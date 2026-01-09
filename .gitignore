@@ -48,6 +48,7 @@ configs/config.local.yaml
 logs/
 
 # Game assets (user provides their own)
+data/
 assets/*.grf
 assets/data/
 

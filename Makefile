@@ -1,7 +1,7 @@
 # Midgard RO Client - Makefile
 # Requires: Go 1.22+, SDL2
 
-.PHONY: all build run run-debug run-release clean test deps check fmt lint help
+.PHONY: all build build-tools run run-debug run-release clean test deps check fmt lint help
 
 # Build settings
 BINARY_NAME := midgard
@@ -28,6 +28,12 @@ build-debug: ## Build with debug symbols
 	@mkdir -p $(BUILD_DIR)
 	go build $(GOFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-debug $(CMD_DIR)
 	@echo "Built: $(BUILD_DIR)/$(BINARY_NAME)-debug"
+
+build-tools: ## Build CLI tools (grftool)
+	@echo "Building tools..."
+	@mkdir -p $(BUILD_DIR)
+	go build $(GOFLAGS) -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/grftool ./cmd/grftool
+	@echo "Built: $(BUILD_DIR)/grftool"
 
 ## Run
 
