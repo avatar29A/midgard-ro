@@ -3,9 +3,11 @@ package window
 
 import (
 	"fmt"
-	"log/slog"
 	"runtime"
 
+	"go.uber.org/zap"
+
+	"github.com/Faultbox/midgard-ro/internal/logger"
 	"github.com/veandco/go-sdl2/sdl"
 )
 
@@ -37,7 +39,7 @@ func New(cfg Config) (*Window, error) {
 	}
 
 	// Initialize SDL2
-	slog.Info("initializing SDL2")
+	logger.Info("initializing SDL2")
 	if err := sdl.Init(sdl.INIT_VIDEO | sdl.INIT_EVENTS); err != nil {
 		return nil, fmt.Errorf("SDL_Init failed: %w", err)
 	}
@@ -85,18 +87,18 @@ func New(cfg Config) (*Window, error) {
 	// Enable VSync
 	if cfg.VSync {
 		if err := sdl.GLSetSwapInterval(1); err != nil {
-			slog.Warn("failed to enable VSync", "error", err)
+			logger.Warn("failed to enable VSync", zap.Error(err))
 		}
 	} else {
 		sdl.GLSetSwapInterval(0)
 	}
 
-	slog.Info("window created",
-		"title", cfg.Title,
-		"width", cfg.Width,
-		"height", cfg.Height,
-		"fullscreen", cfg.Fullscreen,
-		"vsync", cfg.VSync,
+	logger.Info("window created",
+		zap.String("title", cfg.Title),
+		zap.Int("width", cfg.Width),
+		zap.Int("height", cfg.Height),
+		zap.Bool("fullscreen", cfg.Fullscreen),
+		zap.Bool("vsync", cfg.VSync),
 	)
 
 	return w, nil
@@ -104,7 +106,7 @@ func New(cfg Config) (*Window, error) {
 
 // Close destroys the window and cleans up SDL2.
 func (w *Window) Close() {
-	slog.Info("closing window")
+	logger.Info("closing window")
 
 	if w.glContext != nil {
 		sdl.GLDeleteContext(w.glContext)

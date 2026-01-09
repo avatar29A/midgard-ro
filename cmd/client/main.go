@@ -2,40 +2,50 @@
 package main
 
 import (
-	"log/slog"
+	"fmt"
 	"os"
 
+	"go.uber.org/zap"
+
+	"github.com/Faultbox/midgard-ro/internal/config"
 	"github.com/Faultbox/midgard-ro/internal/game"
+	"github.com/Faultbox/midgard-ro/internal/logger"
 )
 
 func main() {
-	// Setup structured logging
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
-	}))
-	slog.SetDefault(logger)
+	// Parse CLI flags first
+	config.ParseFlags()
 
-	slog.Info("=== Midgard RO Client ===")
-	slog.Info("Milestone 1: Window & Triangle")
+	// Load configuration
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Config error: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Initialize logger
+	if err := logger.Init(cfg.Logging.Level, cfg.Logging.LogFile); err != nil {
+		fmt.Fprintf(os.Stderr, "Logger error: %v\n", err)
+		os.Exit(1)
+	}
+	defer logger.Sync()
+
+	logger.Info("=== Midgard RO Client ===")
+	logger.Sugar.Debugf("Config: %+v", cfg)
 
 	// Create and run game
-	g, err := game.New(game.Config{
-		Title:      "Midgard RO - Milestone 1",
-		Width:      1280,
-		Height:     720,
-		Fullscreen: false,
-	})
+	g, err := game.New(cfg)
 	if err != nil {
-		slog.Error("failed to create game", "error", err)
+		logger.Error("failed to create game", zap.Error(err))
 		os.Exit(1)
 	}
 	defer g.Close()
 
 	// Run the game loop
 	if err := g.Run(); err != nil {
-		slog.Error("game error", "error", err)
+		logger.Error("game error", zap.Error(err))
 		os.Exit(1)
 	}
 
-	slog.Info("game closed normally")
+	logger.Info("game closed normally")
 }
