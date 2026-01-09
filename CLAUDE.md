@@ -64,6 +64,9 @@ pkg/           → NO internal imports (standard lib + external only)
 | `pkg/grf` | GRF archive reader (reusable library) |
 | `pkg/formats` | RO file format parsers (SPR, ACT, GAT, etc.) |
 | `pkg/math` | Game math utilities (vectors, matrices) |
+| `pkg/events` | Event bus and event definitions |
+| `internal/debug` | Debug API and QA tooling |
+| `qa/runner` | QA test runner and validation |
 
 ---
 
