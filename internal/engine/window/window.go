@@ -7,8 +7,9 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/Faultbox/midgard-ro/internal/logger"
 	"github.com/veandco/go-sdl2/sdl"
+
+	"github.com/Faultbox/midgard-ro/internal/logger"
 )
 
 func init() {
