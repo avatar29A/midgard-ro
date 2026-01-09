@@ -40,6 +40,13 @@ __debug_bin*
 *.key
 credentials.json
 
+# Local config overrides
+config.yaml
+configs/config.local.yaml
+
+# Logs
+logs/
+
 # Game assets (user provides their own)
 assets/*.grf
 assets/data/

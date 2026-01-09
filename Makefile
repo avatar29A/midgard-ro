@@ -1,7 +1,7 @@
 # Midgard RO Client - Makefile
 # Requires: Go 1.22+, SDL2
 
-.PHONY: all build run clean test deps check fmt lint help
+.PHONY: all build run run-debug run-release clean test deps check fmt lint help
 
 # Build settings
 BINARY_NAME := midgard
@@ -31,10 +31,13 @@ build-debug: ## Build with debug symbols
 
 ## Run
 
-run: ## Run the client (builds first)
+run: ## Run the client
 	go run $(CMD_DIR)
 
-run-binary: build ## Run the built binary
+run-debug: ## Run with debug mode (uses config.yaml + race detector)
+	go run $(CMD_DIR) --config config.yaml --debug
+
+run-release: build ## Run optimized release build
 	./$(BUILD_DIR)/$(BINARY_NAME)
 
 ## Development
@@ -101,6 +104,8 @@ help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 	@echo "Examples:"
-	@echo "  make run          # Build and run the client"
+	@echo "  make run          # Run the client (go run)"
+	@echo "  make run-debug    # Run with debug flags + race detector"
+	@echo "  make run-release  # Build and run optimized binary"
 	@echo "  make test         # Run all tests"
 	@echo "  make env-check    # Check if tools are installed"
