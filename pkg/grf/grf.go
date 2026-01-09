@@ -32,12 +32,12 @@ type Header struct {
 
 // Entry represents a file entry in the archive.
 type Entry struct {
-	Name              string
-	CompressedSize    uint32
-	AlignedSize       uint32
-	UncompressedSize  uint32
-	Flags             uint8
-	Offset            uint32
+	Name             string
+	CompressedSize   uint32
+	AlignedSize      uint32
+	UncompressedSize uint32
+	Flags            uint8
+	Offset           uint32
 }
 
 // Open opens a GRF archive for reading.

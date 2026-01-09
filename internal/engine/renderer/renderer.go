@@ -8,8 +8,9 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/Faultbox/midgard-ro/internal/logger"
 	"github.com/go-gl/gl/v4.1-core/gl"
+
+	"github.com/Faultbox/midgard-ro/internal/logger"
 )
 
 // Config holds renderer configuration.

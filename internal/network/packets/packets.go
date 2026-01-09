@@ -4,46 +4,46 @@ package packets
 // Packet IDs for login server
 const (
 	// Client -> Login Server
-	CA_LOGIN          uint16 = 0x0064 // Login request
-	CA_REQ_HASH       uint16 = 0x01DB // Request password hash
-	CA_LOGIN_HASH     uint16 = 0x01DD // Login with hash
-	CA_SSO_LOGIN_REQ  uint16 = 0x0825 // SSO login request
-	CA_REQ_NEW_ACC    uint16 = 0x0068 // Registration request
+	CA_LOGIN         uint16 = 0x0064 // Login request
+	CA_REQ_HASH      uint16 = 0x01DB // Request password hash
+	CA_LOGIN_HASH    uint16 = 0x01DD // Login with hash
+	CA_SSO_LOGIN_REQ uint16 = 0x0825 // SSO login request
+	CA_REQ_NEW_ACC   uint16 = 0x0068 // Registration request
 
 	// Login Server -> Client
-	AC_ACCEPT_LOGIN   uint16 = 0x0069 // Login accepted
-	AC_REFUSE_LOGIN   uint16 = 0x006A // Login refused
-	AC_NOTIFY_ERROR   uint16 = 0x0081 // Notify error
+	AC_ACCEPT_LOGIN uint16 = 0x0069 // Login accepted
+	AC_REFUSE_LOGIN uint16 = 0x006A // Login refused
+	AC_NOTIFY_ERROR uint16 = 0x0081 // Notify error
 )
 
 // Packet IDs for character server
 const (
 	// Client -> Char Server
-	CH_ENTER          uint16 = 0x0065 // Enter char server
-	CH_SELECT_CHAR    uint16 = 0x0066 // Select character
-	CH_MAKE_CHAR      uint16 = 0x0067 // Create character
-	CH_DELETE_CHAR    uint16 = 0x0068 // Delete character
+	CH_ENTER       uint16 = 0x0065 // Enter char server
+	CH_SELECT_CHAR uint16 = 0x0066 // Select character
+	CH_MAKE_CHAR   uint16 = 0x0067 // Create character
+	CH_DELETE_CHAR uint16 = 0x0068 // Delete character
 
 	// Char Server -> Client
-	HC_ACCEPT_ENTER   uint16 = 0x006B // Enter accepted + char list
-	HC_REFUSE_ENTER   uint16 = 0x006C // Enter refused
+	HC_ACCEPT_ENTER    uint16 = 0x006B // Enter accepted + char list
+	HC_REFUSE_ENTER    uint16 = 0x006C // Enter refused
 	HC_ACCEPT_MAKECHAR uint16 = 0x006D // Character created
-	HC_NOTIFY_ZONESVR uint16 = 0x0071 // Map server info
+	HC_NOTIFY_ZONESVR  uint16 = 0x0071 // Map server info
 )
 
 // Packet IDs for map server
 const (
 	// Client -> Map Server
-	CZ_ENTER          uint16 = 0x0072 // Enter map
-	CZ_REQUEST_MOVE   uint16 = 0x0085 // Request move
+	CZ_ENTER            uint16 = 0x0072 // Enter map
+	CZ_REQUEST_MOVE     uint16 = 0x0085 // Request move
 	CZ_NOTIFY_ACTORINIT uint16 = 0x007D // Loading complete
 
 	// Map Server -> Client
-	ZC_ACCEPT_ENTER   uint16 = 0x0073 // Map enter accepted
+	ZC_ACCEPT_ENTER      uint16 = 0x0073 // Map enter accepted
 	ZC_NOTIFY_STANDENTRY uint16 = 0x0078 // Entity spawn (standing)
-	ZC_NOTIFY_MOVEENTRY uint16 = 0x007B // Entity spawn (moving)
-	ZC_NOTIFY_ACT     uint16 = 0x008A // Entity action
-	ZC_NPCACK_MAPMOVE uint16 = 0x0091 // Map change
+	ZC_NOTIFY_MOVEENTRY  uint16 = 0x007B // Entity spawn (moving)
+	ZC_NOTIFY_ACT        uint16 = 0x008A // Entity action
+	ZC_NPCACK_MAPMOVE    uint16 = 0x0091 // Map change
 )
 
 // LoginRequest (CA_LOGIN 0x0064)
@@ -87,12 +87,12 @@ type LoginAccept struct {
 
 // CharServerInfo contains character server information.
 type CharServerInfo struct {
-	IP        uint32
-	Port      uint16
-	Name      [20]byte
-	Users     uint16
-	State     uint16
-	Property  uint16
+	IP       uint32
+	Port     uint16
+	Name     [20]byte
+	Users    uint16
+	State    uint16
+	Property uint16
 }
 
 // CharEnter (CH_ENTER 0x0065)
@@ -133,33 +133,33 @@ func (p *CharEnter) Encode() []byte {
 
 // CharInfo contains character information.
 type CharInfo struct {
-	CharID     uint32
-	BaseExp    uint32
-	Zeny       uint32
-	JobExp     uint32
-	JobLevel   uint32
-	BodyState  uint32
+	CharID      uint32
+	BaseExp     uint32
+	Zeny        uint32
+	JobExp      uint32
+	JobLevel    uint32
+	BodyState   uint32
 	HealthState uint32
 	EffectState uint32
-	Virtue     uint32
-	Honor      uint32
+	Virtue      uint32
+	Honor       uint32
 	StatusPoint uint16
-	HP         uint32
-	MaxHP      uint32
-	SP         uint16
-	MaxSP      uint16
-	WalkSpeed  uint16
-	Class      uint16
-	HairStyle  uint16
+	HP          uint32
+	MaxHP       uint32
+	SP          uint16
+	MaxSP       uint16
+	WalkSpeed   uint16
+	Class       uint16
+	HairStyle   uint16
 	// ... many more fields
-	Name       [24]byte
-	Str        uint8
-	Agi        uint8
-	Vit        uint8
-	Int        uint8
-	Dex        uint8
-	Luk        uint8
-	Slot       uint8
-	HairColor  uint16
+	Name         [24]byte
+	Str          uint8
+	Agi          uint8
+	Vit          uint8
+	Int          uint8
+	Dex          uint8
+	Luk          uint8
+	Slot         uint8
+	HairColor    uint16
 	ClothesColor uint16
 }
