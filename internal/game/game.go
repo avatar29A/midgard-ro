@@ -3,25 +3,20 @@ package game
 
 import (
 	"fmt"
-	"log/slog"
 	"time"
 
+	"go.uber.org/zap"
+
+	"github.com/Faultbox/midgard-ro/internal/config"
 	"github.com/Faultbox/midgard-ro/internal/engine/input"
 	"github.com/Faultbox/midgard-ro/internal/engine/renderer"
 	"github.com/Faultbox/midgard-ro/internal/engine/window"
+	"github.com/Faultbox/midgard-ro/internal/logger"
 )
-
-// Config holds game configuration.
-type Config struct {
-	Title      string
-	Width      int
-	Height     int
-	Fullscreen bool
-}
 
 // Game is the main game instance.
 type Game struct {
-	config   Config
+	config   *config.Config
 	running  bool
 	window   *window.Window
 	renderer *renderer.Renderer
@@ -29,11 +24,11 @@ type Game struct {
 }
 
 // New creates a new game instance.
-func New(cfg Config) (*Game, error) {
-	slog.Info("initializing game",
-		"title", cfg.Title,
-		"width", cfg.Width,
-		"height", cfg.Height,
+func New(cfg *config.Config) (*Game, error) {
+	logger.Info("initializing game",
+		zap.Int("width", cfg.Graphics.Width),
+		zap.Int("height", cfg.Graphics.Height),
+		zap.Bool("fullscreen", cfg.Graphics.Fullscreen),
 	)
 
 	g := &Game{
@@ -44,11 +39,11 @@ func New(cfg Config) (*Game, error) {
 	// Create window (this also creates OpenGL context)
 	var err error
 	g.window, err = window.New(window.Config{
-		Title:      cfg.Title,
-		Width:      cfg.Width,
-		Height:     cfg.Height,
-		Fullscreen: cfg.Fullscreen,
-		VSync:      true, // Enable VSync by default
+		Title:      "Midgard RO",
+		Width:      cfg.Graphics.Width,
+		Height:     cfg.Graphics.Height,
+		Fullscreen: cfg.Graphics.Fullscreen,
+		VSync:      cfg.Graphics.VSync,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create window: %w", err)
@@ -56,9 +51,9 @@ func New(cfg Config) (*Game, error) {
 
 	// Create renderer (AFTER window, since OpenGL context must exist)
 	g.renderer, err = renderer.New(renderer.Config{
-		Width:  cfg.Width,
-		Height: cfg.Height,
-		VSync:  true,
+		Width:  cfg.Graphics.Width,
+		Height: cfg.Graphics.Height,
+		VSync:  cfg.Graphics.VSync,
 	})
 	if err != nil {
 		g.window.Close()
@@ -68,7 +63,7 @@ func New(cfg Config) (*Game, error) {
 	// Create input handler
 	g.input = input.New()
 
-	slog.Info("game initialized successfully")
+	logger.Info("game initialized successfully")
 	return g, nil
 }
 
@@ -81,7 +76,7 @@ func (g *Game) Run() error {
 	frameCount := 0
 	fpsTimer := time.Now()
 
-	slog.Info("starting game loop")
+	logger.Info("starting game loop")
 
 	for g.running {
 		// Calculate delta time
@@ -122,10 +117,16 @@ func (g *Game) Run() error {
 		// 4. Present (swap buffers)
 		g.window.SwapBuffers()
 
-		// FPS counter
+		// FPS counter (only if enabled)
 		frameCount++
-		if time.Since(fpsTimer) >= time.Second {
-			slog.Debug("fps", "count", frameCount, "dt", fmt.Sprintf("%.2fms", dt*1000))
+		if g.config.Game.ShowFPS && time.Since(fpsTimer) >= time.Second {
+			logger.Debug("fps",
+				zap.Int("count", frameCount),
+				zap.String("dt", fmt.Sprintf("%.2fms", dt*1000)),
+			)
+			frameCount = 0
+			fpsTimer = time.Now()
+		} else if time.Since(fpsTimer) >= time.Second {
 			frameCount = 0
 			fpsTimer = time.Now()
 		}
@@ -136,7 +137,7 @@ func (g *Game) Run() error {
 
 // Close cleans up game resources.
 func (g *Game) Close() {
-	slog.Info("closing game")
+	logger.Info("closing game")
 
 	if g.renderer != nil {
 		g.renderer.Close()
