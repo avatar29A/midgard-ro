@@ -235,3 +235,39 @@ See `docs/prd/PRD.md` Section 7 for full milestone breakdown.
 2. Read the relevant ADR
 3. Ask Boris for clarification on requirements
 4. Search for RO-specific documentation
+
+---
+
+## PR Review Workflow
+
+After creating a PR, follow this process:
+
+### Reviewers
+- **Developer** (Boris) - Architecture, logic, code quality
+- **GitHub Copilot** - Automated code analysis (if enabled)
+
+### Review Rules
+1. **Don't blindly agree** - If unsure about a suggestion, ask Boris for clarification
+2. **Add comments** - Reply in discussion threads when you need more context
+3. **Wait for CI** - All checks must pass (Build, Test, Lint)
+4. **Resolve discussions** - Mark completed items as resolved
+
+### Merge Checklist
+- [ ] All CI checks pass
+- [ ] Developer approval received
+- [ ] Copilot review completed
+- [ ] All discussions resolved
+
+### Commands
+```bash
+# Check CI status
+gh pr checks <PR_NUMBER>
+
+# View review comments
+gh api repos/avatar29A/midgard-ro/pulls/<PR_NUMBER>/comments
+
+# Merge when ready
+gh pr merge <PR_NUMBER> --merge
+```
+
+See `docs/CONTRIBUTING.md` for full details.
