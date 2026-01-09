@@ -118,11 +118,6 @@ go run ./cmd/client
 - [Architecture Decisions](docs/adr/)
 - [Technical Research](docs/research/)
 
-## 🤝 Team
-
-- **Boris** - CEO, Game Designer, Visionary
-- **Ilon (Claude)** - CTO, Technical Lead
-
 ---
 
 *This is an educational and fan project. Ragnarok Online is a trademark of Gravity Co., Ltd.*
