@@ -3,10 +3,12 @@ package renderer
 
 import (
 	"fmt"
-	"log/slog"
 	"strings"
 	"unsafe"
 
+	"go.uber.org/zap"
+
+	"github.com/Faultbox/midgard-ro/internal/logger"
 	"github.com/go-gl/gl/v4.1-core/gl"
 )
 
@@ -43,10 +45,10 @@ func New(cfg Config) (*Renderer, error) {
 
 	// Log OpenGL info
 	version := gl.GoStr(gl.GetString(gl.VERSION))
-	renderer := gl.GoStr(gl.GetString(gl.RENDERER))
-	slog.Info("OpenGL initialized",
-		"version", version,
-		"renderer", renderer,
+	rendererName := gl.GoStr(gl.GetString(gl.RENDERER))
+	logger.Info("OpenGL initialized",
+		zap.String("version", version),
+		zap.String("renderer", rendererName),
 	)
 
 	// Setup default OpenGL state
@@ -71,7 +73,7 @@ func New(cfg Config) (*Renderer, error) {
 
 // Close cleans up renderer resources.
 func (r *Renderer) Close() {
-	slog.Info("closing renderer")
+	logger.Info("closing renderer")
 	if r.triangleVAO != 0 {
 		gl.DeleteVertexArrays(1, &r.triangleVAO)
 	}
@@ -88,7 +90,10 @@ func (r *Renderer) Resize(width, height int) {
 	r.config.Width = width
 	r.config.Height = height
 	gl.Viewport(0, 0, int32(width), int32(height))
-	slog.Debug("renderer resized", "width", width, "height", height)
+	logger.Debug("renderer resized",
+		zap.Int("width", width),
+		zap.Int("height", height),
+	)
 }
 
 // Begin starts a new frame.
@@ -114,12 +119,12 @@ func (r *Renderer) createShaderProgram() (uint32, error) {
 	// Vertex shader - transforms vertices
 	vertexShaderSource := `
 		#version 410 core
-		
+
 		layout (location = 0) in vec3 aPos;
 		layout (location = 1) in vec3 aColor;
-		
+
 		out vec3 vertexColor;
-		
+
 		void main() {
 			gl_Position = vec4(aPos, 1.0);
 			vertexColor = aColor;
@@ -129,10 +134,10 @@ func (r *Renderer) createShaderProgram() (uint32, error) {
 	// Fragment shader - colors pixels
 	fragmentShaderSource := `
 		#version 410 core
-		
+
 		in vec3 vertexColor;
 		out vec4 FragColor;
-		
+
 		void main() {
 			FragColor = vec4(vertexColor, 1.0);
 		}
@@ -169,7 +174,7 @@ func (r *Renderer) createShaderProgram() (uint32, error) {
 		return 0, fmt.Errorf("link failed: %s", log)
 	}
 
-	slog.Debug("shader program created", "program", program)
+	logger.Debug("shader program created", zap.Uint32("program", program))
 	return program, nil
 }
 
@@ -227,6 +232,9 @@ func (r *Renderer) createTriangle() error {
 	gl.BindBuffer(gl.ARRAY_BUFFER, 0)
 	gl.BindVertexArray(0)
 
-	slog.Debug("triangle created", "vao", r.triangleVAO, "vbo", r.triangleVBO)
+	logger.Debug("triangle created",
+		zap.Uint32("vao", r.triangleVAO),
+		zap.Uint32("vbo", r.triangleVBO),
+	)
 	return nil
 }
