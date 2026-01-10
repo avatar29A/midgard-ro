@@ -59,3 +59,6 @@ pkg/formats/testdata/duckling.spr
 Thumbs.db
 ehthumbs.db
 Desktop.ini
+
+# ImGui
+imgui.ini
