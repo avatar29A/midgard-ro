@@ -226,7 +226,7 @@ func (r *Renderer) createTriangle() error {
 	gl.EnableVertexAttribArray(0)
 
 	// Color attribute (location = 1)
-	gl.VertexAttribPointer(1, 3, gl.FLOAT, false, 6*4, unsafe.Pointer(uintptr(3*4)))
+	gl.VertexAttribPointer(1, 3, gl.FLOAT, false, 6*4, gl.PtrOffset(3*4))
 	gl.EnableVertexAttribArray(1)
 
 	// Unbind
