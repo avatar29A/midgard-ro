@@ -79,6 +79,12 @@ issues:
       linters:
         - errcheck
 
+    # File format parsers - EOF errors when reading optional trailing data are expected
+    - path: pkg/formats/
+      text: "error is not nil.*but it returns nil"
+      linters:
+        - nilerr
+
     # Unparam false positives - these functions may return errors in future
     - text: "result .* is always nil"
       linters:
