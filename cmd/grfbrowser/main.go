@@ -310,6 +310,9 @@ func (app *App) render() {
 		app.captureScreenshot()
 	}
 
+	// Check for remote commands (ADR-010 Phase 3)
+	app.checkAndExecuteCommand()
+
 	// Handle keyboard shortcuts
 	// F12 = request screenshot (captured next frame to get rendered content)
 	if imgui.IsKeyChordPressed(imgui.KeyChord(imgui.KeyF12)) {
@@ -562,6 +565,108 @@ func (app *App) dumpState() {
 
 	// Print to console for automation scripts
 	fmt.Printf("State saved: %s\n", statePath)
+}
+
+// Command represents a remote command for GUI automation (ADR-010 Phase 3).
+type Command struct {
+	Action string          `json:"action"`
+	Path   string          `json:"path,omitempty"`
+	Value  string          `json:"value,omitempty"`
+	Filter map[string]bool `json:"filter,omitempty"`
+}
+
+// checkAndExecuteCommand polls for command file and executes if found.
+// Called each frame from render(). Commands are single-shot (file deleted after execution).
+func (app *App) checkAndExecuteCommand() {
+	cmdPath := filepath.Join(app.screenshotDir, "command.json")
+
+	// Check if command file exists
+	data, err := os.ReadFile(cmdPath)
+	if err != nil {
+		return // No command file, normal case
+	}
+
+	// Delete file immediately to prevent re-execution
+	os.Remove(cmdPath)
+
+	// Parse command
+	var cmd Command
+	if err := json.Unmarshal(data, &cmd); err != nil {
+		fmt.Fprintf(os.Stderr, "Invalid command: %v\n", err)
+		return
+	}
+
+	// Execute command
+	app.executeCommand(cmd)
+}
+
+// executeCommand executes a single command.
+func (app *App) executeCommand(cmd Command) {
+	switch cmd.Action {
+	case "select_file":
+		app.selectedPath = cmd.Path
+		app.lastScreenshotMsg = fmt.Sprintf("Selected: %s", cmd.Path)
+
+	case "expand_folder":
+		app.expandedPaths[cmd.Path] = true
+		app.lastScreenshotMsg = fmt.Sprintf("Expanded: %s", cmd.Path)
+
+	case "collapse_folder":
+		app.expandedPaths[cmd.Path] = false
+		app.lastScreenshotMsg = fmt.Sprintf("Collapsed: %s", cmd.Path)
+
+	case "set_search":
+		app.searchText = cmd.Value
+		app.rebuildTree()
+		app.lastScreenshotMsg = fmt.Sprintf("Search: %s", cmd.Value)
+
+	case "clear_search":
+		app.searchText = ""
+		app.rebuildTree()
+		app.lastScreenshotMsg = "Search cleared"
+
+	case "set_filter":
+		if cmd.Filter != nil {
+			if v, ok := cmd.Filter["sprites"]; ok {
+				app.filterSprites = v
+			}
+			if v, ok := cmd.Filter["animations"]; ok {
+				app.filterAnimations = v
+			}
+			if v, ok := cmd.Filter["textures"]; ok {
+				app.filterTextures = v
+			}
+			if v, ok := cmd.Filter["models"]; ok {
+				app.filterModels = v
+			}
+			if v, ok := cmd.Filter["maps"]; ok {
+				app.filterMaps = v
+			}
+			if v, ok := cmd.Filter["audio"]; ok {
+				app.filterAudio = v
+			}
+			if v, ok := cmd.Filter["other"]; ok {
+				app.filterOther = v
+			}
+			app.rebuildTree()
+		}
+		app.lastScreenshotMsg = "Filters updated"
+
+	case "screenshot":
+		app.screenshotRequested = true
+		return // Skip notification, screenshot will show its own
+
+	case "dump_state":
+		app.dumpState()
+		return // Skip notification, dumpState shows its own
+
+	default:
+		app.lastScreenshotMsg = fmt.Sprintf("Unknown command: %s", cmd.Action)
+	}
+
+	app.showScreenshotMsg = true
+	app.screenshotMsgTime = time.Now()
+	fmt.Printf("Command executed: %s\n", cmd.Action)
 }
 
 // renderSearchAndFilter renders the search box and filter checkboxes.
