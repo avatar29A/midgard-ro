@@ -4,15 +4,19 @@ package main
 import (
 	"flag"
 	"fmt"
+	"image"
+	"image/png"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/AllenDang/cimgui-go/backend"
 	"github.com/AllenDang/cimgui-go/backend/sdlbackend"
 	"github.com/AllenDang/cimgui-go/imgui"
+	"github.com/go-gl/gl/v4.1-core/gl"
 	"golang.org/x/text/encoding/korean"
 	"golang.org/x/text/transform"
 
@@ -65,6 +69,13 @@ type App struct {
 	filterMaps       bool
 	filterAudio      bool
 	filterOther      bool
+
+	// Screenshot state (ADR-010: GUI testing infrastructure)
+	screenshotDir       string    // Directory to save screenshots
+	lastScreenshotMsg   string    // Status message for last screenshot
+	showScreenshotMsg   bool      // Whether to show the notification
+	screenshotMsgTime   time.Time // When notification was shown
+	screenshotRequested bool      // Deferred capture flag (capture next frame)
 }
 
 // FileNode represents a node in the virtual file tree.
@@ -87,6 +98,12 @@ func NewApp() *App {
 		filterMaps:       true,
 		filterAudio:      true,
 		filterOther:      true,
+		screenshotDir:    "/tmp/grfbrowser",
+	}
+
+	// Ensure screenshot directory exists (ADR-010)
+	if err := os.MkdirAll(app.screenshotDir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not create screenshot dir: %v\n", err)
 	}
 
 	// Create backend using the proper wrapper
@@ -98,6 +115,11 @@ func NewApp() *App {
 
 	app.backend.SetBgColor(imgui.NewVec4(0.1, 0.1, 0.12, 1.0))
 	app.backend.CreateWindow("GRF Browser", 1280, 800)
+
+	// Initialize OpenGL function pointers for screenshot capture (ADR-010)
+	if err := gl.Init(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: OpenGL init failed (screenshots disabled): %v\n", err)
+	}
 
 	return app
 }
@@ -280,7 +302,19 @@ func (app *App) countFilteredFiles() int {
 
 // render is called each frame to draw the UI.
 func (app *App) render() {
+	// Deferred screenshot capture (ADR-010: GUI testing)
+	// Capture at start of frame to get previous frame's rendered content
+	if app.screenshotRequested {
+		app.screenshotRequested = false
+		app.captureScreenshot()
+	}
+
 	// Handle keyboard shortcuts
+	// F12 = request screenshot (captured next frame to get rendered content)
+	if imgui.IsKeyChordPressed(imgui.KeyChord(imgui.KeyF12)) {
+		app.screenshotRequested = true
+	}
+
 	// Ctrl+C = copy filename only
 	// Cmd+Ctrl+C = copy full path (macOS friendly)
 	if app.selectedPath != "" {
@@ -350,6 +384,98 @@ func (app *App) render() {
 		app.renderStatusBar()
 	}
 	imgui.End()
+
+	// Screenshot notification overlay (ADR-010)
+	// Shows for 2 seconds after capture
+	if app.showScreenshotMsg && time.Since(app.screenshotMsgTime) < 2*time.Second {
+		notifyFlags := imgui.WindowFlagsNoTitleBar | imgui.WindowFlagsNoResize |
+			imgui.WindowFlagsNoMove | imgui.WindowFlagsNoScrollbar |
+			imgui.WindowFlagsAlwaysAutoResize | imgui.WindowFlagsNoFocusOnAppearing
+		imgui.SetNextWindowPos(imgui.NewVec2(workPos.X+10, workPos.Y+10))
+		imgui.SetNextWindowBgAlpha(0.85)
+		if imgui.BeginV("##ScreenshotNotify", nil, notifyFlags) {
+			imgui.Text(app.lastScreenshotMsg)
+		}
+		imgui.End()
+	} else if app.showScreenshotMsg {
+		app.showScreenshotMsg = false
+	}
+}
+
+// captureScreenshot captures the current frame to a PNG file.
+// Press F12 to trigger. Used for automated GUI testing with Claude (ADR-010).
+func (app *App) captureScreenshot() {
+	// Get actual framebuffer size (handles HiDPI/Retina correctly)
+	// DisplaySize is logical pixels, DisplayFramebufferScale is the multiplier
+	io := imgui.CurrentIO()
+	displaySize := io.DisplaySize()
+	fbScale := io.DisplayFramebufferScale()
+	width := int(displaySize.X * fbScale.X)
+	height := int(displaySize.Y * fbScale.Y)
+
+	if width <= 0 || height <= 0 {
+		app.lastScreenshotMsg = "Screenshot failed: invalid viewport"
+		app.showScreenshotMsg = true
+		app.screenshotMsgTime = time.Now()
+		return
+	}
+
+	// Read pixels from OpenGL framebuffer
+	// Read from front buffer (what's currently displayed) since we capture at frame start
+	gl.ReadBuffer(gl.FRONT)
+	pixels := make([]byte, width*height*4) // RGBA
+	gl.ReadPixels(0, 0, int32(width), int32(height), gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(pixels))
+	gl.ReadBuffer(gl.BACK) // Restore default
+
+	// Create image (flip vertically - OpenGL has origin at bottom-left)
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			srcIdx := ((height-1-y)*width + x) * 4
+			dstIdx := (y*width + x) * 4
+			img.Pix[dstIdx+0] = pixels[srcIdx+0] // R
+			img.Pix[dstIdx+1] = pixels[srcIdx+1] // G
+			img.Pix[dstIdx+2] = pixels[srcIdx+2] // B
+			img.Pix[dstIdx+3] = pixels[srcIdx+3] // A
+		}
+	}
+
+	// Generate filename with timestamp
+	timestamp := time.Now().Format("20060102-150405")
+	filename := fmt.Sprintf("screenshot-%s.png", timestamp)
+	savePath := filepath.Join(app.screenshotDir, filename)
+
+	// Save to file
+	file, err := os.Create(savePath)
+	if err != nil {
+		app.lastScreenshotMsg = fmt.Sprintf("Screenshot failed: %v", err)
+		app.showScreenshotMsg = true
+		app.screenshotMsgTime = time.Now()
+		return
+	}
+	defer file.Close()
+
+	if err := png.Encode(file, img); err != nil {
+		app.lastScreenshotMsg = fmt.Sprintf("Screenshot failed: %v", err)
+		app.showScreenshotMsg = true
+		app.screenshotMsgTime = time.Now()
+		return
+	}
+
+	// Also save as "latest.png" for easy access by automation
+	latestPath := filepath.Join(app.screenshotDir, "latest.png")
+	if latestFile, err := os.Create(latestPath); err == nil {
+		_ = png.Encode(latestFile, img)
+		latestFile.Close()
+	}
+
+	// Show notification
+	app.lastScreenshotMsg = fmt.Sprintf("Saved: %s", filename)
+	app.showScreenshotMsg = true
+	app.screenshotMsgTime = time.Now()
+
+	// Print to console for automation scripts
+	fmt.Printf("Screenshot saved: %s\n", savePath)
 }
 
 // renderSearchAndFilter renders the search box and filter checkboxes.
