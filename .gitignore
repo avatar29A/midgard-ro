@@ -52,6 +52,9 @@ data/
 assets/*.grf
 assets/data/
 
+# Extracted test files (regenerate with go run generate*.go)
+pkg/formats/testdata/duckling.spr
+
 # OS generated files
 Thumbs.db
 ehthumbs.db
