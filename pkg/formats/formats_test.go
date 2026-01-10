@@ -113,8 +113,7 @@ func TestGATCell_Types(t *testing.T) {
 func TestGATCell_Heights(t *testing.T) {
 	// Test that heights are stored correctly
 	cell := GATCell{
-		Heights:  [4]float32{1.0, 2.0, 3.0, 4.0},
-		CellType: 0,
+		Heights: [4]float32{1.0, 2.0, 3.0, 4.0},
 	}
 
 	if cell.Heights[0] != 1.0 {
@@ -128,12 +127,15 @@ func TestGATCell_Heights(t *testing.T) {
 func TestGND_Basic(t *testing.T) {
 	gnd := &GND{
 		Width:    100,
-		Height:   100,
+		Height:   200,
 		Textures: []string{"texture1.bmp", "texture2.bmp"},
 	}
 
 	if gnd.Width != 100 {
 		t.Errorf("expected width 100, got %d", gnd.Width)
+	}
+	if gnd.Height != 200 {
+		t.Errorf("expected height 200, got %d", gnd.Height)
 	}
 	if len(gnd.Textures) != 2 {
 		t.Errorf("expected 2 textures, got %d", len(gnd.Textures))
@@ -170,6 +172,11 @@ func TestRSWObject_Coordinates(t *testing.T) {
 		Position: [3]float32{10.5, 20.3, 30.7},
 		Rotation: [3]float32{0, 90, 0},
 		Scale:    [3]float32{2.0, 1.5, 2.0},
+	}
+
+	// Test name
+	if obj.Name != "test_object" {
+		t.Errorf("expected name 'test_object', got %s", obj.Name)
 	}
 
 	// Test position
