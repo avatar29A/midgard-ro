@@ -2,6 +2,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"image"
@@ -315,6 +316,12 @@ func (app *App) render() {
 		app.screenshotRequested = true
 	}
 
+	// Ctrl+D = dump GUI state as JSON (ADR-010 Phase 2)
+	ctrlD := imgui.KeyChord(imgui.ModCtrl) | imgui.KeyChord(imgui.KeyD)
+	if imgui.IsKeyChordPressed(ctrlD) {
+		app.dumpState()
+	}
+
 	// Ctrl+C = copy filename only
 	// Cmd+Ctrl+C = copy full path (macOS friendly)
 	if app.selectedPath != "" {
@@ -476,6 +483,85 @@ func (app *App) captureScreenshot() {
 
 	// Print to console for automation scripts
 	fmt.Printf("Screenshot saved: %s\n", savePath)
+}
+
+// GUIState represents the current GUI state for JSON export (ADR-010 Phase 2).
+type GUIState struct {
+	Timestamp     string   `json:"timestamp"`
+	GRFPath       string   `json:"grfPath"`
+	SelectedPath  string   `json:"selectedPath"`
+	SearchText    string   `json:"searchText"`
+	ExpandedPaths []string `json:"expandedPaths"`
+	Filters       struct {
+		Sprites    bool `json:"sprites"`
+		Animations bool `json:"animations"`
+		Textures   bool `json:"textures"`
+		Models     bool `json:"models"`
+		Maps       bool `json:"maps"`
+		Audio      bool `json:"audio"`
+		Other      bool `json:"other"`
+	} `json:"filters"`
+	Stats struct {
+		TotalFiles    int `json:"totalFiles"`
+		FilteredFiles int `json:"filteredFiles"`
+	} `json:"stats"`
+}
+
+// dumpState exports the current GUI state as JSON.
+// Press F11 to trigger. Used for automated GUI testing with Claude (ADR-010 Phase 2).
+func (app *App) dumpState() {
+	// Build list of expanded paths
+	expandedList := make([]string, 0)
+	for path, expanded := range app.expandedPaths {
+		if expanded {
+			expandedList = append(expandedList, path)
+		}
+	}
+	sort.Strings(expandedList)
+
+	// Create state object
+	state := GUIState{
+		Timestamp:     time.Now().Format(time.RFC3339),
+		GRFPath:       app.grfPath,
+		SelectedPath:  app.selectedPath,
+		SearchText:    app.searchText,
+		ExpandedPaths: expandedList,
+	}
+	state.Filters.Sprites = app.filterSprites
+	state.Filters.Animations = app.filterAnimations
+	state.Filters.Textures = app.filterTextures
+	state.Filters.Models = app.filterModels
+	state.Filters.Maps = app.filterMaps
+	state.Filters.Audio = app.filterAudio
+	state.Filters.Other = app.filterOther
+	state.Stats.TotalFiles = app.totalFiles
+	state.Stats.FilteredFiles = app.filterCount
+
+	// Marshal to JSON
+	jsonData, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		app.lastScreenshotMsg = fmt.Sprintf("State dump failed: %v", err)
+		app.showScreenshotMsg = true
+		app.screenshotMsgTime = time.Now()
+		return
+	}
+
+	// Save to file
+	statePath := filepath.Join(app.screenshotDir, "state.json")
+	if err := os.WriteFile(statePath, jsonData, 0644); err != nil {
+		app.lastScreenshotMsg = fmt.Sprintf("State dump failed: %v", err)
+		app.showScreenshotMsg = true
+		app.screenshotMsgTime = time.Now()
+		return
+	}
+
+	// Show notification (reuse screenshot notification)
+	app.lastScreenshotMsg = "State saved: state.json"
+	app.showScreenshotMsg = true
+	app.screenshotMsgTime = time.Now()
+
+	// Print to console for automation scripts
+	fmt.Printf("State saved: %s\n", statePath)
 }
 
 // renderSearchAndFilter renders the search box and filter checkboxes.
