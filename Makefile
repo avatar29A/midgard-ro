@@ -29,11 +29,12 @@ build-debug: ## Build with debug symbols
 	go build $(GOFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-debug $(CMD_DIR)
 	@echo "Built: $(BUILD_DIR)/$(BINARY_NAME)-debug"
 
-build-tools: ## Build CLI tools (grftool)
+build-tools: ## Build CLI tools (grftool, grfbrowser)
 	@echo "Building tools..."
 	@mkdir -p $(BUILD_DIR)
 	go build $(GOFLAGS) -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/grftool ./cmd/grftool
-	@echo "Built: $(BUILD_DIR)/grftool"
+	go build $(GOFLAGS) -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/grfbrowser ./cmd/grfbrowser
+	@echo "Built: $(BUILD_DIR)/grftool, $(BUILD_DIR)/grfbrowser"
 
 ## Run
 
