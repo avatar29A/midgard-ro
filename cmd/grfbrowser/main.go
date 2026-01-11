@@ -18,6 +18,7 @@ import (
 	"github.com/AllenDang/cimgui-go/backend/sdlbackend"
 	"github.com/AllenDang/cimgui-go/imgui"
 	"github.com/go-gl/gl/v4.1-core/gl"
+	"github.com/sqweek/dialog"
 	"golang.org/x/text/encoding/korean"
 	"golang.org/x/text/transform"
 
@@ -77,6 +78,9 @@ type App struct {
 	showScreenshotMsg   bool      // Whether to show the notification
 	screenshotMsgTime   time.Time // When notification was shown
 	screenshotRequested bool      // Deferred capture flag (capture next frame)
+
+	// File dialog state (must open on main thread)
+	pendingGRFPath string // Path selected from file dialog, processed on main thread
 }
 
 // FileNode represents a node in the virtual file tree.
@@ -86,6 +90,19 @@ type FileNode struct {
 	IsDir    bool
 	Children []*FileNode
 	Size     int64
+}
+
+// koreanGlyphRanges defines the Unicode ranges for Korean text rendering.
+// Format: pairs of [start, end] values terminated by 0.
+// Includes:
+// - Basic Latin (0x0020-0x00FF) for ASCII and extended Latin
+// - Hangul Syllables (0xAC00-0xD7AF) for Korean characters
+var koreanGlyphRanges = []imgui.Wchar{
+	0x0020, 0x00FF, // Basic Latin + Latin Supplement
+	0x3000, 0x30FF, // CJK Symbols and Punctuation, Hiragana, Katakana
+	0x3130, 0x318F, // Hangul Compatibility Jamo
+	0xAC00, 0xD7AF, // Hangul Syllables
+	0, // Terminator
 }
 
 // NewApp creates a new application instance.
@@ -114,6 +131,11 @@ func NewApp() *App {
 		panic(fmt.Sprintf("failed to create backend: %v", err))
 	}
 
+	// Set up font loading hook BEFORE creating window (ADR-009 Stage 2: Korean font support)
+	app.backend.SetAfterCreateContextHook(func() {
+		app.loadKoreanFont()
+	})
+
 	app.backend.SetBgColor(imgui.NewVec4(0.1, 0.1, 0.12, 1.0))
 	app.backend.CreateWindow("GRF Browser", 1280, 800)
 
@@ -123,6 +145,49 @@ func NewApp() *App {
 	}
 
 	return app
+}
+
+// loadKoreanFont loads a font with Korean glyph support.
+// Called from SetAfterCreateContextHook after ImGui context is created.
+func (app *App) loadKoreanFont() {
+	io := imgui.CurrentIO()
+	fonts := io.Fonts()
+
+	// Try different font paths (cross-platform support)
+	fontPaths := []string{
+		"/Library/Fonts/Arial Unicode.ttf",                       // macOS (symlink)
+		"/System/Library/Fonts/Supplemental/Arial Unicode.ttf",   // macOS (actual)
+		"C:\\Windows\\Fonts\\malgun.ttf",                         // Windows (Malgun Gothic)
+		"C:\\Windows\\Fonts\\gulim.ttc",                          // Windows (Gulim)
+		"/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc", // Linux
+		"/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", // Linux alt
+	}
+
+	var fontPath string
+	for _, path := range fontPaths {
+		if _, err := os.Stat(path); err == nil {
+			fontPath = path
+			break
+		}
+	}
+
+	if fontPath == "" {
+		fmt.Fprintf(os.Stderr, "Warning: No Korean font found, using default font\n")
+		return
+	}
+
+	// Create font config
+	fontCfg := imgui.NewFontConfig()
+	defer fontCfg.Destroy()
+
+	// Load font with Korean glyph ranges
+	font := fonts.AddFontFromFileTTFV(fontPath, 16.0, fontCfg, &koreanGlyphRanges[0])
+	if font == nil {
+		fmt.Fprintf(os.Stderr, "Warning: Failed to load Korean font from %s\n", fontPath)
+		return
+	}
+
+	fmt.Printf("Loaded Korean font: %s\n", fontPath)
 }
 
 // Close cleans up resources.
@@ -135,6 +200,31 @@ func (app *App) Close() {
 // Run starts the main application loop.
 func (app *App) Run() {
 	app.backend.Run(app.render)
+}
+
+// openFileDialog shows a native file dialog to select a GRF file.
+func (app *App) openFileDialog() {
+	// Run in goroutine to not block the UI
+	// NOTE: SDL/Cocoa window operations must happen on main thread,
+	// so we just set pendingGRFPath here and process it in render()
+	go func() {
+		filename, err := dialog.File().
+			Filter("GRF Archives", "grf", "gpf").
+			Filter("All Files", "*").
+			Title("Open GRF Archive").
+			Load()
+
+		if err != nil {
+			// User canceled or error occurred
+			if err != dialog.ErrCancelled {
+				fmt.Fprintf(os.Stderr, "File dialog error: %v\n", err)
+			}
+			return
+		}
+
+		// Queue the file to be opened on main thread
+		app.pendingGRFPath = filename
+	}()
 }
 
 // OpenGRF opens a GRF archive file.
@@ -313,6 +403,15 @@ func (app *App) render() {
 	// Check for remote commands (ADR-010 Phase 3)
 	app.checkAndExecuteCommand()
 
+	// Process pending file dialog result (must be on main thread for SDL/Cocoa)
+	if app.pendingGRFPath != "" {
+		path := app.pendingGRFPath
+		app.pendingGRFPath = ""
+		if err := app.OpenGRF(path); err != nil {
+			fmt.Fprintf(os.Stderr, "Error opening GRF: %v\n", err)
+		}
+	}
+
 	// Handle keyboard shortcuts
 	// F12 = request screenshot (captured next frame to get rendered content)
 	if imgui.IsKeyChordPressed(imgui.KeyChord(imgui.KeyF12)) {
@@ -342,9 +441,7 @@ func (app *App) render() {
 	if imgui.BeginMainMenuBar() {
 		if imgui.BeginMenu("File") {
 			if imgui.MenuItemBool("Open GRF...") {
-				// File dialog will be implemented in Stage 2
-				// For now, use: ./grfbrowser -grf path/to/file.grf
-				_ = true // Placeholder to avoid empty branch warning
+				app.openFileDialog()
 			}
 			imgui.Separator()
 			if imgui.MenuItemBool("Exit") {
@@ -750,13 +847,18 @@ func (app *App) renderFileTree() {
 
 	// File tree in child window for scrolling
 	if imgui.BeginChildStrV("FileTreeChild", imgui.NewVec2(0, 0), imgui.ChildFlagsBorders, imgui.WindowFlagsHorizontalScrollbar) {
-		app.renderTreeNode(app.fileTree)
+		if app.fileTree != nil {
+			app.renderTreeNode(app.fileTree)
+		}
 	}
 	imgui.EndChild()
 }
 
 // renderTreeNode recursively renders a tree node.
 func (app *App) renderTreeNode(node *FileNode) {
+	if node == nil {
+		return
+	}
 	for _, child := range node.Children {
 		if child.IsDir {
 			// Directory node
@@ -879,7 +981,22 @@ func (app *App) getFileTypeName(ext string) string {
 }
 
 // euckrToUTF8 converts EUC-KR encoded string to UTF-8.
+// Note: GRF files use EUC-KR encoding for Korean filenames.
 func euckrToUTF8(s string) string {
+	// Check if string contains non-ASCII bytes that might be EUC-KR
+	hasHighBytes := false
+	for i := 0; i < len(s); i++ {
+		if s[i] > 127 {
+			hasHighBytes = true
+			break
+		}
+	}
+
+	// Only decode if there are high bytes (potential EUC-KR)
+	if !hasHighBytes {
+		return s
+	}
+
 	decoder := korean.EUCKR.NewDecoder()
 	result, _, err := transform.String(decoder, s)
 	if err != nil {

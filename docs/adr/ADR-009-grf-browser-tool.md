@@ -133,24 +133,27 @@ Metadata display:
 
 ### 5. Development Stages
 
-#### Stage 1: Foundation (MVP)
+#### Stage 1: Foundation (MVP) ✅ COMPLETED
 **Goal**: Load GRF, display tree, basic navigation
 
-- [ ] ImGui + SDL2 + OpenGL integration
-- [ ] Open GRF dialog
-- [ ] Tree view with virtual folders
-- [ ] Basic file list (no icons yet)
-- [ ] Keyboard navigation (↑↓←→)
-- [ ] Status bar with file count
+- [x] ImGui + SDL2 + OpenGL integration (cimgui-go)
+- [x] Tree view with virtual folders
+- [x] File type icons (text-based: [SPR], [IMG], etc.)
+- [x] Status bar with file count
+- [x] Search input with live filtering
+- [x] Type filter checkboxes
+- [x] Result count display
+- [x] Keyboard shortcuts (Ctrl+C filename, Cmd+Ctrl+C full path)
+- [x] EUC-KR to UTF-8 filename conversion
 
-#### Stage 2: Search & Filter
-**Goal**: Find files efficiently
+#### Stage 2: File Dialog & Fonts (IN PROGRESS)
+**Goal**: Complete file access and proper text rendering
 
-- [ ] Search input with live filtering
-- [ ] Type filter checkboxes
-- [ ] Result count display
+- [x] Native file dialog for Open GRF (using github.com/sqweek/dialog)
+- [x] Korean font loading (Arial Unicode.ttf with custom glyph ranges)
+- [x] Fixed EUC-KR to UTF-8 conversion (asciiToLower preserves high bytes)
+- [ ] Recent files list in File menu
 - [ ] Search history dropdown
-- [ ] Highlight matching items
 
 #### Stage 3: Sprite Viewer
 **Goal**: Preview SPR/ACT files
