@@ -3,24 +3,7 @@ package formats
 import "testing"
 
 // Note: GAT tests are in gat_test.go
-
-func TestGND_Basic(t *testing.T) {
-	gnd := &GND{
-		Width:    100,
-		Height:   200,
-		Textures: []string{"texture1.bmp", "texture2.bmp"},
-	}
-
-	if gnd.Width != 100 {
-		t.Errorf("expected width 100, got %d", gnd.Width)
-	}
-	if gnd.Height != 200 {
-		t.Errorf("expected height 200, got %d", gnd.Height)
-	}
-	if len(gnd.Textures) != 2 {
-		t.Errorf("expected 2 textures, got %d", len(gnd.Textures))
-	}
-}
+// Note: GND tests are in gnd_test.go
 
 func TestRSW_Basic(t *testing.T) {
 	rsw := &RSW{
