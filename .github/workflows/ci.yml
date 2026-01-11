@@ -21,7 +21,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libsdl2-dev libgl1-mesa-dev xorg-dev
+          sudo apt-get install -y libsdl2-dev libgl1-mesa-dev xorg-dev libgtk-3-dev
 
       - name: Setup Go
         uses: actions/setup-go@v6
@@ -50,7 +50,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libsdl2-dev libgl1-mesa-dev xorg-dev
+          sudo apt-get install -y libsdl2-dev libgl1-mesa-dev xorg-dev libgtk-3-dev
 
       - name: Setup Go
         uses: actions/setup-go@v6
@@ -77,7 +77,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libsdl2-dev libgl1-mesa-dev xorg-dev
+          sudo apt-get install -y libsdl2-dev libgl1-mesa-dev xorg-dev libgtk-3-dev
 
       - name: Setup Go
         uses: actions/setup-go@v6
