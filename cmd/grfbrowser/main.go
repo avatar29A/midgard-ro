@@ -2108,7 +2108,10 @@ func (app *App) playAudio() {
 	}
 
 	// Reset to beginning
-	app.audioStreamer.Seek(0)
+	if err := app.audioStreamer.Seek(0); err != nil {
+		fmt.Fprintf(os.Stderr, "Error seeking audio: %v\n", err)
+		return
+	}
 
 	// Create control wrapper for pause/resume
 	app.audioCtrl = &beep.Ctrl{Streamer: app.audioStreamer, Paused: false}
