@@ -123,6 +123,11 @@ type App struct {
 	audioPlaying    bool                  // Is audio currently playing
 	audioLength     int                   // Total samples
 	audioSampleRate beep.SampleRate       // Sample rate for duration calc
+
+	// GAT preview state (ADR-011)
+	previewGAT     *formats.GAT     // Loaded GAT data
+	previewGATTex  *backend.Texture // Rendered texture for GAT visualization
+	previewGATZoom float32          // Zoom level for GAT view
 }
 
 var (
@@ -551,6 +556,26 @@ func (app *App) render() {
 		// 0 key to reset zoom
 		if imgui.IsKeyChordPressed(imgui.KeyChord(imgui.Key0)) || imgui.IsKeyChordPressed(imgui.KeyChord(imgui.KeyKeypad0)) {
 			app.previewZoom = 1.0
+		}
+	}
+
+	// GAT zoom controls: +/- to zoom, 0 to reset
+	if app.previewGAT != nil {
+		// + or = key to zoom in
+		if imgui.IsKeyChordPressed(imgui.KeyChord(imgui.KeyEqual)) || imgui.IsKeyChordPressed(imgui.KeyChord(imgui.KeyKeypadAdd)) {
+			if app.previewGATZoom < 8.0 {
+				app.previewGATZoom += 0.25
+			}
+		}
+		// - key to zoom out
+		if imgui.IsKeyChordPressed(imgui.KeyChord(imgui.KeyMinus)) || imgui.IsKeyChordPressed(imgui.KeyChord(imgui.KeyKeypadSubtract)) {
+			if app.previewGATZoom > 0.25 {
+				app.previewGATZoom -= 0.25
+			}
+		}
+		// 0 key to reset zoom
+		if imgui.IsKeyChordPressed(imgui.KeyChord(imgui.Key0)) || imgui.IsKeyChordPressed(imgui.KeyChord(imgui.KeyKeypad0)) {
+			app.previewGATZoom = 1.0
 		}
 	}
 
@@ -1152,6 +1177,8 @@ func (app *App) renderPreview() {
 		app.renderTextPreview()
 	case ".wav":
 		app.renderAudioPreview()
+	case ".gat":
+		app.renderGATPreview()
 	default:
 		app.renderHexPreview()
 	}
@@ -1186,6 +1213,8 @@ func (app *App) loadPreview(displayPath string) {
 		app.loadTextPreview(archivePath)
 	case ".wav":
 		app.loadAudioPreview(archivePath)
+	case ".gat":
+		app.loadGATPreview(archivePath)
 	default:
 		// Load as hex for unknown formats
 		app.loadHexPreview(archivePath)
@@ -1221,6 +1250,13 @@ func (app *App) clearPreview() {
 
 	// Stop and release audio (Stage 4)
 	app.stopAudio()
+
+	// Clear GAT preview (ADR-011)
+	app.previewGAT = nil
+	if app.previewGATTex != nil {
+		app.previewGATTex.Release()
+		app.previewGATTex = nil
+	}
 }
 
 // loadSpritePreview loads a SPR file for preview.
@@ -2133,6 +2169,158 @@ func (app *App) stopAudio() {
 	if app.audioStreamer != nil {
 		app.audioStreamer.Close()
 		app.audioStreamer = nil
+	}
+}
+
+// loadGATPreview loads a GAT file for preview.
+func (app *App) loadGATPreview(path string) {
+	data, err := app.archive.Read(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading GAT file: %v\n", err)
+		return
+	}
+
+	gat, err := formats.ParseGAT(data)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing GAT: %v\n", err)
+		return
+	}
+
+	app.previewGAT = gat
+	app.previewGATZoom = 1.0
+
+	// Create visualization texture
+	app.createGATTexture()
+}
+
+// createGATTexture creates a texture from GAT data for visualization.
+func (app *App) createGATTexture() {
+	if app.previewGAT == nil {
+		return
+	}
+
+	gat := app.previewGAT
+	width := int(gat.Width)
+	height := int(gat.Height)
+
+	// Create RGBA image
+	rgba := image.NewRGBA(image.Rect(0, 0, width, height))
+
+	// Color map for cell types
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			cell := gat.GetCell(x, y)
+			if cell == nil {
+				continue
+			}
+
+			var c color.RGBA
+			switch cell.Type {
+			case formats.GATWalkable:
+				c = color.RGBA{R: 100, G: 200, B: 100, A: 255} // Green
+			case formats.GATBlocked:
+				c = color.RGBA{R: 200, G: 80, B: 80, A: 255} // Red
+			case formats.GATWater:
+				c = color.RGBA{R: 80, G: 150, B: 220, A: 255} // Blue
+			case formats.GATWalkableWater:
+				c = color.RGBA{R: 100, G: 200, B: 200, A: 255} // Cyan
+			case formats.GATSnipeable:
+				c = color.RGBA{R: 220, G: 200, B: 80, A: 255} // Yellow
+			case formats.GATBlockedSnipe:
+				c = color.RGBA{R: 220, G: 150, B: 80, A: 255} // Orange
+			default:
+				c = color.RGBA{R: 128, G: 128, B: 128, A: 255} // Gray
+			}
+
+			// Flip Y for display (GAT origin is bottom-left)
+			rgba.SetRGBA(x, height-1-y, c)
+		}
+	}
+
+	// Create texture
+	app.previewGATTex = backend.NewTextureFromRgba(rgba)
+}
+
+// renderGATPreview renders the GAT visualization.
+func (app *App) renderGATPreview() {
+	if app.previewGAT == nil {
+		imgui.TextDisabled("Failed to load GAT file")
+		return
+	}
+
+	gat := app.previewGAT
+
+	// Info
+	imgui.Text(fmt.Sprintf("Size: %d x %d cells", gat.Width, gat.Height))
+	imgui.Text(fmt.Sprintf("Version: %s", gat.Version))
+
+	// Cell type counts
+	counts := gat.CountByType()
+	imgui.Text(fmt.Sprintf("Walkable: %d | Blocked: %d | Water: %d",
+		counts[formats.GATWalkable]+counts[formats.GATWalkableWater],
+		counts[formats.GATBlocked]+counts[formats.GATBlockedSnipe],
+		counts[formats.GATWater]+counts[formats.GATWalkableWater]))
+
+	// Altitude range
+	minAlt, maxAlt := gat.GetAltitudeRange()
+	imgui.Text(fmt.Sprintf("Altitude: %.1f to %.1f", minAlt, maxAlt))
+
+	imgui.Separator()
+
+	// Zoom controls (buttons only, keyboard +/- handled globally in handleKeyboardShortcuts)
+	imgui.Text("Zoom:")
+	imgui.SameLine()
+	if imgui.Button("-##gatzoom") && app.previewGATZoom > 0.25 {
+		app.previewGATZoom -= 0.25
+	}
+	imgui.SameLine()
+	imgui.Text(fmt.Sprintf("%.0f%%", app.previewGATZoom*100))
+	imgui.SameLine()
+	if imgui.Button("+##gatzoom") && app.previewGATZoom < 8.0 {
+		app.previewGATZoom += 0.25
+	}
+	imgui.SameLine()
+	if imgui.Button("Fit##gatzoom") {
+		// Calculate zoom to fit in available space
+		avail := imgui.ContentRegionAvail()
+		zoomX := avail.X / float32(gat.Width)
+		zoomY := avail.Y / float32(gat.Height)
+		app.previewGATZoom = min(zoomX, zoomY)
+		if app.previewGATZoom < 0.1 {
+			app.previewGATZoom = 0.1
+		}
+	}
+
+	imgui.Separator()
+
+	// Legend
+	imgui.TextColored(imgui.NewVec4(0.4, 0.8, 0.4, 1), "Walkable")
+	imgui.SameLine()
+	imgui.TextColored(imgui.NewVec4(0.8, 0.3, 0.3, 1), "Blocked")
+	imgui.SameLine()
+	imgui.TextColored(imgui.NewVec4(0.3, 0.6, 0.9, 1), "Water")
+	imgui.SameLine()
+	imgui.TextColored(imgui.NewVec4(0.9, 0.8, 0.3, 1), "Snipeable")
+
+	imgui.Separator()
+
+	// Display texture
+	if app.previewGATTex != nil {
+		w := float32(gat.Width) * app.previewGATZoom
+		h := float32(gat.Height) * app.previewGATZoom
+
+		// Scrollable child region for large maps
+		if imgui.BeginChildStrV("GATView", imgui.NewVec2(0, 0), imgui.ChildFlagsBorders, imgui.WindowFlagsHorizontalScrollbar) {
+			imgui.ImageWithBgV(
+				app.previewGATTex.ID,
+				imgui.NewVec2(w, h),
+				imgui.NewVec2(0, 0),
+				imgui.NewVec2(1, 1),
+				imgui.NewVec4(0.1, 0.1, 0.1, 1.0), // Dark background
+				imgui.NewVec4(1, 1, 1, 1),         // No tint
+			)
+		}
+		imgui.EndChild()
 	}
 }
 
