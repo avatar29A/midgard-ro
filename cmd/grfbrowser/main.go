@@ -102,7 +102,7 @@ var koreanGlyphRanges = []imgui.Wchar{
 	0x3000, 0x30FF, // CJK Symbols and Punctuation, Hiragana, Katakana
 	0x3130, 0x318F, // Hangul Compatibility Jamo
 	0xAC00, 0xD7AF, // Hangul Syllables
-	0,              // Terminator
+	0, // Terminator
 }
 
 // NewApp creates a new application instance.
@@ -155,10 +155,10 @@ func (app *App) loadKoreanFont() {
 
 	// Try different font paths (cross-platform support)
 	fontPaths := []string{
-		"/Library/Fonts/Arial Unicode.ttf",                  // macOS (symlink)
-		"/System/Library/Fonts/Supplemental/Arial Unicode.ttf", // macOS (actual)
-		"C:\\Windows\\Fonts\\malgun.ttf",                    // Windows (Malgun Gothic)
-		"C:\\Windows\\Fonts\\gulim.ttc",                     // Windows (Gulim)
+		"/Library/Fonts/Arial Unicode.ttf",                       // macOS (symlink)
+		"/System/Library/Fonts/Supplemental/Arial Unicode.ttf",   // macOS (actual)
+		"C:\\Windows\\Fonts\\malgun.ttf",                         // Windows (Malgun Gothic)
+		"C:\\Windows\\Fonts\\gulim.ttc",                          // Windows (Gulim)
 		"/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc", // Linux
 		"/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", // Linux alt
 	}
@@ -215,7 +215,7 @@ func (app *App) openFileDialog() {
 			Load()
 
 		if err != nil {
-			// User cancelled or error occurred
+			// User canceled or error occurred
 			if err != dialog.ErrCancelled {
 				fmt.Fprintf(os.Stderr, "File dialog error: %v\n", err)
 			}
