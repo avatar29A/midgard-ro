@@ -301,16 +301,16 @@ func (app *App) buildFileTree() *FileNode {
 			continue
 		}
 
-		// Apply search
-		if app.searchText != "" && !app.matchesSearch(filePath) {
-			continue
-		}
-
 		// Keep original path for archive lookups
 		originalPath := strings.ReplaceAll(filePath, "\\", "/")
 
 		// Convert to UTF-8 for display
 		displayPath := euckrToUTF8(originalPath)
+
+		// Apply search against UTF-8 display path (supports Korean input)
+		if app.searchText != "" && !app.matchesSearch(displayPath) {
+			continue
+		}
 		parts := strings.Split(displayPath, "/")
 
 		// Create parent directories
@@ -409,7 +409,12 @@ func (app *App) matchesSearch(path string) bool {
 func (app *App) countFilteredFiles() int {
 	count := 0
 	for _, path := range app.flatFiles {
-		if app.matchesFilter(path) && app.matchesSearch(path) {
+		if !app.matchesFilter(path) {
+			continue
+		}
+		// Convert to UTF-8 for search matching (supports Korean input)
+		displayPath := euckrToUTF8(strings.ReplaceAll(path, "\\", "/"))
+		if app.matchesSearch(displayPath) {
 			count++
 		}
 	}
@@ -460,8 +465,11 @@ func (app *App) render() {
 
 		if imgui.IsKeyChordPressed(cmdCtrlC) {
 			imgui.SetClipboardText(app.selectedPath)
+			app.showNotification("Copied: " + app.selectedPath)
 		} else if imgui.IsKeyChordPressed(ctrlC) {
-			imgui.SetClipboardText(filepath.Base(app.selectedPath))
+			name := filepath.Base(app.selectedPath)
+			imgui.SetClipboardText(name)
+			app.showNotification("Copied: " + name)
 		}
 	}
 
@@ -661,6 +669,13 @@ func (app *App) captureScreenshot() {
 
 	// Print to console for automation scripts
 	fmt.Printf("Screenshot saved: %s\n", savePath)
+}
+
+// showNotification displays a brief overlay notification message.
+func (app *App) showNotification(msg string) {
+	app.lastScreenshotMsg = msg
+	app.showScreenshotMsg = true
+	app.screenshotMsgTime = time.Now()
 }
 
 // GUIState represents the current GUI state for JSON export (ADR-010 Phase 2).
@@ -898,6 +913,29 @@ func (app *App) renderSearchAndFilter() {
 			}
 
 			imgui.EndTable()
+		}
+
+		// Select All / Unselect All buttons
+		if imgui.Button("All") {
+			app.filterSprites = true
+			app.filterAnimations = true
+			app.filterTextures = true
+			app.filterModels = true
+			app.filterMaps = true
+			app.filterAudio = true
+			app.filterOther = true
+			changed = true
+		}
+		imgui.SameLine()
+		if imgui.Button("None") {
+			app.filterSprites = false
+			app.filterAnimations = false
+			app.filterTextures = false
+			app.filterModels = false
+			app.filterMaps = false
+			app.filterAudio = false
+			app.filterOther = false
+			changed = true
 		}
 
 		if changed {
