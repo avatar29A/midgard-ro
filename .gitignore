@@ -6,7 +6,7 @@
 *.dylib
 build/
 bin/
-grfbrowser
+/grfbrowser
 
 # Test binary, built with `go test -c`
 *.test
