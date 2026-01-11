@@ -48,9 +48,10 @@ type SPRPalette struct {
 
 // SPR represents a parsed sprite file.
 type SPR struct {
-	Version SPRVersion
-	Images  []SPRImage  // All images converted to RGBA
-	Palette *SPRPalette // Original palette (nil for pure TGA sprites)
+	Version      SPRVersion
+	Images       []SPRImage  // All images converted to RGBA
+	Palette      *SPRPalette // Original palette (nil for pure TGA sprites)
+	IndexedCount int         // Number of indexed (palette) images; RGBA images start after this
 }
 
 // ParseSPR parses an SPR file from raw bytes.
@@ -95,8 +96,9 @@ func ParseSPR(data []byte) (*SPR, error) {
 	}
 
 	spr := &SPR{
-		Version: version,
-		Images:  make([]SPRImage, 0, int(indexedCount)+int(trueColorCount)),
+		Version:      version,
+		Images:       make([]SPRImage, 0, int(indexedCount)+int(trueColorCount)),
+		IndexedCount: int(indexedCount),
 	}
 
 	// Parse palette (last 1024 bytes for v1.1+)

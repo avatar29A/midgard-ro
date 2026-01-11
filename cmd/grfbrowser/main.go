@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"image"
+	"image/color"
 	"image/png"
 	"os"
 	"path/filepath"
@@ -22,6 +23,7 @@ import (
 	"golang.org/x/text/encoding/korean"
 	"golang.org/x/text/transform"
 
+	"github.com/Faultbox/midgard-ro/pkg/formats"
 	"github.com/Faultbox/midgard-ro/pkg/grf"
 )
 
@@ -59,9 +61,12 @@ type App struct {
 	filterCount int
 
 	// UI state
-	searchText    string
-	selectedPath  string
-	expandedPaths map[string]bool
+	searchText           string
+	selectedPath         string // Display path (UTF-8)
+	selectedOriginalPath string // Archive path (for file reading)
+	expandedPaths        map[string]bool
+	// TODO (Stage 5): TAB key to cycle focus between Search/Tree/Preview panels
+	// Requires research into ImGui keyboard navigation activation
 
 	// Filter state
 	filterSprites    bool
@@ -81,15 +86,27 @@ type App struct {
 
 	// File dialog state (must open on main thread)
 	pendingGRFPath string // Path selected from file dialog, processed on main thread
+
+	// Sprite preview state (ADR-009 Stage 3)
+	previewSPR      *formats.SPR       // Currently loaded sprite
+	previewACT      *formats.ACT       // Currently loaded animation
+	previewTextures []*backend.Texture // Textures for each sprite frame
+	previewFrame    int                // Current frame index
+	previewAction   int                // Current action index (for ACT)
+	previewPlaying  bool               // Animation playing state
+	previewLastTime time.Time          // Last frame update time
+	previewPath     string             // Path of currently previewed file
+	previewZoom     float32            // Zoom level for preview
 }
 
 // FileNode represents a node in the virtual file tree.
 type FileNode struct {
-	Name     string
-	Path     string
-	IsDir    bool
-	Children []*FileNode
-	Size     int64
+	Name         string // Display name (UTF-8)
+	Path         string // Display path (UTF-8)
+	OriginalPath string // Archive path (original encoding for lookups)
+	IsDir        bool
+	Children     []*FileNode
+	Size         int64
 }
 
 // koreanGlyphRanges defines the Unicode ranges for Korean text rendering.
@@ -117,6 +134,7 @@ func NewApp() *App {
 		filterAudio:      true,
 		filterOther:      true,
 		screenshotDir:    "/tmp/grfbrowser",
+		previewZoom:      1.0,
 	}
 
 	// Ensure screenshot directory exists (ADR-010)
@@ -247,7 +265,11 @@ func (app *App) OpenGRF(path string) error {
 	app.fileTree = app.buildFileTree()
 	app.filterCount = app.totalFiles
 	app.selectedPath = ""
+	app.selectedOriginalPath = ""
 	app.expandedPaths = make(map[string]bool)
+
+	// Clear any existing preview
+	app.clearPreview()
 
 	// Update window title
 	app.backend.SetWindowTitle(fmt.Sprintf("GRF Browser - %s", filepath.Base(path)))
@@ -279,15 +301,17 @@ func (app *App) buildFileTree() *FileNode {
 			continue
 		}
 
-		// Apply search
-		if app.searchText != "" && !app.matchesSearch(filePath) {
+		// Keep original path for archive lookups
+		originalPath := strings.ReplaceAll(filePath, "\\", "/")
+
+		// Convert to UTF-8 for display
+		displayPath := euckrToUTF8(originalPath)
+
+		// Apply search against UTF-8 display path (supports Korean input)
+		if app.searchText != "" && !app.matchesSearch(displayPath) {
 			continue
 		}
-
-		// Normalize path and convert from EUC-KR to UTF-8
-		normalizedPath := strings.ReplaceAll(filePath, "\\", "/")
-		normalizedPath = euckrToUTF8(normalizedPath)
-		parts := strings.Split(normalizedPath, "/")
+		parts := strings.Split(displayPath, "/")
 
 		// Create parent directories
 		currentPath := ""
@@ -315,11 +339,12 @@ func (app *App) buildFileTree() *FileNode {
 					parent = newDir
 				}
 			} else {
-				// File
+				// File - store both display path and original path for archive lookup
 				fileNode := &FileNode{
-					Name:  part,
-					Path:  normalizedPath,
-					IsDir: false,
+					Name:         part,
+					Path:         displayPath,
+					OriginalPath: originalPath,
+					IsDir:        false,
 				}
 				parent.Children = append(parent.Children, fileNode)
 			}
@@ -384,7 +409,12 @@ func (app *App) matchesSearch(path string) bool {
 func (app *App) countFilteredFiles() int {
 	count := 0
 	for _, path := range app.flatFiles {
-		if app.matchesFilter(path) && app.matchesSearch(path) {
+		if !app.matchesFilter(path) {
+			continue
+		}
+		// Convert to UTF-8 for search matching (supports Korean input)
+		displayPath := euckrToUTF8(strings.ReplaceAll(path, "\\", "/"))
+		if app.matchesSearch(displayPath) {
 			count++
 		}
 	}
@@ -424,6 +454,9 @@ func (app *App) render() {
 		app.dumpState()
 	}
 
+	// NOTE: TAB key navigates within tree (ImGui default behavior)
+	// TODO (Stage 5): Research ImGui ConfigFlags to implement custom TAB panel cycling
+
 	// Ctrl+C = copy filename only
 	// Cmd+Ctrl+C = copy full path (macOS friendly)
 	if app.selectedPath != "" {
@@ -432,8 +465,41 @@ func (app *App) render() {
 
 		if imgui.IsKeyChordPressed(cmdCtrlC) {
 			imgui.SetClipboardText(app.selectedPath)
+			app.showNotification("Copied: " + app.selectedPath)
 		} else if imgui.IsKeyChordPressed(ctrlC) {
-			imgui.SetClipboardText(filepath.Base(app.selectedPath))
+			name := filepath.Base(app.selectedPath)
+			imgui.SetClipboardText(name)
+			app.showNotification("Copied: " + name)
+		}
+	}
+
+	// Space to toggle Play/Pause for animations (when not in text input)
+	if app.previewACT != nil && !imgui.IsAnyItemActive() {
+		if imgui.IsKeyChordPressed(imgui.KeyChord(imgui.KeySpace)) {
+			app.previewPlaying = !app.previewPlaying
+			if app.previewPlaying {
+				app.previewLastTime = time.Now()
+			}
+		}
+	}
+
+	// Zoom controls: +/- to zoom, 0 to reset (works when preview has content)
+	if app.previewSPR != nil {
+		// + or = key to zoom in
+		if imgui.IsKeyChordPressed(imgui.KeyChord(imgui.KeyEqual)) || imgui.IsKeyChordPressed(imgui.KeyChord(imgui.KeyKeypadAdd)) {
+			if app.previewZoom < 8.0 {
+				app.previewZoom += 0.5
+			}
+		}
+		// - key to zoom out
+		if imgui.IsKeyChordPressed(imgui.KeyChord(imgui.KeyMinus)) || imgui.IsKeyChordPressed(imgui.KeyChord(imgui.KeyKeypadSubtract)) {
+			if app.previewZoom > 0.5 {
+				app.previewZoom -= 0.5
+			}
+		}
+		// 0 key to reset zoom
+		if imgui.IsKeyChordPressed(imgui.KeyChord(imgui.Key0)) || imgui.IsKeyChordPressed(imgui.KeyChord(imgui.KeyKeypad0)) {
+			app.previewZoom = 1.0
 		}
 	}
 
@@ -459,13 +525,17 @@ func (app *App) render() {
 
 	// Layout dimensions
 	leftPanelWidth := float32(350)
+	rightPanelWidth := float32(200) // Actions panel for animations
 	statusBarHeight := float32(30)
 	contentHeight := workSize.Y - statusBarHeight
+
+	// Show actions panel only for ACT files
+	showActionsPanel := app.previewACT != nil
 
 	// Window flags for fixed panels
 	flags := imgui.WindowFlagsNoMove | imgui.WindowFlagsNoResize | imgui.WindowFlagsNoCollapse
 
-	// Left panel - File browser
+	// Left panel - File browser (contains Search and Tree)
 	imgui.SetNextWindowPos(workPos)
 	imgui.SetNextWindowSize(imgui.NewVec2(leftPanelWidth, contentHeight))
 	if imgui.BeginV("Files", nil, flags) {
@@ -475,13 +545,29 @@ func (app *App) render() {
 	}
 	imgui.End()
 
-	// Right panel - Preview
+	// Calculate preview panel width (shrinks when actions panel is shown)
+	previewWidth := workSize.X - leftPanelWidth
+	if showActionsPanel {
+		previewWidth -= rightPanelWidth
+	}
+
+	// Center panel - Preview
 	imgui.SetNextWindowPos(imgui.NewVec2(workPos.X+leftPanelWidth, workPos.Y))
-	imgui.SetNextWindowSize(imgui.NewVec2(workSize.X-leftPanelWidth, contentHeight))
+	imgui.SetNextWindowSize(imgui.NewVec2(previewWidth, contentHeight))
 	if imgui.BeginV("Preview", nil, flags) {
 		app.renderPreview()
 	}
 	imgui.End()
+
+	// Right panel - Actions (only for ACT files)
+	if showActionsPanel {
+		imgui.SetNextWindowPos(imgui.NewVec2(workPos.X+leftPanelWidth+previewWidth, workPos.Y))
+		imgui.SetNextWindowSize(imgui.NewVec2(rightPanelWidth, contentHeight))
+		if imgui.BeginV("Actions", nil, flags) {
+			app.renderActionsPanel()
+		}
+		imgui.End()
+	}
 
 	// Status bar at bottom
 	imgui.SetNextWindowPos(imgui.NewVec2(workPos.X, workPos.Y+contentHeight))
@@ -583,6 +669,13 @@ func (app *App) captureScreenshot() {
 
 	// Print to console for automation scripts
 	fmt.Printf("Screenshot saved: %s\n", savePath)
+}
+
+// showNotification displays a brief overlay notification message.
+func (app *App) showNotification(msg string) {
+	app.lastScreenshotMsg = msg
+	app.showScreenshotMsg = true
+	app.screenshotMsgTime = time.Now()
 }
 
 // GUIState represents the current GUI state for JSON export (ADR-010 Phase 2).
@@ -702,6 +795,7 @@ func (app *App) executeCommand(cmd Command) {
 	switch cmd.Action {
 	case "select_file":
 		app.selectedPath = cmd.Path
+		app.selectedOriginalPath = cmd.Path // Command uses original path format
 		app.lastScreenshotMsg = fmt.Sprintf("Selected: %s", cmd.Path)
 
 	case "expand_folder":
@@ -821,6 +915,29 @@ func (app *App) renderSearchAndFilter() {
 			imgui.EndTable()
 		}
 
+		// Select All / Unselect All buttons
+		if imgui.Button("All") {
+			app.filterSprites = true
+			app.filterAnimations = true
+			app.filterTextures = true
+			app.filterModels = true
+			app.filterMaps = true
+			app.filterAudio = true
+			app.filterOther = true
+			changed = true
+		}
+		imgui.SameLine()
+		if imgui.Button("None") {
+			app.filterSprites = false
+			app.filterAnimations = false
+			app.filterTextures = false
+			app.filterModels = false
+			app.filterMaps = false
+			app.filterAudio = false
+			app.filterOther = false
+			changed = true
+		}
+
 		if changed {
 			app.rebuildTree()
 		}
@@ -862,22 +979,41 @@ func (app *App) renderTreeNode(node *FileNode) {
 	for _, child := range node.Children {
 		if child.IsDir {
 			// Directory node
-			flags := imgui.TreeNodeFlagsOpenOnArrow | imgui.TreeNodeFlagsOpenOnDoubleClick
+			flags := imgui.TreeNodeFlagsOpenOnArrow | imgui.TreeNodeFlagsOpenOnDoubleClick | imgui.TreeNodeFlagsSpanAvailWidth
+
+			// Selection state for directories
+			if child.Path == app.selectedPath {
+				flags |= imgui.TreeNodeFlagsSelected
+			}
 
 			// Check if expanded
-			if app.expandedPaths[child.Path] {
+			isExpanded := app.expandedPaths[child.Path]
+			if isExpanded {
 				flags |= imgui.TreeNodeFlagsDefaultOpen
 			}
 
 			// Folder icon (text-based for font compatibility)
 			open := imgui.TreeNodeExStrV("[+] "+child.Name, flags)
 
+			// Select directory when focused (for highlighting)
+			if imgui.IsItemFocused() {
+				app.selectedPath = child.Path
+				app.selectedOriginalPath = ""
+			}
+
+			// Toggle expand/collapse with Space when focused
+			if imgui.IsItemFocused() && imgui.IsKeyChordPressed(imgui.KeyChord(imgui.KeySpace)) {
+				// Toggle expansion state - will be applied on next frame rebuild
+				app.expandedPaths[child.Path] = !isExpanded
+			}
+
 			// Track expansion state
 			if open {
 				app.expandedPaths[child.Path] = true
 				app.renderTreeNode(child)
 				imgui.TreePop()
-			} else {
+			} else if !imgui.IsItemFocused() || !imgui.IsKeyChordPressed(imgui.KeyChord(imgui.KeySpace)) {
+				// Only set to false if not manually toggling
 				app.expandedPaths[child.Path] = false
 			}
 		} else {
@@ -894,8 +1030,10 @@ func (app *App) renderTreeNode(node *FileNode) {
 
 			imgui.TreeNodeExStrV(icon+" "+child.Name, flags)
 
-			if imgui.IsItemClicked() {
+			// Auto-select when navigating with arrows (IsItemFocused), or on click/Enter
+			if imgui.IsItemClicked() || imgui.IsItemFocused() {
 				app.selectedPath = child.Path
+				app.selectedOriginalPath = child.OriginalPath
 			}
 		}
 	}
@@ -944,8 +1082,449 @@ func (app *App) renderPreview() {
 	ext := strings.ToLower(filepath.Ext(app.selectedPath))
 	imgui.Text("Type: " + app.getFileTypeName(ext))
 
+	// Load preview if path changed
+	if app.previewPath != app.selectedPath {
+		app.loadPreview(app.selectedPath)
+	}
+
 	imgui.Separator()
-	imgui.TextDisabled("Preview coming in Stage 3...")
+
+	// Render based on file type
+	switch ext {
+	case ".spr":
+		app.renderSpritePreview()
+	case ".act":
+		app.renderAnimationPreview()
+	default:
+		imgui.TextDisabled("Preview not available for this file type")
+	}
+}
+
+// loadPreview loads the preview for the given display path.
+// Uses selectedOriginalPath for archive reads (handles EUC-KR paths).
+func (app *App) loadPreview(displayPath string) {
+	// Clear previous preview
+	app.clearPreview()
+	app.previewPath = displayPath
+
+	if app.archive == nil {
+		return
+	}
+
+	// Use original path for archive reads (EUC-KR encoded for Korean paths)
+	archivePath := app.selectedOriginalPath
+	if archivePath == "" {
+		archivePath = displayPath // Fallback for ASCII paths
+	}
+
+	ext := strings.ToLower(filepath.Ext(displayPath))
+	switch ext {
+	case ".spr":
+		app.loadSpritePreview(archivePath)
+	case ".act":
+		app.loadAnimationPreview(archivePath)
+	}
+}
+
+// clearPreview releases preview resources.
+func (app *App) clearPreview() {
+	// Release textures
+	for _, tex := range app.previewTextures {
+		if tex != nil {
+			tex.Release()
+		}
+	}
+	app.previewTextures = nil
+	app.previewSPR = nil
+	app.previewACT = nil
+	app.previewFrame = 0
+	app.previewAction = 0
+	app.previewPlaying = false
+}
+
+// loadSpritePreview loads a SPR file for preview.
+func (app *App) loadSpritePreview(path string) {
+	data, err := app.archive.Read(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading sprite: %v\n", err)
+		return
+	}
+
+	spr, err := formats.ParseSPR(data)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing sprite: %v\n", err)
+		return
+	}
+
+	app.previewSPR = spr
+
+	// Create textures for all images
+	app.previewTextures = make([]*backend.Texture, len(spr.Images))
+	for i, img := range spr.Images {
+		rgba := sprImageToRGBA(&img)
+		app.previewTextures[i] = backend.NewTextureFromRgba(rgba)
+	}
+}
+
+// loadAnimationPreview loads an ACT file for preview.
+func (app *App) loadAnimationPreview(path string) {
+	data, err := app.archive.Read(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading animation: %v\n", err)
+		return
+	}
+
+	act, err := formats.ParseACT(data)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing animation: %v\n", err)
+		return
+	}
+
+	app.previewACT = act
+
+	// Try to load corresponding SPR file (try both .spr and .SPR extensions)
+	basePath := strings.TrimSuffix(path, filepath.Ext(path))
+	sprPath := ""
+	for _, ext := range []string{".spr", ".SPR", ".Spr"} {
+		candidate := basePath + ext
+		if app.archive.Contains(candidate) {
+			sprPath = candidate
+			break
+		}
+	}
+
+	if sprPath != "" {
+		app.loadSpritePreview(sprPath)
+	} else {
+		fmt.Fprintf(os.Stderr, "SPR file not found for: %s\n", path)
+		// Debug: List files in same directory to help find the SPR
+		dir := filepath.Dir(path)
+		fmt.Fprintf(os.Stderr, "Looking for SPR files in: %s\n", dir)
+		for _, f := range app.flatFiles {
+			fNorm := strings.ReplaceAll(f, "\\", "/")
+			if strings.HasPrefix(fNorm, dir) && strings.HasSuffix(strings.ToLower(fNorm), ".spr") {
+				fmt.Fprintf(os.Stderr, "  Found SPR: %s\n", fNorm)
+			}
+		}
+	}
+
+	app.previewLastTime = time.Now()
+}
+
+// sprImageToRGBA converts an SPR image to *image.RGBA.
+func sprImageToRGBA(img *formats.SPRImage) *image.RGBA {
+	rgba := image.NewRGBA(image.Rect(0, 0, int(img.Width), int(img.Height)))
+
+	// Copy pixel data
+	for y := 0; y < int(img.Height); y++ {
+		for x := 0; x < int(img.Width); x++ {
+			i := (y*int(img.Width) + x) * 4
+			rgba.SetRGBA(x, y, color.RGBA{
+				R: img.Pixels[i],
+				G: img.Pixels[i+1],
+				B: img.Pixels[i+2],
+				A: img.Pixels[i+3],
+			})
+		}
+	}
+
+	return rgba
+}
+
+// renderSpritePreview renders the sprite preview with frame navigation.
+func (app *App) renderSpritePreview() {
+	if app.previewSPR == nil || len(app.previewTextures) == 0 {
+		imgui.TextDisabled("Failed to load sprite")
+		return
+	}
+
+	spr := app.previewSPR
+	imgui.Text(fmt.Sprintf("Version: %s", spr.Version))
+	imgui.Text(fmt.Sprintf("Images: %d", len(spr.Images)))
+
+	if spr.Palette != nil {
+		imgui.Text("Palette: Yes (256 colors)")
+	}
+
+	imgui.Separator()
+
+	// Frame navigation
+	imgui.Text(fmt.Sprintf("Frame: %d / %d", app.previewFrame+1, len(spr.Images)))
+	imgui.SameLine()
+
+	if imgui.Button("<") && app.previewFrame > 0 {
+		app.previewFrame--
+	}
+	imgui.SameLine()
+	if imgui.Button(">") && app.previewFrame < len(spr.Images)-1 {
+		app.previewFrame++
+	}
+
+	// Zoom controls
+	imgui.SameLine()
+	imgui.Text("  Zoom:")
+	imgui.SameLine()
+	if imgui.Button("-") && app.previewZoom > 0.5 {
+		app.previewZoom -= 0.5
+	}
+	imgui.SameLine()
+	imgui.Text(fmt.Sprintf("%.1fx", app.previewZoom))
+	imgui.SameLine()
+	if imgui.Button("+") && app.previewZoom < 8.0 {
+		app.previewZoom += 0.5
+	}
+
+	imgui.Separator()
+
+	// Display current frame centered in available space
+	if app.previewFrame < len(app.previewTextures) {
+		tex := app.previewTextures[app.previewFrame]
+		if tex != nil {
+			img := spr.Images[app.previewFrame]
+			w := float32(img.Width) * app.previewZoom
+			h := float32(img.Height) * app.previewZoom
+
+			// Center the image both horizontally and vertically
+			avail := imgui.ContentRegionAvail()
+			startX := imgui.CursorPosX()
+			startY := imgui.CursorPosY()
+			if w < avail.X {
+				imgui.SetCursorPosX(startX + (avail.X-w)/2)
+			}
+			if h < avail.Y {
+				imgui.SetCursorPosY(startY + (avail.Y-h)/2)
+			}
+
+			// Draw with checkerboard background to show transparency
+			imgui.ImageWithBgV(
+				tex.ID,
+				imgui.NewVec2(w, h),
+				imgui.NewVec2(0, 0),
+				imgui.NewVec2(1, 1),
+				imgui.NewVec4(0.2, 0.2, 0.2, 1.0), // Dark gray background
+				imgui.NewVec4(1, 1, 1, 1),         // White tint (no tint)
+			)
+		}
+	}
+}
+
+// renderAnimationPreview renders the animation preview (frame display only, controls in Actions panel).
+func (app *App) renderAnimationPreview() {
+	if app.previewACT == nil {
+		imgui.TextDisabled("Failed to load animation")
+		return
+	}
+
+	act := app.previewACT
+
+	// Update animation timing
+	if len(act.Actions) > 0 {
+		action := act.Actions[app.previewAction]
+
+		if app.previewPlaying && len(action.Frames) > 0 {
+			// Get interval from ACT file (default 4 ticks if not specified)
+			// ACT intervals are in game ticks; multiply by 24ms per tick for real time
+			interval := float32(4.0) // default 4 ticks
+			if app.previewAction < len(act.Intervals) && act.Intervals[app.previewAction] > 0 {
+				interval = act.Intervals[app.previewAction]
+			}
+
+			// Convert ticks to milliseconds (24ms per tick is standard RO timing)
+			// Apply minimum floor of 100ms for readability
+			intervalMs := interval * 24.0
+			if intervalMs < 100.0 {
+				intervalMs = 100.0
+			}
+
+			elapsed := time.Since(app.previewLastTime).Milliseconds()
+			if elapsed >= int64(intervalMs) {
+				app.previewFrame = (app.previewFrame + 1) % len(action.Frames)
+				app.previewLastTime = time.Now()
+			}
+		}
+
+		// Render current frame layers
+		if app.previewFrame < len(action.Frames) && app.previewSPR != nil {
+			frame := action.Frames[app.previewFrame]
+			app.renderACTFrame(&frame)
+		} else if app.previewSPR == nil {
+			imgui.TextDisabled("No sprite loaded (SPR file not found)")
+		}
+	}
+}
+
+// renderActionsPanel renders the Actions panel for ACT files.
+func (app *App) renderActionsPanel() {
+	if app.previewACT == nil {
+		return
+	}
+
+	act := app.previewACT
+
+	// Playback controls at top
+	if app.previewPlaying {
+		if imgui.ButtonV("Pause", imgui.NewVec2(-1, 0)) {
+			app.previewPlaying = false
+		}
+	} else {
+		if imgui.ButtonV("Play", imgui.NewVec2(-1, 0)) {
+			app.previewPlaying = true
+			app.previewLastTime = time.Now()
+		}
+	}
+
+	imgui.Text("(Space to toggle)")
+
+	imgui.Separator()
+
+	// Frame info
+	if len(act.Actions) > 0 && app.previewAction < len(act.Actions) {
+		action := act.Actions[app.previewAction]
+		imgui.Text(fmt.Sprintf("Frame: %d / %d", app.previewFrame+1, len(action.Frames)))
+
+		// Frame navigation
+		if imgui.Button("<##frame") && app.previewFrame > 0 {
+			app.previewFrame--
+		}
+		imgui.SameLine()
+		if imgui.Button(">##frame") && app.previewFrame < len(action.Frames)-1 {
+			app.previewFrame++
+		}
+	}
+
+	imgui.Separator()
+	imgui.Text("Actions:")
+
+	// Scrollable action list
+	if imgui.BeginChildStrV("ActionList", imgui.NewVec2(0, 0), imgui.ChildFlagsBorders, 0) {
+		for i := 0; i < len(act.Actions); i++ {
+			action := act.Actions[i]
+			name := getActionName(i)
+			label := fmt.Sprintf("%d: %s (%d)", i, name, len(action.Frames))
+
+			isSelected := i == app.previewAction
+			if imgui.SelectableBoolV(label, isSelected, 0, imgui.NewVec2(0, 0)) {
+				app.previewAction = i
+				app.previewFrame = 0
+			}
+		}
+	}
+	imgui.EndChild()
+}
+
+// getActionName returns a standard RO action name for the given index.
+func getActionName(index int) string {
+	// Standard RO action indices (may vary by sprite type)
+	names := []string{
+		"Idle",        // 0
+		"Walk",        // 1
+		"Sit",         // 2
+		"Pick Up",     // 3
+		"Standby",     // 4
+		"Attack 1",    // 5
+		"Damage",      // 6
+		"Die",         // 7
+		"Attack 2",    // 8
+		"Attack 3",    // 9
+		"Dead",        // 10
+		"Skill Cast",  // 11
+		"Skill Ready", // 12
+		"Freeze",      // 13
+	}
+
+	if index < len(names) {
+		return names[index]
+	}
+	return fmt.Sprintf("Action %d", index)
+}
+
+// renderACTFrame renders a single ACT frame with all its layers.
+func (app *App) renderACTFrame(frame *formats.Frame) {
+	if len(frame.Layers) == 0 {
+		imgui.TextDisabled("Empty frame")
+		return
+	}
+
+	// For now, just render the first valid layer's sprite
+	validLayerFound := false
+	allLayersEmpty := true
+
+	for _, layer := range frame.Layers {
+		if layer.SpriteID >= 0 {
+			allLayersEmpty = false
+			break
+		}
+	}
+
+	// Show informative message for empty frames (common in garment/accessory ACT files)
+	if allLayersEmpty {
+		imgui.TextDisabled("Frame has no sprites")
+		imgui.TextDisabled("(Accessory/garment overlay - uses base sprite)")
+		return
+	}
+
+	for _, layer := range frame.Layers {
+		if layer.SpriteID < 0 {
+			continue
+		}
+
+		// Calculate actual sprite index based on sprite type
+		// Type 0 = indexed (palette), Type 1 = RGBA (true-color)
+		// RGBA sprites are stored after indexed sprites in the SPR file
+		spriteIndex := int(layer.SpriteID)
+		if layer.SpriteType == 1 && app.previewSPR != nil {
+			spriteIndex += app.previewSPR.IndexedCount
+		}
+
+		if spriteIndex >= len(app.previewTextures) {
+			continue
+		}
+
+		tex := app.previewTextures[spriteIndex]
+		if tex == nil {
+			continue
+		}
+
+		validLayerFound = true
+		img := app.previewSPR.Images[spriteIndex]
+		w := float32(img.Width) * app.previewZoom * layer.ScaleX
+		h := float32(img.Height) * app.previewZoom * layer.ScaleY
+
+		// Center the image both horizontally and vertically
+		avail := imgui.ContentRegionAvail()
+		startX := imgui.CursorPosX()
+		startY := imgui.CursorPosY()
+		if w < avail.X {
+			imgui.SetCursorPosX(startX + (avail.X-w)/2)
+		}
+		if h < avail.Y {
+			imgui.SetCursorPosY(startY + (avail.Y-h)/2)
+		}
+
+		// Apply layer color tint
+		tint := imgui.NewVec4(
+			float32(layer.Color[0])/255.0,
+			float32(layer.Color[1])/255.0,
+			float32(layer.Color[2])/255.0,
+			float32(layer.Color[3])/255.0,
+		)
+
+		imgui.ImageWithBgV(
+			tex.ID,
+			imgui.NewVec2(w, h),
+			imgui.NewVec2(0, 0),
+			imgui.NewVec2(1, 1),
+			imgui.NewVec4(0.2, 0.2, 0.2, 1.0),
+			tint,
+		)
+
+		// Only render first valid layer for now (proper compositing would need DrawList)
+		break
+	}
+
+	if !validLayerFound {
+		imgui.TextDisabled("No renderable sprites in frame")
+	}
 }
 
 // getFileTypeName returns a human-readable file type name.
