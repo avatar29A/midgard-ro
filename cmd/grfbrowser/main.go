@@ -465,6 +465,16 @@ func (app *App) render() {
 		}
 	}
 
+	// Space to toggle Play/Pause for animations (when not in text input)
+	if app.previewACT != nil && !imgui.IsAnyItemActive() {
+		if imgui.IsKeyChordPressed(imgui.KeyChord(imgui.KeySpace)) {
+			app.previewPlaying = !app.previewPlaying
+			if app.previewPlaying {
+				app.previewLastTime = time.Now()
+			}
+		}
+	}
+
 	// Zoom controls: +/- to zoom, 0 to reset (works when preview has content)
 	if app.previewSPR != nil {
 		// + or = key to zoom in
@@ -507,8 +517,12 @@ func (app *App) render() {
 
 	// Layout dimensions
 	leftPanelWidth := float32(350)
+	rightPanelWidth := float32(200) // Actions panel for animations
 	statusBarHeight := float32(30)
 	contentHeight := workSize.Y - statusBarHeight
+
+	// Show actions panel only for ACT files
+	showActionsPanel := app.previewACT != nil
 
 	// Window flags for fixed panels
 	flags := imgui.WindowFlagsNoMove | imgui.WindowFlagsNoResize | imgui.WindowFlagsNoCollapse
@@ -523,13 +537,29 @@ func (app *App) render() {
 	}
 	imgui.End()
 
-	// Right panel - Preview
+	// Calculate preview panel width (shrinks when actions panel is shown)
+	previewWidth := workSize.X - leftPanelWidth
+	if showActionsPanel {
+		previewWidth -= rightPanelWidth
+	}
+
+	// Center panel - Preview
 	imgui.SetNextWindowPos(imgui.NewVec2(workPos.X+leftPanelWidth, workPos.Y))
-	imgui.SetNextWindowSize(imgui.NewVec2(workSize.X-leftPanelWidth, contentHeight))
+	imgui.SetNextWindowSize(imgui.NewVec2(previewWidth, contentHeight))
 	if imgui.BeginV("Preview", nil, flags) {
 		app.renderPreview()
 	}
 	imgui.End()
+
+	// Right panel - Actions (only for ACT files)
+	if showActionsPanel {
+		imgui.SetNextWindowPos(imgui.NewVec2(workPos.X+leftPanelWidth+previewWidth, workPos.Y))
+		imgui.SetNextWindowSize(imgui.NewVec2(rightPanelWidth, contentHeight))
+		if imgui.BeginV("Actions", nil, flags) {
+			app.renderActionsPanel()
+		}
+		imgui.End()
+	}
 
 	// Status bar at bottom
 	imgui.SetNextWindowPos(imgui.NewVec2(workPos.X, workPos.Y+contentHeight))
@@ -1114,10 +1144,30 @@ func (app *App) loadAnimationPreview(path string) {
 
 	app.previewACT = act
 
-	// Try to load corresponding SPR file
-	sprPath := strings.TrimSuffix(path, filepath.Ext(path)) + ".spr"
-	if app.archive.Contains(sprPath) {
+	// Try to load corresponding SPR file (try both .spr and .SPR extensions)
+	basePath := strings.TrimSuffix(path, filepath.Ext(path))
+	sprPath := ""
+	for _, ext := range []string{".spr", ".SPR", ".Spr"} {
+		candidate := basePath + ext
+		if app.archive.Contains(candidate) {
+			sprPath = candidate
+			break
+		}
+	}
+
+	if sprPath != "" {
 		app.loadSpritePreview(sprPath)
+	} else {
+		fmt.Fprintf(os.Stderr, "SPR file not found for: %s\n", path)
+		// Debug: List files in same directory to help find the SPR
+		dir := filepath.Dir(path)
+		fmt.Fprintf(os.Stderr, "Looking for SPR files in: %s\n", dir)
+		for _, f := range app.flatFiles {
+			fNorm := strings.ReplaceAll(f, "\\", "/")
+			if strings.HasPrefix(fNorm, dir) && strings.HasSuffix(strings.ToLower(fNorm), ".spr") {
+				fmt.Fprintf(os.Stderr, "  Found SPR: %s\n", fNorm)
+			}
+		}
 	}
 
 	app.previewLastTime = time.Now()
@@ -1220,7 +1270,7 @@ func (app *App) renderSpritePreview() {
 	}
 }
 
-// renderAnimationPreview renders the animation preview with playback controls.
+// renderAnimationPreview renders the animation preview (frame display only, controls in Actions panel).
 func (app *App) renderAnimationPreview() {
 	if app.previewACT == nil {
 		imgui.TextDisabled("Failed to load animation")
@@ -1228,73 +1278,32 @@ func (app *App) renderAnimationPreview() {
 	}
 
 	act := app.previewACT
-	imgui.Text(fmt.Sprintf("Version: %s", act.Version))
-	imgui.Text(fmt.Sprintf("Actions: %d", len(act.Actions)))
-	if len(act.Events) > 0 {
-		imgui.Text(fmt.Sprintf("Events: %d", len(act.Events)))
-	}
 
-	imgui.Separator()
-
-	// Action navigation
+	// Update animation timing
 	if len(act.Actions) > 0 {
-		imgui.Text(fmt.Sprintf("Action: %d / %d", app.previewAction+1, len(act.Actions)))
-		imgui.SameLine()
-
-		if imgui.Button("<<") && app.previewAction > 0 {
-			app.previewAction--
-			app.previewFrame = 0
-		}
-		imgui.SameLine()
-		if imgui.Button(">>") && app.previewAction < len(act.Actions)-1 {
-			app.previewAction++
-			app.previewFrame = 0
-		}
-
 		action := act.Actions[app.previewAction]
-		imgui.Text(fmt.Sprintf("Frames: %d", len(action.Frames)))
 
-		// Frame navigation
-		imgui.Text(fmt.Sprintf("Frame: %d / %d", app.previewFrame+1, len(action.Frames)))
-		imgui.SameLine()
-
-		if imgui.Button("<##frame") && app.previewFrame > 0 {
-			app.previewFrame--
-		}
-		imgui.SameLine()
-		if imgui.Button(">##frame") && app.previewFrame < len(action.Frames)-1 {
-			app.previewFrame++
-		}
-
-		// Play/Pause
-		imgui.SameLine()
-		if app.previewPlaying {
-			if imgui.Button("Pause") {
-				app.previewPlaying = false
-			}
-		} else {
-			if imgui.Button("Play") {
-				app.previewPlaying = true
-				app.previewLastTime = time.Now()
-			}
-		}
-
-		// Update animation
 		if app.previewPlaying && len(action.Frames) > 0 {
-			// Get interval (default 100ms if not specified)
-			interval := float32(100.0)
+			// Get interval from ACT file (default 4 ticks if not specified)
+			// ACT intervals are in game ticks; multiply by 24ms per tick for real time
+			interval := float32(4.0) // default 4 ticks
 			if app.previewAction < len(act.Intervals) && act.Intervals[app.previewAction] > 0 {
 				interval = act.Intervals[app.previewAction]
 			}
 
+			// Convert ticks to milliseconds (24ms per tick is standard RO timing)
+			// Apply minimum floor of 100ms for readability
+			intervalMs := interval * 24.0
+			if intervalMs < 100.0 {
+				intervalMs = 100.0
+			}
+
 			elapsed := time.Since(app.previewLastTime).Milliseconds()
-			if elapsed >= int64(interval) {
+			if elapsed >= int64(intervalMs) {
 				app.previewFrame = (app.previewFrame + 1) % len(action.Frames)
 				app.previewLastTime = time.Now()
 			}
 		}
-
-		imgui.Separator()
 
 		// Render current frame layers
 		if app.previewFrame < len(action.Frames) && app.previewSPR != nil {
@@ -1306,6 +1315,91 @@ func (app *App) renderAnimationPreview() {
 	}
 }
 
+// renderActionsPanel renders the Actions panel for ACT files.
+func (app *App) renderActionsPanel() {
+	if app.previewACT == nil {
+		return
+	}
+
+	act := app.previewACT
+
+	// Playback controls at top
+	if app.previewPlaying {
+		if imgui.ButtonV("Pause", imgui.NewVec2(-1, 0)) {
+			app.previewPlaying = false
+		}
+	} else {
+		if imgui.ButtonV("Play", imgui.NewVec2(-1, 0)) {
+			app.previewPlaying = true
+			app.previewLastTime = time.Now()
+		}
+	}
+
+	imgui.Text("(Space to toggle)")
+
+	imgui.Separator()
+
+	// Frame info
+	if len(act.Actions) > 0 && app.previewAction < len(act.Actions) {
+		action := act.Actions[app.previewAction]
+		imgui.Text(fmt.Sprintf("Frame: %d / %d", app.previewFrame+1, len(action.Frames)))
+
+		// Frame navigation
+		if imgui.Button("<##frame") && app.previewFrame > 0 {
+			app.previewFrame--
+		}
+		imgui.SameLine()
+		if imgui.Button(">##frame") && app.previewFrame < len(action.Frames)-1 {
+			app.previewFrame++
+		}
+	}
+
+	imgui.Separator()
+	imgui.Text("Actions:")
+
+	// Scrollable action list
+	if imgui.BeginChildStrV("ActionList", imgui.NewVec2(0, 0), imgui.ChildFlagsBorders, 0) {
+		for i := 0; i < len(act.Actions); i++ {
+			action := act.Actions[i]
+			name := getActionName(i)
+			label := fmt.Sprintf("%d: %s (%d)", i, name, len(action.Frames))
+
+			isSelected := i == app.previewAction
+			if imgui.SelectableBoolV(label, isSelected, 0, imgui.NewVec2(0, 0)) {
+				app.previewAction = i
+				app.previewFrame = 0
+			}
+		}
+	}
+	imgui.EndChild()
+}
+
+// getActionName returns a standard RO action name for the given index.
+func getActionName(index int) string {
+	// Standard RO action indices (may vary by sprite type)
+	names := []string{
+		"Idle",           // 0
+		"Walk",           // 1
+		"Sit",            // 2
+		"Pick Up",        // 3
+		"Standby",        // 4
+		"Attack 1",       // 5
+		"Damage",         // 6
+		"Die",            // 7
+		"Attack 2",       // 8
+		"Attack 3",       // 9
+		"Dead",           // 10
+		"Skill Cast",     // 11
+		"Skill Ready",    // 12
+		"Freeze",         // 13
+	}
+
+	if index < len(names) {
+		return names[index]
+	}
+	return fmt.Sprintf("Action %d", index)
+}
+
 // renderACTFrame renders a single ACT frame with all its layers.
 func (app *App) renderACTFrame(frame *formats.Frame) {
 	if len(frame.Layers) == 0 {
@@ -1314,17 +1408,47 @@ func (app *App) renderACTFrame(frame *formats.Frame) {
 	}
 
 	// For now, just render the first valid layer's sprite
+	validLayerFound := false
+	allLayersEmpty := true
+
 	for _, layer := range frame.Layers {
-		if layer.SpriteID < 0 || int(layer.SpriteID) >= len(app.previewTextures) {
+		if layer.SpriteID >= 0 {
+			allLayersEmpty = false
+			break
+		}
+	}
+
+	// Show informative message for empty frames (common in garment/accessory ACT files)
+	if allLayersEmpty {
+		imgui.TextDisabled("Frame has no sprites")
+		imgui.TextDisabled("(Accessory/garment overlay - uses base sprite)")
+		return
+	}
+
+	for _, layer := range frame.Layers {
+		if layer.SpriteID < 0 {
 			continue
 		}
 
-		tex := app.previewTextures[layer.SpriteID]
+		// Calculate actual sprite index based on sprite type
+		// Type 0 = indexed (palette), Type 1 = RGBA (true-color)
+		// RGBA sprites are stored after indexed sprites in the SPR file
+		spriteIndex := int(layer.SpriteID)
+		if layer.SpriteType == 1 && app.previewSPR != nil {
+			spriteIndex += app.previewSPR.IndexedCount
+		}
+
+		if spriteIndex >= len(app.previewTextures) {
+			continue
+		}
+
+		tex := app.previewTextures[spriteIndex]
 		if tex == nil {
 			continue
 		}
 
-		img := app.previewSPR.Images[layer.SpriteID]
+		validLayerFound = true
+		img := app.previewSPR.Images[spriteIndex]
 		w := float32(img.Width) * app.previewZoom * layer.ScaleX
 		h := float32(img.Height) * app.previewZoom * layer.ScaleY
 
@@ -1358,6 +1482,10 @@ func (app *App) renderACTFrame(frame *formats.Frame) {
 
 		// Only render first valid layer for now (proper compositing would need DrawList)
 		break
+	}
+
+	if !validLayerFound {
+		imgui.TextDisabled("No renderable sprites in frame")
 	}
 }
 
