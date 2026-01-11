@@ -412,11 +412,31 @@ func (app *App) matchesFilter(path string) bool {
 }
 
 // matchesSearch checks if a file matches the search pattern.
+// Supports wildcard patterns: *.bmp, item_*.spr, etc.
 func (app *App) matchesSearch(path string) bool {
 	if app.searchText == "" {
 		return true
 	}
-	return strings.Contains(strings.ToLower(path), strings.ToLower(app.searchText))
+
+	search := strings.ToLower(app.searchText)
+	pathLower := strings.ToLower(path)
+
+	// Check if search contains wildcards
+	if strings.ContainsAny(search, "*?") {
+		// Use glob matching on filename only for patterns like *.bmp
+		filename := filepath.Base(pathLower)
+		if matched, _ := filepath.Match(search, filename); matched {
+			return true
+		}
+		// Also try matching against full path for patterns like data/*.bmp
+		if matched, _ := filepath.Match(search, pathLower); matched {
+			return true
+		}
+		return false
+	}
+
+	// Default: substring search
+	return strings.Contains(pathLower, search)
 }
 
 // countFilteredFiles counts files matching current filters.
