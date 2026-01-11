@@ -128,6 +128,11 @@ type App struct {
 	previewGAT     *formats.GAT     // Loaded GAT data
 	previewGATTex  *backend.Texture // Rendered texture for GAT visualization
 	previewGATZoom float32          // Zoom level for GAT view
+
+	// GND preview state (ADR-011 Stage 2)
+	previewGND     *formats.GND     // Loaded GND data
+	previewGNDTex  *backend.Texture // Rendered height map texture
+	previewGNDZoom float32          // Zoom level for GND view
 }
 
 var (
@@ -576,6 +581,26 @@ func (app *App) render() {
 		// 0 key to reset zoom
 		if imgui.IsKeyChordPressed(imgui.KeyChord(imgui.Key0)) || imgui.IsKeyChordPressed(imgui.KeyChord(imgui.KeyKeypad0)) {
 			app.previewGATZoom = 1.0
+		}
+	}
+
+	// GND zoom controls: +/- to zoom, 0 to reset
+	if app.previewGND != nil {
+		// + or = key to zoom in
+		if imgui.IsKeyChordPressed(imgui.KeyChord(imgui.KeyEqual)) || imgui.IsKeyChordPressed(imgui.KeyChord(imgui.KeyKeypadAdd)) {
+			if app.previewGNDZoom < 8.0 {
+				app.previewGNDZoom += 0.25
+			}
+		}
+		// - key to zoom out
+		if imgui.IsKeyChordPressed(imgui.KeyChord(imgui.KeyMinus)) || imgui.IsKeyChordPressed(imgui.KeyChord(imgui.KeyKeypadSubtract)) {
+			if app.previewGNDZoom > 0.25 {
+				app.previewGNDZoom -= 0.25
+			}
+		}
+		// 0 key to reset zoom
+		if imgui.IsKeyChordPressed(imgui.KeyChord(imgui.Key0)) || imgui.IsKeyChordPressed(imgui.KeyChord(imgui.KeyKeypad0)) {
+			app.previewGNDZoom = 1.0
 		}
 	}
 
@@ -1179,6 +1204,8 @@ func (app *App) renderPreview() {
 		app.renderAudioPreview()
 	case ".gat":
 		app.renderGATPreview()
+	case ".gnd":
+		app.renderGNDPreview()
 	default:
 		app.renderHexPreview()
 	}
@@ -1215,6 +1242,8 @@ func (app *App) loadPreview(displayPath string) {
 		app.loadAudioPreview(archivePath)
 	case ".gat":
 		app.loadGATPreview(archivePath)
+	case ".gnd":
+		app.loadGNDPreview(archivePath)
 	default:
 		// Load as hex for unknown formats
 		app.loadHexPreview(archivePath)
@@ -1256,6 +1285,13 @@ func (app *App) clearPreview() {
 	if app.previewGATTex != nil {
 		app.previewGATTex.Release()
 		app.previewGATTex = nil
+	}
+
+	// Clear GND preview (ADR-011 Stage 2)
+	app.previewGND = nil
+	if app.previewGNDTex != nil {
+		app.previewGNDTex.Release()
+		app.previewGNDTex = nil
 	}
 }
 
@@ -2313,6 +2349,180 @@ func (app *App) renderGATPreview() {
 		if imgui.BeginChildStrV("GATView", imgui.NewVec2(0, 0), imgui.ChildFlagsBorders, imgui.WindowFlagsHorizontalScrollbar) {
 			imgui.ImageWithBgV(
 				app.previewGATTex.ID,
+				imgui.NewVec2(w, h),
+				imgui.NewVec2(0, 0),
+				imgui.NewVec2(1, 1),
+				imgui.NewVec4(0.1, 0.1, 0.1, 1.0), // Dark background
+				imgui.NewVec4(1, 1, 1, 1),         // No tint
+			)
+		}
+		imgui.EndChild()
+	}
+}
+
+// loadGNDPreview loads a GND file for preview.
+func (app *App) loadGNDPreview(path string) {
+	data, err := app.archive.Read(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading GND file: %v\n", err)
+		return
+	}
+
+	gnd, err := formats.ParseGND(data)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing GND: %v\n", err)
+		return
+	}
+
+	app.previewGND = gnd
+	app.previewGNDZoom = 1.0
+
+	// Create height map visualization texture
+	app.createGNDTexture()
+}
+
+// createGNDTexture creates a height map texture from GND data for visualization.
+func (app *App) createGNDTexture() {
+	if app.previewGND == nil {
+		return
+	}
+
+	gnd := app.previewGND
+	width := int(gnd.Width)
+	height := int(gnd.Height)
+
+	// Create RGBA image - height map visualization
+	rgba := image.NewRGBA(image.Rect(0, 0, width, height))
+
+	// Get altitude range for normalization
+	minAlt, maxAlt := gnd.GetAltitudeRange()
+	altRange := maxAlt - minAlt
+	if altRange == 0 {
+		altRange = 1 // Avoid division by zero
+	}
+
+	// Color map: low altitude = dark blue, high altitude = white/yellow
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			tile := gnd.GetTile(x, y)
+			if tile == nil {
+				continue
+			}
+
+			// Average altitude of the tile
+			avgAlt := (tile.Altitude[0] + tile.Altitude[1] + tile.Altitude[2] + tile.Altitude[3]) / 4.0
+
+			// Normalize to 0-1 (note: RO uses negative Y for height)
+			normalized := (maxAlt - avgAlt) / altRange
+
+			// Color gradient: blue (low) -> green -> yellow -> white (high)
+			var r, g, b uint8
+			if normalized < 0.25 {
+				// Dark blue to blue
+				t := normalized * 4
+				r = uint8(20 * t)
+				g = uint8(50 + 50*t)
+				b = uint8(100 + 100*t)
+			} else if normalized < 0.5 {
+				// Blue to green
+				t := (normalized - 0.25) * 4
+				r = uint8(20 + 80*t)
+				g = uint8(100 + 100*t)
+				b = uint8(200 - 100*t)
+			} else if normalized < 0.75 {
+				// Green to yellow
+				t := (normalized - 0.5) * 4
+				r = uint8(100 + 155*t)
+				g = uint8(200 + 55*t)
+				b = uint8(100 - 50*t)
+			} else {
+				// Yellow to white
+				t := (normalized - 0.75) * 4
+				r = uint8(255)
+				g = uint8(255)
+				b = uint8(50 + 205*t)
+			}
+
+			// Highlight tiles with no top surface (cliffs/holes)
+			if tile.TopSurface < 0 {
+				r, g, b = 80, 20, 20 // Dark red for no surface
+			}
+
+			rgba.Set(x, y, color.RGBA{R: r, G: g, B: b, A: 255})
+		}
+	}
+
+	// Create texture
+	app.previewGNDTex = backend.NewTextureFromRgba(rgba)
+}
+
+// renderGNDPreview renders the GND visualization.
+func (app *App) renderGNDPreview() {
+	if app.previewGND == nil {
+		imgui.TextDisabled("Failed to load GND file")
+		return
+	}
+
+	gnd := app.previewGND
+
+	// Info
+	imgui.Text(fmt.Sprintf("Size: %d x %d tiles", gnd.Width, gnd.Height))
+	imgui.Text(fmt.Sprintf("Version: %s", gnd.Version))
+	imgui.Text(fmt.Sprintf("Zoom Factor: %.1f", gnd.Zoom))
+	imgui.Text(fmt.Sprintf("Textures: %d", len(gnd.Textures)))
+	imgui.Text(fmt.Sprintf("Surfaces: %d", len(gnd.Surfaces)))
+	imgui.Text(fmt.Sprintf("Lightmaps: %d (%dx%d)", len(gnd.Lightmaps), gnd.LightmapWidth, gnd.LightmapHeight))
+
+	// Altitude range
+	minAlt, maxAlt := gnd.GetAltitudeRange()
+	imgui.Text(fmt.Sprintf("Altitude: %.1f to %.1f", minAlt, maxAlt))
+
+	imgui.Separator()
+
+	// Zoom controls
+	imgui.Text("Zoom:")
+	imgui.SameLine()
+	if imgui.Button("-##gndzoom") && app.previewGNDZoom > 0.25 {
+		app.previewGNDZoom -= 0.25
+	}
+	imgui.SameLine()
+	imgui.Text(fmt.Sprintf("%.0f%%", app.previewGNDZoom*100))
+	imgui.SameLine()
+	if imgui.Button("+##gndzoom") && app.previewGNDZoom < 8.0 {
+		app.previewGNDZoom += 0.25
+	}
+	imgui.SameLine()
+	if imgui.Button("Fit##gndzoom") {
+		avail := imgui.ContentRegionAvail()
+		zoomX := avail.X / float32(gnd.Width)
+		zoomY := avail.Y / float32(gnd.Height)
+		app.previewGNDZoom = min(zoomX, zoomY)
+		if app.previewGNDZoom < 0.1 {
+			app.previewGNDZoom = 0.1
+		}
+	}
+
+	imgui.Separator()
+
+	// Texture list (collapsible)
+	if imgui.TreeNodeExStrV("Textures", imgui.TreeNodeFlagsNone) {
+		for i, tex := range gnd.Textures {
+			imgui.Text(fmt.Sprintf("%d: %s", i, tex))
+		}
+		imgui.TreePop()
+	}
+
+	imgui.Separator()
+
+	// Display height map texture
+	if app.previewGNDTex != nil {
+		w := float32(gnd.Width) * app.previewGNDZoom
+		h := float32(gnd.Height) * app.previewGNDZoom
+
+		// Scrollable child region for large maps
+		if imgui.BeginChildStrV("GNDView", imgui.NewVec2(0, 0), imgui.ChildFlagsBorders, imgui.WindowFlagsHorizontalScrollbar) {
+			imgui.ImageWithBgV(
+				app.previewGNDTex.ID,
 				imgui.NewVec2(w, h),
 				imgui.NewVec2(0, 0),
 				imgui.NewVec2(1, 1),
