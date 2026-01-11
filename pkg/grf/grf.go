@@ -194,5 +194,18 @@ func (a *Archive) Read(path string) ([]byte, error) {
 
 func normalizePath(path string) string {
 	path = strings.ReplaceAll(path, "\\", "/")
-	return strings.ToLower(path)
+	return asciiToLower(path)
+}
+
+// asciiToLower converts ASCII letters to lowercase while preserving high bytes.
+// This is necessary because GRF filenames use EUC-KR encoding for Korean,
+// and strings.ToLower corrupts non-UTF-8 byte sequences.
+func asciiToLower(s string) string {
+	b := []byte(s)
+	for i := range b {
+		if b[i] >= 'A' && b[i] <= 'Z' {
+			b[i] = b[i] + 32 // Convert A-Z to a-z
+		}
+	}
+	return string(b)
 }
