@@ -15,12 +15,16 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/AllenDang/cimgui-go/backend"
 	"github.com/AllenDang/cimgui-go/backend/sdlbackend"
 	"github.com/AllenDang/cimgui-go/imgui"
 	"github.com/go-gl/gl/v4.1-core/gl"
+	"github.com/gopxl/beep/v2"
+	"github.com/gopxl/beep/v2/speaker"
+	"github.com/gopxl/beep/v2/wav"
 	"github.com/sqweek/dialog"
 	_ "golang.org/x/image/bmp" // BMP decoder registration
 	"golang.org/x/text/encoding/korean"
@@ -111,7 +115,20 @@ type App struct {
 	// Hex preview state (ADR-009 Stage 4)
 	previewHex     []byte // Raw bytes for hex viewer
 	previewHexSize int64  // Original file size
+
+	// Audio preview state (ADR-009 Stage 4)
+	audioStreamer   beep.StreamSeekCloser // Audio stream
+	audioFormat     beep.Format           // Audio format (sample rate, channels)
+	audioCtrl       *beep.Ctrl            // Playback control (pause/resume)
+	audioPlaying    bool                  // Is audio currently playing
+	audioLength     int                   // Total samples
+	audioSampleRate beep.SampleRate       // Sample rate for duration calc
 }
+
+var (
+	speakerInitOnce sync.Once
+	speakerInited   bool
+)
 
 // FileNode represents a node in the virtual file tree.
 type FileNode struct {
@@ -1133,6 +1150,8 @@ func (app *App) renderPreview() {
 		app.renderImagePreview()
 	case ".txt", ".xml", ".lua", ".ini", ".cfg":
 		app.renderTextPreview()
+	case ".wav":
+		app.renderAudioPreview()
 	default:
 		app.renderHexPreview()
 	}
@@ -1165,6 +1184,8 @@ func (app *App) loadPreview(displayPath string) {
 		app.loadImagePreview(archivePath)
 	case ".txt", ".xml", ".lua", ".ini", ".cfg":
 		app.loadTextPreview(archivePath)
+	case ".wav":
+		app.loadAudioPreview(archivePath)
 	default:
 		// Load as hex for unknown formats
 		app.loadHexPreview(archivePath)
@@ -1197,6 +1218,9 @@ func (app *App) clearPreview() {
 	app.previewText = ""
 	app.previewHex = nil
 	app.previewHexSize = 0
+
+	// Stop and release audio (Stage 4)
+	app.stopAudio()
 }
 
 // loadSpritePreview loads a SPR file for preview.
@@ -1990,6 +2014,123 @@ func (app *App) renderHexPreview() {
 		}
 	}
 	imgui.EndChild()
+}
+
+// loadAudioPreview loads a WAV file for audio preview.
+func (app *App) loadAudioPreview(path string) {
+	data, err := app.archive.Read(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading audio file: %v\n", err)
+		return
+	}
+
+	// Decode WAV from memory
+	streamer, format, err := wav.Decode(bytes.NewReader(data))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error decoding WAV: %v\n", err)
+		return
+	}
+
+	// Initialize speaker once (use common sample rate)
+	speakerInitOnce.Do(func() {
+		err := speaker.Init(format.SampleRate, format.SampleRate.N(time.Second/10))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error initializing speaker: %v\n", err)
+			return
+		}
+		speakerInited = true
+	})
+
+	if !speakerInited {
+		streamer.Close()
+		return
+	}
+
+	app.audioStreamer = streamer
+	app.audioFormat = format
+	app.audioLength = streamer.Len()
+	app.audioSampleRate = format.SampleRate
+	app.audioPlaying = false
+	app.audioCtrl = nil
+}
+
+// renderAudioPreview renders the audio player with controls.
+func (app *App) renderAudioPreview() {
+	if app.audioStreamer == nil {
+		imgui.TextDisabled("Failed to load audio")
+		return
+	}
+
+	// Audio info
+	duration := app.audioSampleRate.D(app.audioLength)
+	imgui.Text(fmt.Sprintf("Format: %d Hz, %d ch", app.audioFormat.SampleRate, app.audioFormat.NumChannels))
+	imgui.Text(fmt.Sprintf("Duration: %.1f sec", duration.Seconds()))
+
+	imgui.Separator()
+
+	// Play/Stop buttons
+	if app.audioPlaying {
+		if imgui.ButtonV("Stop", imgui.NewVec2(80, 0)) {
+			app.stopAudio()
+		}
+	} else {
+		if imgui.ButtonV("Play", imgui.NewVec2(80, 0)) {
+			app.playAudio()
+		}
+	}
+
+	imgui.SameLine()
+
+	// Progress bar
+	var progress float32
+	var currentPos int
+	if app.audioStreamer != nil && app.audioLength > 0 {
+		currentPos = app.audioStreamer.Position()
+		progress = float32(currentPos) / float32(app.audioLength)
+	}
+
+	currentTime := app.audioSampleRate.D(currentPos)
+	imgui.Text(fmt.Sprintf("%.1f / %.1f", currentTime.Seconds(), duration.Seconds()))
+
+	// Progress bar (full width)
+	imgui.ProgressBarV(progress, imgui.NewVec2(-1, 0), "")
+
+	// Check if playback finished
+	if app.audioPlaying && currentPos >= app.audioLength {
+		app.audioPlaying = false
+	}
+}
+
+// playAudio starts audio playback.
+func (app *App) playAudio() {
+	if app.audioStreamer == nil || !speakerInited {
+		return
+	}
+
+	// Reset to beginning
+	app.audioStreamer.Seek(0)
+
+	// Create control wrapper for pause/resume
+	app.audioCtrl = &beep.Ctrl{Streamer: app.audioStreamer, Paused: false}
+	app.audioPlaying = true
+
+	// Play with callback when done
+	speaker.Play(beep.Seq(app.audioCtrl, beep.Callback(func() {
+		app.audioPlaying = false
+	})))
+}
+
+// stopAudio stops audio playback and releases resources.
+func (app *App) stopAudio() {
+	if speakerInited {
+		speaker.Clear()
+	}
+	app.audioPlaying = false
+	app.audioCtrl = nil
+	if app.audioStreamer != nil {
+		app.audioStreamer.Close()
+		app.audioStreamer = nil
+	}
 }
 
 // getFileTypeName returns a human-readable file type name.
