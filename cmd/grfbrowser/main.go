@@ -18,11 +18,11 @@ import (
 	"github.com/AllenDang/cimgui-go/backend/sdlbackend"
 	"github.com/AllenDang/cimgui-go/imgui"
 	"github.com/go-gl/gl/v4.1-core/gl"
+	"github.com/sqweek/dialog"
 	"golang.org/x/text/encoding/korean"
 	"golang.org/x/text/transform"
 
 	"github.com/Faultbox/midgard-ro/pkg/grf"
-	"github.com/sqweek/dialog"
 )
 
 func main() {
