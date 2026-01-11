@@ -1416,20 +1416,20 @@ func (app *App) renderActionsPanel() {
 func getActionName(index int) string {
 	// Standard RO action indices (may vary by sprite type)
 	names := []string{
-		"Idle",           // 0
-		"Walk",           // 1
-		"Sit",            // 2
-		"Pick Up",        // 3
-		"Standby",        // 4
-		"Attack 1",       // 5
-		"Damage",         // 6
-		"Die",            // 7
-		"Attack 2",       // 8
-		"Attack 3",       // 9
-		"Dead",           // 10
-		"Skill Cast",     // 11
-		"Skill Ready",    // 12
-		"Freeze",         // 13
+		"Idle",        // 0
+		"Walk",        // 1
+		"Sit",         // 2
+		"Pick Up",     // 3
+		"Standby",     // 4
+		"Attack 1",    // 5
+		"Damage",      // 6
+		"Die",         // 7
+		"Attack 2",    // 8
+		"Attack 3",    // 9
+		"Dead",        // 10
+		"Skill Cast",  // 11
+		"Skill Ready", // 12
+		"Freeze",      // 13
 	}
 
 	if index < len(names) {
