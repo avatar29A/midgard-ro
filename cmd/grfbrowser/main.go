@@ -133,6 +133,9 @@ type App struct {
 	previewGND     *formats.GND     // Loaded GND data
 	previewGNDTex  *backend.Texture // Rendered height map texture
 	previewGNDZoom float32          // Zoom level for GND view
+
+	// RSW preview state (ADR-011 Stage 3)
+	previewRSW *formats.RSW // Loaded RSW data
 }
 
 var (
@@ -1206,6 +1209,8 @@ func (app *App) renderPreview() {
 		app.renderGATPreview()
 	case ".gnd":
 		app.renderGNDPreview()
+	case ".rsw":
+		app.renderRSWPreview()
 	default:
 		app.renderHexPreview()
 	}
@@ -1244,6 +1249,8 @@ func (app *App) loadPreview(displayPath string) {
 		app.loadGATPreview(archivePath)
 	case ".gnd":
 		app.loadGNDPreview(archivePath)
+	case ".rsw":
+		app.loadRSWPreview(archivePath)
 	default:
 		// Load as hex for unknown formats
 		app.loadHexPreview(archivePath)
@@ -1293,6 +1300,9 @@ func (app *App) clearPreview() {
 		app.previewGNDTex.Release()
 		app.previewGNDTex = nil
 	}
+
+	// Clear RSW preview (ADR-011 Stage 3)
+	app.previewRSW = nil
 }
 
 // loadSpritePreview loads a SPR file for preview.
@@ -2531,6 +2541,166 @@ func (app *App) renderGNDPreview() {
 			)
 		}
 		imgui.EndChild()
+	}
+}
+
+// loadRSWPreview loads a RSW file for preview.
+func (app *App) loadRSWPreview(path string) {
+	data, err := app.archive.Read(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading RSW file: %v\n", err)
+		return
+	}
+
+	rsw, err := formats.ParseRSW(data)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing RSW: %v\n", err)
+		return
+	}
+
+	app.previewRSW = rsw
+}
+
+// renderRSWPreview renders the RSW world info panel.
+func (app *App) renderRSWPreview() {
+	if app.previewRSW == nil {
+		imgui.TextDisabled("Failed to load RSW file")
+		return
+	}
+
+	rsw := app.previewRSW
+
+	// Basic info
+	imgui.Text(fmt.Sprintf("Version: %s", rsw.Version))
+	imgui.Separator()
+
+	// File references
+	if imgui.TreeNodeExStrV("File References", imgui.TreeNodeFlagsDefaultOpen) {
+		if rsw.GndFile != "" {
+			imgui.Text(fmt.Sprintf("GND: %s", rsw.GndFile))
+		}
+		if rsw.GatFile != "" {
+			imgui.Text(fmt.Sprintf("GAT: %s", rsw.GatFile))
+		}
+		if rsw.IniFile != "" {
+			imgui.Text(fmt.Sprintf("INI: %s", rsw.IniFile))
+		}
+		if rsw.SrcFile != "" {
+			imgui.Text(fmt.Sprintf("SRC: %s", rsw.SrcFile))
+		}
+		imgui.TreePop()
+	}
+
+	imgui.Separator()
+
+	// Water settings
+	if imgui.TreeNodeExStrV("Water Settings", imgui.TreeNodeFlagsDefaultOpen) {
+		imgui.Text(fmt.Sprintf("Level: %.2f", rsw.Water.Level))
+		imgui.Text(fmt.Sprintf("Type: %d", rsw.Water.Type))
+		imgui.Text(fmt.Sprintf("Wave Height: %.2f", rsw.Water.WaveHeight))
+		imgui.Text(fmt.Sprintf("Wave Speed: %.2f", rsw.Water.WaveSpeed))
+		imgui.Text(fmt.Sprintf("Wave Pitch: %.2f", rsw.Water.WavePitch))
+		imgui.Text(fmt.Sprintf("Anim Speed: %d", rsw.Water.AnimSpeed))
+		imgui.TreePop()
+	}
+
+	imgui.Separator()
+
+	// Light settings
+	if imgui.TreeNodeExStrV("Light Settings", imgui.TreeNodeFlagsDefaultOpen) {
+		imgui.Text(fmt.Sprintf("Longitude: %d", rsw.Light.Longitude))
+		imgui.Text(fmt.Sprintf("Latitude: %d", rsw.Light.Latitude))
+		imgui.Text(fmt.Sprintf("Diffuse: (%.2f, %.2f, %.2f)", rsw.Light.Diffuse[0], rsw.Light.Diffuse[1], rsw.Light.Diffuse[2]))
+		imgui.Text(fmt.Sprintf("Ambient: (%.2f, %.2f, %.2f)", rsw.Light.Ambient[0], rsw.Light.Ambient[1], rsw.Light.Ambient[2]))
+		imgui.Text(fmt.Sprintf("Shadow Opacity: %.2f", rsw.Light.Opacity))
+		imgui.TreePop()
+	}
+
+	imgui.Separator()
+
+	// Object statistics
+	counts := rsw.CountByType()
+	if imgui.TreeNodeExStrV("Objects", imgui.TreeNodeFlagsDefaultOpen) {
+		imgui.Text(fmt.Sprintf("Total: %d objects", len(rsw.Objects)))
+		imgui.Text(fmt.Sprintf("Models: %d", counts[formats.RSWObjectModel]))
+		imgui.Text(fmt.Sprintf("Lights: %d", counts[formats.RSWObjectLight]))
+		imgui.Text(fmt.Sprintf("Sounds: %d", counts[formats.RSWObjectSound]))
+		imgui.Text(fmt.Sprintf("Effects: %d", counts[formats.RSWObjectEffect]))
+		imgui.TreePop()
+	}
+
+	imgui.Separator()
+
+	// Model list (collapsible)
+	models := rsw.GetModels()
+	if len(models) > 0 {
+		if imgui.TreeNodeExStrV(fmt.Sprintf("Model List (%d)", len(models)), imgui.TreeNodeFlagsNone) {
+			// Use clipper for large lists
+			for i, model := range models {
+				if i > 100 {
+					imgui.Text(fmt.Sprintf("... and %d more", len(models)-100))
+					break
+				}
+				name := model.Name
+				if name == "" {
+					name = model.ModelName
+				}
+				// Convert EUC-KR to UTF-8 for Korean names
+				imgui.Text(fmt.Sprintf("%d: %s", i, euckrToUTF8(name)))
+			}
+			imgui.TreePop()
+		}
+	}
+
+	// Sound list (collapsible)
+	sounds := rsw.GetSounds()
+	if len(sounds) > 0 {
+		if imgui.TreeNodeExStrV(fmt.Sprintf("Sound List (%d)", len(sounds)), imgui.TreeNodeFlagsNone) {
+			for i, sound := range sounds {
+				if i > 50 {
+					imgui.Text(fmt.Sprintf("... and %d more", len(sounds)-50))
+					break
+				}
+				imgui.Text(fmt.Sprintf("%d: %s", i, euckrToUTF8(sound.File)))
+			}
+			imgui.TreePop()
+		}
+	}
+
+	// Light source list (collapsible)
+	lights := rsw.GetLights()
+	if len(lights) > 0 {
+		if imgui.TreeNodeExStrV(fmt.Sprintf("Light Sources (%d)", len(lights)), imgui.TreeNodeFlagsNone) {
+			for i, light := range lights {
+				if i > 50 {
+					imgui.Text(fmt.Sprintf("... and %d more", len(lights)-50))
+					break
+				}
+				imgui.Text(fmt.Sprintf("%d: %s (range: %.1f)", i, euckrToUTF8(light.Name), light.Range))
+			}
+			imgui.TreePop()
+		}
+	}
+
+	// Effect list (collapsible)
+	effects := rsw.GetEffects()
+	if len(effects) > 0 {
+		if imgui.TreeNodeExStrV(fmt.Sprintf("Effects (%d)", len(effects)), imgui.TreeNodeFlagsNone) {
+			for i, effect := range effects {
+				if i > 50 {
+					imgui.Text(fmt.Sprintf("... and %d more", len(effects)-50))
+					break
+				}
+				imgui.Text(fmt.Sprintf("%d: %s (ID: %d)", i, euckrToUTF8(effect.Name), effect.EffectID))
+			}
+			imgui.TreePop()
+		}
+	}
+
+	// Quadtree info
+	if len(rsw.Quadtree) > 0 {
+		imgui.Separator()
+		imgui.Text(fmt.Sprintf("Quadtree nodes: %d", len(rsw.Quadtree)))
 	}
 }
 
