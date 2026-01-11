@@ -2,14 +2,7 @@
 package formats
 
 // Note: GAT (Ground Altitude Table) is fully implemented in gat.go
-
-// GND represents ground mesh data.
-// Contains textures and geometry for the map surface.
-type GND struct {
-	Width    int
-	Height   int
-	Textures []string
-}
+// Note: GND (Ground Mesh) is fully implemented in gnd.go
 
 // RSW represents resource/world data.
 // Contains objects, lights, sounds, and effects placed on the map.
