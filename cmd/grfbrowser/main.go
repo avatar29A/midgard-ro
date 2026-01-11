@@ -1130,7 +1130,7 @@ func (app *App) renderTreeNode(node *FileNode) {
 			}
 
 			// File icon based on type
-			icon := app.getFileIcon(child.Name)
+			icon := getFileIcon(child.Name)
 
 			imgui.TreeNodeExStrV(icon+" "+child.Name, flags)
 
@@ -1140,34 +1140,6 @@ func (app *App) renderTreeNode(node *FileNode) {
 				app.selectedOriginalPath = child.OriginalPath
 			}
 		}
-	}
-}
-
-// getFileIcon returns an icon for a file based on its extension.
-func (app *App) getFileIcon(filename string) string {
-	ext := strings.ToLower(filepath.Ext(filename))
-
-	switch ext {
-	case ".spr":
-		return "[SPR]"
-	case ".act":
-		return "[ACT]"
-	case ".bmp", ".tga", ".jpg", ".png", ".imf":
-		return "[IMG]"
-	case ".rsm":
-		return "[3D]"
-	case ".rsw":
-		return "[MAP]"
-	case ".gat":
-		return "[GAT]"
-	case ".gnd":
-		return "[GND]"
-	case ".wav", ".mp3":
-		return "[SND]"
-	case ".txt", ".xml", ".lua":
-		return "[TXT]"
-	default:
-		return "[?]"
 	}
 }
 
@@ -1184,7 +1156,7 @@ func (app *App) renderPreview() {
 
 	// Show file extension info
 	ext := strings.ToLower(filepath.Ext(app.selectedPath))
-	imgui.Text("Type: " + app.getFileTypeName(ext))
+	imgui.Text("Type: " + getFileTypeName(ext))
 
 	// Load preview if path changed
 	if app.previewPath != app.selectedPath {
@@ -1606,26 +1578,6 @@ func hasHighBytes(data []byte) bool {
 		}
 	}
 	return false
-}
-
-// sprImageToRGBA converts an SPR image to *image.RGBA.
-func sprImageToRGBA(img *formats.SPRImage) *image.RGBA {
-	rgba := image.NewRGBA(image.Rect(0, 0, int(img.Width), int(img.Height)))
-
-	// Copy pixel data
-	for y := 0; y < int(img.Height); y++ {
-		for x := 0; x < int(img.Width); x++ {
-			i := (y*int(img.Width) + x) * 4
-			rgba.SetRGBA(x, y, color.RGBA{
-				R: img.Pixels[i],
-				G: img.Pixels[i+1],
-				B: img.Pixels[i+2],
-				A: img.Pixels[i+3],
-			})
-		}
-	}
-
-	return rgba
 }
 
 // renderSpritePreview renders the sprite preview with frame navigation.
@@ -2702,63 +2654,6 @@ func (app *App) renderRSWPreview() {
 		imgui.Separator()
 		imgui.Text(fmt.Sprintf("Quadtree nodes: %d", len(rsw.Quadtree)))
 	}
-}
-
-// getFileTypeName returns a human-readable file type name.
-func (app *App) getFileTypeName(ext string) string {
-	switch ext {
-	case ".spr":
-		return "Sprite Image"
-	case ".act":
-		return "Animation Data"
-	case ".bmp", ".tga", ".jpg", ".png":
-		return "Texture Image"
-	case ".imf":
-		return "Image Format (IMF)"
-	case ".rsm":
-		return "3D Model"
-	case ".rsw":
-		return "Map Resource"
-	case ".gat":
-		return "Ground Altitude"
-	case ".gnd":
-		return "Ground Mesh"
-	case ".wav", ".mp3":
-		return "Audio File"
-	case ".txt":
-		return "Text File"
-	case ".xml":
-		return "XML File"
-	case ".lua":
-		return "Lua Script"
-	default:
-		return "Unknown"
-	}
-}
-
-// euckrToUTF8 converts EUC-KR encoded string to UTF-8.
-// Note: GRF files use EUC-KR encoding for Korean filenames.
-func euckrToUTF8(s string) string {
-	// Check if string contains non-ASCII bytes that might be EUC-KR
-	hasHighBytes := false
-	for i := 0; i < len(s); i++ {
-		if s[i] > 127 {
-			hasHighBytes = true
-			break
-		}
-	}
-
-	// Only decode if there are high bytes (potential EUC-KR)
-	if !hasHighBytes {
-		return s
-	}
-
-	decoder := korean.EUCKR.NewDecoder()
-	result, _, err := transform.String(decoder, s)
-	if err != nil {
-		return s // Return original if conversion fails
-	}
-	return result
 }
 
 // renderStatusBar renders the status bar at the bottom.
