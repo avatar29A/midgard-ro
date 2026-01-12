@@ -304,10 +304,18 @@ func TestRSM_HasAnimation(t *testing.T) {
 			want:  false,
 		},
 		{
-			name: "has rotation keys",
+			name: "single keyframe is not animation",
 			nodes: []RSMNode{{
 				Name:    "node",
 				RotKeys: []RSMRotKeyframe{{Frame: 0}},
+			}},
+			want: false, // Need 2+ keyframes to animate
+		},
+		{
+			name: "has rotation keys",
+			nodes: []RSMNode{{
+				Name:    "node",
+				RotKeys: []RSMRotKeyframe{{Frame: 0}, {Frame: 100}},
 			}},
 			want: true,
 		},
@@ -315,7 +323,7 @@ func TestRSM_HasAnimation(t *testing.T) {
 			name: "has position keys",
 			nodes: []RSMNode{{
 				Name:    "node",
-				PosKeys: []RSMPosKeyframe{{Frame: 0}},
+				PosKeys: []RSMPosKeyframe{{Frame: 0}, {Frame: 100}},
 			}},
 			want: true,
 		},
@@ -323,7 +331,7 @@ func TestRSM_HasAnimation(t *testing.T) {
 			name: "has scale keys",
 			nodes: []RSMNode{{
 				Name:      "node",
-				ScaleKeys: []RSMScaleKeyframe{{Frame: 0}},
+				ScaleKeys: []RSMScaleKeyframe{{Frame: 0}, {Frame: 100}},
 			}},
 			want: true,
 		},
