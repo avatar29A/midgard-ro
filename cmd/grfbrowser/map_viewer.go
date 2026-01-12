@@ -12,6 +12,26 @@ import (
 	"github.com/Faultbox/midgard-ro/pkg/math"
 )
 
+// MapModel represents a placed RSM model in the map.
+type MapModel struct {
+	vao        uint32
+	vbo        uint32
+	ebo        uint32
+	indexCount int32
+	textures   []uint32
+	texGroups  []modelTexGroup
+	position   [3]float32
+	rotation   [3]float32
+	scale      [3]float32
+}
+
+// modelTexGroup groups faces by texture for rendering.
+type modelTexGroup struct {
+	texIdx     int
+	startIndex int32
+	indexCount int32
+}
+
 // MapViewer handles 3D rendering of complete RO maps.
 type MapViewer struct {
 	// Framebuffer resources
@@ -22,13 +42,21 @@ type MapViewer struct {
 	height       int32
 
 	// Terrain shader
-	terrainProgram  uint32
-	locViewProj     int32
-	locLightDir     int32
-	locAmbient      int32
-	locTexture      int32
-	locLightmap     int32
-	locSunStrength  int32
+	terrainProgram uint32
+	locViewProj    int32
+	locLightDir    int32
+	locAmbient     int32
+	locTexture     int32
+	locLightmap    int32
+	locSunStrength int32
+
+	// Model shader
+	modelProgram     uint32
+	locModelMVP      int32
+	locModelLightDir int32
+	locModelAmbient  int32
+	locModelDiffuse  int32
+	locModelTexture  int32
 
 	// Terrain mesh
 	terrainVAO    uint32
@@ -42,6 +70,9 @@ type MapViewer struct {
 	lightmapAtlas  uint32
 	atlasSize      int32 // Atlas dimensions (square)
 	tilesPerRow    int32 // Number of lightmap tiles per row in atlas
+
+	// Placed models
+	models []*MapModel
 
 	// Camera - Orbit mode
 	rotationX float32
@@ -66,15 +97,19 @@ type MapViewer struct {
 	// Map bounds
 	minBounds [3]float32
 	maxBounds [3]float32
+
+	// Map dimensions for coordinate conversion
+	mapWidth  float32 // Width in world units (tiles * zoom)
+	mapHeight float32 // Height in world units (tiles * zoom)
 }
 
 // terrainVertex is the vertex format for terrain mesh.
 type terrainVertex struct {
-	Position    [3]float32
-	Normal      [3]float32
-	TexCoord    [2]float32
-	LightmapUV  [2]float32
-	Color       [4]float32
+	Position   [3]float32
+	Normal     [3]float32
+	TexCoord   [2]float32
+	LightmapUV [2]float32
+	Color      [4]float32
 }
 
 // terrainTextureGroup groups triangles by texture for batched rendering.
@@ -138,6 +173,53 @@ void main() {
 }
 `
 
+// Model vertex type (same as rsmVertex in model_viewer.go)
+type modelVertex struct {
+	Position [3]float32
+	Normal   [3]float32
+	TexCoord [2]float32
+}
+
+const modelVertexShader = `#version 410 core
+layout (location = 0) in vec3 aPosition;
+layout (location = 1) in vec3 aNormal;
+layout (location = 2) in vec2 aTexCoord;
+
+uniform mat4 uMVP;
+
+out vec3 vNormal;
+out vec2 vTexCoord;
+
+void main() {
+    vNormal = aNormal;
+    vTexCoord = aTexCoord;
+    gl_Position = uMVP * vec4(aPosition, 1.0);
+}
+`
+
+const modelFragmentShader = `#version 410 core
+in vec3 vNormal;
+in vec2 vTexCoord;
+
+uniform sampler2D uTexture;
+uniform vec3 uLightDir;
+uniform vec3 uAmbient;
+uniform vec3 uDiffuse;
+
+out vec4 FragColor;
+
+void main() {
+    vec4 texColor = texture(uTexture, vTexCoord);
+
+    // Simple lighting
+    float NdotL = max(dot(normalize(vNormal), normalize(uLightDir)), 0.0);
+    vec3 lighting = uAmbient + uDiffuse * NdotL;
+
+    vec3 color = texColor.rgb * lighting;
+    FragColor = vec4(color, texColor.a);
+}
+`
+
 // NewMapViewer creates a new 3D map viewer.
 func NewMapViewer(width, height int32) (*MapViewer, error) {
 	mv := &MapViewer{
@@ -157,6 +239,10 @@ func NewMapViewer(width, height int32) (*MapViewer, error) {
 
 	if err := mv.createTerrainShader(); err != nil {
 		return nil, fmt.Errorf("creating terrain shader: %w", err)
+	}
+
+	if err := mv.createModelShader(); err != nil {
+		return nil, fmt.Errorf("creating model shader: %w", err)
 	}
 
 	mv.createFallbackTexture()
@@ -257,6 +343,69 @@ func (mv *MapViewer) createTerrainShader() error {
 	return nil
 }
 
+// createModelShader compiles the RSM model shader program.
+func (mv *MapViewer) createModelShader() error {
+	// Compile vertex shader
+	vertShader := gl.CreateShader(gl.VERTEX_SHADER)
+	csource, free := gl.Strs(modelVertexShader + "\x00")
+	gl.ShaderSource(vertShader, 1, csource, nil)
+	free()
+	gl.CompileShader(vertShader)
+
+	var status int32
+	gl.GetShaderiv(vertShader, gl.COMPILE_STATUS, &status)
+	if status == gl.FALSE {
+		var logLen int32
+		gl.GetShaderiv(vertShader, gl.INFO_LOG_LENGTH, &logLen)
+		log := make([]byte, logLen)
+		gl.GetShaderInfoLog(vertShader, logLen, nil, &log[0])
+		return fmt.Errorf("model vertex shader: %s", string(log))
+	}
+
+	// Compile fragment shader
+	fragShader := gl.CreateShader(gl.FRAGMENT_SHADER)
+	csource, free = gl.Strs(modelFragmentShader + "\x00")
+	gl.ShaderSource(fragShader, 1, csource, nil)
+	free()
+	gl.CompileShader(fragShader)
+
+	gl.GetShaderiv(fragShader, gl.COMPILE_STATUS, &status)
+	if status == gl.FALSE {
+		var logLen int32
+		gl.GetShaderiv(fragShader, gl.INFO_LOG_LENGTH, &logLen)
+		log := make([]byte, logLen)
+		gl.GetShaderInfoLog(fragShader, logLen, nil, &log[0])
+		return fmt.Errorf("model fragment shader: %s", string(log))
+	}
+
+	// Link program
+	mv.modelProgram = gl.CreateProgram()
+	gl.AttachShader(mv.modelProgram, vertShader)
+	gl.AttachShader(mv.modelProgram, fragShader)
+	gl.LinkProgram(mv.modelProgram)
+
+	gl.GetProgramiv(mv.modelProgram, gl.LINK_STATUS, &status)
+	if status == gl.FALSE {
+		var logLen int32
+		gl.GetProgramiv(mv.modelProgram, gl.INFO_LOG_LENGTH, &logLen)
+		log := make([]byte, logLen)
+		gl.GetProgramInfoLog(mv.modelProgram, logLen, nil, &log[0])
+		return fmt.Errorf("model shader link: %s", string(log))
+	}
+
+	gl.DeleteShader(vertShader)
+	gl.DeleteShader(fragShader)
+
+	// Get uniform locations
+	mv.locModelMVP = gl.GetUniformLocation(mv.modelProgram, gl.Str("uMVP\x00"))
+	mv.locModelLightDir = gl.GetUniformLocation(mv.modelProgram, gl.Str("uLightDir\x00"))
+	mv.locModelAmbient = gl.GetUniformLocation(mv.modelProgram, gl.Str("uAmbient\x00"))
+	mv.locModelDiffuse = gl.GetUniformLocation(mv.modelProgram, gl.Str("uDiffuse\x00"))
+	mv.locModelTexture = gl.GetUniformLocation(mv.modelProgram, gl.Str("uTexture\x00"))
+
+	return nil
+}
+
 // createFallbackTexture creates a simple white texture for missing textures.
 func (mv *MapViewer) createFallbackTexture() {
 	gl.GenTextures(1, &mv.fallbackTex)
@@ -269,9 +418,13 @@ func (mv *MapViewer) createFallbackTexture() {
 }
 
 // LoadMap loads a GND/RSW map for rendering.
-func (mv *MapViewer) LoadMap(gnd *formats.GND, _ *formats.RSW, texLoader func(string) ([]byte, error)) error {
+func (mv *MapViewer) LoadMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(string) ([]byte, error)) error {
 	// Clear old resources
 	mv.clearTerrain()
+
+	// Store map dimensions for coordinate conversion (RSW positions are centered)
+	mv.mapWidth = float32(gnd.Width) * gnd.Zoom
+	mv.mapHeight = float32(gnd.Height) * gnd.Zoom
 
 	// Load ground textures
 	mv.loadGroundTextures(gnd, texLoader)
@@ -285,6 +438,11 @@ func (mv *MapViewer) LoadMap(gnd *formats.GND, _ *formats.RSW, texLoader func(st
 
 	// Upload to GPU
 	mv.uploadTerrainMesh(vertices, indices)
+
+	// Load RSM models from RSW (Stage 4)
+	if rsw != nil {
+		mv.loadModels(rsw, texLoader)
+	}
 
 	// Fit camera to map
 	mv.fitCamera()
@@ -315,6 +473,23 @@ func (mv *MapViewer) clearTerrain() {
 		gl.DeleteTextures(1, &mv.lightmapAtlas)
 		mv.lightmapAtlas = 0
 	}
+
+	// Clear models
+	for _, model := range mv.models {
+		if model.vao != 0 {
+			gl.DeleteVertexArrays(1, &model.vao)
+		}
+		if model.vbo != 0 {
+			gl.DeleteBuffers(1, &model.vbo)
+		}
+		if model.ebo != 0 {
+			gl.DeleteBuffers(1, &model.ebo)
+		}
+		for _, tex := range model.textures {
+			gl.DeleteTextures(1, &tex)
+		}
+	}
+	mv.models = nil
 }
 
 // loadGroundTextures loads textures from GRF.
@@ -338,6 +513,272 @@ func (mv *MapViewer) loadGroundTextures(gnd *formats.GND, texLoader func(string)
 		texID := uploadModelTexture(img)
 		mv.groundTextures[i] = texID
 	}
+}
+
+// loadModels loads RSM models from RSW object list.
+func (mv *MapViewer) loadModels(rsw *formats.RSW, texLoader func(string) ([]byte, error)) {
+	models := rsw.GetModels()
+
+	// Limit number of models to avoid performance issues
+	maxModels := 500
+	if len(models) > maxModels {
+		models = models[:maxModels]
+	}
+
+	// Cache loaded RSM files to avoid reloading
+	rsmCache := make(map[string]*formats.RSM)
+
+	for _, modelRef := range models {
+		// Load RSM if not cached
+		rsmPath := "data/model/" + modelRef.ModelName
+		rsm, ok := rsmCache[rsmPath]
+		if !ok {
+			data, err := texLoader(rsmPath)
+			if err != nil {
+				continue
+			}
+			rsm, err = formats.ParseRSM(data)
+			if err != nil {
+				continue
+			}
+			rsmCache[rsmPath] = rsm
+		}
+
+		// Build map model from RSM
+		mapModel := mv.buildMapModel(rsm, modelRef, texLoader)
+		if mapModel != nil {
+			mv.models = append(mv.models, mapModel)
+		}
+	}
+}
+
+// buildMapModel creates a MapModel from RSM data with world transform.
+func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texLoader func(string) ([]byte, error)) *MapModel {
+	if len(rsm.Nodes) == 0 {
+		return nil
+	}
+
+	// Build mesh from all RSM nodes
+	var vertices []modelVertex
+	var indices []uint32
+	texGroups := make(map[int][]uint32)
+
+	// Load model textures
+	modelTextures := make([]uint32, len(rsm.Textures))
+	for i, texName := range rsm.Textures {
+		texPath := "data/texture/" + texName
+		data, err := texLoader(texPath)
+		if err != nil {
+			modelTextures[i] = mv.fallbackTex
+			continue
+		}
+		img, err := decodeModelTexture(data, texPath, true) // Use magenta key
+		if err != nil {
+			modelTextures[i] = mv.fallbackTex
+			continue
+		}
+		modelTextures[i] = uploadModelTexture(img)
+	}
+
+	// Track bounding box for centering
+	var minVertX, minVertY, minVertZ float32 = 1e10, 1e10, 1e10
+	var maxVertX, maxVertY, maxVertZ float32 = -1e10, -1e10, -1e10
+
+	// Process each node
+	for i := range rsm.Nodes {
+		node := &rsm.Nodes[i]
+		baseIdx := uint32(len(vertices))
+
+		// Build node transform matrix (with parent hierarchy)
+		nodeMatrix := mv.buildNodeMatrix(node, rsm)
+
+		// Process faces
+		for _, face := range node.Faces {
+			// Get face normal
+			normal := [3]float32{0, 1, 0}
+			if len(face.VertexIDs) >= 3 && int(face.VertexIDs[0]) < len(node.Vertices) &&
+				int(face.VertexIDs[1]) < len(node.Vertices) && int(face.VertexIDs[2]) < len(node.Vertices) {
+				// Calculate face normal from vertices
+				v0 := node.Vertices[face.VertexIDs[0]]
+				v1 := node.Vertices[face.VertexIDs[1]]
+				v2 := node.Vertices[face.VertexIDs[2]]
+				e1 := [3]float32{v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]}
+				e2 := [3]float32{v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]}
+				normal = normalize(cross(e1, e2))
+			}
+
+			// Add vertices for this face
+			faceBaseIdx := uint32(len(vertices))
+			for i, vid := range face.VertexIDs {
+				if int(vid) >= len(node.Vertices) {
+					continue
+				}
+				v := node.Vertices[vid]
+
+				// Transform vertex position by node matrix
+				pos := transformPoint(nodeMatrix, v)
+
+				// Flip Y for RO coordinate system (same as model_viewer.go)
+				pos[1] = -pos[1]
+
+				// Track bounding box
+				if pos[0] < minVertX {
+					minVertX = pos[0]
+				}
+				if pos[0] > maxVertX {
+					maxVertX = pos[0]
+				}
+				if pos[1] < minVertY {
+					minVertY = pos[1]
+				}
+				if pos[1] > maxVertY {
+					maxVertY = pos[1]
+				}
+				if pos[2] < minVertZ {
+					minVertZ = pos[2]
+				}
+				if pos[2] > maxVertZ {
+					maxVertZ = pos[2]
+				}
+
+				// Get texture coordinates
+				var uv [2]float32
+				if i < len(face.TexCoordIDs) && int(face.TexCoordIDs[i]) < len(node.TexCoords) {
+					tc := node.TexCoords[face.TexCoordIDs[i]]
+					uv = [2]float32{tc.U, tc.V}
+				}
+
+				vertices = append(vertices, modelVertex{
+					Position: pos,
+					Normal:   normal,
+					TexCoord: uv,
+				})
+			}
+
+			// Add indices for triangles (face can have 3+ vertices)
+			texIdx := int(face.TextureID)
+			for i := 2; i < len(face.VertexIDs); i++ {
+				texGroups[texIdx] = append(texGroups[texIdx],
+					faceBaseIdx,
+					faceBaseIdx+uint32(i-1),
+					faceBaseIdx+uint32(i),
+				)
+			}
+		}
+		_ = baseIdx // Silence unused warning
+	}
+
+	if len(vertices) == 0 {
+		return nil
+	}
+
+	// Center all models based on bounding box (standard RO approach)
+	// Subtract centerX/Z for horizontal centering, minY to put base at ground
+	centerX := (minVertX + maxVertX) / 2
+	centerZ := (minVertZ + maxVertZ) / 2
+	for i := range vertices {
+		vertices[i].Position[0] -= centerX
+		vertices[i].Position[1] -= minVertY
+		vertices[i].Position[2] -= centerZ
+	}
+
+	// Build texture groups
+	var groups []modelTexGroup
+	for texIdx, idxs := range texGroups {
+		if len(idxs) == 0 {
+			continue
+		}
+		groups = append(groups, modelTexGroup{
+			texIdx:     texIdx,
+			startIndex: int32(len(indices)),
+			indexCount: int32(len(idxs)),
+		})
+		indices = append(indices, idxs...)
+	}
+
+	// Create GPU resources
+	model := &MapModel{
+		textures:  modelTextures,
+		texGroups: groups,
+		position:  ref.Position,
+		rotation:  ref.Rotation,
+		scale:     ref.Scale,
+	}
+
+	// Upload mesh to GPU
+	gl.GenVertexArrays(1, &model.vao)
+	gl.BindVertexArray(model.vao)
+
+	gl.GenBuffers(1, &model.vbo)
+	gl.BindBuffer(gl.ARRAY_BUFFER, model.vbo)
+	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*int(unsafe.Sizeof(modelVertex{})), gl.Ptr(vertices), gl.STATIC_DRAW)
+
+	gl.GenBuffers(1, &model.ebo)
+	gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, model.ebo)
+	gl.BufferData(gl.ELEMENT_ARRAY_BUFFER, len(indices)*4, gl.Ptr(indices), gl.STATIC_DRAW)
+
+	model.indexCount = int32(len(indices))
+
+	// Set vertex attributes (Position, Normal, TexCoord)
+	stride := int32(unsafe.Sizeof(modelVertex{}))
+	gl.EnableVertexAttribArray(0)
+	gl.VertexAttribPointerWithOffset(0, 3, gl.FLOAT, false, stride, 0)
+	gl.EnableVertexAttribArray(1)
+	gl.VertexAttribPointerWithOffset(1, 3, gl.FLOAT, false, stride, 12)
+	gl.EnableVertexAttribArray(2)
+	gl.VertexAttribPointerWithOffset(2, 2, gl.FLOAT, false, stride, 24)
+
+	gl.BindVertexArray(0)
+
+	return model
+}
+
+// buildNodeMatrix builds the transformation matrix for an RSM node.
+// This matches the model_viewer.go implementation for consistency.
+func (mv *MapViewer) buildNodeMatrix(node *formats.RSMNode, rsm *formats.RSM) math.Mat4 {
+	return mv.buildNodeMatrixRecursive(node, rsm, make(map[string]bool))
+}
+
+func (mv *MapViewer) buildNodeMatrixRecursive(node *formats.RSMNode, rsm *formats.RSM, visited map[string]bool) math.Mat4 {
+	// Prevent infinite recursion
+	if visited[node.Name] {
+		return math.Identity()
+	}
+	visited[node.Name] = true
+
+	result := math.Identity()
+
+	// Apply scale
+	result = result.Mul(math.Scale(node.Scale[0], node.Scale[1], node.Scale[2]))
+
+	// Apply rotation from 3x3 matrix (not axis-angle)
+	rotMat := math.FromMat3x3(node.Matrix)
+	result = result.Mul(rotMat)
+
+	// Apply offset (pivot point) - note the negative sign
+	result = result.Mul(math.Translate(-node.Offset[0], -node.Offset[1], -node.Offset[2]))
+
+	// Apply position
+	result = result.Mul(math.Translate(node.Position[0], node.Position[1], node.Position[2]))
+
+	// If node has parent, multiply by parent's matrix
+	if node.Parent != "" && node.Parent != node.Name {
+		parentNode := rsm.GetNodeByName(node.Parent)
+		if parentNode != nil {
+			parentMatrix := mv.buildNodeMatrixRecursive(parentNode, rsm, visited)
+			result = parentMatrix.Mul(result)
+		}
+	}
+
+	return result
+}
+
+// transformPoint transforms a point by a 4x4 matrix.
+func transformPoint(m math.Mat4, p [3]float32) [3]float32 {
+	x := m[0]*p[0] + m[4]*p[1] + m[8]*p[2] + m[12]
+	y := m[1]*p[0] + m[5]*p[1] + m[9]*p[2] + m[13]
+	z := m[2]*p[0] + m[6]*p[1] + m[10]*p[2] + m[14]
+	return [3]float32{x, y, z}
 }
 
 // buildLightmapAtlas creates a texture atlas from GND lightmaps.
@@ -844,9 +1285,81 @@ func (mv *MapViewer) Render() uint32 {
 	}
 
 	gl.BindVertexArray(0)
+
+	// Render placed models
+	mv.renderModels(viewProj)
+
 	gl.BindFramebuffer(gl.FRAMEBUFFER, 0)
 
 	return mv.colorTexture
+}
+
+// renderModels renders all placed RSM models.
+func (mv *MapViewer) renderModels(viewProj math.Mat4) {
+	if len(mv.models) == 0 {
+		return
+	}
+
+	gl.UseProgram(mv.modelProgram)
+	gl.Uniform3f(mv.locModelLightDir, 0.5, 1.0, 0.3)
+	gl.Uniform3f(mv.locModelAmbient, 0.5, 0.5, 0.5)
+	gl.Uniform3f(mv.locModelDiffuse, 0.7, 0.7, 0.7)
+	gl.Uniform1i(mv.locModelTexture, 0)
+
+	gl.ActiveTexture(gl.TEXTURE0)
+
+	// RSW positions are centered at map origin (0,0,0)
+	// GND terrain spans from (0,0) to (mapWidth, mapHeight)
+	// Convert by adding map center offset
+	offsetX := mv.mapWidth / 2
+	offsetZ := mv.mapHeight / 2
+
+	for _, model := range mv.models {
+		if model.vao == 0 || model.indexCount == 0 {
+			continue
+		}
+
+		// Convert RSW position to GND world coordinates:
+		// - RSW X (0 = center) -> World X = rswX + mapWidth/2
+		// - RSW Y (altitude) -> World Y = -rswY (same as GND altitude convention)
+		// - RSW Z (0 = center) -> World Z = rswZ + mapHeight/2
+		worldX := model.position[0] + offsetX
+		worldY := -model.position[1]
+		worldZ := model.position[2] + offsetZ
+
+		// Build model matrix: translate first, then apply rotation and scale
+		// Order: T * Ry * Rx * Rz * BaseRot * S (applied right-to-left)
+		modelMatrix := math.Identity()
+
+		// Apply translation to world position
+		modelMatrix = modelMatrix.Mul(math.Translate(worldX, worldY, worldZ))
+
+		// Apply RSW rotations (in degrees)
+		modelMatrix = modelMatrix.Mul(math.RotateY(model.rotation[1] * gomath.Pi / 180))
+		modelMatrix = modelMatrix.Mul(math.RotateX(model.rotation[0] * gomath.Pi / 180))
+		modelMatrix = modelMatrix.Mul(math.RotateZ(model.rotation[2] * gomath.Pi / 180))
+
+		// Apply scale
+		modelMatrix = modelMatrix.Mul(math.Scale(model.scale[0], model.scale[1], model.scale[2]))
+
+		// Combine with view-projection
+		mvp := viewProj.Mul(modelMatrix)
+		gl.UniformMatrix4fv(mv.locModelMVP, 1, false, &mvp[0])
+
+		gl.BindVertexArray(model.vao)
+
+		// Render each texture group
+		for _, group := range model.texGroups {
+			tex := mv.fallbackTex
+			if group.texIdx >= 0 && group.texIdx < len(model.textures) {
+				tex = model.textures[group.texIdx]
+			}
+			gl.BindTexture(gl.TEXTURE_2D, tex)
+			gl.DrawElementsWithOffset(gl.TRIANGLES, group.indexCount, gl.UNSIGNED_INT, uintptr(group.startIndex*4))
+		}
+	}
+
+	gl.BindVertexArray(0)
 }
 
 // calculateCameraPosition computes camera position from orbit parameters.
@@ -928,9 +1441,9 @@ func (mv *MapViewer) HandleFPSMovement(forward, right, up float32) {
 	dirX := float32(sinf(mv.camYaw))
 	dirZ := float32(cosf(mv.camYaw))
 
-	// Right direction (perpendicular to forward)
-	rightX := float32(cosf(mv.camYaw))
-	rightZ := float32(-sinf(mv.camYaw))
+	// Right direction (perpendicular to forward) - negated for correct A/D mapping
+	rightX := float32(-cosf(mv.camYaw))
+	rightZ := float32(sinf(mv.camYaw))
 
 	// Apply movement
 	mv.camPosX += (dirX*forward + rightX*right) * mv.MoveSpeed
@@ -992,6 +1505,9 @@ func (mv *MapViewer) Destroy() {
 	if mv.terrainProgram != 0 {
 		gl.DeleteProgram(mv.terrainProgram)
 	}
+	if mv.modelProgram != 0 {
+		gl.DeleteProgram(mv.modelProgram)
+	}
 	if mv.fbo != 0 {
 		gl.DeleteFramebuffers(1, &mv.fbo)
 	}
@@ -1038,8 +1554,4 @@ func absf(x float32) float32 {
 		return -x
 	}
 	return x
-}
-
-func atan2f(y, x float64) float64 {
-	return gomath.Atan2(y, x)
 }
