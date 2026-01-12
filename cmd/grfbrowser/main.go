@@ -94,6 +94,8 @@ type App struct {
 	previewLastTime time.Time          // Last frame update time
 	previewPath     string             // Path of currently previewed file
 	previewZoom     float32            // Zoom level for preview
+	previewSpeed    float32            // Animation playback speed (1.0 = normal)
+	previewLooping  bool               // Whether animation loops
 
 	// Image preview state (ADR-009 Stage 4)
 	previewImage   *backend.Texture // Texture for image preview
@@ -174,6 +176,8 @@ func NewApp() *App {
 		filterOther:         true,
 		screenshotDir:       "/tmp/grfbrowser",
 		previewZoom:         1.0,
+		previewSpeed:        1.0,  // Normal playback speed
+		previewLooping:      true, // Loop by default
 		magentaTransparency: true, // Enable magenta key transparency by default
 	}
 
@@ -380,6 +384,13 @@ func (app *App) render() {
 			if app.previewPlaying {
 				app.previewLastTime = time.Now()
 			}
+		}
+	}
+
+	// Space to toggle Play/Pause for RSM animations (when not in text input)
+	if app.modelViewer != nil && app.modelViewer.HasAnimation() && !imgui.IsAnyItemActive() {
+		if imgui.IsKeyChordPressed(imgui.KeyChord(imgui.KeySpace)) {
+			app.modelViewer.ToggleAnimation()
 		}
 	}
 
