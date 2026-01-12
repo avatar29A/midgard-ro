@@ -4,6 +4,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/AllenDang/cimgui-go/imgui"
 
@@ -12,6 +13,9 @@ import (
 
 // lastMousePos tracks previous mouse position for drag delta calculation.
 var lastMousePos imgui.Vec2
+
+// lastRSMAnimTime tracks the last update time for RSM animation.
+var lastRSMAnimTime time.Time
 
 // loadRSMPreview loads a RSM file for preview.
 func (app *App) loadRSMPreview(path string) {
@@ -60,6 +64,21 @@ func (app *App) renderRSMPreview() {
 
 	// 3D Preview section (ADR-012 Stage 3)
 	if app.modelViewer != nil {
+		// Update animation if playing
+		if app.modelViewer.HasAnimation() && app.modelViewer.IsAnimationPlaying() {
+			now := time.Now()
+			if !lastRSMAnimTime.IsZero() {
+				deltaMs := float32(now.Sub(lastRSMAnimTime).Milliseconds())
+				if deltaMs > 0 {
+					app.modelViewer.UpdateAnimation(deltaMs)
+				}
+			}
+			lastRSMAnimTime = now
+		} else {
+			// Reset time tracking when not playing
+			lastRSMAnimTime = time.Time{}
+		}
+
 		// Render 3D view to texture
 		textureID := app.modelViewer.Render()
 
@@ -137,6 +156,56 @@ func (app *App) renderRSMPreview() {
 		}
 		if imgui.IsItemHovered() {
 			imgui.SetTooltip("Treat RGB(255,0,255) as transparent")
+		}
+
+		// Animation controls (only show if model has animation)
+		if app.modelViewer.HasAnimation() {
+			imgui.Separator()
+			imgui.Text("Animation")
+
+			// Play/Pause button
+			if app.modelViewer.IsAnimationPlaying() {
+				if imgui.Button("Pause") {
+					app.modelViewer.PauseAnimation()
+				}
+			} else {
+				if imgui.Button("Play") {
+					app.modelViewer.PlayAnimation()
+					lastRSMAnimTime = time.Now()
+				}
+			}
+			imgui.SameLine()
+
+			// Stop button (reset to start)
+			if imgui.Button("Stop") {
+				app.modelViewer.PauseAnimation()
+				app.modelViewer.SetAnimationTime(0)
+			}
+
+			// Timeline slider
+			animTime := app.modelViewer.GetAnimationTime()
+			animLen := float32(app.modelViewer.GetAnimationLength())
+			if animLen > 0 {
+				imgui.Text(fmt.Sprintf("Time: %.0f / %.0f ms", animTime, animLen))
+				imgui.SetNextItemWidth(-1)
+				if imgui.SliderFloatV("##AnimTime", &animTime, 0, animLen, "%.0f ms", imgui.SliderFlagsNone) {
+					app.modelViewer.SetAnimationTime(animTime)
+				}
+			}
+
+			// Speed control
+			speed := app.modelViewer.GetAnimationSpeed()
+			imgui.SetNextItemWidth(100)
+			if imgui.SliderFloatV("Speed", &speed, 0.1, 3.0, "%.1fx", imgui.SliderFlagsNone) {
+				app.modelViewer.SetAnimationSpeed(speed)
+			}
+			imgui.SameLine()
+
+			// Loop checkbox
+			looping := app.modelViewer.IsAnimationLooping()
+			if imgui.Checkbox("Loop", &looping) {
+				app.modelViewer.SetAnimationLooping(looping)
+			}
 		}
 	}
 
