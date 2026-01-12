@@ -43,13 +43,22 @@ type MapViewer struct {
 	atlasSize      int32 // Atlas dimensions (square)
 	tilesPerRow    int32 // Number of lightmap tiles per row in atlas
 
-	// Camera (orbit style for Stage 1)
+	// Camera - Orbit mode
 	rotationX float32
 	rotationY float32
 	distance  float32
 	centerX   float32
 	centerY   float32
 	centerZ   float32
+
+	// Camera - FPS mode
+	FPSMode   bool
+	camPosX   float32
+	camPosY   float32
+	camPosZ   float32
+	camYaw    float32 // Horizontal angle (radians)
+	camPitch  float32 // Vertical angle (radians)
+	MoveSpeed float32
 
 	// Lighting controls
 	SunStrength float32
@@ -139,6 +148,7 @@ func NewMapViewer(width, height int32) (*MapViewer, error) {
 		rotationY:      0.0,
 		distance:       500.0,
 		SunStrength:    2.0,
+		MoveSpeed:      5.0,
 	}
 
 	if err := mv.createFramebuffer(); err != nil {
@@ -781,11 +791,24 @@ func (mv *MapViewer) Render() uint32 {
 	aspect := float32(mv.width) / float32(mv.height)
 	proj := math.Perspective(45.0, aspect, 1.0, 10000.0)
 
-	// Orbit camera position
-	camPos := mv.calculateCameraPosition()
-	center := math.Vec3{X: mv.centerX, Y: mv.centerY, Z: mv.centerZ}
-	up := math.Vec3{X: 0, Y: 1, Z: 0}
-	view := math.LookAt(camPos, center, up)
+	var view math.Mat4
+	if mv.FPSMode {
+		// FPS camera - look from position in direction of yaw/pitch
+		camPos := math.Vec3{X: mv.camPosX, Y: mv.camPosY, Z: mv.camPosZ}
+		// Calculate look direction from yaw and pitch
+		dirX := float32(cosf(mv.camPitch) * sinf(mv.camYaw))
+		dirY := float32(sinf(mv.camPitch))
+		dirZ := float32(cosf(mv.camPitch) * cosf(mv.camYaw))
+		target := math.Vec3{X: mv.camPosX + dirX, Y: mv.camPosY + dirY, Z: mv.camPosZ + dirZ}
+		up := math.Vec3{X: 0, Y: 1, Z: 0}
+		view = math.LookAt(camPos, target, up)
+	} else {
+		// Orbit camera - rotate around center point
+		camPos := mv.calculateCameraPosition()
+		center := math.Vec3{X: mv.centerX, Y: mv.centerY, Z: mv.centerZ}
+		up := math.Vec3{X: 0, Y: 1, Z: 0}
+		view = math.LookAt(camPos, center, up)
+	}
 
 	viewProj := proj.Mul(view)
 
@@ -843,34 +866,108 @@ func (mv *MapViewer) calculateCameraPosition() math.Vec3 {
 // HandleMouseDrag handles mouse drag for camera rotation.
 func (mv *MapViewer) HandleMouseDrag(deltaX, deltaY float32) {
 	sensitivity := float32(0.005)
-	mv.rotationY -= deltaX * sensitivity
-	mv.rotationX += deltaY * sensitivity
 
-	// Clamp pitch
-	if mv.rotationX < 0.1 {
-		mv.rotationX = 0.1
-	}
-	if mv.rotationX > 1.5 {
-		mv.rotationX = 1.5
+	if mv.FPSMode {
+		// FPS mode - adjust yaw and pitch
+		mv.camYaw -= deltaX * sensitivity
+		mv.camPitch -= deltaY * sensitivity
+
+		// Clamp pitch to avoid gimbal lock
+		if mv.camPitch < -1.5 {
+			mv.camPitch = -1.5
+		}
+		if mv.camPitch > 1.5 {
+			mv.camPitch = 1.5
+		}
+	} else {
+		// Orbit mode - rotate around center
+		mv.rotationY -= deltaX * sensitivity
+		mv.rotationX += deltaY * sensitivity
+
+		// Clamp pitch
+		if mv.rotationX < 0.1 {
+			mv.rotationX = 0.1
+		}
+		if mv.rotationX > 1.5 {
+			mv.rotationX = 1.5
+		}
 	}
 }
 
 // HandleMouseWheel handles mouse scroll for zoom.
 func (mv *MapViewer) HandleMouseWheel(delta float32) {
-	mv.distance -= delta * mv.distance * 0.1
-	if mv.distance < 50 {
-		mv.distance = 50
+	if mv.FPSMode {
+		// In FPS mode, scroll adjusts move speed
+		mv.MoveSpeed += delta * 0.5
+		if mv.MoveSpeed < 1.0 {
+			mv.MoveSpeed = 1.0
+		}
+		if mv.MoveSpeed > 50.0 {
+			mv.MoveSpeed = 50.0
+		}
+	} else {
+		// Orbit mode - zoom in/out
+		mv.distance -= delta * mv.distance * 0.1
+		if mv.distance < 50 {
+			mv.distance = 50
+		}
+		if mv.distance > 5000 {
+			mv.distance = 5000
+		}
 	}
-	if mv.distance > 5000 {
-		mv.distance = 5000
+}
+
+// HandleFPSMovement handles WASD movement in FPS mode.
+// forward/right are -1, 0, or 1 based on key presses.
+func (mv *MapViewer) HandleFPSMovement(forward, right, up float32) {
+	if !mv.FPSMode {
+		return
+	}
+
+	// Calculate forward direction (horizontal only for walking)
+	dirX := float32(sinf(mv.camYaw))
+	dirZ := float32(cosf(mv.camYaw))
+
+	// Right direction (perpendicular to forward)
+	rightX := float32(cosf(mv.camYaw))
+	rightZ := float32(-sinf(mv.camYaw))
+
+	// Apply movement
+	mv.camPosX += (dirX*forward + rightX*right) * mv.MoveSpeed
+	mv.camPosZ += (dirZ*forward + rightZ*right) * mv.MoveSpeed
+	mv.camPosY += up * mv.MoveSpeed
+}
+
+// ToggleFPSMode toggles between orbit and FPS camera modes.
+func (mv *MapViewer) ToggleFPSMode() {
+	mv.FPSMode = !mv.FPSMode
+
+	if mv.FPSMode {
+		// Initialize FPS camera at map center, slightly above ground level
+		mv.camPosX = mv.centerX
+		mv.camPosY = mv.centerY + 50 // Slightly above center height
+		mv.camPosZ = mv.centerZ
+
+		// Look forward (towards +Z direction)
+		mv.camYaw = 0
+		mv.camPitch = 0
 	}
 }
 
 // Reset resets camera to default position.
 func (mv *MapViewer) Reset() {
-	mv.rotationX = 0.6
-	mv.rotationY = 0.0
-	// Distance is kept from fitCamera
+	if mv.FPSMode {
+		// Reset FPS camera to map center
+		mv.camPosX = mv.centerX
+		mv.camPosY = mv.centerY + 50
+		mv.camPosZ = mv.centerZ
+		mv.camYaw = 0
+		mv.camPitch = 0
+		mv.MoveSpeed = 5.0
+	} else {
+		mv.rotationX = 0.6
+		mv.rotationY = 0.0
+	}
 }
 
 // updateBounds expands bounds to include point.
@@ -941,4 +1038,8 @@ func absf(x float32) float32 {
 		return -x
 	}
 	return x
+}
+
+func atan2f(y, x float64) float64 {
+	return gomath.Atan2(y, x)
 }
