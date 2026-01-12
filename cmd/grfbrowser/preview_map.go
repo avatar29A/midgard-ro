@@ -383,6 +383,19 @@ func (app *App) renderRSWPreview() {
 				app.mapViewer.Reset()
 			}
 		}
+		imgui.SameLine()
+		// FPS/Orbit mode toggle
+		if app.mapViewer != nil {
+			if app.mapViewer.FPSMode {
+				if imgui.Button("Orbit Mode") {
+					app.mapViewer.ToggleFPSMode()
+				}
+			} else {
+				if imgui.Button("FPS Mode") {
+					app.mapViewer.ToggleFPSMode()
+				}
+			}
+		}
 
 		// Render 3D view
 		app.renderMap3DView()
@@ -591,8 +604,15 @@ func (app *App) renderMap3DView() {
 		return
 	}
 
-	// Help text
-	imgui.TextDisabled("Drag to rotate | Scroll to zoom")
+	// Help text based on mode
+	if app.mapViewer.FPSMode {
+		imgui.TextDisabled("WASD: Move | QE: Up/Down | Drag: Look | Scroll: Speed")
+		// Show current speed
+		imgui.SameLine()
+		imgui.Text(fmt.Sprintf("Speed: %.1f", app.mapViewer.MoveSpeed))
+	} else {
+		imgui.TextDisabled("Drag to rotate | Scroll to zoom")
+	}
 
 	// Sun strength slider
 	imgui.Text("Sun:")
@@ -601,6 +621,32 @@ func (app *App) renderMap3DView() {
 	imgui.SliderFloatV("##sunstrength", &app.mapViewer.SunStrength, 0.0, 2.0, "%.2f", imgui.SliderFlagsNone)
 
 	imgui.Separator()
+
+	// Handle FPS keyboard input
+	if app.mapViewer.FPSMode {
+		var forward, right, up float32
+		if imgui.IsKeyDown(imgui.KeyW) {
+			forward = 1
+		}
+		if imgui.IsKeyDown(imgui.KeyS) {
+			forward = -1
+		}
+		if imgui.IsKeyDown(imgui.KeyD) {
+			right = 1
+		}
+		if imgui.IsKeyDown(imgui.KeyA) {
+			right = -1
+		}
+		if imgui.IsKeyDown(imgui.KeyE) {
+			up = 1
+		}
+		if imgui.IsKeyDown(imgui.KeyQ) {
+			up = -1
+		}
+		if forward != 0 || right != 0 || up != 0 {
+			app.mapViewer.HandleFPSMovement(forward, right, up)
+		}
+	}
 
 	// Render the map
 	texID := app.mapViewer.Render()
