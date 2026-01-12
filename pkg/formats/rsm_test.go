@@ -462,7 +462,7 @@ func makeMinimalRSMWithNode(major, minor uint8) []byte {
 
 	// Transform matrix (9 floats - identity matrix)
 	// [1,0,0, 0,1,0, 0,0,1]
-	binary.LittleEndian.PutUint32(data[offset:], 0x3f800000)   // 1.0
+	binary.LittleEndian.PutUint32(data[offset:], 0x3f800000)    // 1.0
 	binary.LittleEndian.PutUint32(data[offset+12:], 0x3f800000) // 1.0
 	binary.LittleEndian.PutUint32(data[offset+24:], 0x3f800000) // 1.0
 	offset += 36

@@ -65,8 +65,8 @@ func (s RSMShadingType) String() string {
 
 // RSMTexCoord represents a texture coordinate with optional vertex color.
 type RSMTexCoord struct {
-	Color [4]uint8  // RGBA vertex color (v1.2+)
-	U, V  float32   // Texture coordinates
+	Color [4]uint8 // RGBA vertex color (v1.2+)
+	U, V  float32  // Texture coordinates
 }
 
 // RSMFace represents a triangle face in a mesh.
@@ -99,20 +99,20 @@ type RSMScaleKeyframe struct {
 
 // RSMNode represents a node in the model hierarchy.
 type RSMNode struct {
-	Name       string          // Node name
-	Parent     string          // Parent node name (empty for root)
-	TextureIDs []int32         // Indices into RSM.Textures array
+	Name       string  // Node name
+	Parent     string  // Parent node name (empty for root)
+	TextureIDs []int32 // Indices into RSM.Textures array
 
 	// Transform components
-	Matrix   [9]float32  // 3x3 rotation matrix
-	Offset   [3]float32  // Pivot point offset
-	Position [3]float32  // Translation
-	RotAngle float32     // Rotation angle (radians)
-	RotAxis  [3]float32  // Rotation axis
-	Scale    [3]float32  // Scale factors
+	Matrix   [9]float32 // 3x3 rotation matrix
+	Offset   [3]float32 // Pivot point offset
+	Position [3]float32 // Translation
+	RotAngle float32    // Rotation angle (radians)
+	RotAxis  [3]float32 // Rotation axis
+	Scale    [3]float32 // Scale factors
 
 	// Mesh data
-	Vertices  [][3]float32 // Vertex positions
+	Vertices  [][3]float32  // Vertex positions
 	TexCoords []RSMTexCoord // Texture coordinates
 	Faces     []RSMFace     // Triangle faces
 
@@ -205,11 +205,11 @@ func ParseRSM(data []byte) (*RSM, error) {
 	// Read texture names
 	rsm.Textures = make([]string, textureCount)
 	for i := int32(0); i < textureCount; i++ {
-		rsm.Textures[i] = readString(r, 40)
+		rsm.Textures[i] = readString40(r)
 	}
 
 	// Read root node name
-	rsm.RootNode = readString(r, 40)
+	rsm.RootNode = readString40(r)
 
 	// Read node count
 	var nodeCount int32
@@ -258,8 +258,8 @@ func parseRSMNode(r *bytes.Reader, version RSMVersion) (*RSMNode, error) {
 	node := &RSMNode{}
 
 	// Read node name and parent name
-	node.Name = readString(r, 40)
-	node.Parent = readString(r, 40)
+	node.Name = readString40(r)
+	node.Parent = readString40(r)
 
 	// Read texture indices
 	var textureCount int32
@@ -398,9 +398,10 @@ func ParseRSMFile(path string) (*RSM, error) {
 	return ParseRSM(data)
 }
 
-// readString reads a fixed-length null-terminated string from a reader.
-func readString(r *bytes.Reader, length int) string {
-	buf := make([]byte, length)
+// readString40 reads a 40-byte null-terminated string from a reader.
+// RSM format uses 40-byte fixed-length strings for node/texture names.
+func readString40(r *bytes.Reader) string {
+	buf := make([]byte, 40)
 	r.Read(buf)
 	// Find null terminator
 	for i, b := range buf {
