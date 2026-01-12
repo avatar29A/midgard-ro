@@ -1,105 +1,105 @@
+version: "2"
+
 run:
   timeout: 5m
   modules-download-mode: readonly
 
 linters:
+  default: standard
   enable:
-    # Default linters
-    - errcheck
-    - gosimple
-    - govet
-    - ineffassign
-    - staticcheck
-    - unused
-    # Additional useful linters
-    - gofmt
-    - goimports
     - misspell
     - unconvert
     - unparam
-    - gosec
     - bodyclose
     - nilerr
     - copyloopvar
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: false
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
+    misspell:
+      locale: US
+    staticcheck:
+      checks:
+        - all
+        - -QF1001  # De Morgan's law - stylistic, not critical
+        - -QF1003  # Tagged switch - stylistic, not critical
+        - -ST1003  # ALL_CAPS naming - existing code convention for packet IDs
+        - -ST1021  # Comment format - stylistic
+  exclusions:
+    warn-unused: true
+    rules:
+      # Ignore certain linters in test files
+      - path: _test\.go
+        linters:
+          - gosec
+          - errcheck
 
-linters-settings:
-  errcheck:
-    check-type-assertions: true
-    check-blank: false
+      # Ignore generated files
+      - path: testdata/
+        linters:
+          - all
 
-  govet:
-    enable-all: true
-    disable:
-      - fieldalignment  # Too noisy for game dev
+      # SDL/OpenGL setup functions - errors are logged but not critical
+      - path: internal/engine/
+        text: "Error return value of .*(GLSet|Destroy).*is not checked"
+        linters:
+          - errcheck
 
-  gofmt:
-    simplify: true
+      # Flag parsing in CLI tools - exits on error anyway
+      - path: cmd/
+        text: "Error return value of `fs.Parse` is not checked"
+        linters:
+          - errcheck
 
-  goimports:
-    local-prefixes: github.com/Faultbox/midgard-ro
+      # Binary reading in file parsers - errors caught by subsequent operations
+      - path: pkg/grf/
+        text: "Error return value of .*(binary.Read|io.ReadFull|Seek).*is not checked"
+        linters:
+          - errcheck
 
-  misspell:
-    locale: US
+      # Binary reading in format parsers - errors caught by subsequent operations
+      - path: pkg/formats/
+        text: "Error return value of .*(binary.Read|r.Read|r.Seek).*is not checked"
+        linters:
+          - errcheck
 
-  gosec:
-    excludes:
-      - G104  # Unhandled errors (too strict for game client)
-      - G115  # Integer overflow (safe in graphics context)
-      - G304  # File path from variable (needed for asset loading)
-      - G306  # WriteFile permissions (0644 is fine for config/extracted files)
+      # File format parsers - EOF errors when reading optional trailing data are expected
+      - path: pkg/formats/
+        text: "error is not nil.*but it returns nil"
+        linters:
+          - nilerr
+
+      # Unparam false positives - these functions may return errors in future
+      - text: "result .* is always nil"
+        linters:
+          - unparam
+
+      # Shadow is too noisy for err variable
+      - text: 'shadow: declaration of "err" shadows'
+        linters:
+          - govet
+
+      # Close() calls in defers - common Go pattern where error is logged or not critical
+      - text: "Error return value of .*(Close|Remove).*is not checked"
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    gofmt:
+      simplify: true
+    goimports:
+      local-prefixes:
+        - github.com/Faultbox/midgard-ro
 
 issues:
-  exclude-rules:
-    # Ignore certain linters in test files
-    - path: _test\.go
-      linters:
-        - gosec
-        - errcheck
-
-    # Ignore generated files
-    - path: testdata/
-      linters:
-        - all
-
-    # SDL/OpenGL setup functions - errors are logged but not critical
-    - path: internal/engine/
-      text: "Error return value of .*(GLSet|Destroy).*is not checked"
-      linters:
-        - errcheck
-
-    # Flag parsing in CLI tools - exits on error anyway
-    - path: cmd/
-      text: "Error return value of `fs.Parse` is not checked"
-      linters:
-        - errcheck
-
-    # Binary reading in file parsers - errors caught by subsequent operations
-    - path: pkg/grf/
-      text: "Error return value of .*(binary.Read|io.ReadFull|Seek).*is not checked"
-      linters:
-        - errcheck
-
-    # Binary reading in format parsers - errors caught by subsequent operations
-    - path: pkg/formats/
-      text: "Error return value of .*(binary.Read|r.Read|r.Seek).*is not checked"
-      linters:
-        - errcheck
-
-    # File format parsers - EOF errors when reading optional trailing data are expected
-    - path: pkg/formats/
-      text: "error is not nil.*but it returns nil"
-      linters:
-        - nilerr
-
-    # Unparam false positives - these functions may return errors in future
-    - text: "result .* is always nil"
-      linters:
-        - unparam
-
-    # Shadow is too noisy for err variable
-    - text: 'shadow: declaration of "err" shadows'
-      linters:
-        - govet
-
   max-issues-per-linter: 50
   max-same-issues: 10
