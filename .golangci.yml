@@ -28,6 +28,8 @@ linters:
         - all
         - -QF1001  # De Morgan's law - stylistic, not critical
         - -QF1003  # Tagged switch - stylistic, not critical
+        - -ST1003  # ALL_CAPS naming - existing code convention for packet IDs
+        - -ST1021  # Comment format - stylistic
   exclusions:
     warn-unused: true
     rules:
