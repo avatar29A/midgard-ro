@@ -79,6 +79,12 @@ issues:
       linters:
         - errcheck
 
+    # Binary reading in format parsers - errors caught by subsequent operations
+    - path: pkg/formats/
+      text: "Error return value of .*(binary.Read|r.Read|r.Seek).*is not checked"
+      linters:
+        - errcheck
+
     # File format parsers - EOF errors when reading optional trailing data are expected
     - path: pkg/formats/
       text: "error is not nil.*but it returns nil"
