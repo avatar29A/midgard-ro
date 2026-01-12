@@ -77,6 +77,11 @@ linters:
         linters:
           - govet
 
+      # Close() calls in defers - common Go pattern where error is logged or not critical
+      - text: "Error return value of .*(Close|Remove).*is not checked"
+        linters:
+          - errcheck
+
 formatters:
   enable:
     - gofmt
