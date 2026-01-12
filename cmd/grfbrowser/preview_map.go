@@ -365,6 +365,33 @@ func (app *App) renderRSWPreview() {
 
 	rsw := app.previewRSW
 
+	// View mode toggle buttons
+	if app.map3DViewMode {
+		if imgui.Button("2D Info") {
+			app.map3DViewMode = false
+		}
+		imgui.SameLine()
+		imgui.TextDisabled("3D View")
+		imgui.SameLine()
+		if imgui.Button("Reset Camera") {
+			if app.mapViewer != nil {
+				app.mapViewer.Reset()
+			}
+		}
+
+		// Render 3D view
+		app.renderMap3DView()
+		return
+	}
+
+	if imgui.Button("3D View") {
+		app.initMap3DView()
+	}
+	imgui.SameLine()
+	imgui.TextDisabled("2D Info")
+
+	imgui.Separator()
+
 	// Basic info
 	imgui.Text(fmt.Sprintf("Version: %s", rsw.Version))
 	imgui.Separator()
@@ -496,5 +523,118 @@ func (app *App) renderRSWPreview() {
 	if len(rsw.Quadtree) > 0 {
 		imgui.Separator()
 		imgui.Text(fmt.Sprintf("Quadtree nodes: %d", len(rsw.Quadtree)))
+	}
+}
+
+// initMap3DView initializes the 3D map viewer with GND data.
+func (app *App) initMap3DView() {
+	if app.previewRSW == nil {
+		return
+	}
+
+	// Get GND file path from RSW
+	gndPath := "data/" + app.previewRSW.GndFile
+	if !app.archive.Contains(gndPath) {
+		fmt.Fprintf(os.Stderr, "GND file not found: %s\n", gndPath)
+		return
+	}
+
+	// Load GND data
+	gndData, err := app.archive.Read(gndPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading GND: %v\n", err)
+		return
+	}
+
+	gnd, err := formats.ParseGND(gndData)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing GND: %v\n", err)
+		return
+	}
+
+	// Create MapViewer if needed
+	if app.mapViewer == nil {
+		mv, err := NewMapViewer(512, 512)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating map viewer: %v\n", err)
+			return
+		}
+		app.mapViewer = mv
+	}
+
+	// Texture loader function
+	texLoader := func(path string) ([]byte, error) {
+		return app.archive.Read(path)
+	}
+
+	// Load map into viewer
+	if err := app.mapViewer.LoadMap(gnd, app.previewRSW, texLoader); err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading map: %v\n", err)
+		return
+	}
+
+	app.map3DViewMode = true
+}
+
+// Track last mouse position for drag delta calculation
+var mapViewerLastMousePos imgui.Vec2
+
+// renderMap3DView renders the 3D map view.
+func (app *App) renderMap3DView() {
+	if app.mapViewer == nil {
+		imgui.TextDisabled("Map viewer not initialized")
+		return
+	}
+
+	// Help text
+	imgui.TextDisabled("Drag to rotate | Scroll to zoom")
+	imgui.Separator()
+
+	// Render the map
+	texID := app.mapViewer.Render()
+
+	// Display the rendered texture
+	avail := imgui.ContentRegionAvail()
+	size := avail.X
+	if avail.Y < size {
+		size = avail.Y
+	}
+	if size < 100 {
+		size = 100
+	}
+
+	// Center the image
+	cursorX := imgui.CursorPosX()
+	if avail.X > size {
+		imgui.SetCursorPosX(cursorX + (avail.X-size)/2)
+	}
+
+	// Display with flipped V coordinates (OpenGL to ImGui)
+	texRef := imgui.NewTextureRefTextureID(imgui.TextureID(texID))
+	imgui.ImageWithBgV(
+		*texRef,
+		imgui.NewVec2(size, size),
+		imgui.NewVec2(0, 1), // UV flipped
+		imgui.NewVec2(1, 0),
+		imgui.NewVec4(0.1, 0.1, 0.1, 1.0), // Dark background
+		imgui.NewVec4(1, 1, 1, 1),         // No tint
+	)
+
+	// Handle mouse input on the image
+	if imgui.IsItemHovered() {
+		// Mouse drag for rotation
+		mousePos := imgui.MousePos()
+		if imgui.IsMouseDragging(imgui.MouseButtonLeft) {
+			deltaX := mousePos.X - mapViewerLastMousePos.X
+			deltaY := mousePos.Y - mapViewerLastMousePos.Y
+			app.mapViewer.HandleMouseDrag(deltaX, deltaY)
+		}
+		mapViewerLastMousePos = mousePos
+
+		// Mouse wheel for zoom
+		wheel := imgui.CurrentIO().MouseWheel()
+		if wheel != 0 {
+			app.mapViewer.HandleMouseWheel(wheel)
+		}
 	}
 }
