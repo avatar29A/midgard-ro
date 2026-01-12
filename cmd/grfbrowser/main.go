@@ -126,6 +126,9 @@ type App struct {
 
 	// RSW preview state (ADR-011 Stage 3)
 	previewRSW *formats.RSW // Loaded RSW data
+
+	// RSM preview state (ADR-012 Stage 2)
+	previewRSM *formats.RSM // Loaded RSM 3D model data
 }
 
 var (
@@ -651,6 +654,8 @@ func (app *App) renderPreview() {
 		app.renderGNDPreview()
 	case ".rsw":
 		app.renderRSWPreview()
+	case ".rsm":
+		app.renderRSMPreview()
 	default:
 		app.renderHexPreview()
 	}
@@ -691,6 +696,8 @@ func (app *App) loadPreview(displayPath string) {
 		app.loadGNDPreview(archivePath)
 	case ".rsw":
 		app.loadRSWPreview(archivePath)
+	case ".rsm":
+		app.loadRSMPreview(archivePath)
 	default:
 		// Load as hex for unknown formats
 		app.loadHexPreview(archivePath)
@@ -743,6 +750,9 @@ func (app *App) clearPreview() {
 
 	// Clear RSW preview (ADR-011 Stage 3)
 	app.previewRSW = nil
+
+	// Clear RSM preview (ADR-012 Stage 2)
+	app.previewRSM = nil
 }
 
 // renderStatusBar renders the status bar at the bottom.
