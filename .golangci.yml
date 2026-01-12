@@ -23,6 +23,11 @@ linters:
         - fieldalignment
     misspell:
       locale: US
+    staticcheck:
+      checks:
+        - all
+        - -QF1001  # De Morgan's law - stylistic, not critical
+        - -QF1003  # Tagged switch - stylistic, not critical
   exclusions:
     warn-unused: true
     rules:
