@@ -5,92 +5,88 @@ run:
   modules-download-mode: readonly
 
 linters:
+  default: standard
   enable:
-    # Additional useful linters beyond defaults
     - misspell
     - unconvert
     - unparam
     - bodyclose
     - nilerr
     - copyloopvar
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: false
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
+    misspell:
+      locale: US
+  exclusions:
+    warn-unused: true
+    rules:
+      # Ignore certain linters in test files
+      - path: _test\.go
+        linters:
+          - gosec
+          - errcheck
+
+      # Ignore generated files
+      - path: testdata/
+        linters:
+          - all
+
+      # SDL/OpenGL setup functions - errors are logged but not critical
+      - path: internal/engine/
+        text: "Error return value of .*(GLSet|Destroy).*is not checked"
+        linters:
+          - errcheck
+
+      # Flag parsing in CLI tools - exits on error anyway
+      - path: cmd/
+        text: "Error return value of `fs.Parse` is not checked"
+        linters:
+          - errcheck
+
+      # Binary reading in file parsers - errors caught by subsequent operations
+      - path: pkg/grf/
+        text: "Error return value of .*(binary.Read|io.ReadFull|Seek).*is not checked"
+        linters:
+          - errcheck
+
+      # Binary reading in format parsers - errors caught by subsequent operations
+      - path: pkg/formats/
+        text: "Error return value of .*(binary.Read|r.Read|r.Seek).*is not checked"
+        linters:
+          - errcheck
+
+      # File format parsers - EOF errors when reading optional trailing data are expected
+      - path: pkg/formats/
+        text: "error is not nil.*but it returns nil"
+        linters:
+          - nilerr
+
+      # Unparam false positives - these functions may return errors in future
+      - text: "result .* is always nil"
+        linters:
+          - unparam
+
+      # Shadow is too noisy for err variable
+      - text: 'shadow: declaration of "err" shadows'
+        linters:
+          - govet
 
 formatters:
   enable:
     - gofmt
     - goimports
-
-linters-settings:
-  errcheck:
-    check-type-assertions: true
-    check-blank: false
-
-  govet:
-    enable-all: true
-    disable:
-      - fieldalignment  # Too noisy for game dev
-
-  misspell:
-    locale: US
-
-formatters-settings:
-  gofmt:
-    simplify: true
-
-  goimports:
-    local-prefixes: github.com/Faultbox/midgard-ro
+  settings:
+    gofmt:
+      simplify: true
+    goimports:
+      local-prefixes: github.com/Faultbox/midgard-ro
 
 issues:
-  exclude-rules:
-    # Ignore certain linters in test files
-    - path: _test\.go
-      linters:
-        - gosec
-        - errcheck
-
-    # Ignore generated files
-    - path: testdata/
-      linters:
-        - all
-
-    # SDL/OpenGL setup functions - errors are logged but not critical
-    - path: internal/engine/
-      text: "Error return value of .*(GLSet|Destroy).*is not checked"
-      linters:
-        - errcheck
-
-    # Flag parsing in CLI tools - exits on error anyway
-    - path: cmd/
-      text: "Error return value of `fs.Parse` is not checked"
-      linters:
-        - errcheck
-
-    # Binary reading in file parsers - errors caught by subsequent operations
-    - path: pkg/grf/
-      text: "Error return value of .*(binary.Read|io.ReadFull|Seek).*is not checked"
-      linters:
-        - errcheck
-
-    # Binary reading in format parsers - errors caught by subsequent operations
-    - path: pkg/formats/
-      text: "Error return value of .*(binary.Read|r.Read|r.Seek).*is not checked"
-      linters:
-        - errcheck
-
-    # File format parsers - EOF errors when reading optional trailing data are expected
-    - path: pkg/formats/
-      text: "error is not nil.*but it returns nil"
-      linters:
-        - nilerr
-
-    # Unparam false positives - these functions may return errors in future
-    - text: "result .* is always nil"
-      linters:
-        - unparam
-
-    # Shadow is too noisy for err variable
-    - text: 'shadow: declaration of "err" shadows'
-      linters:
-        - govet
-
   max-issues-per-linter: 50
   max-same-issues: 10
