@@ -127,8 +127,10 @@ type App struct {
 	// RSW preview state (ADR-011 Stage 3)
 	previewRSW *formats.RSW // Loaded RSW data
 
-	// RSM preview state (ADR-012 Stage 2)
-	previewRSM *formats.RSM // Loaded RSM 3D model data
+	// RSM preview state (ADR-012 Stage 2/3)
+	previewRSM          *formats.RSM // Loaded RSM 3D model data
+	modelViewer         *ModelViewer // 3D model renderer (ADR-012 Stage 3)
+	magentaTransparency bool         // Enable magenta (255,0,255) as transparency key
 }
 
 var (
@@ -162,16 +164,17 @@ var koreanGlyphRanges = []imgui.Wchar{
 // NewApp creates a new application instance.
 func NewApp() *App {
 	app := &App{
-		expandedPaths:    make(map[string]bool),
-		filterSprites:    true,
-		filterAnimations: true,
-		filterTextures:   true,
-		filterModels:     true,
-		filterMaps:       true,
-		filterAudio:      true,
-		filterOther:      true,
-		screenshotDir:    "/tmp/grfbrowser",
-		previewZoom:      1.0,
+		expandedPaths:       make(map[string]bool),
+		filterSprites:       true,
+		filterAnimations:    true,
+		filterTextures:      true,
+		filterModels:        true,
+		filterMaps:          true,
+		filterAudio:         true,
+		filterOther:         true,
+		screenshotDir:       "/tmp/grfbrowser",
+		previewZoom:         1.0,
+		magentaTransparency: true, // Enable magenta key transparency by default
 	}
 
 	// Ensure screenshot directory exists (ADR-010)
@@ -247,6 +250,10 @@ func (app *App) loadKoreanFont() {
 
 // Close cleans up resources.
 func (app *App) Close() {
+	if app.modelViewer != nil {
+		app.modelViewer.Destroy()
+		app.modelViewer = nil
+	}
 	if app.archive != nil {
 		app.archive.Close()
 	}
@@ -751,8 +758,9 @@ func (app *App) clearPreview() {
 	// Clear RSW preview (ADR-011 Stage 3)
 	app.previewRSW = nil
 
-	// Clear RSM preview (ADR-012 Stage 2)
+	// Clear RSM preview (ADR-012 Stage 2/3)
 	app.previewRSM = nil
+	// Note: modelViewer is reused, not destroyed here - just clear mesh on next load
 }
 
 // renderStatusBar renders the status bar at the bottom.
