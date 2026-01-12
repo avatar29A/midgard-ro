@@ -22,11 +22,13 @@ type MapViewer struct {
 	height       int32
 
 	// Terrain shader
-	terrainProgram uint32
-	locViewProj    int32
-	locLightDir    int32
-	locAmbient     int32
-	locTexture     int32
+	terrainProgram  uint32
+	locViewProj     int32
+	locLightDir     int32
+	locAmbient      int32
+	locTexture      int32
+	locLightmap     int32
+	locSunStrength  int32
 
 	// Terrain mesh
 	terrainVAO    uint32
@@ -34,9 +36,12 @@ type MapViewer struct {
 	terrainEBO    uint32
 	terrainGroups []terrainTextureGroup
 
-	// Ground textures
+	// Ground textures and lightmap
 	groundTextures map[int]uint32
 	fallbackTex    uint32
+	lightmapAtlas  uint32
+	atlasSize      int32 // Atlas dimensions (square)
+	tilesPerRow    int32 // Number of lightmap tiles per row in atlas
 
 	// Camera (orbit style for Stage 1)
 	rotationX float32
@@ -46,6 +51,9 @@ type MapViewer struct {
 	centerY   float32
 	centerZ   float32
 
+	// Lighting controls
+	SunStrength float32
+
 	// Map bounds
 	minBounds [3]float32
 	maxBounds [3]float32
@@ -53,10 +61,11 @@ type MapViewer struct {
 
 // terrainVertex is the vertex format for terrain mesh.
 type terrainVertex struct {
-	Position [3]float32
-	Normal   [3]float32
-	TexCoord [2]float32
-	Color    [4]float32
+	Position    [3]float32
+	Normal      [3]float32
+	TexCoord    [2]float32
+	LightmapUV  [2]float32
+	Color       [4]float32
 }
 
 // terrainTextureGroup groups triangles by texture for batched rendering.
@@ -70,17 +79,20 @@ const terrainVertexShader = `#version 410 core
 layout (location = 0) in vec3 aPosition;
 layout (location = 1) in vec3 aNormal;
 layout (location = 2) in vec2 aTexCoord;
-layout (location = 3) in vec4 aColor;
+layout (location = 3) in vec2 aLightmapUV;
+layout (location = 4) in vec4 aColor;
 
 uniform mat4 uViewProj;
 
 out vec3 vNormal;
 out vec2 vTexCoord;
+out vec2 vLightmapUV;
 out vec4 vColor;
 
 void main() {
     vNormal = aNormal;
     vTexCoord = aTexCoord;
+    vLightmapUV = aLightmapUV;
     vColor = aColor;
     gl_Position = uViewProj * vec4(aPosition, 1.0);
 }
@@ -89,24 +101,30 @@ void main() {
 const terrainFragmentShader = `#version 410 core
 in vec3 vNormal;
 in vec2 vTexCoord;
+in vec2 vLightmapUV;
 in vec4 vColor;
 
 uniform sampler2D uTexture;
+uniform sampler2D uLightmap;
 uniform vec3 uLightDir;
 uniform vec3 uAmbient;
+uniform float uSunStrength;
 
 out vec4 FragColor;
 
 void main() {
     vec4 texColor = texture(uTexture, vTexCoord);
+    vec3 lightmapColor = texture(uLightmap, vLightmapUV).rgb;
 
-    // Simple diffuse lighting
+    // Directional light component (sun) - controlled by uSunStrength
     float NdotL = max(dot(normalize(vNormal), normalize(uLightDir)), 0.0);
-    vec3 diffuse = vec3(0.6) * NdotL;
+    vec3 directional = vec3(uSunStrength) * NdotL;
 
-    vec3 lighting = uAmbient + diffuse;
-    vec3 color = texColor.rgb * vColor.rgb * lighting;
+    // Combine: ambient + directional, modulated by lightmap and vertex color
+    // Boost overall brightness for preview visibility
+    vec3 lighting = (uAmbient + directional + vec3(0.2)) * (lightmapColor * 1.2 + vec3(0.5)) * vColor.rgb;
 
+    vec3 color = texColor.rgb * lighting;
     FragColor = vec4(color, texColor.a * vColor.a);
 }
 `
@@ -120,6 +138,7 @@ func NewMapViewer(width, height int32) (*MapViewer, error) {
 		rotationX:      0.5,
 		rotationY:      0.0,
 		distance:       500.0,
+		SunStrength:    2.0,
 	}
 
 	if err := mv.createFramebuffer(); err != nil {
@@ -222,6 +241,8 @@ func (mv *MapViewer) createTerrainShader() error {
 	mv.locLightDir = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uLightDir\x00"))
 	mv.locAmbient = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uAmbient\x00"))
 	mv.locTexture = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uTexture\x00"))
+	mv.locLightmap = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uLightmap\x00"))
+	mv.locSunStrength = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uSunStrength\x00"))
 
 	return nil
 }
@@ -244,6 +265,9 @@ func (mv *MapViewer) LoadMap(gnd *formats.GND, _ *formats.RSW, texLoader func(st
 
 	// Load ground textures
 	mv.loadGroundTextures(gnd, texLoader)
+
+	// Build lightmap atlas (Stage 2)
+	mv.buildLightmapAtlas(gnd)
 
 	// Build terrain mesh
 	vertices, indices, groups := mv.buildTerrainMesh(gnd)
@@ -277,6 +301,10 @@ func (mv *MapViewer) clearTerrain() {
 	}
 	mv.groundTextures = make(map[int]uint32)
 	mv.terrainGroups = nil
+	if mv.lightmapAtlas != 0 {
+		gl.DeleteTextures(1, &mv.lightmapAtlas)
+		mv.lightmapAtlas = 0
+	}
 }
 
 // loadGroundTextures loads textures from GRF.
@@ -300,6 +328,163 @@ func (mv *MapViewer) loadGroundTextures(gnd *formats.GND, texLoader func(string)
 		texID := uploadModelTexture(img)
 		mv.groundTextures[i] = texID
 	}
+}
+
+// buildLightmapAtlas creates a texture atlas from GND lightmaps.
+func (mv *MapViewer) buildLightmapAtlas(gnd *formats.GND) {
+	if len(gnd.Lightmaps) == 0 {
+		// Create a simple white lightmap if none exist
+		mv.atlasSize = 8
+		mv.tilesPerRow = 1
+		gl.GenTextures(1, &mv.lightmapAtlas)
+		gl.BindTexture(gl.TEXTURE_2D, mv.lightmapAtlas)
+		white := make([]uint8, 64*3) // 8x8 RGB
+		for i := range white {
+			white[i] = 255
+		}
+		gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGB, 8, 8, 0, gl.RGB, gl.UNSIGNED_BYTE, gl.Ptr(white))
+		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+		return
+	}
+
+	// Calculate atlas size (square, power of 2)
+	lmWidth := int(gnd.LightmapWidth)
+	lmHeight := int(gnd.LightmapHeight)
+	if lmWidth == 0 {
+		lmWidth = 8
+	}
+	if lmHeight == 0 {
+		lmHeight = 8
+	}
+
+	// Calculate how many lightmaps fit per row
+	numLightmaps := len(gnd.Lightmaps)
+	tilesPerRow := 1
+	for tilesPerRow*tilesPerRow < numLightmaps {
+		tilesPerRow *= 2
+	}
+
+	atlasSize := tilesPerRow * lmWidth
+	// Round up to power of 2
+	for p := 64; p < atlasSize; p *= 2 {
+		atlasSize = p * 2
+	}
+	if atlasSize < 64 {
+		atlasSize = 64
+	}
+	if atlasSize > 2048 {
+		atlasSize = 2048
+	}
+
+	mv.atlasSize = int32(atlasSize)
+	mv.tilesPerRow = int32(atlasSize / lmWidth)
+
+	// Create atlas texture data (RGB)
+	atlasData := make([]uint8, atlasSize*atlasSize*3)
+
+	// Fill with white default
+	for i := range atlasData {
+		atlasData[i] = 255
+	}
+
+	// Copy each lightmap into the atlas
+	for i, lm := range gnd.Lightmaps {
+		tileX := i % int(mv.tilesPerRow)
+		tileY := i / int(mv.tilesPerRow)
+
+		baseX := tileX * lmWidth
+		baseY := tileY * lmHeight
+
+		// Copy lightmap pixels
+		for y := 0; y < lmHeight; y++ {
+			for x := 0; x < lmWidth; x++ {
+				srcIdx := y*lmWidth + x
+				dstX := baseX + x
+				dstY := baseY + y
+
+				if dstX >= atlasSize || dstY >= atlasSize {
+					continue
+				}
+
+				dstIdx := (dstY*atlasSize + dstX) * 3
+
+				// Combine brightness with color
+				brightness := float32(1.0)
+				if srcIdx < len(lm.Brightness) {
+					brightness = float32(lm.Brightness[srcIdx]) / 255.0
+				}
+
+				// Get RGB color
+				var r, g, b uint8 = 255, 255, 255
+				if srcIdx*3+2 < len(lm.ColorRGB) {
+					r = lm.ColorRGB[srcIdx*3]
+					g = lm.ColorRGB[srcIdx*3+1]
+					b = lm.ColorRGB[srcIdx*3+2]
+				}
+
+				// Apply brightness to color
+				atlasData[dstIdx] = uint8(float32(r) * brightness)
+				atlasData[dstIdx+1] = uint8(float32(g) * brightness)
+				atlasData[dstIdx+2] = uint8(float32(b) * brightness)
+			}
+		}
+	}
+
+	// Upload atlas to GPU
+	gl.GenTextures(1, &mv.lightmapAtlas)
+	gl.BindTexture(gl.TEXTURE_2D, mv.lightmapAtlas)
+	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGB, int32(atlasSize), int32(atlasSize), 0, gl.RGB, gl.UNSIGNED_BYTE, gl.Ptr(atlasData))
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+}
+
+// calculateLightmapUV returns UV coordinates for a lightmap in the atlas.
+// cornerIdx: 0=BL, 1=BR, 2=TL, 3=TR
+func (mv *MapViewer) calculateLightmapUV(lightmapID int16, cornerIdx int, gnd *formats.GND) [2]float32 {
+	if lightmapID < 0 || mv.tilesPerRow == 0 {
+		return [2]float32{0.5, 0.5} // Center of first tile as fallback
+	}
+
+	lmWidth := int(gnd.LightmapWidth)
+	lmHeight := int(gnd.LightmapHeight)
+	if lmWidth == 0 {
+		lmWidth = 8
+	}
+	if lmHeight == 0 {
+		lmHeight = 8
+	}
+
+	// Position of lightmap tile in atlas
+	tileX := int(lightmapID) % int(mv.tilesPerRow)
+	tileY := int(lightmapID) / int(mv.tilesPerRow)
+
+	// Calculate UV with small inset to avoid edge bleeding
+	atlasSize := float32(mv.atlasSize)
+	tileW := float32(lmWidth) / atlasSize
+	tileH := float32(lmHeight) / atlasSize
+
+	baseU := float32(tileX*lmWidth) / atlasSize
+	baseV := float32(tileY*lmHeight) / atlasSize
+
+	// Small inset (half pixel)
+	inset := 0.5 / atlasSize
+
+	// Corner UVs within the tile (with inset)
+	// GND UV order: [0]=BL, [1]=BR, [2]=TL, [3]=TR
+	switch cornerIdx {
+	case 0: // Bottom-left
+		return [2]float32{baseU + inset, baseV + tileH - inset}
+	case 1: // Bottom-right
+		return [2]float32{baseU + tileW - inset, baseV + tileH - inset}
+	case 2: // Top-left
+		return [2]float32{baseU + inset, baseV + inset}
+	case 3: // Top-right
+		return [2]float32{baseU + tileW - inset, baseV + inset}
+	}
+	return [2]float32{0.5, 0.5}
 }
 
 // buildTerrainMesh generates the terrain mesh from GND data.
@@ -370,13 +555,19 @@ func (mv *MapViewer) buildTerrainMesh(gnd *formats.GND) ([]terrainVertex, []uint
 					float32(surface.Color[3]) / 255.0, // A
 				}
 
+				// Calculate lightmap UVs
+				lmUV0 := mv.calculateLightmapUV(surface.LightmapID, 0, gnd)
+				lmUV1 := mv.calculateLightmapUV(surface.LightmapID, 1, gnd)
+				lmUV2 := mv.calculateLightmapUV(surface.LightmapID, 2, gnd)
+				lmUV3 := mv.calculateLightmapUV(surface.LightmapID, 3, gnd)
+
 				// Create vertices for quad
 				baseIdx := uint32(len(vertices))
 				vertices = append(vertices,
-					terrainVertex{Position: corners[0], Normal: normal, TexCoord: [2]float32{surface.U[0], surface.V[0]}, Color: color},
-					terrainVertex{Position: corners[1], Normal: normal, TexCoord: [2]float32{surface.U[1], surface.V[1]}, Color: color},
-					terrainVertex{Position: corners[2], Normal: normal, TexCoord: [2]float32{surface.U[2], surface.V[2]}, Color: color},
-					terrainVertex{Position: corners[3], Normal: normal, TexCoord: [2]float32{surface.U[3], surface.V[3]}, Color: color},
+					terrainVertex{Position: corners[0], Normal: normal, TexCoord: [2]float32{surface.U[0], surface.V[0]}, LightmapUV: lmUV0, Color: color},
+					terrainVertex{Position: corners[1], Normal: normal, TexCoord: [2]float32{surface.U[1], surface.V[1]}, LightmapUV: lmUV1, Color: color},
+					terrainVertex{Position: corners[2], Normal: normal, TexCoord: [2]float32{surface.U[2], surface.V[2]}, LightmapUV: lmUV2, Color: color},
+					terrainVertex{Position: corners[3], Normal: normal, TexCoord: [2]float32{surface.U[3], surface.V[3]}, LightmapUV: lmUV3, Color: color},
 				)
 
 				// Two triangles for quad
@@ -410,12 +601,18 @@ func (mv *MapViewer) buildTerrainMesh(gnd *formats.GND) ([]terrainVertex, []uint
 						normal := [3]float32{0, 0, -1} // Facing -Z
 						color := [4]float32{1.0, 1.0, 1.0, 1.0}
 
+						// Calculate lightmap UVs for wall
+						wlmUV0 := mv.calculateLightmapUV(surface.LightmapID, 0, gnd)
+						wlmUV1 := mv.calculateLightmapUV(surface.LightmapID, 1, gnd)
+						wlmUV2 := mv.calculateLightmapUV(surface.LightmapID, 2, gnd)
+						wlmUV3 := mv.calculateLightmapUV(surface.LightmapID, 3, gnd)
+
 						baseIdx := uint32(len(vertices))
 						vertices = append(vertices,
-							terrainVertex{Position: wallCorners[0], Normal: normal, TexCoord: [2]float32{surface.U[0], surface.V[0]}, Color: color},
-							terrainVertex{Position: wallCorners[1], Normal: normal, TexCoord: [2]float32{surface.U[1], surface.V[1]}, Color: color},
-							terrainVertex{Position: wallCorners[2], Normal: normal, TexCoord: [2]float32{surface.U[2], surface.V[2]}, Color: color},
-							terrainVertex{Position: wallCorners[3], Normal: normal, TexCoord: [2]float32{surface.U[3], surface.V[3]}, Color: color},
+							terrainVertex{Position: wallCorners[0], Normal: normal, TexCoord: [2]float32{surface.U[0], surface.V[0]}, LightmapUV: wlmUV0, Color: color},
+							terrainVertex{Position: wallCorners[1], Normal: normal, TexCoord: [2]float32{surface.U[1], surface.V[1]}, LightmapUV: wlmUV1, Color: color},
+							terrainVertex{Position: wallCorners[2], Normal: normal, TexCoord: [2]float32{surface.U[2], surface.V[2]}, LightmapUV: wlmUV2, Color: color},
+							terrainVertex{Position: wallCorners[3], Normal: normal, TexCoord: [2]float32{surface.U[3], surface.V[3]}, LightmapUV: wlmUV3, Color: color},
 						)
 
 						textureIndices[texID] = append(textureIndices[texID],
@@ -450,12 +647,18 @@ func (mv *MapViewer) buildTerrainMesh(gnd *formats.GND) ([]terrainVertex, []uint
 						normal := [3]float32{1, 0, 0} // Facing +X
 						color := [4]float32{1.0, 1.0, 1.0, 1.0}
 
+						// Calculate lightmap UVs for wall
+						wlmUV0 := mv.calculateLightmapUV(surface.LightmapID, 0, gnd)
+						wlmUV1 := mv.calculateLightmapUV(surface.LightmapID, 1, gnd)
+						wlmUV2 := mv.calculateLightmapUV(surface.LightmapID, 2, gnd)
+						wlmUV3 := mv.calculateLightmapUV(surface.LightmapID, 3, gnd)
+
 						baseIdx := uint32(len(vertices))
 						vertices = append(vertices,
-							terrainVertex{Position: wallCorners[0], Normal: normal, TexCoord: [2]float32{surface.U[0], surface.V[0]}, Color: color},
-							terrainVertex{Position: wallCorners[1], Normal: normal, TexCoord: [2]float32{surface.U[1], surface.V[1]}, Color: color},
-							terrainVertex{Position: wallCorners[2], Normal: normal, TexCoord: [2]float32{surface.U[2], surface.V[2]}, Color: color},
-							terrainVertex{Position: wallCorners[3], Normal: normal, TexCoord: [2]float32{surface.U[3], surface.V[3]}, Color: color},
+							terrainVertex{Position: wallCorners[0], Normal: normal, TexCoord: [2]float32{surface.U[0], surface.V[0]}, LightmapUV: wlmUV0, Color: color},
+							terrainVertex{Position: wallCorners[1], Normal: normal, TexCoord: [2]float32{surface.U[1], surface.V[1]}, LightmapUV: wlmUV1, Color: color},
+							terrainVertex{Position: wallCorners[2], Normal: normal, TexCoord: [2]float32{surface.U[2], surface.V[2]}, LightmapUV: wlmUV2, Color: color},
+							terrainVertex{Position: wallCorners[3], Normal: normal, TexCoord: [2]float32{surface.U[3], surface.V[3]}, LightmapUV: wlmUV3, Color: color},
 						)
 
 						textureIndices[texID] = append(textureIndices[texID],
@@ -506,23 +709,28 @@ func (mv *MapViewer) uploadTerrainMesh(vertices []terrainVertex, indices []uint3
 	gl.BufferData(gl.ELEMENT_ARRAY_BUFFER, len(indices)*4, gl.Ptr(indices), gl.STATIC_DRAW)
 
 	// Set vertex attributes
+	// terrainVertex: Position(12) + Normal(12) + TexCoord(8) + LightmapUV(8) + Color(16) = 56 bytes
 	stride := int32(unsafe.Sizeof(terrainVertex{}))
 
-	// Position (location 0)
+	// Position (location 0) - offset 0
 	gl.EnableVertexAttribArray(0)
 	gl.VertexAttribPointerWithOffset(0, 3, gl.FLOAT, false, stride, 0)
 
-	// Normal (location 1)
+	// Normal (location 1) - offset 12
 	gl.EnableVertexAttribArray(1)
 	gl.VertexAttribPointerWithOffset(1, 3, gl.FLOAT, false, stride, 12)
 
-	// TexCoord (location 2)
+	// TexCoord (location 2) - offset 24
 	gl.EnableVertexAttribArray(2)
 	gl.VertexAttribPointerWithOffset(2, 2, gl.FLOAT, false, stride, 24)
 
-	// Color (location 3)
+	// LightmapUV (location 3) - offset 32
 	gl.EnableVertexAttribArray(3)
-	gl.VertexAttribPointerWithOffset(3, 4, gl.FLOAT, false, stride, 32)
+	gl.VertexAttribPointerWithOffset(3, 2, gl.FLOAT, false, stride, 32)
+
+	// Color (location 4) - offset 40
+	gl.EnableVertexAttribArray(4)
+	gl.VertexAttribPointerWithOffset(4, 4, gl.FLOAT, false, stride, 40)
 
 	gl.BindVertexArray(0)
 }
@@ -586,7 +794,17 @@ func (mv *MapViewer) Render() uint32 {
 	gl.UniformMatrix4fv(mv.locViewProj, 1, false, &viewProj[0])
 	gl.Uniform3f(mv.locLightDir, 0.5, 1.0, 0.3)
 	gl.Uniform3f(mv.locAmbient, 0.4, 0.4, 0.4)
+	gl.Uniform1f(mv.locSunStrength, mv.SunStrength)
 	gl.Uniform1i(mv.locTexture, 0)
+	gl.Uniform1i(mv.locLightmap, 1)
+
+	// Bind lightmap atlas to texture unit 1
+	gl.ActiveTexture(gl.TEXTURE1)
+	if mv.lightmapAtlas != 0 {
+		gl.BindTexture(gl.TEXTURE_2D, mv.lightmapAtlas)
+	} else {
+		gl.BindTexture(gl.TEXTURE_2D, mv.fallbackTex)
+	}
 
 	// Bind terrain VAO
 	gl.BindVertexArray(mv.terrainVAO)

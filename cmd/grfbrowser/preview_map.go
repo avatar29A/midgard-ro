@@ -354,6 +354,11 @@ func (app *App) loadRSWPreview(path string) {
 	}
 
 	app.previewRSW = rsw
+
+	// Auto-reload 3D view if already in 3D mode
+	if app.map3DViewMode {
+		app.initMap3DView()
+	}
 }
 
 // renderRSWPreview renders the RSW world info panel.
@@ -588,6 +593,13 @@ func (app *App) renderMap3DView() {
 
 	// Help text
 	imgui.TextDisabled("Drag to rotate | Scroll to zoom")
+
+	// Sun strength slider
+	imgui.Text("Sun:")
+	imgui.SameLine()
+	imgui.SetNextItemWidth(150)
+	imgui.SliderFloatV("##sunstrength", &app.mapViewer.SunStrength, 0.0, 2.0, "%.2f", imgui.SliderFlagsNone)
+
 	imgui.Separator()
 
 	// Render the map
