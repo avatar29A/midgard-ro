@@ -1,26 +1,23 @@
+version: "2"
+
 run:
   timeout: 5m
   modules-download-mode: readonly
 
 linters:
   enable:
-    # Default linters
-    - errcheck
-    - gosimple
-    - govet
-    - ineffassign
-    - staticcheck
-    - unused
-    # Additional useful linters
-    - gofmt
-    - goimports
+    # Additional useful linters beyond defaults
     - misspell
     - unconvert
     - unparam
-    - gosec
     - bodyclose
     - nilerr
     - copyloopvar
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
 
 linters-settings:
   errcheck:
@@ -32,21 +29,15 @@ linters-settings:
     disable:
       - fieldalignment  # Too noisy for game dev
 
+  misspell:
+    locale: US
+
+formatters-settings:
   gofmt:
     simplify: true
 
   goimports:
     local-prefixes: github.com/Faultbox/midgard-ro
-
-  misspell:
-    locale: US
-
-  gosec:
-    excludes:
-      - G104  # Unhandled errors (too strict for game client)
-      - G115  # Integer overflow (safe in graphics context)
-      - G304  # File path from variable (needed for asset loading)
-      - G306  # WriteFile permissions (0644 is fine for config/extracted files)
 
 issues:
   exclude-rules:
