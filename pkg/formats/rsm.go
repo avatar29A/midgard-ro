@@ -117,9 +117,9 @@ type RSMNode struct {
 	Faces     []RSMFace     // Triangle faces
 
 	// Animation keyframes
-	PosKeys   []RSMPosKeyframe   // Position keyframes (v < 1.5)
+	PosKeys   []RSMPosKeyframe   // Position keyframes (v < 1.4)
 	RotKeys   []RSMRotKeyframe   // Rotation keyframes
-	ScaleKeys []RSMScaleKeyframe // Scale keyframes (v >= 1.5)
+	ScaleKeys []RSMScaleKeyframe // Scale keyframes (v >= 2.0)
 }
 
 // RSMVolumeBox represents a bounding volume box.
@@ -188,15 +188,8 @@ func ParseRSM(data []byte) (*RSM, error) {
 		rsm.Alpha = 1.0
 	}
 
-	// Skip reserved bytes (16 bytes for v < 2.2, variable for v >= 2.2)
-	if rsm.Version.AtLeast(2, 2) {
-		// v2.2+ has different header structure
-		// Skip 16 bytes reserved
-		r.Seek(16, 1)
-	} else {
-		// v1.x has 16 bytes reserved
-		r.Seek(16, 1)
-	}
+	// Skip 16 bytes reserved
+	r.Seek(16, 1)
 
 	// Read texture count
 	var textureCount int32
@@ -343,8 +336,22 @@ func parseRSMNode(r *bytes.Reader, version RSMVersion) (*RSMNode, error) {
 		}
 	}
 
-	// Read position keyframes (v < 1.5)
-	if !version.AtLeast(1, 5) {
+	// Read rotation keyframes (all versions)
+	var rotKeyCount int32
+	binary.Read(r, binary.LittleEndian, &rotKeyCount)
+
+	if rotKeyCount > 0 && rotKeyCount < 10000 {
+		node.RotKeys = make([]RSMRotKeyframe, rotKeyCount)
+		for i := int32(0); i < rotKeyCount; i++ {
+			key := &node.RotKeys[i]
+			binary.Read(r, binary.LittleEndian, &key.Frame)
+			binary.Read(r, binary.LittleEndian, &key.Quaternion)
+		}
+	}
+
+	// Position keyframes only exist in RSM versions before 1.4.
+	// v1.4 and v1.5 do not have posKeyCount field in node data.
+	if !version.AtLeast(1, 4) {
 		var posKeyCount int32
 		binary.Read(r, binary.LittleEndian, &posKeyCount)
 
@@ -358,21 +365,9 @@ func parseRSMNode(r *bytes.Reader, version RSMVersion) (*RSMNode, error) {
 		}
 	}
 
-	// Read rotation keyframes
-	var rotKeyCount int32
-	binary.Read(r, binary.LittleEndian, &rotKeyCount)
-
-	if rotKeyCount > 0 && rotKeyCount < 10000 {
-		node.RotKeys = make([]RSMRotKeyframe, rotKeyCount)
-		for i := int32(0); i < rotKeyCount; i++ {
-			key := &node.RotKeys[i]
-			binary.Read(r, binary.LittleEndian, &key.Frame)
-			binary.Read(r, binary.LittleEndian, &key.Quaternion)
-		}
-	}
-
-	// Read scale keyframes (v >= 1.5)
-	if version.AtLeast(1, 5) {
+	// Read scale keyframes (v >= 2.0)
+	// Note: Scale keyframes were added in RSM v2.0, not v1.5
+	if version.AtLeast(2, 0) {
 		var scaleKeyCount int32
 		binary.Read(r, binary.LittleEndian, &scaleKeyCount)
 
@@ -456,10 +451,11 @@ func (rsm *RSM) GetChildNodes(parentName string) []*RSMNode {
 	return children
 }
 
-// HasAnimation returns true if the model has any animation keyframes.
+// HasAnimation returns true if the model has actual animation (at least 2 keyframes).
+// A single keyframe is static - you need 2+ to interpolate between.
 func (rsm *RSM) HasAnimation() bool {
 	for _, node := range rsm.Nodes {
-		if len(node.PosKeys) > 0 || len(node.RotKeys) > 0 || len(node.ScaleKeys) > 0 {
+		if len(node.PosKeys) > 1 || len(node.RotKeys) > 1 || len(node.ScaleKeys) > 1 {
 			return true
 		}
 	}
