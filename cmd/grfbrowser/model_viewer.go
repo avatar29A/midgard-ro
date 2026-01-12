@@ -61,6 +61,18 @@ type ModelViewer struct {
 	// Bounding box for auto-fit
 	minBounds [3]float32
 	maxBounds [3]float32
+
+	// Animation state
+	animPlaying bool
+	animTime    float32 // Current animation time in milliseconds
+	animSpeed   float32 // Animation speed multiplier (1.0 = normal)
+	animLength  int32   // Total animation length in ms (from RSM)
+	animLooping bool    // Whether animation loops
+
+	// Cached data for animation rebuild
+	currentRSM      *formats.RSM
+	textureLoader   func(string) ([]byte, error)
+	magentaKeyCache bool
 }
 
 // rsmVertex is the vertex format for RSM mesh.
@@ -120,11 +132,13 @@ void main() {
 // NewModelViewer creates a new 3D model viewer.
 func NewModelViewer(width, height int32) (*ModelViewer, error) {
 	mv := &ModelViewer{
-		width:     width,
-		height:    height,
-		rotationX: 0.3,   // Slight downward angle
-		rotationY: 0.5,   // Slight sideways angle
-		distance:  100.0, // Default zoom
+		width:       width,
+		height:      height,
+		rotationX:   0.3,   // Slight downward angle
+		rotationY:   0.5,   // Slight sideways angle
+		distance:    100.0, // Default zoom
+		animSpeed:   1.0,   // Normal animation speed
+		animLooping: true,  // Loop by default
 	}
 
 	// Create framebuffer
@@ -251,8 +265,18 @@ func (mv *ModelViewer) LoadModel(rsm *formats.RSM, texLoader func(string) ([]byt
 	// Clear previous model
 	mv.clearModel()
 
-	// Build mesh
-	vertices, indices := mv.buildMeshFromRSM(rsm)
+	// Store references for animation rebuild
+	mv.currentRSM = rsm
+	mv.textureLoader = texLoader
+	mv.magentaKeyCache = magentaKey
+
+	// Initialize animation state
+	mv.animLength = rsm.AnimLength
+	mv.animTime = 0
+	mv.animPlaying = false // Start paused
+
+	// Build mesh with current animation time (0 = base pose)
+	vertices, indices := mv.buildMeshFromRSM(rsm, 0)
 	if len(vertices) == 0 {
 		return fmt.Errorf("no vertices in model")
 	}
@@ -269,7 +293,7 @@ func (mv *ModelViewer) LoadModel(rsm *formats.RSM, texLoader func(string) ([]byt
 	return nil
 }
 
-func (mv *ModelViewer) buildMeshFromRSM(rsm *formats.RSM) ([]rsmVertex, []uint32) {
+func (mv *ModelViewer) buildMeshFromRSM(rsm *formats.RSM, animTimeMs float32) ([]rsmVertex, []uint32) {
 	// Group faces by global texture index for multi-texture support
 	type faceData struct {
 		vertices [3]rsmVertex
@@ -286,10 +310,17 @@ func (mv *ModelViewer) buildMeshFromRSM(rsm *formats.RSM) ([]rsmVertex, []uint32
 	for nodeIdx := range rsm.Nodes {
 		node := &rsm.Nodes[nodeIdx]
 
-		// Build node transformation matrix
-		nodeMatrix := mv.buildNodeMatrix(node, rsm)
+		// Build node transformation matrix with animation
+		nodeMatrix := mv.buildNodeMatrix(node, rsm, animTimeMs)
 
 		for _, face := range node.Faces {
+			// Bounds check for vertex indices
+			if int(face.VertexIDs[0]) >= len(node.Vertices) ||
+				int(face.VertexIDs[1]) >= len(node.Vertices) ||
+				int(face.VertexIDs[2]) >= len(node.Vertices) {
+				continue // Skip invalid faces
+			}
+
 			// Get vertices for this face
 			v0 := node.Vertices[face.VertexIDs[0]]
 			v1 := node.Vertices[face.VertexIDs[1]]
@@ -389,13 +420,13 @@ func (mv *ModelViewer) buildMeshFromRSM(rsm *formats.RSM) ([]rsmVertex, []uint32
 	return vertices, indices
 }
 
-func (mv *ModelViewer) buildNodeMatrix(node *formats.RSMNode, rsm *formats.RSM) math.Mat4 {
+func (mv *ModelViewer) buildNodeMatrix(node *formats.RSMNode, rsm *formats.RSM, animTimeMs float32) math.Mat4 {
 	// Use helper with visited set to prevent infinite recursion
 	visited := make(map[string]bool)
-	return mv.buildNodeMatrixRecursive(node, rsm, visited)
+	return mv.buildNodeMatrixRecursive(node, rsm, animTimeMs, visited)
 }
 
-func (mv *ModelViewer) buildNodeMatrixRecursive(node *formats.RSMNode, rsm *formats.RSM, visited map[string]bool) math.Mat4 {
+func (mv *ModelViewer) buildNodeMatrixRecursive(node *formats.RSMNode, rsm *formats.RSM, animTimeMs float32, visited map[string]bool) math.Mat4 {
 	// Prevent infinite recursion from circular references
 	if visited[node.Name] {
 		return math.Identity()
@@ -405,29 +436,178 @@ func (mv *ModelViewer) buildNodeMatrixRecursive(node *formats.RSMNode, rsm *form
 	// Start with identity
 	result := math.Identity()
 
-	// Apply scale
-	result = result.Mul(math.Scale(node.Scale[0], node.Scale[1], node.Scale[2]))
+	// Get animated scale (or use static scale)
+	scale := node.Scale
+	if len(node.ScaleKeys) > 0 {
+		scale = mv.interpolateScaleKeys(node.ScaleKeys, animTimeMs)
+	}
+	result = result.Mul(math.Scale(scale[0], scale[1], scale[2]))
 
-	// Apply the 3x3 rotation matrix from node
-	rotMat := math.FromMat3x3(node.Matrix)
-	result = result.Mul(rotMat)
+	// Get animated rotation (quaternion) or use static matrix
+	if len(node.RotKeys) > 0 {
+		// Interpolate rotation keyframes
+		rotQuat := mv.interpolateRotKeys(node.RotKeys, animTimeMs)
+		rotMat := rotQuat.ToMat4()
+		result = result.Mul(rotMat)
+	} else {
+		// Use static 3x3 rotation matrix from node
+		rotMat := math.FromMat3x3(node.Matrix)
+		result = result.Mul(rotMat)
+	}
 
 	// Apply offset (pivot point)
 	result = result.Mul(math.Translate(-node.Offset[0], -node.Offset[1], -node.Offset[2]))
 
-	// Apply position
-	result = result.Mul(math.Translate(node.Position[0], node.Position[1], node.Position[2]))
+	// Get animated position or use static position
+	position := node.Position
+	if len(node.PosKeys) > 0 {
+		position = mv.interpolatePosKeys(node.PosKeys, animTimeMs)
+	}
+	result = result.Mul(math.Translate(position[0], position[1], position[2]))
 
 	// If node has parent, multiply by parent's matrix
 	if node.Parent != "" && node.Parent != node.Name {
 		parentNode := rsm.GetNodeByName(node.Parent)
 		if parentNode != nil {
-			parentMatrix := mv.buildNodeMatrixRecursive(parentNode, rsm, visited)
+			parentMatrix := mv.buildNodeMatrixRecursive(parentNode, rsm, animTimeMs, visited)
 			result = parentMatrix.Mul(result)
 		}
 	}
 
 	return result
+}
+
+// interpolateRotKeys interpolates rotation keyframes at the given time.
+func (mv *ModelViewer) interpolateRotKeys(keys []formats.RSMRotKeyframe, timeMs float32) math.Quat {
+	if len(keys) == 0 {
+		return math.QuatIdentity()
+	}
+	if len(keys) == 1 {
+		k := keys[0]
+		return math.Quat{X: k.Quaternion[0], Y: k.Quaternion[1], Z: k.Quaternion[2], W: k.Quaternion[3]}
+	}
+
+	// Find surrounding keyframes
+	// RSM uses frame numbers, convert time to frame (assume 1000ms = 1000 frames for simplicity)
+	frame := timeMs
+
+	// Find the keyframes that bracket this frame
+	var k0, k1 formats.RSMRotKeyframe
+	k0 = keys[0]
+	k1 = keys[0]
+
+	for i := 0; i < len(keys)-1; i++ {
+		if float32(keys[i].Frame) <= frame && float32(keys[i+1].Frame) > frame {
+			k0 = keys[i]
+			k1 = keys[i+1]
+			break
+		}
+	}
+
+	// If frame is past all keyframes, use last keyframe
+	if frame >= float32(keys[len(keys)-1].Frame) {
+		k := keys[len(keys)-1]
+		return math.Quat{X: k.Quaternion[0], Y: k.Quaternion[1], Z: k.Quaternion[2], W: k.Quaternion[3]}
+	}
+
+	// If frame is before first keyframe, use first
+	if frame <= float32(keys[0].Frame) {
+		k := keys[0]
+		return math.Quat{X: k.Quaternion[0], Y: k.Quaternion[1], Z: k.Quaternion[2], W: k.Quaternion[3]}
+	}
+
+	// Interpolate
+	frameDiff := float32(k1.Frame - k0.Frame)
+	if frameDiff <= 0 {
+		k := k0
+		return math.Quat{X: k.Quaternion[0], Y: k.Quaternion[1], Z: k.Quaternion[2], W: k.Quaternion[3]}
+	}
+
+	t := (frame - float32(k0.Frame)) / frameDiff
+	q0 := math.Quat{X: k0.Quaternion[0], Y: k0.Quaternion[1], Z: k0.Quaternion[2], W: k0.Quaternion[3]}
+	q1 := math.Quat{X: k1.Quaternion[0], Y: k1.Quaternion[1], Z: k1.Quaternion[2], W: k1.Quaternion[3]}
+
+	return q0.Slerp(q1, t)
+}
+
+// interpolatePosKeys interpolates position keyframes at the given time.
+func (mv *ModelViewer) interpolatePosKeys(keys []formats.RSMPosKeyframe, timeMs float32) [3]float32 {
+	if len(keys) == 0 {
+		return [3]float32{0, 0, 0}
+	}
+	if len(keys) == 1 {
+		return keys[0].Position
+	}
+
+	frame := timeMs
+
+	// Find surrounding keyframes
+	var k0, k1 formats.RSMPosKeyframe
+	k0 = keys[0]
+	k1 = keys[0]
+
+	for i := 0; i < len(keys)-1; i++ {
+		if float32(keys[i].Frame) <= frame && float32(keys[i+1].Frame) > frame {
+			k0 = keys[i]
+			k1 = keys[i+1]
+			break
+		}
+	}
+
+	if frame >= float32(keys[len(keys)-1].Frame) {
+		return keys[len(keys)-1].Position
+	}
+	if frame <= float32(keys[0].Frame) {
+		return keys[0].Position
+	}
+
+	frameDiff := float32(k1.Frame - k0.Frame)
+	if frameDiff <= 0 {
+		return k0.Position
+	}
+
+	t := (frame - float32(k0.Frame)) / frameDiff
+	return math.LerpVec3(k0.Position, k1.Position, t)
+}
+
+// interpolateScaleKeys interpolates scale keyframes at the given time.
+func (mv *ModelViewer) interpolateScaleKeys(keys []formats.RSMScaleKeyframe, timeMs float32) [3]float32 {
+	if len(keys) == 0 {
+		return [3]float32{1, 1, 1}
+	}
+	if len(keys) == 1 {
+		return keys[0].Scale
+	}
+
+	frame := timeMs
+
+	// Find surrounding keyframes
+	var k0, k1 formats.RSMScaleKeyframe
+	k0 = keys[0]
+	k1 = keys[0]
+
+	for i := 0; i < len(keys)-1; i++ {
+		if float32(keys[i].Frame) <= frame && float32(keys[i+1].Frame) > frame {
+			k0 = keys[i]
+			k1 = keys[i+1]
+			break
+		}
+	}
+
+	if frame >= float32(keys[len(keys)-1].Frame) {
+		return keys[len(keys)-1].Scale
+	}
+	if frame <= float32(keys[0].Frame) {
+		return keys[0].Scale
+	}
+
+	frameDiff := float32(k1.Frame - k0.Frame)
+	if frameDiff <= 0 {
+		return k0.Scale
+	}
+
+	t := (frame - float32(k0.Frame)) / frameDiff
+	return math.LerpVec3(k0.Scale, k1.Scale, t)
 }
 
 func (mv *ModelViewer) updateBounds(p [3]float32) {
@@ -710,6 +890,137 @@ func (mv *ModelViewer) Reset() {
 	mv.rotationX = 0.3
 	mv.rotationY = 0.5
 	mv.fitCamera()
+}
+
+// Animation control methods
+
+// UpdateAnimation advances animation time by deltaMs milliseconds.
+// Should be called each frame when animation is playing.
+// Returns true if mesh was rebuilt.
+func (mv *ModelViewer) UpdateAnimation(deltaMs float32) bool {
+	if !mv.animPlaying || mv.currentRSM == nil || mv.animLength <= 0 {
+		return false
+	}
+
+	// Advance time
+	mv.animTime += deltaMs * mv.animSpeed
+
+	// Handle looping
+	if mv.animLooping {
+		for mv.animTime >= float32(mv.animLength) {
+			mv.animTime -= float32(mv.animLength)
+		}
+		for mv.animTime < 0 {
+			mv.animTime += float32(mv.animLength)
+		}
+	} else {
+		// Clamp to range
+		if mv.animTime >= float32(mv.animLength) {
+			mv.animTime = float32(mv.animLength)
+			mv.animPlaying = false
+		}
+		if mv.animTime < 0 {
+			mv.animTime = 0
+		}
+	}
+
+	// Rebuild mesh with new animation time
+	mv.rebuildMesh()
+	return true
+}
+
+// rebuildMesh rebuilds the mesh with current animation time.
+func (mv *ModelViewer) rebuildMesh() {
+	if mv.currentRSM == nil {
+		return
+	}
+
+	// Delete old buffers
+	if mv.vao != 0 {
+		gl.DeleteVertexArrays(1, &mv.vao)
+		mv.vao = 0
+	}
+	if mv.vbo != 0 {
+		gl.DeleteBuffers(1, &mv.vbo)
+		mv.vbo = 0
+	}
+	if mv.ebo != 0 {
+		gl.DeleteBuffers(1, &mv.ebo)
+		mv.ebo = 0
+	}
+
+	// Rebuild with current animation time
+	vertices, indices := mv.buildMeshFromRSM(mv.currentRSM, mv.animTime)
+	if len(vertices) > 0 {
+		mv.uploadMesh(vertices, indices)
+	}
+}
+
+// PlayAnimation starts or resumes animation playback.
+func (mv *ModelViewer) PlayAnimation() {
+	mv.animPlaying = true
+}
+
+// PauseAnimation pauses animation playback.
+func (mv *ModelViewer) PauseAnimation() {
+	mv.animPlaying = false
+}
+
+// ToggleAnimation toggles between play and pause.
+func (mv *ModelViewer) ToggleAnimation() {
+	mv.animPlaying = !mv.animPlaying
+}
+
+// IsAnimationPlaying returns true if animation is playing.
+func (mv *ModelViewer) IsAnimationPlaying() bool {
+	return mv.animPlaying
+}
+
+// SetAnimationTime sets the animation time in milliseconds.
+func (mv *ModelViewer) SetAnimationTime(timeMs float32) {
+	mv.animTime = timeMs
+	if mv.animTime < 0 {
+		mv.animTime = 0
+	}
+	if mv.animTime > float32(mv.animLength) {
+		mv.animTime = float32(mv.animLength)
+	}
+	mv.rebuildMesh()
+}
+
+// GetAnimationTime returns the current animation time in milliseconds.
+func (mv *ModelViewer) GetAnimationTime() float32 {
+	return mv.animTime
+}
+
+// GetAnimationLength returns the animation length in milliseconds.
+func (mv *ModelViewer) GetAnimationLength() int32 {
+	return mv.animLength
+}
+
+// SetAnimationSpeed sets the animation speed multiplier.
+func (mv *ModelViewer) SetAnimationSpeed(speed float32) {
+	mv.animSpeed = speed
+}
+
+// GetAnimationSpeed returns the current animation speed multiplier.
+func (mv *ModelViewer) GetAnimationSpeed() float32 {
+	return mv.animSpeed
+}
+
+// SetAnimationLooping sets whether animation should loop.
+func (mv *ModelViewer) SetAnimationLooping(loop bool) {
+	mv.animLooping = loop
+}
+
+// IsAnimationLooping returns true if animation loops.
+func (mv *ModelViewer) IsAnimationLooping() bool {
+	return mv.animLooping
+}
+
+// HasAnimation returns true if the loaded model has animation keyframes.
+func (mv *ModelViewer) HasAnimation() bool {
+	return mv.currentRSM != nil && mv.currentRSM.HasAnimation()
 }
 
 func (mv *ModelViewer) clearModel() {

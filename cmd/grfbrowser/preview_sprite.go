@@ -112,18 +112,30 @@ func (app *App) renderSpritePreview() {
 		app.previewFrame++
 	}
 
+	// Timeline slider for multi-frame sprites
+	if len(spr.Images) > 1 {
+		frame := int32(app.previewFrame)
+		imgui.SetNextItemWidth(200)
+		if imgui.SliderIntV("##SprTimeline", &frame, 0, int32(len(spr.Images)-1), "%d", imgui.SliderFlagsNone) {
+			app.previewFrame = int(frame)
+		}
+	}
+
 	// Zoom controls
+	imgui.Text("Zoom:")
 	imgui.SameLine()
-	imgui.Text("  Zoom:")
-	imgui.SameLine()
-	if imgui.Button("-") && app.previewZoom > 0.5 {
+	if imgui.Button("-##zoom") && app.previewZoom > 0.5 {
 		app.previewZoom -= 0.5
 	}
 	imgui.SameLine()
 	imgui.Text(fmt.Sprintf("%.1fx", app.previewZoom))
 	imgui.SameLine()
-	if imgui.Button("+") && app.previewZoom < 8.0 {
+	if imgui.Button("+##zoom") && app.previewZoom < 8.0 {
 		app.previewZoom += 0.5
+	}
+	imgui.SameLine()
+	if imgui.Button("1:1") {
+		app.previewZoom = 1.0
 	}
 
 	imgui.Separator()
@@ -188,9 +200,24 @@ func (app *App) renderAnimationPreview() {
 				intervalMs = 100.0
 			}
 
+			// Apply speed multiplier
+			if app.previewSpeed > 0 {
+				intervalMs = intervalMs / app.previewSpeed
+			}
+
 			elapsed := time.Since(app.previewLastTime).Milliseconds()
 			if elapsed >= int64(intervalMs) {
-				app.previewFrame = (app.previewFrame + 1) % len(action.Frames)
+				nextFrame := app.previewFrame + 1
+				if nextFrame >= len(action.Frames) {
+					if app.previewLooping {
+						nextFrame = 0
+					} else {
+						// Stop at last frame
+						app.previewPlaying = false
+						nextFrame = len(action.Frames) - 1
+					}
+				}
+				app.previewFrame = nextFrame
 				app.previewLastTime = time.Now()
 			}
 		}
@@ -225,24 +252,50 @@ func (app *App) renderActionsPanel() {
 		}
 	}
 
+	// Stop button (reset to frame 0)
+	if imgui.ButtonV("Stop", imgui.NewVec2(-1, 0)) {
+		app.previewPlaying = false
+		app.previewFrame = 0
+	}
+
 	imgui.Text("(Space to toggle)")
 
 	imgui.Separator()
 
-	// Frame info
+	// Frame info and timeline
 	if len(act.Actions) > 0 && app.previewAction < len(act.Actions) {
 		action := act.Actions[app.previewAction]
-		imgui.Text(fmt.Sprintf("Frame: %d / %d", app.previewFrame+1, len(action.Frames)))
+		frameCount := len(action.Frames)
+		imgui.Text(fmt.Sprintf("Frame: %d / %d", app.previewFrame+1, frameCount))
 
-		// Frame navigation
+		// Frame navigation buttons
 		if imgui.Button("<##frame") && app.previewFrame > 0 {
 			app.previewFrame--
 		}
 		imgui.SameLine()
-		if imgui.Button(">##frame") && app.previewFrame < len(action.Frames)-1 {
+		if imgui.Button(">##frame") && app.previewFrame < frameCount-1 {
 			app.previewFrame++
 		}
+
+		// Timeline slider
+		if frameCount > 1 {
+			frame := int32(app.previewFrame)
+			imgui.SetNextItemWidth(-1)
+			if imgui.SliderIntV("##Timeline", &frame, 0, int32(frameCount-1), "%d", imgui.SliderFlagsNone) {
+				app.previewFrame = int(frame)
+			}
+		}
 	}
+
+	imgui.Separator()
+
+	// Speed control
+	imgui.Text("Speed:")
+	imgui.SetNextItemWidth(-1)
+	imgui.SliderFloatV("##Speed", &app.previewSpeed, 0.1, 3.0, "%.1fx", imgui.SliderFlagsNone)
+
+	// Loop toggle
+	imgui.Checkbox("Loop", &app.previewLooping)
 
 	imgui.Separator()
 	imgui.Text("Actions:")
