@@ -133,6 +133,10 @@ type App struct {
 	previewRSM          *formats.RSM // Loaded RSM 3D model data
 	modelViewer         *ModelViewer // 3D model renderer (ADR-012 Stage 3)
 	magentaTransparency bool         // Enable magenta (255,0,255) as transparency key
+
+	// Map 3D viewer state (ADR-013)
+	mapViewer     *MapViewer // 3D map renderer
+	map3DViewMode bool       // Whether 3D view is active for map
 }
 
 var (
@@ -257,6 +261,10 @@ func (app *App) Close() {
 	if app.modelViewer != nil {
 		app.modelViewer.Destroy()
 		app.modelViewer = nil
+	}
+	if app.mapViewer != nil {
+		app.mapViewer.Destroy()
+		app.mapViewer = nil
 	}
 	if app.archive != nil {
 		app.archive.Close()

@@ -110,6 +110,23 @@ func RotateZ(angle float32) Mat4 {
 	}
 }
 
+// RotateAxis creates a rotation matrix around an arbitrary axis.
+// axis should be normalized, angle is in radians.
+func RotateAxis(axis [3]float32, angle float32) Mat4 {
+	c := float32(math.Cos(float64(angle)))
+	s := float32(math.Sin(float64(angle)))
+	t := 1 - c
+
+	x, y, z := axis[0], axis[1], axis[2]
+
+	return Mat4{
+		t*x*x + c, t*x*y + s*z, t*x*z - s*y, 0,
+		t*x*y - s*z, t*y*y + c, t*y*z + s*x, 0,
+		t*x*z + s*y, t*y*z - s*x, t*z*z + c, 0,
+		0, 0, 0, 1,
+	}
+}
+
 // Mul multiplies this matrix by another (m * other).
 func (m Mat4) Mul(other Mat4) Mat4 {
 	var result Mat4
