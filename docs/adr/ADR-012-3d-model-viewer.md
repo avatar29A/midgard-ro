@@ -1,7 +1,7 @@
 # ADR-012: 3D Model Viewer
 
 ## Status
-Proposed
+Implemented (2026-01-12)
 
 ## Context
 
