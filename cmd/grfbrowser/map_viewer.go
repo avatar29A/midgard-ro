@@ -46,9 +46,9 @@ type MapViewer struct {
 	locViewProj    int32
 	locLightDir    int32
 	locAmbient     int32
+	locDiffuse     int32
 	locTexture     int32
 	locLightmap    int32
-	locSunStrength int32
 
 	// Model shader
 	modelProgram     uint32
@@ -91,8 +91,10 @@ type MapViewer struct {
 	camPitch  float32 // Vertical angle (radians)
 	MoveSpeed float32
 
-	// Lighting controls
-	SunStrength float32
+	// Lighting from RSW
+	lightDir     [3]float32 // Calculated from longitude/latitude
+	ambientColor [3]float32 // From RSW.Light.Ambient
+	diffuseColor [3]float32 // From RSW.Light.Diffuse
 
 	// Map bounds
 	minBounds [3]float32
@@ -152,7 +154,7 @@ uniform sampler2D uTexture;
 uniform sampler2D uLightmap;
 uniform vec3 uLightDir;
 uniform vec3 uAmbient;
-uniform float uSunStrength;
+uniform vec3 uDiffuse;
 
 out vec4 FragColor;
 
@@ -160,16 +162,25 @@ void main() {
     vec4 texColor = texture(uTexture, vTexCoord);
     vec3 lightmapColor = texture(uLightmap, vLightmapUV).rgb;
 
-    // Directional light component (sun) - controlled by uSunStrength
-    float NdotL = max(dot(normalize(vNormal), normalize(uLightDir)), 0.0);
-    vec3 directional = vec3(uSunStrength) * NdotL;
+    // Proper lighting calculation using RSW data
+    // Directional light component (sun)
+    vec3 normal = normalize(vNormal);
+    vec3 lightDir = normalize(uLightDir);
+    float NdotL = max(dot(normal, lightDir), 0.0);
+    vec3 directional = uDiffuse * NdotL;
 
-    // Combine: ambient + directional, modulated by lightmap and vertex color
-    // Boost overall brightness for preview visibility
-    vec3 lighting = (uAmbient + directional + vec3(0.2)) * (lightmapColor * 1.2 + vec3(0.5)) * vColor.rgb;
+    // Combine ambient + directional lighting
+    vec3 lighting = uAmbient + directional;
 
-    vec3 color = texColor.rgb * lighting;
-    FragColor = vec4(color, texColor.a * vColor.a);
+    // Apply lightmap (pre-baked shadows and color from point lights)
+    // Lightmaps in RO contain baked lighting - they should ADD to the scene
+    // not darken it completely. Mix between full light and lightmap.
+    vec3 adjustedLightmap = mix(vec3(0.5), lightmapColor, 0.8);
+
+    // Combine: texture * dynamic lighting * baked lightmap * vertex color
+    vec3 finalColor = texColor.rgb * lighting * adjustedLightmap * vColor.rgb;
+
+    FragColor = vec4(finalColor, texColor.a * vColor.a);
 }
 `
 
@@ -229,8 +240,11 @@ func NewMapViewer(width, height int32) (*MapViewer, error) {
 		rotationX:      0.5,
 		rotationY:      0.0,
 		distance:       500.0,
-		SunStrength:    2.0,
 		MoveSpeed:      5.0,
+		// Default lighting (will be overwritten by RSW data)
+		lightDir:     [3]float32{0.5, 0.866, 0.0}, // 60 degrees elevation
+		ambientColor: [3]float32{0.3, 0.3, 0.3},
+		diffuseColor: [3]float32{1.0, 1.0, 1.0},
 	}
 
 	if err := mv.createFramebuffer(); err != nil {
@@ -336,9 +350,9 @@ func (mv *MapViewer) createTerrainShader() error {
 	mv.locViewProj = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uViewProj\x00"))
 	mv.locLightDir = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uLightDir\x00"))
 	mv.locAmbient = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uAmbient\x00"))
+	mv.locDiffuse = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uDiffuse\x00"))
 	mv.locTexture = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uTexture\x00"))
 	mv.locLightmap = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uLightmap\x00"))
-	mv.locSunStrength = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uSunStrength\x00"))
 
 	return nil
 }
@@ -425,6 +439,27 @@ func (mv *MapViewer) LoadMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(
 	// Store map dimensions for coordinate conversion (RSW positions are centered)
 	mv.mapWidth = float32(gnd.Width) * gnd.Zoom
 	mv.mapHeight = float32(gnd.Height) * gnd.Zoom
+
+	// Extract lighting data from RSW (Stage 1: Correct Lighting - ADR-014)
+	if rsw != nil {
+		// Calculate sun direction from spherical coordinates
+		mv.lightDir = calculateSunDirection(rsw.Light.Longitude, rsw.Light.Latitude)
+
+		// Use RSW ambient and diffuse colors
+		// Note: RSW values are often quite low, we apply a minimum floor
+		// to prevent completely dark scenes
+		mv.ambientColor = rsw.Light.Ambient
+		mv.diffuseColor = rsw.Light.Diffuse
+
+		// Ensure minimum ambient to prevent totally dark scenes
+		// Reference implementations typically boost ambient
+		minAmbient := float32(0.3)
+		for i := 0; i < 3; i++ {
+			if mv.ambientColor[i] < minAmbient {
+				mv.ambientColor[i] = minAmbient
+			}
+		}
+	}
 
 	// Load ground textures
 	mv.loadGroundTextures(gnd, texLoader)
@@ -1253,12 +1288,12 @@ func (mv *MapViewer) Render() uint32 {
 
 	viewProj := proj.Mul(view)
 
-	// Use terrain shader
+	// Use terrain shader with RSW lighting data
 	gl.UseProgram(mv.terrainProgram)
 	gl.UniformMatrix4fv(mv.locViewProj, 1, false, &viewProj[0])
-	gl.Uniform3f(mv.locLightDir, 0.5, 1.0, 0.3)
-	gl.Uniform3f(mv.locAmbient, 0.4, 0.4, 0.4)
-	gl.Uniform1f(mv.locSunStrength, mv.SunStrength)
+	gl.Uniform3f(mv.locLightDir, mv.lightDir[0], mv.lightDir[1], mv.lightDir[2])
+	gl.Uniform3f(mv.locAmbient, mv.ambientColor[0], mv.ambientColor[1], mv.ambientColor[2])
+	gl.Uniform3f(mv.locDiffuse, mv.diffuseColor[0], mv.diffuseColor[1], mv.diffuseColor[2])
 	gl.Uniform1i(mv.locTexture, 0)
 	gl.Uniform1i(mv.locLightmap, 1)
 
@@ -1301,9 +1336,9 @@ func (mv *MapViewer) renderModels(viewProj math.Mat4) {
 	}
 
 	gl.UseProgram(mv.modelProgram)
-	gl.Uniform3f(mv.locModelLightDir, 0.5, 1.0, 0.3)
-	gl.Uniform3f(mv.locModelAmbient, 0.5, 0.5, 0.5)
-	gl.Uniform3f(mv.locModelDiffuse, 0.7, 0.7, 0.7)
+	gl.Uniform3f(mv.locModelLightDir, mv.lightDir[0], mv.lightDir[1], mv.lightDir[2])
+	gl.Uniform3f(mv.locModelAmbient, mv.ambientColor[0], mv.ambientColor[1], mv.ambientColor[2])
+	gl.Uniform3f(mv.locModelDiffuse, mv.diffuseColor[0], mv.diffuseColor[1], mv.diffuseColor[2])
 	gl.Uniform1i(mv.locModelTexture, 0)
 
 	gl.ActiveTexture(gl.TEXTURE0)
@@ -1495,6 +1530,21 @@ func (mv *MapViewer) updateBounds(p [3]float32) {
 	}
 }
 
+// GetLightDir returns the current light direction vector (from RSW data).
+func (mv *MapViewer) GetLightDir() [3]float32 {
+	return mv.lightDir
+}
+
+// GetAmbientColor returns the current ambient light color (from RSW data).
+func (mv *MapViewer) GetAmbientColor() [3]float32 {
+	return mv.ambientColor
+}
+
+// GetDiffuseColor returns the current diffuse light color (from RSW data).
+func (mv *MapViewer) GetDiffuseColor() [3]float32 {
+	return mv.diffuseColor
+}
+
 // Destroy frees all GPU resources.
 func (mv *MapViewer) Destroy() {
 	mv.clearTerrain()
@@ -1554,4 +1604,24 @@ func absf(x float32) float32 {
 		return -x
 	}
 	return x
+}
+
+// calculateSunDirection converts RSW spherical coordinates (longitude, latitude in degrees)
+// to a directional light vector. This matches how the RO client interprets the sun position.
+// Longitude: azimuth angle (0-360), horizontal rotation around Y axis
+// Latitude: elevation angle (0-90), 0 = horizon, 90 = directly overhead
+func calculateSunDirection(longitude, latitude int32) [3]float32 {
+	// Convert degrees to radians
+	lonRad := float64(longitude) * gomath.Pi / 180.0
+	latRad := float64(latitude) * gomath.Pi / 180.0
+
+	// Spherical to Cartesian conversion
+	// The sun direction points FROM the sun TO the surface (towards origin)
+	// Latitude: 0 = horizon, 90 = directly overhead
+	// Longitude: angle around Y axis
+	x := float32(gomath.Cos(latRad) * gomath.Sin(lonRad))
+	y := float32(gomath.Sin(latRad))
+	z := float32(gomath.Cos(latRad) * gomath.Cos(lonRad))
+
+	return [3]float32{x, y, z}
 }
