@@ -114,15 +114,20 @@ type MapViewer struct {
 	terrainTilesZ    int         // Number of tiles in Z
 
 	// Water rendering (Stage 4 - ADR-014)
-	waterProgram  uint32
-	waterVAO      uint32
-	waterVBO      uint32
-	waterLevel    float32 // From RSW.Water.Level
-	hasWater      bool    // Whether map has water
-	locWaterMVP   int32
-	locWaterColor int32
-	locWaterTime  int32
-	waterTime     float32 // Animation time
+	waterProgram   uint32
+	waterVAO       uint32
+	waterVBO       uint32
+	waterLevel     float32   // From RSW.Water.Level
+	hasWater       bool      // Whether map has water
+	locWaterMVP    int32
+	locWaterColor  int32
+	locWaterTime   int32
+	locWaterTex    int32
+	waterTime      float32   // Animation time
+	waterTextures  []uint32  // Animated water texture frames
+	waterAnimSpeed float32   // Animation speed from RSW
+	waterFrame     int       // Current animation frame
+	useWaterTex    bool      // Whether we have loaded water textures
 
 	// Fog settings (Stage 4 - ADR-014)
 	fogEnabled bool
@@ -281,34 +286,31 @@ in vec3 vWorldPos;
 
 uniform vec4 uWaterColor;
 uniform float uTime;
+uniform sampler2D uWaterTex;
+uniform int uUseTexture;
 
 out vec4 FragColor;
 
-// Hash function for pseudo-random noise
+// Hash function for pseudo-random noise (fallback)
 float hash(vec2 p) {
     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
 }
 
-// Value noise
 float noise(vec2 p) {
     vec2 i = floor(p);
     vec2 f = fract(p);
-    f = f * f * (3.0 - 2.0 * f); // Smoothstep
-
+    f = f * f * (3.0 - 2.0 * f);
     float a = hash(i);
     float b = hash(i + vec2(1.0, 0.0));
     float c = hash(i + vec2(0.0, 1.0));
     float d = hash(i + vec2(1.0, 1.0));
-
     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
 
-// Fractal Brownian Motion for turbulent water
 float fbm(vec2 p, float time) {
     float value = 0.0;
     float amplitude = 0.5;
     vec2 shift = vec2(time * 0.3, time * 0.2);
-
     for (int i = 0; i < 4; i++) {
         value += amplitude * noise(p + shift);
         p = p * 2.0 + vec2(1.7, 9.2);
@@ -319,32 +321,38 @@ float fbm(vec2 p, float time) {
 }
 
 void main() {
-    // Scale world position for texture coordinates (RO-like scale)
-    vec2 uv = vWorldPos.xz * 0.05;
+    // Scale world position for texture coordinates - tile the texture
+    // RO tiles water texture approximately every 50-100 world units
+    vec2 uv = vWorldPos.xz * 0.02; // Tiling scale
 
-    // Get turbulent water pattern with animation
-    float pattern1 = fbm(uv, uTime);
-    float pattern2 = fbm(uv * 1.5 + vec2(5.0), uTime * 0.8);
-    float pattern = mix(pattern1, pattern2, 0.5);
-
-    // RO-style water colors (blue-green tones)
-    vec3 deepColor = vec3(0.12, 0.30, 0.45);    // Dark blue
-    vec3 midColor = vec3(0.20, 0.45, 0.55);     // Medium blue-green
-    vec3 lightColor = vec3(0.35, 0.60, 0.70);   // Light blue-green
-
-    // Create layered color based on pattern
-    vec3 waterColor;
-    if (pattern < 0.4) {
-        waterColor = mix(deepColor, midColor, pattern / 0.4);
+    if (uUseTexture == 1) {
+        // Use loaded water texture - just tile it, animation comes from texture frame switching
+        vec4 texColor = texture(uWaterTex, uv);
+        // Brighten the texture to match RO's vibrant water look
+        vec3 brightened = texColor.rgb * 1.3 + vec3(0.1);
+        FragColor = vec4(brightened, uWaterColor.a);
     } else {
-        waterColor = mix(midColor, lightColor, (pattern - 0.4) / 0.6);
+        // Fallback to procedural water
+        vec2 procUV = vWorldPos.xz * 0.05;
+        float pattern1 = fbm(procUV, uTime);
+        float pattern2 = fbm(procUV * 1.5 + vec2(5.0), uTime * 0.8);
+        float pattern = mix(pattern1, pattern2, 0.5);
+
+        vec3 deepColor = vec3(0.12, 0.30, 0.45);
+        vec3 midColor = vec3(0.20, 0.45, 0.55);
+        vec3 lightColor = vec3(0.35, 0.60, 0.70);
+
+        vec3 waterColor;
+        if (pattern < 0.4) {
+            waterColor = mix(deepColor, midColor, pattern / 0.4);
+        } else {
+            waterColor = mix(midColor, lightColor, (pattern - 0.4) / 0.6);
+        }
+        float caustic = pow(pattern, 2.5) * 0.4;
+        waterColor += vec3(caustic * 0.5, caustic * 0.7, caustic);
+
+        FragColor = vec4(waterColor, uWaterColor.a);
     }
-
-    // Add caustic-like highlights
-    float caustic = pow(pattern, 2.5) * 0.4;
-    waterColor += vec3(caustic * 0.5, caustic * 0.7, caustic);
-
-    FragColor = vec4(waterColor, uWaterColor.a);
 }
 `
 
@@ -611,8 +619,49 @@ func (mv *MapViewer) compileWaterShader() error {
 	mv.locWaterMVP = gl.GetUniformLocation(mv.waterProgram, gl.Str("uMVP\x00"))
 	mv.locWaterColor = gl.GetUniformLocation(mv.waterProgram, gl.Str("uWaterColor\x00"))
 	mv.locWaterTime = gl.GetUniformLocation(mv.waterProgram, gl.Str("uTime\x00"))
+	mv.locWaterTex = gl.GetUniformLocation(mv.waterProgram, gl.Str("uWaterTex\x00"))
 
 	return nil
+}
+
+// loadWaterTextures loads water textures from GRF based on water type.
+func (mv *MapViewer) loadWaterTextures(_ int32, texLoader func(string) ([]byte, error)) {
+	// RO water textures are in data/texture/워터/ folder
+	// Format: water%03d.jpg (000-031 for 32 frames)
+
+	var textures []uint32
+
+	// Load 32 frames of water animation
+	for frame := 0; frame < 32; frame++ {
+		path := fmt.Sprintf("data/texture/워터/water%03d.jpg", frame)
+
+		data, err := texLoader(path)
+		if err != nil {
+			if frame == 0 {
+				fmt.Printf("Water texture not found: %s\n", path)
+			}
+			continue
+		}
+
+		// Decode and upload texture
+		img, err := decodeModelTexture(data, path, false)
+		if err != nil {
+			fmt.Printf("Failed to decode water texture: %s\n", path)
+			continue
+		}
+
+		texID := uploadModelTexture(img)
+		textures = append(textures, texID)
+	}
+
+	if len(textures) > 0 {
+		mv.waterTextures = textures
+		mv.useWaterTex = true
+		fmt.Printf("Loaded %d water texture frames\n", len(textures))
+	} else {
+		fmt.Println("No water textures found, using procedural water")
+		mv.useWaterTex = false
+	}
 }
 
 // LoadMap loads a GND/RSW map for rendering.
@@ -669,6 +718,11 @@ func (mv *MapViewer) LoadMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(
 	// Create water plane (Stage 4 - ADR-014)
 	if rsw != nil && rsw.Water.Level != 0 {
 		mv.createWaterPlane(gnd, rsw.Water.Level)
+		mv.loadWaterTextures(rsw.Water.Type, texLoader)
+		mv.waterAnimSpeed = float32(rsw.Water.AnimSpeed)
+		if mv.waterAnimSpeed == 0 {
+			mv.waterAnimSpeed = 3.0 // Default animation speed
+		}
 	}
 
 	// Set up fog (Stage 4 - ADR-014)
@@ -1561,7 +1615,7 @@ func (mv *MapViewer) renderWater(viewProj math.Mat4) {
 		return
 	}
 
-	// Update water animation time (increment by ~16ms per frame at 60fps)
+	// Update water animation time
 	mv.waterTime += 0.016
 
 	// Enable blending for transparency
@@ -1572,11 +1626,31 @@ func (mv *MapViewer) renderWater(viewProj math.Mat4) {
 	gl.UseProgram(mv.waterProgram)
 	gl.UniformMatrix4fv(mv.locWaterMVP, 1, false, &viewProj[0])
 
-	// Water color: blue with 70% opacity
-	gl.Uniform4f(mv.locWaterColor, 0.2, 0.4, 0.7, 0.7)
+	// Water color: fully opaque when using texture
+	gl.Uniform4f(mv.locWaterColor, 0.2, 0.4, 0.7, 1.0)
 
 	// Pass animation time
 	gl.Uniform1f(mv.locWaterTime, mv.waterTime)
+
+	// Set up texture if we have water textures loaded
+	if mv.useWaterTex && len(mv.waterTextures) > 0 {
+		// Update animation frame based on time and speed
+		frameTime := mv.waterTime * mv.waterAnimSpeed
+		mv.waterFrame = int(frameTime) % len(mv.waterTextures)
+
+		// Bind water texture
+		gl.ActiveTexture(gl.TEXTURE0)
+		gl.BindTexture(gl.TEXTURE_2D, mv.waterTextures[mv.waterFrame])
+		gl.Uniform1i(mv.locWaterTex, 0)
+
+		// Tell shader to use texture
+		locUseTexture := gl.GetUniformLocation(mv.waterProgram, gl.Str("uUseTexture\x00"))
+		gl.Uniform1i(locUseTexture, 1)
+	} else {
+		// Tell shader to use procedural water
+		locUseTexture := gl.GetUniformLocation(mv.waterProgram, gl.Str("uUseTexture\x00"))
+		gl.Uniform1i(locUseTexture, 0)
+	}
 
 	// Render water quad
 	gl.BindVertexArray(mv.waterVAO)
