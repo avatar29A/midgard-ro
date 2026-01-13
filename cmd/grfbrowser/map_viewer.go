@@ -1347,95 +1347,120 @@ func (mv *MapViewer) buildTerrainMesh(gnd *formats.GND) ([]terrainVertex, []uint
 				)
 			}
 
-			// Front surface (vertical wall facing -Z)
-			// Only render if there's actual height difference between tiles
-			if tile.FrontSurface >= 0 && int(tile.FrontSurface) < len(gnd.Surfaces) {
-				surface := &gnd.Surfaces[tile.FrontSurface]
-				texID := int(surface.TextureID)
-
-				// Get neighboring tile for bottom edge
-				nextTile := gnd.GetTile(x, y+1)
-				if nextTile != nil {
-					// Check if there's a height difference (skip flat connections)
-					heightDiff0 := absf(tile.Altitude[0] - nextTile.Altitude[2])
-					heightDiff1 := absf(tile.Altitude[1] - nextTile.Altitude[3])
-					if heightDiff0 > 1.0 || heightDiff1 > 1.0 {
-						// Wall corners
-						wallCorners := [4][3]float32{
-							corners[0], // Top-left
-							corners[1], // Top-right
-							{baseX, -nextTile.Altitude[2], baseZ + tileSize},            // Bottom-left
-							{baseX + tileSize, -nextTile.Altitude[3], baseZ + tileSize}, // Bottom-right
-						}
-
-						normal := [3]float32{0, 0, -1} // Facing -Z
-						color := [4]float32{1.0, 1.0, 1.0, 1.0}
-
-						// Calculate lightmap UVs for wall
-						wlmUV0 := mv.calculateLightmapUV(surface.LightmapID, 0, gnd)
-						wlmUV1 := mv.calculateLightmapUV(surface.LightmapID, 1, gnd)
-						wlmUV2 := mv.calculateLightmapUV(surface.LightmapID, 2, gnd)
-						wlmUV3 := mv.calculateLightmapUV(surface.LightmapID, 3, gnd)
-
-						baseIdx := uint32(len(vertices))
-						vertices = append(vertices,
-							terrainVertex{Position: wallCorners[0], Normal: normal, TexCoord: [2]float32{surface.U[0], surface.V[0]}, LightmapUV: wlmUV0, Color: color},
-							terrainVertex{Position: wallCorners[1], Normal: normal, TexCoord: [2]float32{surface.U[1], surface.V[1]}, LightmapUV: wlmUV1, Color: color},
-							terrainVertex{Position: wallCorners[2], Normal: normal, TexCoord: [2]float32{surface.U[2], surface.V[2]}, LightmapUV: wlmUV2, Color: color},
-							terrainVertex{Position: wallCorners[3], Normal: normal, TexCoord: [2]float32{surface.U[3], surface.V[3]}, LightmapUV: wlmUV3, Color: color},
-						)
-
-						textureIndices[texID] = append(textureIndices[texID],
-							baseIdx, baseIdx+2, baseIdx+1,
-							baseIdx+1, baseIdx+2, baseIdx+3,
-						)
+			// Front surface (vertical wall facing -Z) - fill gaps between tiles
+			nextTile := gnd.GetTile(x, y+1)
+			if nextTile != nil {
+				heightDiff0 := absf(tile.Altitude[0] - nextTile.Altitude[2])
+				heightDiff1 := absf(tile.Altitude[1] - nextTile.Altitude[3])
+				if heightDiff0 > 0.001 || heightDiff1 > 0.001 {
+					// Wall corners
+					wallCorners := [4][3]float32{
+						corners[0], // Top-left
+						corners[1], // Top-right
+						{baseX, -nextTile.Altitude[2], baseZ + tileSize},            // Bottom-left
+						{baseX + tileSize, -nextTile.Altitude[3], baseZ + tileSize}, // Bottom-right
 					}
+
+					normal := [3]float32{0, 0, -1} // Facing -Z
+					color := [4]float32{1.0, 1.0, 1.0, 1.0}
+					var texID int
+					var texU, texV [4]float32
+					var lmID int16
+
+					// Use front surface if available, otherwise use top surface
+					if tile.FrontSurface >= 0 && int(tile.FrontSurface) < len(gnd.Surfaces) {
+						surface := &gnd.Surfaces[tile.FrontSurface]
+						texID = int(surface.TextureID)
+						texU = surface.U
+						texV = surface.V
+						lmID = surface.LightmapID
+					} else if tile.TopSurface >= 0 && int(tile.TopSurface) < len(gnd.Surfaces) {
+						// Fallback to top surface texture for gap filling
+						surface := &gnd.Surfaces[tile.TopSurface]
+						texID = int(surface.TextureID)
+						texU = [4]float32{0, 1, 0, 1}
+						texV = [4]float32{0, 0, 1, 1}
+						lmID = surface.LightmapID
+					} else {
+						continue
+					}
+
+					wlmUV0 := mv.calculateLightmapUV(lmID, 0, gnd)
+					wlmUV1 := mv.calculateLightmapUV(lmID, 1, gnd)
+					wlmUV2 := mv.calculateLightmapUV(lmID, 2, gnd)
+					wlmUV3 := mv.calculateLightmapUV(lmID, 3, gnd)
+
+					baseIdx := uint32(len(vertices))
+					vertices = append(vertices,
+						terrainVertex{Position: wallCorners[0], Normal: normal, TexCoord: [2]float32{texU[0], texV[0]}, LightmapUV: wlmUV0, Color: color},
+						terrainVertex{Position: wallCorners[1], Normal: normal, TexCoord: [2]float32{texU[1], texV[1]}, LightmapUV: wlmUV1, Color: color},
+						terrainVertex{Position: wallCorners[2], Normal: normal, TexCoord: [2]float32{texU[2], texV[2]}, LightmapUV: wlmUV2, Color: color},
+						terrainVertex{Position: wallCorners[3], Normal: normal, TexCoord: [2]float32{texU[3], texV[3]}, LightmapUV: wlmUV3, Color: color},
+					)
+
+					textureIndices[texID] = append(textureIndices[texID],
+						baseIdx, baseIdx+2, baseIdx+1,
+						baseIdx+1, baseIdx+2, baseIdx+3,
+					)
 				}
 			}
 
-			// Right surface (vertical wall facing +X)
-			// Only render if there's actual height difference between tiles
-			if tile.RightSurface >= 0 && int(tile.RightSurface) < len(gnd.Surfaces) {
-				surface := &gnd.Surfaces[tile.RightSurface]
-				texID := int(surface.TextureID)
-
-				// Get neighboring tile for right edge
-				nextTile := gnd.GetTile(x+1, y)
-				if nextTile != nil {
-					// Check if there's a height difference (skip flat connections)
-					heightDiff0 := absf(tile.Altitude[1] - nextTile.Altitude[0])
-					heightDiff1 := absf(tile.Altitude[3] - nextTile.Altitude[2])
-					if heightDiff0 > 1.0 || heightDiff1 > 1.0 {
-						// Wall corners
-						wallCorners := [4][3]float32{
-							corners[3], // Top-back
-							corners[1], // Top-front
-							{baseX + tileSize, -nextTile.Altitude[2], baseZ},            // Bottom-back
-							{baseX + tileSize, -nextTile.Altitude[0], baseZ + tileSize}, // Bottom-front
-						}
-
-						normal := [3]float32{1, 0, 0} // Facing +X
-						color := [4]float32{1.0, 1.0, 1.0, 1.0}
-
-						// Calculate lightmap UVs for wall
-						wlmUV0 := mv.calculateLightmapUV(surface.LightmapID, 0, gnd)
-						wlmUV1 := mv.calculateLightmapUV(surface.LightmapID, 1, gnd)
-						wlmUV2 := mv.calculateLightmapUV(surface.LightmapID, 2, gnd)
-						wlmUV3 := mv.calculateLightmapUV(surface.LightmapID, 3, gnd)
-
-						baseIdx := uint32(len(vertices))
-						vertices = append(vertices,
-							terrainVertex{Position: wallCorners[0], Normal: normal, TexCoord: [2]float32{surface.U[0], surface.V[0]}, LightmapUV: wlmUV0, Color: color},
-							terrainVertex{Position: wallCorners[1], Normal: normal, TexCoord: [2]float32{surface.U[1], surface.V[1]}, LightmapUV: wlmUV1, Color: color},
-							terrainVertex{Position: wallCorners[2], Normal: normal, TexCoord: [2]float32{surface.U[2], surface.V[2]}, LightmapUV: wlmUV2, Color: color},
-							terrainVertex{Position: wallCorners[3], Normal: normal, TexCoord: [2]float32{surface.U[3], surface.V[3]}, LightmapUV: wlmUV3, Color: color},
-						)
-
-						textureIndices[texID] = append(textureIndices[texID],
-							baseIdx, baseIdx+2, baseIdx+1,
-							baseIdx+1, baseIdx+2, baseIdx+3,
-						)
+			// Right surface (vertical wall facing +X) - fill gaps between tiles
+			rightNextTile := gnd.GetTile(x+1, y)
+			if rightNextTile != nil {
+				heightDiff0 := absf(tile.Altitude[1] - rightNextTile.Altitude[0])
+				heightDiff1 := absf(tile.Altitude[3] - rightNextTile.Altitude[2])
+				if heightDiff0 > 0.001 || heightDiff1 > 0.001 {
+					// Wall corners
+					wallCorners := [4][3]float32{
+						corners[3], // Top-back
+						corners[1], // Top-front
+						{baseX + tileSize, -rightNextTile.Altitude[2], baseZ},            // Bottom-back
+						{baseX + tileSize, -rightNextTile.Altitude[0], baseZ + tileSize}, // Bottom-front
 					}
+
+					normal := [3]float32{1, 0, 0} // Facing +X
+					color := [4]float32{1.0, 1.0, 1.0, 1.0}
+					var texID int
+					var texU, texV [4]float32
+					var lmID int16
+
+					// Use right surface if available, otherwise use top surface
+					if tile.RightSurface >= 0 && int(tile.RightSurface) < len(gnd.Surfaces) {
+						surface := &gnd.Surfaces[tile.RightSurface]
+						texID = int(surface.TextureID)
+						texU = surface.U
+						texV = surface.V
+						lmID = surface.LightmapID
+					} else if tile.TopSurface >= 0 && int(tile.TopSurface) < len(gnd.Surfaces) {
+						// Fallback to top surface texture for gap filling
+						surface := &gnd.Surfaces[tile.TopSurface]
+						texID = int(surface.TextureID)
+						texU = [4]float32{0, 1, 0, 1}
+						texV = [4]float32{0, 0, 1, 1}
+						lmID = surface.LightmapID
+					} else {
+						continue
+					}
+
+					// Calculate lightmap UVs for wall
+					wlmUV0 := mv.calculateLightmapUV(lmID, 0, gnd)
+					wlmUV1 := mv.calculateLightmapUV(lmID, 1, gnd)
+					wlmUV2 := mv.calculateLightmapUV(lmID, 2, gnd)
+					wlmUV3 := mv.calculateLightmapUV(lmID, 3, gnd)
+
+					baseIdx := uint32(len(vertices))
+					vertices = append(vertices,
+						terrainVertex{Position: wallCorners[0], Normal: normal, TexCoord: [2]float32{texU[0], texV[0]}, LightmapUV: wlmUV0, Color: color},
+						terrainVertex{Position: wallCorners[1], Normal: normal, TexCoord: [2]float32{texU[1], texV[1]}, LightmapUV: wlmUV1, Color: color},
+						terrainVertex{Position: wallCorners[2], Normal: normal, TexCoord: [2]float32{texU[2], texV[2]}, LightmapUV: wlmUV2, Color: color},
+						terrainVertex{Position: wallCorners[3], Normal: normal, TexCoord: [2]float32{texU[3], texV[3]}, LightmapUV: wlmUV3, Color: color},
+					)
+
+					textureIndices[texID] = append(textureIndices[texID],
+						baseIdx, baseIdx+2, baseIdx+1,
+						baseIdx+1, baseIdx+2, baseIdx+3,
+					)
 				}
 			}
 		}
