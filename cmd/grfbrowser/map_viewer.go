@@ -204,12 +204,18 @@ void main() {
     vec3 lighting = uAmbient + directional;
 
     // Apply lightmap (pre-baked shadows and color from point lights)
-    // Lightmaps in RO contain baked lighting - they should ADD to the scene
-    // not darken it completely. Mix between full light and lightmap.
-    vec3 adjustedLightmap = mix(vec3(0.5), lightmapColor, 0.8);
+    // Boost lightmap significantly - RO terrain should be well-lit
+    vec3 adjustedLightmap = lightmapColor * 0.3 + vec3(0.7);
+
+    // Ensure vertex color doesn't cause black (default to white if black)
+    vec3 vertColor = vColor.rgb;
+    if (vertColor.r + vertColor.g + vertColor.b < 0.1) {
+        vertColor = vec3(1.0);
+    }
 
     // Combine: texture * dynamic lighting * baked lightmap * vertex color
-    vec3 finalColor = texColor.rgb * lighting * adjustedLightmap * vColor.rgb;
+    // Boost brightness for well-lit terrain like RO
+    vec3 finalColor = texColor.rgb * lighting * adjustedLightmap * vertColor * 1.5;
 
     FragColor = vec4(finalColor, texColor.a * vColor.a);
 }
