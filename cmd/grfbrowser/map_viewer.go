@@ -286,6 +286,7 @@ in vec3 vWorldPos;
 
 uniform vec4 uWaterColor;
 uniform float uTime;
+uniform float uScrollSpeed;
 uniform sampler2D uWaterTex;
 uniform int uUseTexture;
 
@@ -326,11 +327,11 @@ void main() {
     vec2 uv = vWorldPos.xz * 0.02; // Tiling scale
 
     if (uUseTexture == 1) {
-        // Use loaded water texture - just tile it, animation comes from texture frame switching
-        vec4 texColor = texture(uWaterTex, uv);
-        // Brighten the texture to match RO's vibrant water look
-        vec3 brightened = texColor.rgb * 1.3 + vec3(0.1);
-        FragColor = vec4(brightened, uWaterColor.a);
+        // Use loaded water texture - frame animation creates shimmering effect
+        // No UV scrolling - just tile the texture
+        vec2 tileUV = vWorldPos.xz * 0.004;
+        vec4 texColor = texture(uWaterTex, tileUV);
+        FragColor = vec4(texColor.rgb, 1.0);
     } else {
         // Fallback to procedural water
         vec2 procUV = vWorldPos.xz * 0.05;
@@ -721,7 +722,7 @@ func (mv *MapViewer) LoadMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(
 		mv.loadWaterTextures(rsw.Water.Type, texLoader)
 		mv.waterAnimSpeed = float32(rsw.Water.AnimSpeed)
 		if mv.waterAnimSpeed == 0 {
-			mv.waterAnimSpeed = 3.0 // Default animation speed
+			mv.waterAnimSpeed = 30.0 // Fast animation speed for shimmering effect
 		}
 	}
 
@@ -1629,13 +1630,16 @@ func (mv *MapViewer) renderWater(viewProj math.Mat4) {
 	// Water color: fully opaque when using texture
 	gl.Uniform4f(mv.locWaterColor, 0.2, 0.4, 0.7, 1.0)
 
-	// Pass animation time
+	// Pass animation time and scroll speed
 	gl.Uniform1f(mv.locWaterTime, mv.waterTime)
+	locScrollSpeed := gl.GetUniformLocation(mv.waterProgram, gl.Str("uScrollSpeed\x00"))
+	gl.Uniform1f(locScrollSpeed, mv.waterAnimSpeed)
 
 	// Set up texture if we have water textures loaded
 	if mv.useWaterTex && len(mv.waterTextures) > 0 {
 		// Update animation frame based on time and speed
-		frameTime := mv.waterTime * mv.waterAnimSpeed
+		// At speed 10, cycle through 32 frames in ~3 seconds
+		frameTime := mv.waterTime * mv.waterAnimSpeed * 0.5
 		mv.waterFrame = int(frameTime) % len(mv.waterTextures)
 
 		// Bind water texture
@@ -1866,6 +1870,21 @@ func (mv *MapViewer) updateBounds(p [3]float32) {
 // GetLightDir returns the current light direction vector (from RSW data).
 func (mv *MapViewer) GetLightDir() [3]float32 {
 	return mv.lightDir
+}
+
+// GetWaterAnimSpeed returns the current water animation speed.
+func (mv *MapViewer) GetWaterAnimSpeed() float32 {
+	return mv.waterAnimSpeed
+}
+
+// SetWaterAnimSpeed sets the water animation speed.
+func (mv *MapViewer) SetWaterAnimSpeed(speed float32) {
+	mv.waterAnimSpeed = speed
+}
+
+// HasWater returns whether the map has water.
+func (mv *MapViewer) HasWater() bool {
+	return mv.hasWater
 }
 
 // GetModelCount returns the number of loaded models.
