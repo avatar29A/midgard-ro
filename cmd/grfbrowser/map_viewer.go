@@ -23,6 +23,9 @@ type MapModel struct {
 	position   [3]float32
 	rotation   [3]float32
 	scale      [3]float32
+	// Debug info
+	modelName  string
+	bbox       [6]float32 // minX, minY, minZ, maxX, maxY, maxZ (after centering)
 }
 
 // modelTexGroup groups faces by texture for rendering.
@@ -103,6 +106,29 @@ type MapViewer struct {
 	// Map dimensions for coordinate conversion
 	mapWidth  float32 // Width in world units (tiles * zoom)
 	mapHeight float32 // Height in world units (tiles * zoom)
+
+	// Terrain height data for model positioning (Stage 2 - ADR-014)
+	terrainAltitudes [][]float32 // [x][y] -> average altitude at tile center
+	terrainTileZoom  float32     // GND zoom factor
+	terrainTilesX    int         // Number of tiles in X
+	terrainTilesZ    int         // Number of tiles in Z
+
+	// Water rendering (Stage 4 - ADR-014)
+	waterProgram  uint32
+	waterVAO      uint32
+	waterVBO      uint32
+	waterLevel    float32 // From RSW.Water.Level
+	hasWater      bool    // Whether map has water
+	locWaterMVP   int32
+	locWaterColor int32
+	locWaterTime  int32
+	waterTime     float32 // Animation time
+
+	// Fog settings (Stage 4 - ADR-014)
+	fogEnabled bool
+	fogNear    float32
+	fogFar     float32
+	fogColor   [3]float32
 }
 
 // terrainVertex is the vertex format for terrain mesh.
@@ -222,12 +248,103 @@ out vec4 FragColor;
 void main() {
     vec4 texColor = texture(uTexture, vTexCoord);
 
+    // Discard transparent pixels (alpha set to 0 for magenta color key during texture load)
+    if (texColor.a < 0.5) {
+        discard;
+    }
+
     // Simple lighting
     float NdotL = max(dot(normalize(vNormal), normalize(uLightDir)), 0.0);
     vec3 lighting = uAmbient + uDiffuse * NdotL;
 
     vec3 color = texColor.rgb * lighting;
     FragColor = vec4(color, texColor.a);
+}
+`
+
+// Water shader for semi-transparent water plane
+const waterVertexShader = `#version 410 core
+layout (location = 0) in vec3 aPosition;
+
+uniform mat4 uMVP;
+
+out vec3 vWorldPos;
+
+void main() {
+    vWorldPos = aPosition;
+    gl_Position = uMVP * vec4(aPosition, 1.0);
+}
+`
+
+const waterFragmentShader = `#version 410 core
+in vec3 vWorldPos;
+
+uniform vec4 uWaterColor;
+uniform float uTime;
+
+out vec4 FragColor;
+
+// Hash function for pseudo-random noise
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+// Value noise
+float noise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f); // Smoothstep
+
+    float a = hash(i);
+    float b = hash(i + vec2(1.0, 0.0));
+    float c = hash(i + vec2(0.0, 1.0));
+    float d = hash(i + vec2(1.0, 1.0));
+
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+// Fractal Brownian Motion for turbulent water
+float fbm(vec2 p, float time) {
+    float value = 0.0;
+    float amplitude = 0.5;
+    vec2 shift = vec2(time * 0.3, time * 0.2);
+
+    for (int i = 0; i < 4; i++) {
+        value += amplitude * noise(p + shift);
+        p = p * 2.0 + vec2(1.7, 9.2);
+        shift *= 1.1;
+        amplitude *= 0.5;
+    }
+    return value;
+}
+
+void main() {
+    // Scale world position for texture coordinates (RO-like scale)
+    vec2 uv = vWorldPos.xz * 0.05;
+
+    // Get turbulent water pattern with animation
+    float pattern1 = fbm(uv, uTime);
+    float pattern2 = fbm(uv * 1.5 + vec2(5.0), uTime * 0.8);
+    float pattern = mix(pattern1, pattern2, 0.5);
+
+    // RO-style water colors (blue-green tones)
+    vec3 deepColor = vec3(0.12, 0.30, 0.45);    // Dark blue
+    vec3 midColor = vec3(0.20, 0.45, 0.55);     // Medium blue-green
+    vec3 lightColor = vec3(0.35, 0.60, 0.70);   // Light blue-green
+
+    // Create layered color based on pattern
+    vec3 waterColor;
+    if (pattern < 0.4) {
+        waterColor = mix(deepColor, midColor, pattern / 0.4);
+    } else {
+        waterColor = mix(midColor, lightColor, (pattern - 0.4) / 0.6);
+    }
+
+    // Add caustic-like highlights
+    float caustic = pow(pattern, 2.5) * 0.4;
+    waterColor += vec3(caustic * 0.5, caustic * 0.7, caustic);
+
+    FragColor = vec4(waterColor, uWaterColor.a);
 }
 `
 
@@ -417,6 +534,11 @@ func (mv *MapViewer) createModelShader() error {
 	mv.locModelDiffuse = gl.GetUniformLocation(mv.modelProgram, gl.Str("uDiffuse\x00"))
 	mv.locModelTexture = gl.GetUniformLocation(mv.modelProgram, gl.Str("uTexture\x00"))
 
+	// Compile water shader
+	if err := mv.compileWaterShader(); err != nil {
+		return fmt.Errorf("water shader: %w", err)
+	}
+
 	return nil
 }
 
@@ -431,6 +553,68 @@ func (mv *MapViewer) createFallbackTexture() {
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
 }
 
+// compileWaterShader compiles the water rendering shader.
+func (mv *MapViewer) compileWaterShader() error {
+	var status int32
+
+	// Compile vertex shader
+	vertShader := gl.CreateShader(gl.VERTEX_SHADER)
+	csource, free := gl.Strs(waterVertexShader + "\x00")
+	gl.ShaderSource(vertShader, 1, csource, nil)
+	free()
+	gl.CompileShader(vertShader)
+
+	gl.GetShaderiv(vertShader, gl.COMPILE_STATUS, &status)
+	if status == gl.FALSE {
+		var logLen int32
+		gl.GetShaderiv(vertShader, gl.INFO_LOG_LENGTH, &logLen)
+		log := make([]byte, logLen)
+		gl.GetShaderInfoLog(vertShader, logLen, nil, &log[0])
+		return fmt.Errorf("water vertex shader: %s", string(log))
+	}
+
+	// Compile fragment shader
+	fragShader := gl.CreateShader(gl.FRAGMENT_SHADER)
+	csource, free = gl.Strs(waterFragmentShader + "\x00")
+	gl.ShaderSource(fragShader, 1, csource, nil)
+	free()
+	gl.CompileShader(fragShader)
+
+	gl.GetShaderiv(fragShader, gl.COMPILE_STATUS, &status)
+	if status == gl.FALSE {
+		var logLen int32
+		gl.GetShaderiv(fragShader, gl.INFO_LOG_LENGTH, &logLen)
+		log := make([]byte, logLen)
+		gl.GetShaderInfoLog(fragShader, logLen, nil, &log[0])
+		return fmt.Errorf("water fragment shader: %s", string(log))
+	}
+
+	// Link program
+	mv.waterProgram = gl.CreateProgram()
+	gl.AttachShader(mv.waterProgram, vertShader)
+	gl.AttachShader(mv.waterProgram, fragShader)
+	gl.LinkProgram(mv.waterProgram)
+
+	gl.GetProgramiv(mv.waterProgram, gl.LINK_STATUS, &status)
+	if status == gl.FALSE {
+		var logLen int32
+		gl.GetProgramiv(mv.waterProgram, gl.INFO_LOG_LENGTH, &logLen)
+		log := make([]byte, logLen)
+		gl.GetProgramInfoLog(mv.waterProgram, logLen, nil, &log[0])
+		return fmt.Errorf("water shader link: %s", string(log))
+	}
+
+	gl.DeleteShader(vertShader)
+	gl.DeleteShader(fragShader)
+
+	// Get uniform locations
+	mv.locWaterMVP = gl.GetUniformLocation(mv.waterProgram, gl.Str("uMVP\x00"))
+	mv.locWaterColor = gl.GetUniformLocation(mv.waterProgram, gl.Str("uWaterColor\x00"))
+	mv.locWaterTime = gl.GetUniformLocation(mv.waterProgram, gl.Str("uTime\x00"))
+
+	return nil
+}
+
 // LoadMap loads a GND/RSW map for rendering.
 func (mv *MapViewer) LoadMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(string) ([]byte, error)) error {
 	// Clear old resources
@@ -439,6 +623,9 @@ func (mv *MapViewer) LoadMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(
 	// Store map dimensions for coordinate conversion (RSW positions are centered)
 	mv.mapWidth = float32(gnd.Width) * gnd.Zoom
 	mv.mapHeight = float32(gnd.Height) * gnd.Zoom
+
+	// Store terrain height data for model positioning (Stage 2 - ADR-014)
+	mv.buildTerrainHeightMap(gnd)
 
 	// Extract lighting data from RSW (Stage 1: Correct Lighting - ADR-014)
 	if rsw != nil {
@@ -478,6 +665,17 @@ func (mv *MapViewer) LoadMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(
 	if rsw != nil {
 		mv.loadModels(rsw, texLoader)
 	}
+
+	// Create water plane (Stage 4 - ADR-014)
+	if rsw != nil && rsw.Water.Level != 0 {
+		mv.createWaterPlane(gnd, rsw.Water.Level)
+	}
+
+	// Set up fog (Stage 4 - ADR-014)
+	mv.fogEnabled = true
+	mv.fogNear = 500.0
+	mv.fogFar = 3000.0
+	mv.fogColor = [3]float32{0.6, 0.75, 0.9} // Light blue-gray fog
 
 	// Fit camera to map
 	mv.fitCamera()
@@ -550,6 +748,9 @@ func (mv *MapViewer) loadGroundTextures(gnd *formats.GND, texLoader func(string)
 	}
 }
 
+// DebugModelPositioning enables debug output for model positioning issues.
+var DebugModelPositioning = false
+
 // loadModels loads RSM models from RSW object list.
 func (mv *MapViewer) loadModels(rsw *formats.RSW, texLoader func(string) ([]byte, error)) {
 	models := rsw.GetModels()
@@ -558,6 +759,10 @@ func (mv *MapViewer) loadModels(rsw *formats.RSW, texLoader func(string) ([]byte
 	maxModels := 500
 	if len(models) > maxModels {
 		models = models[:maxModels]
+	}
+
+	if DebugModelPositioning {
+		fmt.Printf("Loading %d models (max %d)\n", len(models), maxModels)
 	}
 
 	// Cache loaded RSM files to avoid reloading
@@ -717,6 +922,22 @@ func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texL
 		vertices[i].Position[2] -= centerZ
 	}
 
+	// Store bounding box after centering (for debug visualization)
+	bboxAfter := [6]float32{
+		minVertX - centerX, minVertY - minVertY, minVertZ - centerZ,
+		maxVertX - centerX, maxVertY - minVertY, maxVertZ - centerZ,
+	}
+
+	// Debug: log model centering info
+	if DebugModelPositioning {
+		height := maxVertY - minVertY
+		fmt.Printf("Model: %s | RSW pos: (%.1f,%.1f,%.1f) rot: (%.1f,%.1f,%.1f) | BBox: (%.1f,%.1f,%.1f)-(%.1f,%.1f,%.1f) | Height: %.1f\n",
+			ref.ModelName,
+			ref.Position[0], ref.Position[1], ref.Position[2],
+			ref.Rotation[0], ref.Rotation[1], ref.Rotation[2],
+			minVertX, minVertY, minVertZ, maxVertX, maxVertY, maxVertZ, height)
+	}
+
 	// Build texture groups
 	var groups []modelTexGroup
 	for texIdx, idxs := range texGroups {
@@ -738,6 +959,8 @@ func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texL
 		position:  ref.Position,
 		rotation:  ref.Rotation,
 		scale:     ref.Scale,
+		modelName: ref.ModelName,
+		bbox:      bboxAfter,
 	}
 
 	// Upload mesh to GPU
@@ -1324,9 +1547,44 @@ func (mv *MapViewer) Render() uint32 {
 	// Render placed models
 	mv.renderModels(viewProj)
 
+	// Render water (last, with transparency)
+	mv.renderWater(viewProj)
+
 	gl.BindFramebuffer(gl.FRAMEBUFFER, 0)
 
 	return mv.colorTexture
+}
+
+// renderWater renders the water plane with transparency.
+func (mv *MapViewer) renderWater(viewProj math.Mat4) {
+	if !mv.hasWater || mv.waterVAO == 0 {
+		return
+	}
+
+	// Update water animation time (increment by ~16ms per frame at 60fps)
+	mv.waterTime += 0.016
+
+	// Enable blending for transparency
+	gl.Enable(gl.BLEND)
+	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+
+	// Use water shader
+	gl.UseProgram(mv.waterProgram)
+	gl.UniformMatrix4fv(mv.locWaterMVP, 1, false, &viewProj[0])
+
+	// Water color: blue with 70% opacity
+	gl.Uniform4f(mv.locWaterColor, 0.2, 0.4, 0.7, 0.7)
+
+	// Pass animation time
+	gl.Uniform1f(mv.locWaterTime, mv.waterTime)
+
+	// Render water quad
+	gl.BindVertexArray(mv.waterVAO)
+	gl.DrawArrays(gl.TRIANGLE_FAN, 0, 4)
+	gl.BindVertexArray(0)
+
+	// Disable blending
+	gl.Disable(gl.BLEND)
 }
 
 // renderModels renders all placed RSM models.
@@ -1356,7 +1614,7 @@ func (mv *MapViewer) renderModels(viewProj math.Mat4) {
 
 		// Convert RSW position to GND world coordinates:
 		// - RSW X (0 = center) -> World X = rswX + mapWidth/2
-		// - RSW Y (altitude) -> World Y = -rswY (same as GND altitude convention)
+		// - RSW Y (altitude) -> World Y = -rswY (same convention as GND: positive = lower)
 		// - RSW Z (0 = center) -> World Z = rswZ + mapHeight/2
 		worldX := model.position[0] + offsetX
 		worldY := -model.position[1]
@@ -1370,6 +1628,7 @@ func (mv *MapViewer) renderModels(viewProj math.Mat4) {
 		modelMatrix = modelMatrix.Mul(math.Translate(worldX, worldY, worldZ))
 
 		// Apply RSW rotations (in degrees)
+		// Note: RSW stores rotation as [X, Y, Z] in degrees
 		modelMatrix = modelMatrix.Mul(math.RotateY(model.rotation[1] * gomath.Pi / 180))
 		modelMatrix = modelMatrix.Mul(math.RotateX(model.rotation[0] * gomath.Pi / 180))
 		modelMatrix = modelMatrix.Mul(math.RotateZ(model.rotation[2] * gomath.Pi / 180))
@@ -1535,6 +1794,25 @@ func (mv *MapViewer) GetLightDir() [3]float32 {
 	return mv.lightDir
 }
 
+// GetModelCount returns the number of loaded models.
+func (mv *MapViewer) GetModelCount() int {
+	return len(mv.models)
+}
+
+// GetModelInfo returns debug info for a specific model by index.
+func (mv *MapViewer) GetModelInfo(idx int) (name string, pos, rot, scale [3]float32, bbox [6]float32) {
+	if idx < 0 || idx >= len(mv.models) {
+		return "", [3]float32{}, [3]float32{}, [3]float32{}, [6]float32{}
+	}
+	m := mv.models[idx]
+	return m.modelName, m.position, m.rotation, m.scale, m.bbox
+}
+
+// SetDebugMode enables/disables debug output for model positioning.
+func SetDebugMode(enabled bool) {
+	DebugModelPositioning = enabled
+}
+
 // GetAmbientColor returns the current ambient light color (from RSW data).
 func (mv *MapViewer) GetAmbientColor() [3]float32 {
 	return mv.ambientColor
@@ -1604,6 +1882,102 @@ func absf(x float32) float32 {
 		return -x
 	}
 	return x
+}
+
+// buildTerrainHeightMap builds a lookup table of terrain heights for model positioning.
+func (mv *MapViewer) buildTerrainHeightMap(gnd *formats.GND) {
+	mv.terrainTilesX = int(gnd.Width)
+	mv.terrainTilesZ = int(gnd.Height)
+	mv.terrainTileZoom = gnd.Zoom
+
+	// Allocate 2D array for terrain heights
+	mv.terrainAltitudes = make([][]float32, mv.terrainTilesX)
+	for x := 0; x < mv.terrainTilesX; x++ {
+		mv.terrainAltitudes[x] = make([]float32, mv.terrainTilesZ)
+		for z := 0; z < mv.terrainTilesZ; z++ {
+			tile := gnd.GetTile(x, z)
+			if tile != nil {
+				// Average of 4 corners
+				avgAlt := (tile.Altitude[0] + tile.Altitude[1] + tile.Altitude[2] + tile.Altitude[3]) / 4.0
+				mv.terrainAltitudes[x][z] = avgAlt
+			}
+		}
+	}
+}
+
+// getTerrainHeight returns the terrain height at a world position.
+// World position is in GND coordinates (after adding map center offset).
+func (mv *MapViewer) getTerrainHeight(worldX, worldZ float32) float32 {
+	if mv.terrainAltitudes == nil || mv.terrainTileZoom == 0 {
+		return 0
+	}
+
+	// Convert world position to tile coordinates
+	tileX := int(worldX / mv.terrainTileZoom)
+	tileZ := int(worldZ / mv.terrainTileZoom)
+
+	// Clamp to valid range
+	if tileX < 0 {
+		tileX = 0
+	}
+	if tileX >= mv.terrainTilesX {
+		tileX = mv.terrainTilesX - 1
+	}
+	if tileZ < 0 {
+		tileZ = 0
+	}
+	if tileZ >= mv.terrainTilesZ {
+		tileZ = mv.terrainTilesZ - 1
+	}
+
+	// Return negated altitude (GND altitude is positive for lower, we negate for Y-up)
+	return -mv.terrainAltitudes[tileX][tileZ]
+}
+
+// createWaterPlane creates a water surface plane at the specified height.
+func (mv *MapViewer) createWaterPlane(_ *formats.GND, waterLevel float32) {
+	// Delete old water if exists
+	if mv.waterVAO != 0 {
+		gl.DeleteVertexArrays(1, &mv.waterVAO)
+		gl.DeleteBuffers(1, &mv.waterVBO)
+	}
+
+	// Water level in RSW is typically positive for below ground level
+	// Convert to our Y-up coordinate system
+	waterY := -waterLevel
+
+	// Create a large water plane covering the map
+	// Extend slightly beyond map bounds
+	padding := float32(50.0)
+	minX := mv.minBounds[0] - padding
+	maxX := mv.maxBounds[0] + padding
+	minZ := mv.minBounds[2] - padding
+	maxZ := mv.maxBounds[2] + padding
+
+	// Simple quad vertices (position only)
+	vertices := []float32{
+		minX, waterY, minZ,
+		maxX, waterY, minZ,
+		maxX, waterY, maxZ,
+		minX, waterY, maxZ,
+	}
+
+	// Create VAO/VBO
+	gl.GenVertexArrays(1, &mv.waterVAO)
+	gl.GenBuffers(1, &mv.waterVBO)
+
+	gl.BindVertexArray(mv.waterVAO)
+	gl.BindBuffer(gl.ARRAY_BUFFER, mv.waterVBO)
+	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*4, gl.Ptr(vertices), gl.STATIC_DRAW)
+
+	// Position attribute
+	gl.EnableVertexAttribArray(0)
+	gl.VertexAttribPointerWithOffset(0, 3, gl.FLOAT, false, 3*4, 0)
+
+	gl.BindVertexArray(0)
+
+	mv.waterLevel = waterLevel
+	mv.hasWater = true
 }
 
 // calculateSunDirection converts RSW spherical coordinates (longitude, latitude in degrees)
