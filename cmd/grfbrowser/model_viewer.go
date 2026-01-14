@@ -729,11 +729,18 @@ func uploadModelTexture(img *image.RGBA) uint32 {
 		int32(img.Bounds().Dx()), int32(img.Bounds().Dy()),
 		0, gl.RGBA, gl.UNSIGNED_BYTE, unsafe.Pointer(&img.Pix[0]))
 
+	// Generate mipmaps for smooth rendering at distance
+	gl.GenerateMipmap(gl.TEXTURE_2D)
+
+	// Use trilinear filtering (LINEAR between mipmap levels) for smooth appearance
+	// This matches roBrowser and korangar approach
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR)
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT)
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT)
-	gl.GenerateMipmap(gl.TEXTURE_2D)
+
+	// Enable anisotropic filtering for better quality at oblique angles (8x)
+	gl.TexParameterf(gl.TEXTURE_2D, gl.TEXTURE_MAX_ANISOTROPY, 8.0)
 
 	return texID
 }

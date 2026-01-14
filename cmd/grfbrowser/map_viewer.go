@@ -12,6 +12,34 @@ import (
 	"github.com/Faultbox/midgard-ro/pkg/math"
 )
 
+// MapDiagnostics tracks loading statistics for debugging.
+type MapDiagnostics struct {
+	// RSW model stats
+	TotalModelsInRSW   int
+	ModelsSkippedLimit int
+	ModelsLoadFailed   int
+	ModelsParseError   int
+	ModelsNoNodes      int
+	ModelsLoaded       int
+
+	// RSM face stats
+	TotalFaces    int
+	TwoSidedFaces int
+	TotalVertices int
+	TotalNodes    int
+
+	// Texture stats
+	TexturesLoaded  int
+	TexturesMissing int
+	MissingTextures []string
+
+	// Unique RSM files
+	UniqueRSMFiles int
+
+	// Failure details
+	FailedModels []string
+}
+
 // MapModel represents a placed RSM model in the map.
 type MapModel struct {
 	vao        uint32
@@ -45,13 +73,15 @@ type MapViewer struct {
 	height       int32
 
 	// Terrain shader
-	terrainProgram uint32
-	locViewProj    int32
-	locLightDir    int32
-	locAmbient     int32
-	locDiffuse     int32
-	locTexture     int32
-	locLightmap    int32
+	terrainProgram  uint32
+	locViewProj     int32
+	locLightDir     int32
+	locAmbient      int32
+	locDiffuse      int32
+	locTexture      int32
+	locLightmap     int32
+	locBrightness   int32
+	locLightOpacity int32
 
 	// Model shader
 	modelProgram     uint32
@@ -75,7 +105,11 @@ type MapViewer struct {
 	tilesPerRow    int32 // Number of lightmap tiles per row in atlas
 
 	// Placed models
-	models []*MapModel
+	models    []*MapModel
+	MaxModels int // Maximum models to load (0 = unlimited)
+
+	// Diagnostics
+	Diagnostics MapDiagnostics
 
 	// Camera - Orbit mode
 	rotationX float32
@@ -98,6 +132,8 @@ type MapViewer struct {
 	lightDir     [3]float32 // Calculated from longitude/latitude
 	ambientColor [3]float32 // From RSW.Light.Ambient
 	diffuseColor [3]float32 // From RSW.Light.Diffuse
+	lightOpacity float32    // Shadow opacity from RSW (affects ambient strength)
+	Brightness   float32    // Terrain brightness multiplier (default 1.3)
 
 	// Map bounds
 	minBounds [3]float32
@@ -186,26 +222,35 @@ uniform sampler2D uLightmap;
 uniform vec3 uLightDir;
 uniform vec3 uAmbient;
 uniform vec3 uDiffuse;
+uniform float uBrightness;
+uniform float uLightOpacity;
 
 out vec4 FragColor;
 
 void main() {
     vec4 texColor = texture(uTexture, vTexCoord);
-    vec3 lightmapColor = texture(uLightmap, vLightmapUV).rgb;
 
-    // Proper lighting calculation using RSW data
+    // Lightmap: RGB = color tint, A = shadow intensity (0=shadow, 1=lit)
+    vec4 lightmap = texture(uLightmap, vLightmapUV);
+    float shadowIntensity = lightmap.a;  // 0.0 = full shadow, 1.0 = fully lit
+    vec3 colorTint = lightmap.rgb;  // Color tint (0-255 normalized by GPU)
+
     // Directional light component (sun)
     vec3 normal = normalize(vNormal);
     vec3 lightDir = normalize(uLightDir);
     float NdotL = max(dot(normal, lightDir), 0.0);
     vec3 directional = uDiffuse * NdotL;
 
-    // Combine ambient + directional lighting
-    vec3 lighting = uAmbient + directional;
+    // roBrowser lighting formula:
+    // Ambient is scaled by opacity (lower opacity = darker ambient = more visible shadows)
+    vec3 ambient = uAmbient * uLightOpacity;
 
-    // Apply lightmap (pre-baked shadows and color from point lights)
-    // Boost lightmap significantly - RO terrain should be well-lit
-    vec3 adjustedLightmap = lightmapColor * 0.3 + vec3(0.7);
+    // Combine ambient + directional, modulated by lightmap shadow
+    // LightColor = (Ambient + Diffuse) * lightmap.a
+    vec3 lighting = (ambient + directional) * shadowIntensity;
+
+    // Clamp lighting to [0, 1] range (prevents overbright)
+    lighting = clamp(lighting, vec3(0.0), vec3(1.0));
 
     // Ensure vertex color doesn't cause black (default to white if black)
     vec3 vertColor = vColor.rgb;
@@ -213,9 +258,9 @@ void main() {
         vertColor = vec3(1.0);
     }
 
-    // Combine: texture * dynamic lighting * baked lightmap * vertex color
-    // Boost brightness for well-lit terrain like RO
-    vec3 finalColor = texColor.rgb * lighting * adjustedLightmap * vertColor * 1.5;
+    // Final color: (texture * lighting * vertColor * brightness) + colorTint
+    // roBrowser formula: texture * LightColor + ColorMap
+    vec3 finalColor = texColor.rgb * lighting * vertColor * uBrightness + colorTint;
 
     FragColor = vec4(finalColor, texColor.a * vColor.a);
 }
@@ -373,10 +418,13 @@ func NewMapViewer(width, height int32) (*MapViewer, error) {
 		rotationY:      0.0,
 		distance:       500.0,
 		MoveSpeed:      5.0,
+		MaxModels:      1500, // Default model limit
+		Brightness:     1.3,  // Default terrain brightness multiplier
 		// Default lighting (will be overwritten by RSW data)
 		lightDir:     [3]float32{0.5, 0.866, 0.0}, // 60 degrees elevation
 		ambientColor: [3]float32{0.3, 0.3, 0.3},
 		diffuseColor: [3]float32{1.0, 1.0, 1.0},
+		lightOpacity: 1.0, // Default shadow opacity
 	}
 
 	if err := mv.createFramebuffer(); err != nil {
@@ -485,6 +533,8 @@ func (mv *MapViewer) createTerrainShader() error {
 	mv.locDiffuse = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uDiffuse\x00"))
 	mv.locTexture = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uTexture\x00"))
 	mv.locLightmap = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uLightmap\x00"))
+	mv.locBrightness = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uBrightness\x00"))
+	mv.locLightOpacity = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uLightOpacity\x00"))
 
 	return nil
 }
@@ -694,6 +744,12 @@ func (mv *MapViewer) LoadMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(
 		mv.ambientColor = rsw.Light.Ambient
 		mv.diffuseColor = rsw.Light.Diffuse
 
+		// Shadow opacity from RSW (affects how strong ambient is relative to shadows)
+		mv.lightOpacity = rsw.Light.Opacity
+		if mv.lightOpacity <= 0 {
+			mv.lightOpacity = 1.0 // Default if not set
+		}
+
 		// Ensure minimum ambient to prevent totally dark scenes
 		// Reference implementations typically boost ambient
 		minAmbient := float32(0.3)
@@ -814,11 +870,22 @@ var DebugModelPositioning = false
 
 // loadModels loads RSM models from RSW object list.
 func (mv *MapViewer) loadModels(rsw *formats.RSW, texLoader func(string) ([]byte, error)) {
-	models := rsw.GetModels()
+	allModels := rsw.GetModels()
+
+	// Reset diagnostics
+	mv.Diagnostics = MapDiagnostics{
+		TotalModelsInRSW: len(allModels),
+	}
 
 	// Limit number of models to avoid performance issues
-	maxModels := 500
+	// Use configured MaxModels, default to 1500 if not set
+	maxModels := mv.MaxModels
+	if maxModels <= 0 {
+		maxModels = 1500 // Default limit
+	}
+	models := allModels
 	if len(models) > maxModels {
+		mv.Diagnostics.ModelsSkippedLimit = len(models) - maxModels
 		models = models[:maxModels]
 	}
 
@@ -836,10 +903,14 @@ func (mv *MapViewer) loadModels(rsw *formats.RSW, texLoader func(string) ([]byte
 		if !ok {
 			data, err := texLoader(rsmPath)
 			if err != nil {
+				mv.Diagnostics.ModelsLoadFailed++
+				mv.Diagnostics.FailedModels = append(mv.Diagnostics.FailedModels, modelRef.ModelName+" (load: "+err.Error()+")")
 				continue
 			}
 			rsm, err = formats.ParseRSM(data)
 			if err != nil {
+				mv.Diagnostics.ModelsParseError++
+				mv.Diagnostics.FailedModels = append(mv.Diagnostics.FailedModels, modelRef.ModelName+" (parse: "+err.Error()+")")
 				continue
 			}
 			rsmCache[rsmPath] = rsm
@@ -849,8 +920,13 @@ func (mv *MapViewer) loadModels(rsw *formats.RSW, texLoader func(string) ([]byte
 		mapModel := mv.buildMapModel(rsm, modelRef, texLoader)
 		if mapModel != nil {
 			mv.models = append(mv.models, mapModel)
+			mv.Diagnostics.ModelsLoaded++
+		} else {
+			mv.Diagnostics.ModelsNoNodes++
 		}
 	}
+
+	mv.Diagnostics.UniqueRSMFiles = len(rsmCache)
 }
 
 // buildMapModel creates a MapModel from RSM data with world transform.
@@ -858,6 +934,9 @@ func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texL
 	if len(rsm.Nodes) == 0 {
 		return nil
 	}
+
+	// Track nodes
+	mv.Diagnostics.TotalNodes += len(rsm.Nodes)
 
 	// Build mesh from all RSM nodes
 	var vertices []modelVertex
@@ -871,14 +950,28 @@ func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texL
 		data, err := texLoader(texPath)
 		if err != nil {
 			modelTextures[i] = mv.fallbackTex
+			mv.Diagnostics.TexturesMissing++
+			// Only add unique missing textures
+			found := false
+			for _, t := range mv.Diagnostics.MissingTextures {
+				if t == texName {
+					found = true
+					break
+				}
+			}
+			if !found {
+				mv.Diagnostics.MissingTextures = append(mv.Diagnostics.MissingTextures, texName)
+			}
 			continue
 		}
 		img, err := decodeModelTexture(data, texPath, true) // Use magenta key
 		if err != nil {
 			modelTextures[i] = mv.fallbackTex
+			mv.Diagnostics.TexturesMissing++
 			continue
 		}
 		modelTextures[i] = uploadModelTexture(img)
+		mv.Diagnostics.TexturesLoaded++
 	}
 
 	// Track bounding box for centering
@@ -895,6 +988,12 @@ func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texL
 
 		// Process faces
 		for _, face := range node.Faces {
+			// Track face stats
+			mv.Diagnostics.TotalFaces++
+			if face.TwoSide != 0 {
+				mv.Diagnostics.TwoSidedFaces++
+			}
+
 			// Get face normal
 			normal := [3]float32{0, 1, 0}
 			if len(face.VertexIDs) >= 3 && int(face.VertexIDs[0]) < len(node.Vertices) &&
@@ -969,6 +1068,9 @@ func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texL
 		_ = baseIdx // Silence unused warning
 	}
 
+	// Track total vertices
+	mv.Diagnostics.TotalVertices += len(vertices)
+
 	if len(vertices) == 0 {
 		return nil
 	}
@@ -1012,6 +1114,9 @@ func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texL
 		})
 		indices = append(indices, idxs...)
 	}
+
+	// Smooth normals for models (reduces faceted appearance)
+	smoothModelNormals(vertices)
 
 	// Create GPU resources
 	model := &MapModel{
@@ -1136,29 +1241,34 @@ func (mv *MapViewer) buildLightmapAtlas(gnd *formats.GND) {
 	}
 
 	atlasSize := tilesPerRow * lmWidth
-	// Round up to power of 2
-	for p := 64; p < atlasSize; p *= 2 {
-		atlasSize = p * 2
+	// Round up to next power of 2
+	pow2 := 64
+	for pow2 < atlasSize {
+		pow2 *= 2
 	}
-	if atlasSize < 64 {
-		atlasSize = 64
-	}
-	if atlasSize > 2048 {
-		atlasSize = 2048
+	atlasSize = pow2
+	if atlasSize > 4096 {
+		atlasSize = 4096
 	}
 
 	mv.atlasSize = int32(atlasSize)
 	mv.tilesPerRow = int32(atlasSize / lmWidth)
 
-	// Create atlas texture data (RGB)
-	atlasData := make([]uint8, atlasSize*atlasSize*3)
+	// Create RGBA atlas (4 bytes per pixel)
+	atlasData := make([]byte, atlasSize*atlasSize*4)
 
-	// Fill with white default
-	for i := range atlasData {
-		atlasData[i] = 255
+	// Fill with default (white color, full brightness)
+	for i := 0; i < len(atlasData); i += 4 {
+		atlasData[i] = 255   // R
+		atlasData[i+1] = 255 // G
+		atlasData[i+2] = 255 // B
+		atlasData[i+3] = 255 // A (brightness/shadow)
 	}
 
 	// Copy each lightmap into the atlas
+	// GND lightmap format:
+	// - Brightness: shadow/intensity (0=dark shadow, 255=fully lit)
+	// - ColorRGB: color tint to add
 	for i, lm := range gnd.Lightmaps {
 		tileX := i % int(mv.tilesPerRow)
 		tileY := i / int(mv.tilesPerRow)
@@ -1166,7 +1276,7 @@ func (mv *MapViewer) buildLightmapAtlas(gnd *formats.GND) {
 		baseX := tileX * lmWidth
 		baseY := tileY * lmHeight
 
-		// Copy lightmap pixels
+		// Copy lightmap pixels directly (no Y flip - testing)
 		for y := 0; y < lmHeight; y++ {
 			for x := 0; x < lmWidth; x++ {
 				srcIdx := y*lmWidth + x
@@ -1177,35 +1287,39 @@ func (mv *MapViewer) buildLightmapAtlas(gnd *formats.GND) {
 					continue
 				}
 
-				dstIdx := (dstY*atlasSize + dstX) * 3
+				dstIdx := (dstY*atlasSize + dstX) * 4
 
-				// Combine brightness with color
-				brightness := float32(1.0)
+				// Get brightness (shadow intensity) for alpha channel
+				var brightness uint8 = 255
 				if srcIdx < len(lm.Brightness) {
-					brightness = float32(lm.Brightness[srcIdx]) / 255.0
+					brightness = lm.Brightness[srcIdx]
 				}
 
-				// Get RGB color
-				var r, g, b uint8 = 255, 255, 255
+				// Get RGB color tint
+				var r, g, b uint8 = 0, 0, 0
 				if srcIdx*3+2 < len(lm.ColorRGB) {
 					r = lm.ColorRGB[srcIdx*3]
 					g = lm.ColorRGB[srcIdx*3+1]
 					b = lm.ColorRGB[srcIdx*3+2]
 				}
 
-				// Apply brightness to color
-				atlasData[dstIdx] = uint8(float32(r) * brightness)
-				atlasData[dstIdx+1] = uint8(float32(g) * brightness)
-				atlasData[dstIdx+2] = uint8(float32(b) * brightness)
+				// Store: RGB = color tint, A = shadow intensity
+				atlasData[dstIdx] = r
+				atlasData[dstIdx+1] = g
+				atlasData[dstIdx+2] = b
+				atlasData[dstIdx+3] = brightness
 			}
 		}
 	}
 
-	// Upload atlas to GPU
+	// Upload RGBA atlas to GPU
 	gl.GenTextures(1, &mv.lightmapAtlas)
 	gl.BindTexture(gl.TEXTURE_2D, mv.lightmapAtlas)
-	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGB, int32(atlasSize), int32(atlasSize), 0, gl.RGB, gl.UNSIGNED_BYTE, gl.Ptr(atlasData))
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA, int32(atlasSize), int32(atlasSize), 0, gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(atlasData))
+
+	// Generate mipmaps for smooth lightmap at distance
+	gl.GenerateMipmap(gl.TEXTURE_2D)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR)
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
@@ -1213,6 +1327,10 @@ func (mv *MapViewer) buildLightmapAtlas(gnd *formats.GND) {
 
 // calculateLightmapUV returns UV coordinates for a lightmap in the atlas.
 // cornerIdx: 0=BL, 1=BR, 2=TL, 3=TR
+//
+// Uses 0.125/0.875 offsets (1/8 and 7/8 of tile size) to center UV sampling
+// within the inner 75% of each lightmap tile, avoiding boundary bleeding
+// that causes the chess board pattern. This matches roBrowser's approach.
 func (mv *MapViewer) calculateLightmapUV(lightmapID int16, cornerIdx int, gnd *formats.GND) [2]float32 {
 	if lightmapID < 0 || mv.tilesPerRow == 0 {
 		return [2]float32{0.5, 0.5} // Center of first tile as fallback
@@ -1231,7 +1349,8 @@ func (mv *MapViewer) calculateLightmapUV(lightmapID int16, cornerIdx int, gnd *f
 	tileX := int(lightmapID) % int(mv.tilesPerRow)
 	tileY := int(lightmapID) / int(mv.tilesPerRow)
 
-	// Calculate UV with small inset to avoid edge bleeding
+	// Calculate UV with 1/8 inset on each side to avoid edge bleeding
+	// roBrowser uses 0.125 (1/8) and 0.875 (7/8) within each tile
 	atlasSize := float32(mv.atlasSize)
 	tileW := float32(lmWidth) / atlasSize
 	tileH := float32(lmHeight) / atlasSize
@@ -1239,22 +1358,106 @@ func (mv *MapViewer) calculateLightmapUV(lightmapID int16, cornerIdx int, gnd *f
 	baseU := float32(tileX*lmWidth) / atlasSize
 	baseV := float32(tileY*lmHeight) / atlasSize
 
-	// Small inset (half pixel)
-	inset := 0.5 / atlasSize
+	// Use full tile range with half-pixel inset to avoid edge bleeding
+	halfPixelU := 0.5 / float32(mv.atlasSize)
+	halfPixelV := 0.5 / float32(mv.atlasSize)
+	innerU1 := baseU + halfPixelU
+	innerU2 := baseU + tileW - halfPixelU
+	innerV1 := baseV + halfPixelV
+	innerV2 := baseV + tileH - halfPixelV
 
-	// Corner UVs within the tile (with inset)
+	// Corner UVs within the tile
 	// GND UV order: [0]=BL, [1]=BR, [2]=TL, [3]=TR
 	switch cornerIdx {
 	case 0: // Bottom-left
-		return [2]float32{baseU + inset, baseV + tileH - inset}
+		return [2]float32{innerU1, innerV2}
 	case 1: // Bottom-right
-		return [2]float32{baseU + tileW - inset, baseV + tileH - inset}
+		return [2]float32{innerU2, innerV2}
 	case 2: // Top-left
-		return [2]float32{baseU + inset, baseV + inset}
+		return [2]float32{innerU1, innerV1}
 	case 3: // Top-right
-		return [2]float32{baseU + tileW - inset, baseV + inset}
+		return [2]float32{innerU2, innerV1}
 	}
 	return [2]float32{0.5, 0.5}
+}
+
+// smoothModelNormals averages normals at shared vertex positions for models.
+// This reduces faceted appearance on models (buildings, trees, etc).
+func smoothModelNormals(vertices []modelVertex) {
+	const epsilon float32 = 0.001
+
+	// Group vertices by quantized position for O(n) lookup
+	posMap := make(map[[3]int32][]int)
+	for i := range vertices {
+		key := [3]int32{
+			int32(vertices[i].Position[0] / epsilon),
+			int32(vertices[i].Position[1] / epsilon),
+			int32(vertices[i].Position[2] / epsilon),
+		}
+		posMap[key] = append(posMap[key], i)
+	}
+
+	// Average normals for vertices at same position
+	for _, indices := range posMap {
+		if len(indices) < 2 {
+			continue
+		}
+
+		var sum [3]float32
+		for _, idx := range indices {
+			sum[0] += vertices[idx].Normal[0]
+			sum[1] += vertices[idx].Normal[1]
+			sum[2] += vertices[idx].Normal[2]
+		}
+
+		avg := normalize(sum)
+
+		for _, idx := range indices {
+			vertices[idx].Normal = avg
+		}
+	}
+}
+
+// smoothTerrainNormals averages normals at shared vertex positions.
+// This removes the visible "grid" lighting pattern between tiles by
+// making lighting transition smoothly across tile boundaries.
+func smoothTerrainNormals(vertices []terrainVertex) {
+	const epsilon float32 = 0.001
+
+	// Group vertices by quantized position for O(n) lookup
+	posMap := make(map[[3]int32][]int)
+	for i := range vertices {
+		// Quantize position to grid for fast grouping
+		key := [3]int32{
+			int32(vertices[i].Position[0] / epsilon),
+			int32(vertices[i].Position[1] / epsilon),
+			int32(vertices[i].Position[2] / epsilon),
+		}
+		posMap[key] = append(posMap[key], i)
+	}
+
+	// Average normals for vertices at same position
+	for _, indices := range posMap {
+		if len(indices) < 2 {
+			continue // No smoothing needed for isolated vertices
+		}
+
+		// Sum all normals at this position
+		var sum [3]float32
+		for _, idx := range indices {
+			sum[0] += vertices[idx].Normal[0]
+			sum[1] += vertices[idx].Normal[1]
+			sum[2] += vertices[idx].Normal[2]
+		}
+
+		// Normalize the average
+		avg := normalize(sum)
+
+		// Apply averaged normal to all vertices at this position
+		for _, idx := range indices {
+			vertices[idx].Normal = avg
+		}
+	}
 }
 
 // buildTerrainMesh generates the terrain mesh from GND data.
@@ -1480,6 +1683,9 @@ func (mv *MapViewer) buildTerrainMesh(gnd *formats.GND) ([]terrainVertex, []uint
 		indices = append(indices, texIndices...)
 	}
 
+	// Smooth normals to eliminate hard edges between tiles
+	smoothTerrainNormals(vertices)
+
 	return vertices, indices, groups
 }
 
@@ -1605,6 +1811,8 @@ func (mv *MapViewer) Render() uint32 {
 	gl.Uniform3f(mv.locDiffuse, mv.diffuseColor[0], mv.diffuseColor[1], mv.diffuseColor[2])
 	gl.Uniform1i(mv.locTexture, 0)
 	gl.Uniform1i(mv.locLightmap, 1)
+	gl.Uniform1f(mv.locBrightness, mv.Brightness)
+	gl.Uniform1f(mv.locLightOpacity, mv.lightOpacity)
 
 	// Bind lightmap atlas to texture unit 1
 	gl.ActiveTexture(gl.TEXTURE1)
@@ -2093,4 +2301,59 @@ func calculateSunDirection(longitude, latitude int32) [3]float32 {
 	z := float32(gomath.Cos(latRad) * gomath.Cos(lonRad))
 
 	return [3]float32{x, y, z}
+}
+
+// PrintDiagnostics outputs map loading diagnostics to console.
+func (mv *MapViewer) PrintDiagnostics() {
+	d := mv.Diagnostics
+	fmt.Println("\n=== Map Loading Diagnostics ===")
+	fmt.Println("Models:")
+	fmt.Printf("  Total in RSW:    %d\n", d.TotalModelsInRSW)
+	fmt.Printf("  Skipped (limit): %d\n", d.ModelsSkippedLimit)
+	fmt.Printf("  Load failed:     %d\n", d.ModelsLoadFailed)
+	fmt.Printf("  Parse error:     %d\n", d.ModelsParseError)
+	fmt.Printf("  No nodes:        %d\n", d.ModelsNoNodes)
+	fmt.Printf("  Loaded OK:       %d\n", d.ModelsLoaded)
+	fmt.Printf("  Unique RSM files:%d\n", d.UniqueRSMFiles)
+
+	fmt.Println("\nGeometry:")
+	fmt.Printf("  Total nodes:     %d\n", d.TotalNodes)
+	fmt.Printf("  Total faces:     %d\n", d.TotalFaces)
+	fmt.Printf("  Two-sided faces: %d (%.1f%%)\n", d.TwoSidedFaces, float64(d.TwoSidedFaces)*100/float64(max(d.TotalFaces, 1)))
+	fmt.Printf("  Total vertices:  %d\n", d.TotalVertices)
+
+	fmt.Println("\nTextures:")
+	fmt.Printf("  Loaded:          %d\n", d.TexturesLoaded)
+	fmt.Printf("  Missing:         %d\n", d.TexturesMissing)
+
+	if len(d.MissingTextures) > 0 {
+		fmt.Println("\nMissing textures (first 10):")
+		for i, tex := range d.MissingTextures {
+			if i >= 10 {
+				fmt.Printf("  ... and %d more\n", len(d.MissingTextures)-10)
+				break
+			}
+			fmt.Printf("  - %s\n", tex)
+		}
+	}
+
+	if len(d.FailedModels) > 0 {
+		fmt.Println("\nFailed models (first 10):")
+		for i, model := range d.FailedModels {
+			if i >= 10 {
+				fmt.Printf("  ... and %d more\n", len(d.FailedModels)-10)
+				break
+			}
+			fmt.Printf("  - %s\n", model)
+		}
+	}
+
+	fmt.Println("\nLighting:")
+	fmt.Printf("  Light Dir:       (%.2f, %.2f, %.2f)\n", mv.lightDir[0], mv.lightDir[1], mv.lightDir[2])
+	fmt.Printf("  Ambient:         (%.2f, %.2f, %.2f)\n", mv.ambientColor[0], mv.ambientColor[1], mv.ambientColor[2])
+	fmt.Printf("  Diffuse:         (%.2f, %.2f, %.2f)\n", mv.diffuseColor[0], mv.diffuseColor[1], mv.diffuseColor[2])
+	fmt.Printf("  Light Opacity:   %.2f\n", mv.lightOpacity)
+	fmt.Printf("  Brightness:      %.2f\n", mv.Brightness)
+
+	fmt.Println("================================")
 }
