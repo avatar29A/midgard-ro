@@ -147,8 +147,8 @@ type App struct {
 	terrainBrightness float32    // Terrain brightness multiplier (default 1.0)
 
 	// Scene debug UI state
-	modelFilterText    string // Filter text for model list
-	showPropertiesPanel bool  // Whether to show properties panel
+	modelFilterText     string // Filter text for model list
+	showPropertiesPanel bool   // Whether to show properties panel
 }
 
 var (
@@ -530,7 +530,7 @@ func (app *App) render() {
 
 	// Layout dimensions
 	leftPanelWidth := float32(350)
-	rightPanelWidth := float32(200)     // Actions panel for animations / map controls
+	rightPanelWidth := float32(200)      // Actions panel for animations / map controls
 	propertiesPanelWidth := float32(180) // Properties panel for selected model
 	statusBarHeight := float32(30)
 	contentHeight := workSize.Y - statusBarHeight
@@ -888,9 +888,22 @@ func (app *App) renderModelPropertiesPanel() {
 	imgui.Text("Properties")
 	imgui.Separator()
 
-	// Model name
+	// Model name (convert from EUC-KR to UTF-8 for Korean display)
+	displayName := euckrToUTF8(model.modelName)
+	fullPath := "data/model/" + model.modelName
+
 	imgui.Text("Model:")
-	imgui.TextWrapped(model.modelName)
+	imgui.TextWrapped(displayName)
+
+	// Copy and Viewer buttons
+	if imgui.SmallButton("Copy") {
+		imgui.SetClipboardText(fullPath)
+	}
+	imgui.SameLine()
+	if imgui.SmallButton("Viewer") {
+		// Load this model in the model viewer
+		app.openModelInViewer(fullPath)
+	}
 
 	imgui.Spacing()
 
@@ -961,8 +974,93 @@ func (app *App) renderModelPropertiesPanel() {
 	imgui.Spacing()
 	imgui.Separator()
 
+	// RSM debug info
+	imgui.Text("RSM Info:")
+	imgui.Text(fmt.Sprintf("  Version: %s", model.GetRSMVersion()))
+	imgui.Text(fmt.Sprintf("  Nodes: %d", model.GetNodeCount()))
+
+	// Show node details in a collapsible tree
+	if model.GetNodeCount() > 0 && imgui.TreeNodeExStrV("Node Details", 0) {
+		for i, node := range model.GetNodes() {
+			nodeLabel := fmt.Sprintf("Node %d: %s", i, node.Name)
+			if imgui.TreeNodeExStrV(nodeLabel, 0) {
+				if node.Parent != "" {
+					imgui.Text(fmt.Sprintf("Parent: %s", node.Parent))
+				} else {
+					imgui.TextColored(imgui.NewVec4(0.5, 1, 0.5, 1), "Root node")
+				}
+				imgui.Text(fmt.Sprintf("Offset: (%.2f, %.2f, %.2f)",
+					node.Offset[0], node.Offset[1], node.Offset[2]))
+				imgui.Text(fmt.Sprintf("Position: (%.2f, %.2f, %.2f)",
+					node.Position[0], node.Position[1], node.Position[2]))
+				imgui.Text(fmt.Sprintf("Scale: (%.3f, %.3f, %.3f)",
+					node.Scale[0], node.Scale[1], node.Scale[2]))
+				if node.RotAngle != 0 {
+					imgui.TextColored(imgui.NewVec4(1, 1, 0.5, 1),
+						fmt.Sprintf("RotAngle: %.3f", node.RotAngle))
+					imgui.Text(fmt.Sprintf("RotAxis: (%.3f, %.3f, %.3f)",
+						node.RotAxis[0], node.RotAxis[1], node.RotAxis[2]))
+				}
+				// Show 3x3 matrix
+				if imgui.TreeNodeExStrV("Matrix 3x3", 0) {
+					imgui.Text(fmt.Sprintf("[%.3f %.3f %.3f]",
+						node.Matrix[0], node.Matrix[3], node.Matrix[6]))
+					imgui.Text(fmt.Sprintf("[%.3f %.3f %.3f]",
+						node.Matrix[1], node.Matrix[4], node.Matrix[7]))
+					imgui.Text(fmt.Sprintf("[%.3f %.3f %.3f]",
+						node.Matrix[2], node.Matrix[5], node.Matrix[8]))
+					imgui.TreePop()
+				}
+				// Animation flags
+				if node.HasRotKeys || node.HasPosKeys || node.HasScaleKeys {
+					imgui.TextColored(imgui.NewVec4(0.5, 0.8, 1, 1), "Animated:")
+					if node.HasRotKeys {
+						imgui.SameLine()
+						imgui.Text(fmt.Sprintf("Rot(%d)", node.RotKeyCount))
+					}
+					if node.HasPosKeys {
+						imgui.SameLine()
+						imgui.Text("Pos")
+					}
+					if node.HasScaleKeys {
+						imgui.SameLine()
+						imgui.Text("Scale")
+					}
+					// Show first rotation quaternion if present
+					if node.HasRotKeys {
+						q := node.FirstRotQuat
+						imgui.Text(fmt.Sprintf("Quat[0]: (%.3f, %.3f, %.3f, %.3f)",
+							q[0], q[1], q[2], q[3]))
+					}
+				}
+				imgui.TreePop()
+			}
+		}
+		imgui.TreePop()
+	}
+
+	imgui.Spacing()
+	imgui.Separator()
+
 	// Focus camera button
 	if imgui.ButtonV("Focus Camera", imgui.NewVec2(-1, 0)) {
 		app.mapViewer.FocusOnModel(app.mapViewer.SelectedIdx)
 	}
+}
+
+// openModelInViewer switches from map view to model preview for the given path.
+func (app *App) openModelInViewer(path string) {
+	// Exit 3D map view mode
+	app.map3DViewMode = false
+	app.showPropertiesPanel = false
+
+	// Set selected path (both display and archive path)
+	app.selectedPath = path
+	app.selectedOriginalPath = path
+
+	// Clear preview path to force reload
+	app.previewPath = ""
+
+	// Load the RSM preview
+	app.loadRSMPreview(path)
 }

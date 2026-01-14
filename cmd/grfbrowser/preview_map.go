@@ -789,6 +789,19 @@ func (app *App) renderMapControlsPanel() {
 		app.initMap3DView()
 	}
 
+	// Debug: Force all two-sided
+	forceTwo := app.mapViewer.ForceAllTwoSided
+	if imgui.Checkbox("Force Two-Sided", &forceTwo) {
+		app.mapViewer.ForceAllTwoSided = forceTwo
+		// Need to reload to apply
+		app.initMap3DView()
+	}
+	imgui.SameLineV(0, 5)
+	imgui.TextDisabled("(?)")
+	if imgui.IsItemHovered() {
+		imgui.SetTooltip("Render all faces from both sides (reloads map)")
+	}
+
 	imgui.Spacing()
 	imgui.Spacing()
 
