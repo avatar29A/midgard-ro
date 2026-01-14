@@ -24,8 +24,8 @@ type MapModel struct {
 	rotation   [3]float32
 	scale      [3]float32
 	// Debug info
-	modelName  string
-	bbox       [6]float32 // minX, minY, minZ, maxX, maxY, maxZ (after centering)
+	modelName string
+	bbox      [6]float32 // minX, minY, minZ, maxX, maxY, maxZ (after centering)
 }
 
 // modelTexGroup groups faces by texture for rendering.
@@ -117,17 +117,17 @@ type MapViewer struct {
 	waterProgram   uint32
 	waterVAO       uint32
 	waterVBO       uint32
-	waterLevel     float32   // From RSW.Water.Level
-	hasWater       bool      // Whether map has water
+	waterLevel     float32 // From RSW.Water.Level
+	hasWater       bool    // Whether map has water
 	locWaterMVP    int32
 	locWaterColor  int32
 	locWaterTime   int32
 	locWaterTex    int32
-	waterTime      float32   // Animation time
-	waterTextures  []uint32  // Animated water texture frames
-	waterAnimSpeed float32   // Animation speed from RSW
-	waterFrame     int       // Current animation frame
-	useWaterTex    bool      // Whether we have loaded water textures
+	waterTime      float32  // Animation time
+	waterTextures  []uint32 // Animated water texture frames
+	waterAnimSpeed float32  // Animation speed from RSW
+	waterFrame     int      // Current animation frame
+	useWaterTex    bool     // Whether we have loaded water textures
 
 	// Fog settings (Stage 4 - ADR-014)
 	fogEnabled bool
@@ -2027,35 +2027,6 @@ func (mv *MapViewer) buildTerrainHeightMap(gnd *formats.GND) {
 			}
 		}
 	}
-}
-
-// getTerrainHeight returns the terrain height at a world position.
-// World position is in GND coordinates (after adding map center offset).
-func (mv *MapViewer) getTerrainHeight(worldX, worldZ float32) float32 {
-	if mv.terrainAltitudes == nil || mv.terrainTileZoom == 0 {
-		return 0
-	}
-
-	// Convert world position to tile coordinates
-	tileX := int(worldX / mv.terrainTileZoom)
-	tileZ := int(worldZ / mv.terrainTileZoom)
-
-	// Clamp to valid range
-	if tileX < 0 {
-		tileX = 0
-	}
-	if tileX >= mv.terrainTilesX {
-		tileX = mv.terrainTilesX - 1
-	}
-	if tileZ < 0 {
-		tileZ = 0
-	}
-	if tileZ >= mv.terrainTilesZ {
-		tileZ = mv.terrainTilesZ - 1
-	}
-
-	// Return negated altitude (GND altitude is positive for lower, we negate for Y-up)
-	return -mv.terrainAltitudes[tileX][tileZ]
 }
 
 // createWaterPlane creates a water surface plane at the specified height.
