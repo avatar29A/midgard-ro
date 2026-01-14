@@ -4,6 +4,7 @@ package main
 import (
 	"fmt"
 	gomath "math"
+	"sort"
 	"unsafe"
 
 	"github.com/go-gl/gl/v4.1-core/gl"
@@ -52,8 +53,21 @@ type MapModel struct {
 	rotation   [3]float32
 	scale      [3]float32
 	// Debug info
-	modelName string
-	bbox      [6]float32 // minX, minY, minZ, maxX, maxY, maxZ (after centering)
+	modelName  string
+	bbox       [6]float32 // minX, minY, minZ, maxX, maxY, maxZ (after centering)
+	instanceID int        // Unique instance ID for this model placement
+	// Visibility and selection
+	Visible    bool // Whether this instance is rendered
+	// Stats for debugging
+	totalFaces   int
+	twoSideFaces int
+}
+
+// ModelGroup represents a group of model instances sharing the same RSM.
+type ModelGroup struct {
+	RSMName     string // RSM filename (without path)
+	Instances   []int  // Indices into MapViewer.models
+	AllVisible  bool   // Quick toggle for all instances
 }
 
 // modelTexGroup groups faces by texture for rendering.
@@ -113,8 +127,11 @@ type MapViewer struct {
 	tilesPerRow    int32 // Number of lightmap tiles per row in atlas
 
 	// Placed models
-	models    []*MapModel
-	MaxModels int // Maximum models to load (0 = unlimited)
+	models       []*MapModel
+	ModelGroups  []ModelGroup // Models grouped by RSM name
+	MaxModels    int          // Maximum models to load (0 = unlimited)
+	SelectedIdx  int          // Currently selected model index (-1 = none)
+	ModelFilter  string       // Filter string for model names
 
 	// Diagnostics
 	Diagnostics MapDiagnostics
@@ -178,6 +195,18 @@ type MapViewer struct {
 	FogNear    float32
 	FogFar     float32
 	FogColor   [3]float32
+
+	// Selection bounding box rendering
+	bboxProgram  uint32
+	bboxVAO      uint32
+	bboxVBO      uint32
+	locBboxMVP   int32
+	locBboxColor int32
+
+	// Cached matrices for picking
+	lastViewProj math.Mat4
+	lastView     math.Mat4
+	lastProj     math.Mat4
 }
 
 // terrainVertex is the vertex format for terrain mesh.
@@ -443,6 +472,27 @@ void main() {
 }
 `
 
+// Bounding box shader - simple wireframe lines
+const bboxVertexShader = `#version 410 core
+layout (location = 0) in vec3 aPosition;
+
+uniform mat4 uMVP;
+
+void main() {
+    gl_Position = uMVP * vec4(aPosition, 1.0);
+}
+`
+
+const bboxFragmentShader = `#version 410 core
+uniform vec4 uColor;
+
+out vec4 FragColor;
+
+void main() {
+    FragColor = uColor;
+}
+`
+
 // NewMapViewer creates a new 3D map viewer.
 func NewMapViewer(width, height int32) (*MapViewer, error) {
 	mv := &MapViewer{
@@ -455,6 +505,7 @@ func NewMapViewer(width, height int32) (*MapViewer, error) {
 		MoveSpeed:      5.0,
 		MaxModels:      1500, // Default model limit
 		Brightness:     1.0,  // Default terrain brightness multiplier
+		SelectedIdx:    -1,   // No model selected initially
 		// Default lighting (will be overwritten by RSW data)
 		lightDir:     [3]float32{0.5, 0.866, 0.0}, // 60 degrees elevation
 		ambientColor: [3]float32{0.3, 0.3, 0.3},
@@ -472,6 +523,10 @@ func NewMapViewer(width, height int32) (*MapViewer, error) {
 
 	if err := mv.createModelShader(); err != nil {
 		return nil, fmt.Errorf("creating model shader: %w", err)
+	}
+
+	if err := mv.createBboxShader(); err != nil {
+		return nil, fmt.Errorf("creating bbox shader: %w", err)
 	}
 
 	mv.createFallbackTexture()
@@ -670,6 +725,81 @@ func (mv *MapViewer) createModelShader() error {
 	if err := mv.compileWaterShader(); err != nil {
 		return fmt.Errorf("water shader: %w", err)
 	}
+
+	return nil
+}
+
+// createBboxShader compiles the bounding box wireframe shader.
+func (mv *MapViewer) createBboxShader() error {
+	// Compile vertex shader
+	vertShader := gl.CreateShader(gl.VERTEX_SHADER)
+	csource, free := gl.Strs(bboxVertexShader + "\x00")
+	gl.ShaderSource(vertShader, 1, csource, nil)
+	free()
+	gl.CompileShader(vertShader)
+
+	var status int32
+	gl.GetShaderiv(vertShader, gl.COMPILE_STATUS, &status)
+	if status == gl.FALSE {
+		var logLen int32
+		gl.GetShaderiv(vertShader, gl.INFO_LOG_LENGTH, &logLen)
+		log := make([]byte, logLen)
+		gl.GetShaderInfoLog(vertShader, logLen, nil, &log[0])
+		return fmt.Errorf("bbox vertex shader: %s", string(log))
+	}
+
+	// Compile fragment shader
+	fragShader := gl.CreateShader(gl.FRAGMENT_SHADER)
+	csource, free = gl.Strs(bboxFragmentShader + "\x00")
+	gl.ShaderSource(fragShader, 1, csource, nil)
+	free()
+	gl.CompileShader(fragShader)
+
+	gl.GetShaderiv(fragShader, gl.COMPILE_STATUS, &status)
+	if status == gl.FALSE {
+		var logLen int32
+		gl.GetShaderiv(fragShader, gl.INFO_LOG_LENGTH, &logLen)
+		log := make([]byte, logLen)
+		gl.GetShaderInfoLog(fragShader, logLen, nil, &log[0])
+		return fmt.Errorf("bbox fragment shader: %s", string(log))
+	}
+
+	// Link program
+	mv.bboxProgram = gl.CreateProgram()
+	gl.AttachShader(mv.bboxProgram, vertShader)
+	gl.AttachShader(mv.bboxProgram, fragShader)
+	gl.LinkProgram(mv.bboxProgram)
+
+	gl.GetProgramiv(mv.bboxProgram, gl.LINK_STATUS, &status)
+	if status == gl.FALSE {
+		var logLen int32
+		gl.GetProgramiv(mv.bboxProgram, gl.INFO_LOG_LENGTH, &logLen)
+		log := make([]byte, logLen)
+		gl.GetProgramInfoLog(mv.bboxProgram, logLen, nil, &log[0])
+		return fmt.Errorf("bbox shader link: %s", string(log))
+	}
+
+	gl.DeleteShader(vertShader)
+	gl.DeleteShader(fragShader)
+
+	// Get uniform locations
+	mv.locBboxMVP = gl.GetUniformLocation(mv.bboxProgram, gl.Str("uMVP\x00"))
+	mv.locBboxColor = gl.GetUniformLocation(mv.bboxProgram, gl.Str("uColor\x00"))
+
+	// Create VAO/VBO for bounding box (12 lines = 24 vertices)
+	gl.GenVertexArrays(1, &mv.bboxVAO)
+	gl.GenBuffers(1, &mv.bboxVBO)
+
+	gl.BindVertexArray(mv.bboxVAO)
+	gl.BindBuffer(gl.ARRAY_BUFFER, mv.bboxVBO)
+	// Allocate space for 24 vertices (12 lines), will be updated per-frame
+	gl.BufferData(gl.ARRAY_BUFFER, 24*3*4, nil, gl.DYNAMIC_DRAW)
+
+	// Position attribute
+	gl.VertexAttribPointerWithOffset(0, 3, gl.FLOAT, false, 3*4, 0)
+	gl.EnableVertexAttribArray(0)
+
+	gl.BindVertexArray(0)
 
 	return nil
 }
@@ -986,6 +1116,7 @@ func (mv *MapViewer) loadModels(rsw *formats.RSW, texLoader func(string) ([]byte
 		// Build map model from RSM
 		mapModel := mv.buildMapModel(rsm, modelRef, texLoader)
 		if mapModel != nil {
+			mapModel.instanceID = len(mv.models)
 			mv.models = append(mv.models, mapModel)
 			mv.Diagnostics.ModelsLoaded++
 		} else {
@@ -994,6 +1125,123 @@ func (mv *MapViewer) loadModels(rsw *formats.RSW, texLoader func(string) ([]byte
 	}
 
 	mv.Diagnostics.UniqueRSMFiles = len(rsmCache)
+
+	// Build model groups for scene tree
+	mv.buildModelGroups()
+}
+
+// buildModelGroups creates groups of model instances by RSM name.
+func (mv *MapViewer) buildModelGroups() {
+	groupMap := make(map[string][]int)
+
+	for i, model := range mv.models {
+		if model == nil {
+			continue
+		}
+		groupMap[model.modelName] = append(groupMap[model.modelName], i)
+	}
+
+	// Convert to slice and sort by name
+	mv.ModelGroups = make([]ModelGroup, 0, len(groupMap))
+	for name, indices := range groupMap {
+		mv.ModelGroups = append(mv.ModelGroups, ModelGroup{
+			RSMName:    name,
+			Instances:  indices,
+			AllVisible: true,
+		})
+	}
+
+	// Sort groups alphabetically
+	sort.Slice(mv.ModelGroups, func(i, j int) bool {
+		return mv.ModelGroups[i].RSMName < mv.ModelGroups[j].RSMName
+	})
+}
+
+// SetGroupVisibility sets visibility for all instances in a model group.
+func (mv *MapViewer) SetGroupVisibility(groupIdx int, visible bool) {
+	if groupIdx < 0 || groupIdx >= len(mv.ModelGroups) {
+		return
+	}
+	mv.ModelGroups[groupIdx].AllVisible = visible
+	for _, modelIdx := range mv.ModelGroups[groupIdx].Instances {
+		if modelIdx >= 0 && modelIdx < len(mv.models) && mv.models[modelIdx] != nil {
+			mv.models[modelIdx].Visible = visible
+		}
+	}
+}
+
+// SetAllModelsVisible sets visibility for all models.
+func (mv *MapViewer) SetAllModelsVisible(visible bool) {
+	for i := range mv.ModelGroups {
+		mv.ModelGroups[i].AllVisible = visible
+	}
+	for _, model := range mv.models {
+		if model != nil {
+			model.Visible = visible
+		}
+	}
+}
+
+// GetModel returns a model by index, or nil if invalid.
+func (mv *MapViewer) GetModel(idx int) *MapModel {
+	if idx < 0 || idx >= len(mv.models) {
+		return nil
+	}
+	return mv.models[idx]
+}
+
+// GetVisibleCount returns the number of visible models.
+func (mv *MapViewer) GetVisibleCount() int {
+	count := 0
+	for _, model := range mv.models {
+		if model != nil && model.Visible {
+			count++
+		}
+	}
+	return count
+}
+
+// FocusOnModel moves the camera to focus on a specific model.
+func (mv *MapViewer) FocusOnModel(idx int) {
+	model := mv.GetModel(idx)
+	if model == nil {
+		return
+	}
+
+	// Calculate world position of model
+	offsetX := mv.mapWidth / 2
+	offsetZ := mv.mapHeight / 2
+	worldX := model.position[0] + offsetX
+	worldY := -model.position[1]
+	worldZ := model.position[2] + offsetZ
+
+	// Set camera center to model position
+	mv.centerX = worldX
+	mv.centerY = worldY
+	mv.centerZ = worldZ
+
+	// Set reasonable zoom distance based on model bounding box
+	bboxSize := gomath.Max(
+		float64(model.bbox[3]-model.bbox[0]),
+		gomath.Max(float64(model.bbox[4]-model.bbox[1]), float64(model.bbox[5]-model.bbox[2])),
+	)
+	mv.Distance = float32(gomath.Max(bboxSize*2, 50))
+}
+
+// HasNegativeScale returns true if the model has a negative scale determinant.
+func (m *MapModel) HasNegativeScale() bool {
+	return m.scale[0]*m.scale[1]*m.scale[2] < 0
+}
+
+// GetWorldPosition returns the world position of the model.
+func (mv *MapViewer) GetModelWorldPosition(idx int) (float32, float32, float32) {
+	model := mv.GetModel(idx)
+	if model == nil {
+		return 0, 0, 0
+	}
+	offsetX := mv.mapWidth / 2
+	offsetZ := mv.mapHeight / 2
+	return model.position[0] + offsetX, -model.position[1], model.position[2] + offsetZ
 }
 
 // buildMapModel creates a MapModel from RSM data with world transform.
@@ -1185,15 +1433,30 @@ func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texL
 	// Smooth normals for models (reduces faceted appearance)
 	smoothModelNormals(vertices)
 
+	// Count total and two-sided faces for this model
+	modelTotalFaces := 0
+	modelTwoSideFaces := 0
+	for i := range rsm.Nodes {
+		for _, face := range rsm.Nodes[i].Faces {
+			modelTotalFaces++
+			if face.TwoSide != 0 {
+				modelTwoSideFaces++
+			}
+		}
+	}
+
 	// Create GPU resources
 	model := &MapModel{
-		textures:  modelTextures,
-		texGroups: groups,
-		position:  ref.Position,
-		rotation:  ref.Rotation,
-		scale:     ref.Scale,
-		modelName: ref.ModelName,
-		bbox:      bboxAfter,
+		textures:     modelTextures,
+		texGroups:    groups,
+		position:     ref.Position,
+		rotation:     ref.Rotation,
+		scale:        ref.Scale,
+		modelName:    ref.ModelName,
+		bbox:         bboxAfter,
+		Visible:      true, // Visible by default
+		totalFaces:   modelTotalFaces,
+		twoSideFaces: modelTwoSideFaces,
 	}
 
 	// Upload mesh to GPU
@@ -1819,10 +2082,8 @@ func (mv *MapViewer) fitCamera() {
 		maxSize = sizeZ
 	}
 
-	mv.Distance = maxSize * 0.7
-	if mv.Distance < 100 {
-		mv.Distance = 100
-	}
+	// Default zoom distance
+	mv.Distance = 200
 
 	mv.rotationX = 0.6 // Look down at ~35 degrees
 	mv.rotationY = 0.0
@@ -1870,6 +2131,11 @@ func (mv *MapViewer) Render() uint32 {
 	}
 
 	viewProj := proj.Mul(view)
+
+	// Cache matrices for picking
+	mv.lastView = view
+	mv.lastProj = proj
+	mv.lastViewProj = viewProj
 
 	// Use terrain shader with RSW lighting data
 	gl.UseProgram(mv.terrainProgram)
@@ -1921,6 +2187,9 @@ func (mv *MapViewer) Render() uint32 {
 
 	// Render water (last, with transparency)
 	mv.renderWater(viewProj)
+
+	// Render selection bounding box (on top of everything)
+	mv.renderSelectionBbox(viewProj)
 
 	gl.BindFramebuffer(gl.FRAMEBUFFER, 0)
 
@@ -1982,6 +2251,254 @@ func (mv *MapViewer) renderWater(viewProj math.Mat4) {
 	gl.Disable(gl.BLEND)
 }
 
+// renderSelectionBbox draws a wireframe bounding box around the selected model.
+func (mv *MapViewer) renderSelectionBbox(viewProj math.Mat4) {
+	if mv.SelectedIdx < 0 || mv.bboxVAO == 0 {
+		return
+	}
+
+	model := mv.GetModel(mv.SelectedIdx)
+	if model == nil || !model.Visible {
+		return
+	}
+
+	// Calculate world position
+	offsetX := mv.mapWidth / 2
+	offsetZ := mv.mapHeight / 2
+	worldX := model.position[0] + offsetX
+	worldY := -model.position[1]
+	worldZ := model.position[2] + offsetZ
+
+	// Get model bounding box (local space, already centered)
+	minX := model.bbox[0] * model.scale[0]
+	minY := model.bbox[1] * model.scale[1]
+	minZ := model.bbox[2] * model.scale[2]
+	maxX := model.bbox[3] * model.scale[0]
+	maxY := model.bbox[4] * model.scale[1]
+	maxZ := model.bbox[5] * model.scale[2]
+
+	// Handle negative scales
+	if minX > maxX {
+		minX, maxX = maxX, minX
+	}
+	if minY > maxY {
+		minY, maxY = maxY, minY
+	}
+	if minZ > maxZ {
+		minZ, maxZ = maxZ, minZ
+	}
+
+	// Expand box slightly for visibility
+	pad := float32(1.0)
+	minX -= pad
+	minY -= pad
+	minZ -= pad
+	maxX += pad
+	maxY += pad
+	maxZ += pad
+
+	// Transform to world space
+	minX += worldX
+	minY += worldY
+	minZ += worldZ
+	maxX += worldX
+	maxY += worldY
+	maxZ += worldZ
+
+	// Build line vertices for 12 edges of the box
+	vertices := []float32{
+		// Bottom face
+		minX, minY, minZ, maxX, minY, minZ,
+		maxX, minY, minZ, maxX, minY, maxZ,
+		maxX, minY, maxZ, minX, minY, maxZ,
+		minX, minY, maxZ, minX, minY, minZ,
+		// Top face
+		minX, maxY, minZ, maxX, maxY, minZ,
+		maxX, maxY, minZ, maxX, maxY, maxZ,
+		maxX, maxY, maxZ, minX, maxY, maxZ,
+		minX, maxY, maxZ, minX, maxY, minZ,
+		// Vertical edges
+		minX, minY, minZ, minX, maxY, minZ,
+		maxX, minY, minZ, maxX, maxY, minZ,
+		maxX, minY, maxZ, maxX, maxY, maxZ,
+		minX, minY, maxZ, minX, maxY, maxZ,
+	}
+
+	// Update VBO
+	gl.BindBuffer(gl.ARRAY_BUFFER, mv.bboxVBO)
+	gl.BufferSubData(gl.ARRAY_BUFFER, 0, len(vertices)*4, unsafe.Pointer(&vertices[0]))
+
+	// Disable depth test to draw on top
+	gl.Disable(gl.DEPTH_TEST)
+	gl.LineWidth(2.0)
+
+	// Draw
+	gl.UseProgram(mv.bboxProgram)
+	gl.UniformMatrix4fv(mv.locBboxMVP, 1, false, &viewProj[0])
+	gl.Uniform4f(mv.locBboxColor, 1.0, 0.0, 1.0, 1.0) // Purple/Magenta
+
+	gl.BindVertexArray(mv.bboxVAO)
+	gl.DrawArrays(gl.LINES, 0, 24)
+	gl.BindVertexArray(0)
+
+	// Re-enable depth test
+	gl.Enable(gl.DEPTH_TEST)
+	gl.LineWidth(1.0)
+}
+
+// PickModelAtScreen returns the index of the model at screen coordinates, or -1 if none.
+func (mv *MapViewer) PickModelAtScreen(screenX, screenY, viewWidth, viewHeight float32) int {
+	if len(mv.models) == 0 {
+		return -1
+	}
+
+	// Convert screen coords to normalized device coords (-1 to 1)
+	ndcX := (2.0*screenX/viewWidth - 1.0)
+	ndcY := (1.0 - 2.0*screenY/viewHeight) // Flip Y
+
+	// Create ray from camera through the click point
+	// Unproject near and far points
+	invViewProj := mv.lastViewProj.Inverse()
+
+	nearPoint := math.Vec4{ndcX, ndcY, -1.0, 1.0}
+	farPoint := math.Vec4{ndcX, ndcY, 1.0, 1.0}
+
+	nearWorld := invViewProj.MulVec4(nearPoint)
+	farWorld := invViewProj.MulVec4(farPoint)
+
+	// Perspective divide
+	if nearWorld[3] != 0 {
+		nearWorld[0] /= nearWorld[3]
+		nearWorld[1] /= nearWorld[3]
+		nearWorld[2] /= nearWorld[3]
+	}
+	if farWorld[3] != 0 {
+		farWorld[0] /= farWorld[3]
+		farWorld[1] /= farWorld[3]
+		farWorld[2] /= farWorld[3]
+	}
+
+	rayOrigin := [3]float32{nearWorld[0], nearWorld[1], nearWorld[2]}
+	rayDir := [3]float32{
+		farWorld[0] - nearWorld[0],
+		farWorld[1] - nearWorld[1],
+		farWorld[2] - nearWorld[2],
+	}
+
+	// Normalize ray direction
+	rayLen := float32(gomath.Sqrt(float64(rayDir[0]*rayDir[0] + rayDir[1]*rayDir[1] + rayDir[2]*rayDir[2])))
+	if rayLen > 0 {
+		rayDir[0] /= rayLen
+		rayDir[1] /= rayLen
+		rayDir[2] /= rayLen
+	}
+
+	// Test intersection with each visible model's bounding box
+	offsetX := mv.mapWidth / 2
+	offsetZ := mv.mapHeight / 2
+
+	bestIdx := -1
+	bestDist := float32(gomath.MaxFloat32)
+
+	for i, model := range mv.models {
+		if model == nil || !model.Visible {
+			continue
+		}
+
+		// Calculate world-space bounding box
+		worldX := model.position[0] + offsetX
+		worldY := -model.position[1]
+		worldZ := model.position[2] + offsetZ
+
+		minX := model.bbox[0]*model.scale[0] + worldX
+		minY := model.bbox[1]*model.scale[1] + worldY
+		minZ := model.bbox[2]*model.scale[2] + worldZ
+		maxX := model.bbox[3]*model.scale[0] + worldX
+		maxY := model.bbox[4]*model.scale[1] + worldY
+		maxZ := model.bbox[5]*model.scale[2] + worldZ
+
+		// Handle negative scales
+		if minX > maxX {
+			minX, maxX = maxX, minX
+		}
+		if minY > maxY {
+			minY, maxY = maxY, minY
+		}
+		if minZ > maxZ {
+			minZ, maxZ = maxZ, minZ
+		}
+
+		// Ray-AABB intersection test
+		tmin := float32(-gomath.MaxFloat32)
+		tmax := float32(gomath.MaxFloat32)
+
+		// X slab
+		if rayDir[0] != 0 {
+			t1 := (minX - rayOrigin[0]) / rayDir[0]
+			t2 := (maxX - rayOrigin[0]) / rayDir[0]
+			if t1 > t2 {
+				t1, t2 = t2, t1
+			}
+			if t1 > tmin {
+				tmin = t1
+			}
+			if t2 < tmax {
+				tmax = t2
+			}
+		} else if rayOrigin[0] < minX || rayOrigin[0] > maxX {
+			continue
+		}
+
+		// Y slab
+		if rayDir[1] != 0 {
+			t1 := (minY - rayOrigin[1]) / rayDir[1]
+			t2 := (maxY - rayOrigin[1]) / rayDir[1]
+			if t1 > t2 {
+				t1, t2 = t2, t1
+			}
+			if t1 > tmin {
+				tmin = t1
+			}
+			if t2 < tmax {
+				tmax = t2
+			}
+		} else if rayOrigin[1] < minY || rayOrigin[1] > maxY {
+			continue
+		}
+
+		// Z slab
+		if rayDir[2] != 0 {
+			t1 := (minZ - rayOrigin[2]) / rayDir[2]
+			t2 := (maxZ - rayOrigin[2]) / rayDir[2]
+			if t1 > t2 {
+				t1, t2 = t2, t1
+			}
+			if t1 > tmin {
+				tmin = t1
+			}
+			if t2 < tmax {
+				tmax = t2
+			}
+		} else if rayOrigin[2] < minZ || rayOrigin[2] > maxZ {
+			continue
+		}
+
+		// Check if intersection is valid
+		if tmax >= tmin && tmax >= 0 {
+			hitDist := tmin
+			if hitDist < 0 {
+				hitDist = tmax
+			}
+			if hitDist < bestDist {
+				bestDist = hitDist
+				bestIdx = i
+			}
+		}
+	}
+
+	return bestIdx
+}
+
 // renderModels renders all placed RSM models.
 func (mv *MapViewer) renderModels(viewProj math.Mat4) {
 	if len(mv.models) == 0 {
@@ -2013,7 +2530,7 @@ func (mv *MapViewer) renderModels(viewProj math.Mat4) {
 	offsetZ := mv.mapHeight / 2
 
 	for _, model := range mv.models {
-		if model.vao == 0 || model.indexCount == 0 {
+		if model.vao == 0 || model.indexCount == 0 || !model.Visible {
 			continue
 		}
 

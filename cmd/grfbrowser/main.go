@@ -145,6 +145,10 @@ type App struct {
 	map3DViewMode     bool       // Whether 3D view is active for map
 	maxModelsLimit    int        // Max models to load (default 1500)
 	terrainBrightness float32    // Terrain brightness multiplier (default 1.0)
+
+	// Scene debug UI state
+	modelFilterText    string // Filter text for model list
+	showPropertiesPanel bool  // Whether to show properties panel
 }
 
 var (
@@ -526,7 +530,8 @@ func (app *App) render() {
 
 	// Layout dimensions
 	leftPanelWidth := float32(350)
-	rightPanelWidth := float32(200) // Actions panel for animations / map controls
+	rightPanelWidth := float32(200)     // Actions panel for animations / map controls
+	propertiesPanelWidth := float32(180) // Properties panel for selected model
 	statusBarHeight := float32(30)
 	contentHeight := workSize.Y - statusBarHeight
 
@@ -534,6 +539,8 @@ func (app *App) render() {
 	showActionsPanel := app.previewACT != nil
 	// Show map controls panel for 3D map view
 	showMapControlsPanel := app.map3DViewMode && app.mapViewer != nil
+	// Show properties panel when a model is selected
+	showPropertiesPanel := app.showPropertiesPanel && app.mapViewer != nil && app.mapViewer.SelectedIdx >= 0
 
 	// Window flags for fixed panels
 	flags := imgui.WindowFlagsNoMove | imgui.WindowFlagsNoResize | imgui.WindowFlagsNoCollapse
@@ -548,10 +555,13 @@ func (app *App) render() {
 	}
 	imgui.End()
 
-	// Calculate preview panel width (shrinks when right panel is shown)
+	// Calculate preview panel width (shrinks when right panels are shown)
 	previewWidth := workSize.X - leftPanelWidth
 	if showActionsPanel || showMapControlsPanel {
 		previewWidth -= rightPanelWidth
+	}
+	if showPropertiesPanel {
+		previewWidth -= propertiesPanelWidth
 	}
 
 	// Center panel - Preview
@@ -573,11 +583,23 @@ func (app *App) render() {
 	}
 
 	// Right panel - Map Controls (only for 3D map view)
+	controlsPanelX := workPos.X + leftPanelWidth + previewWidth
 	if showMapControlsPanel {
-		imgui.SetNextWindowPos(imgui.NewVec2(workPos.X+leftPanelWidth+previewWidth, workPos.Y))
+		imgui.SetNextWindowPos(imgui.NewVec2(controlsPanelX, workPos.Y))
 		imgui.SetNextWindowSize(imgui.NewVec2(rightPanelWidth, contentHeight))
 		if imgui.BeginV("Controls", nil, flags) {
 			app.renderMapControlsPanel()
+		}
+		imgui.End()
+		controlsPanelX += rightPanelWidth
+	}
+
+	// Far right panel - Properties (only when model selected)
+	if showPropertiesPanel {
+		imgui.SetNextWindowPos(imgui.NewVec2(controlsPanelX, workPos.Y))
+		imgui.SetNextWindowSize(imgui.NewVec2(propertiesPanelWidth, contentHeight))
+		if imgui.BeginV("Properties", nil, flags) {
+			app.renderModelPropertiesPanel()
 		}
 		imgui.End()
 	}
@@ -843,5 +865,104 @@ func (app *App) renderStatusBar() {
 			app.totalFiles, app.filterCount, app.selectedPath))
 	} else {
 		imgui.Text("No GRF loaded")
+	}
+}
+
+// renderModelPropertiesPanel renders the properties panel for selected model.
+func (app *App) renderModelPropertiesPanel() {
+	if app.mapViewer == nil || app.mapViewer.SelectedIdx < 0 {
+		return
+	}
+
+	model := app.mapViewer.GetModel(app.mapViewer.SelectedIdx)
+	if model == nil {
+		return
+	}
+
+	// Close button at top right
+	if imgui.Button("X##closeprops") {
+		app.showPropertiesPanel = false
+		app.mapViewer.SelectedIdx = -1
+	}
+	imgui.SameLine()
+	imgui.Text("Properties")
+	imgui.Separator()
+
+	// Model name
+	imgui.Text("Model:")
+	imgui.TextWrapped(model.modelName)
+
+	imgui.Spacing()
+
+	// Instance ID
+	imgui.Text(fmt.Sprintf("Instance: %d", model.instanceID))
+
+	imgui.Spacing()
+
+	// Visibility toggle
+	visible := model.Visible
+	if imgui.Checkbox("Visible", &visible) {
+		model.Visible = visible
+	}
+
+	imgui.Spacing()
+	imgui.Separator()
+
+	// Position
+	imgui.Text("Position:")
+	imgui.Text(fmt.Sprintf("  X: %.2f", model.position[0]))
+	imgui.Text(fmt.Sprintf("  Y: %.2f", model.position[1]))
+	imgui.Text(fmt.Sprintf("  Z: %.2f", model.position[2]))
+
+	imgui.Spacing()
+
+	// Rotation
+	imgui.Text("Rotation:")
+	imgui.Text(fmt.Sprintf("  X: %.1f", model.rotation[0]))
+	imgui.Text(fmt.Sprintf("  Y: %.1f", model.rotation[1]))
+	imgui.Text(fmt.Sprintf("  Z: %.1f", model.rotation[2]))
+
+	imgui.Spacing()
+
+	// Scale with warning for negative
+	imgui.Text("Scale:")
+	imgui.Text(fmt.Sprintf("  X: %.3f", model.scale[0]))
+	imgui.Text(fmt.Sprintf("  Y: %.3f", model.scale[1]))
+	imgui.Text(fmt.Sprintf("  Z: %.3f", model.scale[2]))
+
+	if model.HasNegativeScale() {
+		imgui.Spacing()
+		imgui.TextColored(imgui.NewVec4(1, 0.8, 0, 1), "Warning: Negative scale")
+		imgui.TextColored(imgui.NewVec4(0.7, 0.7, 0.7, 1), "(may flip winding)")
+	}
+
+	imgui.Spacing()
+	imgui.Separator()
+
+	// Bounding box
+	imgui.Text("Bounding Box:")
+	imgui.Text(fmt.Sprintf("  Min: (%.1f, %.1f, %.1f)",
+		model.bbox[0], model.bbox[1], model.bbox[2]))
+	imgui.Text(fmt.Sprintf("  Max: (%.1f, %.1f, %.1f)",
+		model.bbox[3], model.bbox[4], model.bbox[5]))
+
+	imgui.Spacing()
+	imgui.Separator()
+
+	// Face statistics
+	imgui.Text("Geometry:")
+	imgui.Text(fmt.Sprintf("  Total faces: %d", model.totalFaces))
+	imgui.Text(fmt.Sprintf("  Two-sided: %d", model.twoSideFaces))
+	if model.totalFaces > 0 {
+		pct := float32(model.twoSideFaces) * 100.0 / float32(model.totalFaces)
+		imgui.Text(fmt.Sprintf("  (%.1f%%)", pct))
+	}
+
+	imgui.Spacing()
+	imgui.Separator()
+
+	// Focus camera button
+	if imgui.ButtonV("Focus Camera", imgui.NewVec2(-1, 0)) {
+		app.mapViewer.FocusOnModel(app.mapViewer.SelectedIdx)
 	}
 }

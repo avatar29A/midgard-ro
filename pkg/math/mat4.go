@@ -192,3 +192,57 @@ func FromMat3x3(m3 [9]float32) Mat4 {
 func (m *Mat4) Ptr() *float32 {
 	return &m[0]
 }
+
+// Vec4 is a 4-component vector.
+type Vec4 [4]float32
+
+// MulVec4 multiplies the matrix by a Vec4.
+func (m Mat4) MulVec4(v Vec4) Vec4 {
+	return Vec4{
+		m[0]*v[0] + m[4]*v[1] + m[8]*v[2] + m[12]*v[3],
+		m[1]*v[0] + m[5]*v[1] + m[9]*v[2] + m[13]*v[3],
+		m[2]*v[0] + m[6]*v[1] + m[10]*v[2] + m[14]*v[3],
+		m[3]*v[0] + m[7]*v[1] + m[11]*v[2] + m[15]*v[3],
+	}
+}
+
+// Inverse returns the inverse of the matrix.
+// Returns identity if the matrix is singular.
+func (m Mat4) Inverse() Mat4 {
+	// Calculate cofactors
+	c00 := m[5]*m[10]*m[15] - m[5]*m[11]*m[14] - m[9]*m[6]*m[15] + m[9]*m[7]*m[14] + m[13]*m[6]*m[11] - m[13]*m[7]*m[10]
+	c01 := -m[1]*m[10]*m[15] + m[1]*m[11]*m[14] + m[9]*m[2]*m[15] - m[9]*m[3]*m[14] - m[13]*m[2]*m[11] + m[13]*m[3]*m[10]
+	c02 := m[1]*m[6]*m[15] - m[1]*m[7]*m[14] - m[5]*m[2]*m[15] + m[5]*m[3]*m[14] + m[13]*m[2]*m[7] - m[13]*m[3]*m[6]
+	c03 := -m[1]*m[6]*m[11] + m[1]*m[7]*m[10] + m[5]*m[2]*m[11] - m[5]*m[3]*m[10] - m[9]*m[2]*m[7] + m[9]*m[3]*m[6]
+
+	c10 := -m[4]*m[10]*m[15] + m[4]*m[11]*m[14] + m[8]*m[6]*m[15] - m[8]*m[7]*m[14] - m[12]*m[6]*m[11] + m[12]*m[7]*m[10]
+	c11 := m[0]*m[10]*m[15] - m[0]*m[11]*m[14] - m[8]*m[2]*m[15] + m[8]*m[3]*m[14] + m[12]*m[2]*m[11] - m[12]*m[3]*m[10]
+	c12 := -m[0]*m[6]*m[15] + m[0]*m[7]*m[14] + m[4]*m[2]*m[15] - m[4]*m[3]*m[14] - m[12]*m[2]*m[7] + m[12]*m[3]*m[6]
+	c13 := m[0]*m[6]*m[11] - m[0]*m[7]*m[10] - m[4]*m[2]*m[11] + m[4]*m[3]*m[10] + m[8]*m[2]*m[7] - m[8]*m[3]*m[6]
+
+	c20 := m[4]*m[9]*m[15] - m[4]*m[11]*m[13] - m[8]*m[5]*m[15] + m[8]*m[7]*m[13] + m[12]*m[5]*m[11] - m[12]*m[7]*m[9]
+	c21 := -m[0]*m[9]*m[15] + m[0]*m[11]*m[13] + m[8]*m[1]*m[15] - m[8]*m[3]*m[13] - m[12]*m[1]*m[11] + m[12]*m[3]*m[9]
+	c22 := m[0]*m[5]*m[15] - m[0]*m[7]*m[13] - m[4]*m[1]*m[15] + m[4]*m[3]*m[13] + m[12]*m[1]*m[7] - m[12]*m[3]*m[5]
+	c23 := -m[0]*m[5]*m[11] + m[0]*m[7]*m[9] + m[4]*m[1]*m[11] - m[4]*m[3]*m[9] - m[8]*m[1]*m[7] + m[8]*m[3]*m[5]
+
+	c30 := -m[4]*m[9]*m[14] + m[4]*m[10]*m[13] + m[8]*m[5]*m[14] - m[8]*m[6]*m[13] - m[12]*m[5]*m[10] + m[12]*m[6]*m[9]
+	c31 := m[0]*m[9]*m[14] - m[0]*m[10]*m[13] - m[8]*m[1]*m[14] + m[8]*m[2]*m[13] + m[12]*m[1]*m[10] - m[12]*m[2]*m[9]
+	c32 := -m[0]*m[5]*m[14] + m[0]*m[6]*m[13] + m[4]*m[1]*m[14] - m[4]*m[2]*m[13] - m[12]*m[1]*m[6] + m[12]*m[2]*m[5]
+	c33 := m[0]*m[5]*m[10] - m[0]*m[6]*m[9] - m[4]*m[1]*m[10] + m[4]*m[2]*m[9] + m[8]*m[1]*m[6] - m[8]*m[2]*m[5]
+
+	// Calculate determinant
+	det := m[0]*c00 + m[4]*c01 + m[8]*c02 + m[12]*c03
+
+	if det == 0 {
+		return Identity()
+	}
+
+	invDet := 1.0 / det
+
+	return Mat4{
+		c00 * invDet, c01 * invDet, c02 * invDet, c03 * invDet,
+		c10 * invDet, c11 * invDet, c12 * invDet, c13 * invDet,
+		c20 * invDet, c21 * invDet, c22 * invDet, c23 * invDet,
+		c30 * invDet, c31 * invDet, c32 * invDet, c33 * invDet,
+	}
+}

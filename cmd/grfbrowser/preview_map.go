@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/color"
 	"os"
+	"strings"
 
 	"github.com/AllenDang/cimgui-go/backend"
 	"github.com/AllenDang/cimgui-go/imgui"
@@ -649,6 +650,9 @@ func (app *App) renderMap3DView() {
 		imgui.NewVec4(1, 1, 1, 1),         // No tint
 	)
 
+	// Get item position for click-to-select
+	itemMin := imgui.ItemRectMin()
+
 	// Handle mouse input on the image
 	if imgui.IsItemHovered() {
 		// Mouse drag for rotation
@@ -664,6 +668,30 @@ func (app *App) renderMap3DView() {
 		wheel := imgui.CurrentIO().MouseWheel()
 		if wheel != 0 {
 			app.mapViewer.HandleMouseWheel(wheel)
+		}
+
+		// Convert screen coords to local image coords
+		localX := mousePos.X - itemMin.X
+		localY := mousePos.Y - itemMin.Y
+
+		// Double-click to select model
+		if imgui.IsMouseDoubleClicked(imgui.MouseButtonLeft) {
+			// Pick model at screen position
+			modelIdx := app.mapViewer.PickModelAtScreen(localX, localY, width, height)
+			if modelIdx >= 0 {
+				app.mapViewer.SelectedIdx = modelIdx
+				app.showPropertiesPanel = true
+			}
+		}
+
+		// Single click on empty space to deselect (only if not dragging)
+		if imgui.IsMouseReleased(imgui.MouseButtonLeft) && !imgui.IsMouseDragging(imgui.MouseButtonLeft) {
+			// Only deselect if click didn't hit any model
+			modelIdx := app.mapViewer.PickModelAtScreen(localX, localY, width, height)
+			if modelIdx < 0 {
+				app.mapViewer.SelectedIdx = -1
+				app.showPropertiesPanel = false
+			}
 		}
 	}
 }
@@ -768,4 +796,110 @@ func (app *App) renderMapControlsPanel() {
 	if imgui.ButtonV("2D Info View", imgui.NewVec2(-1, 0)) {
 		app.map3DViewMode = false
 	}
+
+	imgui.Spacing()
+	imgui.Spacing()
+
+	// Scene Models section
+	imgui.Text("Scene Models")
+	imgui.Separator()
+
+	// Model stats
+	visCount := app.mapViewer.GetVisibleCount()
+	totalCount := len(app.mapViewer.ModelGroups)
+	imgui.Text(fmt.Sprintf("%d groups, %d/%d visible", totalCount, visCount, len(app.mapViewer.models)))
+
+	// Filter input
+	imgui.Text("Filter:")
+	imgui.SetNextItemWidth(-1)
+	if imgui.InputTextWithHint("##modelfilter", "Filter models...", &app.modelFilterText, 0, nil) {
+		app.mapViewer.ModelFilter = app.modelFilterText
+	}
+
+	// All/None buttons
+	if imgui.Button("All##models") {
+		app.mapViewer.SetAllModelsVisible(true)
+	}
+	imgui.SameLine()
+	if imgui.Button("None##models") {
+		app.mapViewer.SetAllModelsVisible(false)
+	}
+
+	imgui.Spacing()
+
+	// Model groups tree
+	filterLower := strings.ToLower(app.modelFilterText)
+	if imgui.BeginChildStrV("ModelTree", imgui.NewVec2(0, 0), imgui.ChildFlagsBorders, 0) {
+		for groupIdx, group := range app.mapViewer.ModelGroups {
+			// Apply filter
+			if filterLower != "" && !strings.Contains(strings.ToLower(group.RSMName), filterLower) {
+				continue
+			}
+
+			// Tree node for group (RSM name)
+			nodeFlags := imgui.TreeNodeFlagsOpenOnArrow | imgui.TreeNodeFlagsOpenOnDoubleClick
+			if len(group.Instances) == 1 {
+				nodeFlags |= imgui.TreeNodeFlagsLeaf
+			}
+
+			// Checkbox for group visibility
+			visible := group.AllVisible
+			if imgui.Checkbox(fmt.Sprintf("##grp%d", groupIdx), &visible) {
+				app.mapViewer.SetGroupVisibility(groupIdx, visible)
+			}
+			imgui.SameLine()
+
+			// Group node label with instance count (convert Korean names)
+			displayName := euckrToUTF8(group.RSMName)
+			label := fmt.Sprintf("%s (%d)", displayName, len(group.Instances))
+			nodeOpen := imgui.TreeNodeExStrV(fmt.Sprintf("%s##grp%d", label, groupIdx), nodeFlags)
+
+			if nodeOpen {
+				// Show instances
+				for i, modelIdx := range group.Instances {
+					model := app.mapViewer.GetModel(modelIdx)
+					if model == nil {
+						continue
+					}
+
+					// Instance checkbox
+					instVisible := model.Visible
+					if imgui.Checkbox(fmt.Sprintf("##inst%d_%d", groupIdx, i), &instVisible) {
+						model.Visible = instVisible
+						// Update group visibility state
+						allVis := true
+						for _, idx := range group.Instances {
+							m := app.mapViewer.GetModel(idx)
+							if m != nil && !m.Visible {
+								allVis = false
+								break
+							}
+						}
+						app.mapViewer.ModelGroups[groupIdx].AllVisible = allVis
+					}
+					imgui.SameLine()
+
+					// Instance label - show ID and position
+					instLabel := fmt.Sprintf("Instance %d (%.0f, %.0f, %.0f)##inst%d_%d",
+						model.instanceID,
+						model.position[0], model.position[1], model.position[2],
+						groupIdx, i)
+
+					// Selectable for clicking
+					selected := app.mapViewer.SelectedIdx == modelIdx
+					if imgui.SelectableBoolPtrV(instLabel, &selected, imgui.SelectableFlagsAllowDoubleClick, imgui.NewVec2(0, 0)) {
+						app.mapViewer.SelectedIdx = modelIdx
+						app.showPropertiesPanel = true
+
+						// Double-click to focus camera
+						if imgui.IsMouseDoubleClicked(imgui.MouseButtonLeft) {
+							app.mapViewer.FocusOnModel(modelIdx)
+						}
+					}
+				}
+				imgui.TreePop()
+			}
+		}
+	}
+	imgui.EndChild()
 }
