@@ -23,6 +23,9 @@ type MapModel struct {
 	position   [3]float32
 	rotation   [3]float32
 	scale      [3]float32
+	// Debug info
+	modelName string
+	bbox      [6]float32 // minX, minY, minZ, maxX, maxY, maxZ (after centering)
 }
 
 // modelTexGroup groups faces by texture for rendering.
@@ -46,9 +49,9 @@ type MapViewer struct {
 	locViewProj    int32
 	locLightDir    int32
 	locAmbient     int32
+	locDiffuse     int32
 	locTexture     int32
 	locLightmap    int32
-	locSunStrength int32
 
 	// Model shader
 	modelProgram     uint32
@@ -91,8 +94,10 @@ type MapViewer struct {
 	camPitch  float32 // Vertical angle (radians)
 	MoveSpeed float32
 
-	// Lighting controls
-	SunStrength float32
+	// Lighting from RSW
+	lightDir     [3]float32 // Calculated from longitude/latitude
+	ambientColor [3]float32 // From RSW.Light.Ambient
+	diffuseColor [3]float32 // From RSW.Light.Diffuse
 
 	// Map bounds
 	minBounds [3]float32
@@ -101,6 +106,34 @@ type MapViewer struct {
 	// Map dimensions for coordinate conversion
 	mapWidth  float32 // Width in world units (tiles * zoom)
 	mapHeight float32 // Height in world units (tiles * zoom)
+
+	// Terrain height data for model positioning (Stage 2 - ADR-014)
+	terrainAltitudes [][]float32 // [x][y] -> average altitude at tile center
+	terrainTileZoom  float32     // GND zoom factor
+	terrainTilesX    int         // Number of tiles in X
+	terrainTilesZ    int         // Number of tiles in Z
+
+	// Water rendering (Stage 4 - ADR-014)
+	waterProgram   uint32
+	waterVAO       uint32
+	waterVBO       uint32
+	waterLevel     float32 // From RSW.Water.Level
+	hasWater       bool    // Whether map has water
+	locWaterMVP    int32
+	locWaterColor  int32
+	locWaterTime   int32
+	locWaterTex    int32
+	waterTime      float32  // Animation time
+	waterTextures  []uint32 // Animated water texture frames
+	waterAnimSpeed float32  // Animation speed from RSW
+	waterFrame     int      // Current animation frame
+	useWaterTex    bool     // Whether we have loaded water textures
+
+	// Fog settings (Stage 4 - ADR-014)
+	fogEnabled bool
+	fogNear    float32
+	fogFar     float32
+	fogColor   [3]float32
 }
 
 // terrainVertex is the vertex format for terrain mesh.
@@ -152,7 +185,7 @@ uniform sampler2D uTexture;
 uniform sampler2D uLightmap;
 uniform vec3 uLightDir;
 uniform vec3 uAmbient;
-uniform float uSunStrength;
+uniform vec3 uDiffuse;
 
 out vec4 FragColor;
 
@@ -160,16 +193,31 @@ void main() {
     vec4 texColor = texture(uTexture, vTexCoord);
     vec3 lightmapColor = texture(uLightmap, vLightmapUV).rgb;
 
-    // Directional light component (sun) - controlled by uSunStrength
-    float NdotL = max(dot(normalize(vNormal), normalize(uLightDir)), 0.0);
-    vec3 directional = vec3(uSunStrength) * NdotL;
+    // Proper lighting calculation using RSW data
+    // Directional light component (sun)
+    vec3 normal = normalize(vNormal);
+    vec3 lightDir = normalize(uLightDir);
+    float NdotL = max(dot(normal, lightDir), 0.0);
+    vec3 directional = uDiffuse * NdotL;
 
-    // Combine: ambient + directional, modulated by lightmap and vertex color
-    // Boost overall brightness for preview visibility
-    vec3 lighting = (uAmbient + directional + vec3(0.2)) * (lightmapColor * 1.2 + vec3(0.5)) * vColor.rgb;
+    // Combine ambient + directional lighting
+    vec3 lighting = uAmbient + directional;
 
-    vec3 color = texColor.rgb * lighting;
-    FragColor = vec4(color, texColor.a * vColor.a);
+    // Apply lightmap (pre-baked shadows and color from point lights)
+    // Boost lightmap significantly - RO terrain should be well-lit
+    vec3 adjustedLightmap = lightmapColor * 0.3 + vec3(0.7);
+
+    // Ensure vertex color doesn't cause black (default to white if black)
+    vec3 vertColor = vColor.rgb;
+    if (vertColor.r + vertColor.g + vertColor.b < 0.1) {
+        vertColor = vec3(1.0);
+    }
+
+    // Combine: texture * dynamic lighting * baked lightmap * vertex color
+    // Boost brightness for well-lit terrain like RO
+    vec3 finalColor = texColor.rgb * lighting * adjustedLightmap * vertColor * 1.5;
+
+    FragColor = vec4(finalColor, texColor.a * vColor.a);
 }
 `
 
@@ -211,12 +259,107 @@ out vec4 FragColor;
 void main() {
     vec4 texColor = texture(uTexture, vTexCoord);
 
+    // Discard transparent pixels (alpha set to 0 for magenta color key during texture load)
+    if (texColor.a < 0.5) {
+        discard;
+    }
+
     // Simple lighting
     float NdotL = max(dot(normalize(vNormal), normalize(uLightDir)), 0.0);
     vec3 lighting = uAmbient + uDiffuse * NdotL;
 
     vec3 color = texColor.rgb * lighting;
     FragColor = vec4(color, texColor.a);
+}
+`
+
+// Water shader for semi-transparent water plane
+const waterVertexShader = `#version 410 core
+layout (location = 0) in vec3 aPosition;
+
+uniform mat4 uMVP;
+
+out vec3 vWorldPos;
+
+void main() {
+    vWorldPos = aPosition;
+    gl_Position = uMVP * vec4(aPosition, 1.0);
+}
+`
+
+const waterFragmentShader = `#version 410 core
+in vec3 vWorldPos;
+
+uniform vec4 uWaterColor;
+uniform float uTime;
+uniform float uScrollSpeed;
+uniform sampler2D uWaterTex;
+uniform int uUseTexture;
+
+out vec4 FragColor;
+
+// Hash function for pseudo-random noise (fallback)
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float noise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = hash(i);
+    float b = hash(i + vec2(1.0, 0.0));
+    float c = hash(i + vec2(0.0, 1.0));
+    float d = hash(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+float fbm(vec2 p, float time) {
+    float value = 0.0;
+    float amplitude = 0.5;
+    vec2 shift = vec2(time * 0.3, time * 0.2);
+    for (int i = 0; i < 4; i++) {
+        value += amplitude * noise(p + shift);
+        p = p * 2.0 + vec2(1.7, 9.2);
+        shift *= 1.1;
+        amplitude *= 0.5;
+    }
+    return value;
+}
+
+void main() {
+    // Scale world position for texture coordinates - tile the texture
+    // RO tiles water texture approximately every 50-100 world units
+    vec2 uv = vWorldPos.xz * 0.02; // Tiling scale
+
+    if (uUseTexture == 1) {
+        // Use loaded water texture - frame animation creates shimmering effect
+        // No UV scrolling - just tile the texture
+        vec2 tileUV = vWorldPos.xz * 0.004;
+        vec4 texColor = texture(uWaterTex, tileUV);
+        FragColor = vec4(texColor.rgb, 1.0);
+    } else {
+        // Fallback to procedural water
+        vec2 procUV = vWorldPos.xz * 0.05;
+        float pattern1 = fbm(procUV, uTime);
+        float pattern2 = fbm(procUV * 1.5 + vec2(5.0), uTime * 0.8);
+        float pattern = mix(pattern1, pattern2, 0.5);
+
+        vec3 deepColor = vec3(0.12, 0.30, 0.45);
+        vec3 midColor = vec3(0.20, 0.45, 0.55);
+        vec3 lightColor = vec3(0.35, 0.60, 0.70);
+
+        vec3 waterColor;
+        if (pattern < 0.4) {
+            waterColor = mix(deepColor, midColor, pattern / 0.4);
+        } else {
+            waterColor = mix(midColor, lightColor, (pattern - 0.4) / 0.6);
+        }
+        float caustic = pow(pattern, 2.5) * 0.4;
+        waterColor += vec3(caustic * 0.5, caustic * 0.7, caustic);
+
+        FragColor = vec4(waterColor, uWaterColor.a);
+    }
 }
 `
 
@@ -229,8 +372,11 @@ func NewMapViewer(width, height int32) (*MapViewer, error) {
 		rotationX:      0.5,
 		rotationY:      0.0,
 		distance:       500.0,
-		SunStrength:    2.0,
 		MoveSpeed:      5.0,
+		// Default lighting (will be overwritten by RSW data)
+		lightDir:     [3]float32{0.5, 0.866, 0.0}, // 60 degrees elevation
+		ambientColor: [3]float32{0.3, 0.3, 0.3},
+		diffuseColor: [3]float32{1.0, 1.0, 1.0},
 	}
 
 	if err := mv.createFramebuffer(); err != nil {
@@ -336,9 +482,9 @@ func (mv *MapViewer) createTerrainShader() error {
 	mv.locViewProj = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uViewProj\x00"))
 	mv.locLightDir = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uLightDir\x00"))
 	mv.locAmbient = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uAmbient\x00"))
+	mv.locDiffuse = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uDiffuse\x00"))
 	mv.locTexture = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uTexture\x00"))
 	mv.locLightmap = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uLightmap\x00"))
-	mv.locSunStrength = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uSunStrength\x00"))
 
 	return nil
 }
@@ -403,6 +549,11 @@ func (mv *MapViewer) createModelShader() error {
 	mv.locModelDiffuse = gl.GetUniformLocation(mv.modelProgram, gl.Str("uDiffuse\x00"))
 	mv.locModelTexture = gl.GetUniformLocation(mv.modelProgram, gl.Str("uTexture\x00"))
 
+	// Compile water shader
+	if err := mv.compileWaterShader(); err != nil {
+		return fmt.Errorf("water shader: %w", err)
+	}
+
 	return nil
 }
 
@@ -417,6 +568,109 @@ func (mv *MapViewer) createFallbackTexture() {
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
 }
 
+// compileWaterShader compiles the water rendering shader.
+func (mv *MapViewer) compileWaterShader() error {
+	var status int32
+
+	// Compile vertex shader
+	vertShader := gl.CreateShader(gl.VERTEX_SHADER)
+	csource, free := gl.Strs(waterVertexShader + "\x00")
+	gl.ShaderSource(vertShader, 1, csource, nil)
+	free()
+	gl.CompileShader(vertShader)
+
+	gl.GetShaderiv(vertShader, gl.COMPILE_STATUS, &status)
+	if status == gl.FALSE {
+		var logLen int32
+		gl.GetShaderiv(vertShader, gl.INFO_LOG_LENGTH, &logLen)
+		log := make([]byte, logLen)
+		gl.GetShaderInfoLog(vertShader, logLen, nil, &log[0])
+		return fmt.Errorf("water vertex shader: %s", string(log))
+	}
+
+	// Compile fragment shader
+	fragShader := gl.CreateShader(gl.FRAGMENT_SHADER)
+	csource, free = gl.Strs(waterFragmentShader + "\x00")
+	gl.ShaderSource(fragShader, 1, csource, nil)
+	free()
+	gl.CompileShader(fragShader)
+
+	gl.GetShaderiv(fragShader, gl.COMPILE_STATUS, &status)
+	if status == gl.FALSE {
+		var logLen int32
+		gl.GetShaderiv(fragShader, gl.INFO_LOG_LENGTH, &logLen)
+		log := make([]byte, logLen)
+		gl.GetShaderInfoLog(fragShader, logLen, nil, &log[0])
+		return fmt.Errorf("water fragment shader: %s", string(log))
+	}
+
+	// Link program
+	mv.waterProgram = gl.CreateProgram()
+	gl.AttachShader(mv.waterProgram, vertShader)
+	gl.AttachShader(mv.waterProgram, fragShader)
+	gl.LinkProgram(mv.waterProgram)
+
+	gl.GetProgramiv(mv.waterProgram, gl.LINK_STATUS, &status)
+	if status == gl.FALSE {
+		var logLen int32
+		gl.GetProgramiv(mv.waterProgram, gl.INFO_LOG_LENGTH, &logLen)
+		log := make([]byte, logLen)
+		gl.GetProgramInfoLog(mv.waterProgram, logLen, nil, &log[0])
+		return fmt.Errorf("water shader link: %s", string(log))
+	}
+
+	gl.DeleteShader(vertShader)
+	gl.DeleteShader(fragShader)
+
+	// Get uniform locations
+	mv.locWaterMVP = gl.GetUniformLocation(mv.waterProgram, gl.Str("uMVP\x00"))
+	mv.locWaterColor = gl.GetUniformLocation(mv.waterProgram, gl.Str("uWaterColor\x00"))
+	mv.locWaterTime = gl.GetUniformLocation(mv.waterProgram, gl.Str("uTime\x00"))
+	mv.locWaterTex = gl.GetUniformLocation(mv.waterProgram, gl.Str("uWaterTex\x00"))
+
+	return nil
+}
+
+// loadWaterTextures loads water textures from GRF based on water type.
+func (mv *MapViewer) loadWaterTextures(_ int32, texLoader func(string) ([]byte, error)) {
+	// RO water textures are in data/texture/워터/ folder
+	// Format: water%03d.jpg (000-031 for 32 frames)
+
+	var textures []uint32
+
+	// Load 32 frames of water animation
+	for frame := 0; frame < 32; frame++ {
+		path := fmt.Sprintf("data/texture/워터/water%03d.jpg", frame)
+
+		data, err := texLoader(path)
+		if err != nil {
+			if frame == 0 {
+				fmt.Printf("Water texture not found: %s\n", path)
+			}
+			continue
+		}
+
+		// Decode and upload texture
+		img, err := decodeModelTexture(data, path, false)
+		if err != nil {
+			fmt.Printf("Failed to decode water texture: %s\n", path)
+			continue
+		}
+
+		texID := uploadModelTexture(img)
+		textures = append(textures, texID)
+	}
+
+	if len(textures) > 0 {
+		mv.waterTextures = textures
+		mv.useWaterTex = true
+		fmt.Printf("Loaded %d water texture frames\n", len(textures))
+	} else {
+		fmt.Println("No water textures found, using procedural water")
+		mv.useWaterTex = false
+	}
+}
+
 // LoadMap loads a GND/RSW map for rendering.
 func (mv *MapViewer) LoadMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(string) ([]byte, error)) error {
 	// Clear old resources
@@ -425,6 +679,30 @@ func (mv *MapViewer) LoadMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(
 	// Store map dimensions for coordinate conversion (RSW positions are centered)
 	mv.mapWidth = float32(gnd.Width) * gnd.Zoom
 	mv.mapHeight = float32(gnd.Height) * gnd.Zoom
+
+	// Store terrain height data for model positioning (Stage 2 - ADR-014)
+	mv.buildTerrainHeightMap(gnd)
+
+	// Extract lighting data from RSW (Stage 1: Correct Lighting - ADR-014)
+	if rsw != nil {
+		// Calculate sun direction from spherical coordinates
+		mv.lightDir = calculateSunDirection(rsw.Light.Longitude, rsw.Light.Latitude)
+
+		// Use RSW ambient and diffuse colors
+		// Note: RSW values are often quite low, we apply a minimum floor
+		// to prevent completely dark scenes
+		mv.ambientColor = rsw.Light.Ambient
+		mv.diffuseColor = rsw.Light.Diffuse
+
+		// Ensure minimum ambient to prevent totally dark scenes
+		// Reference implementations typically boost ambient
+		minAmbient := float32(0.3)
+		for i := 0; i < 3; i++ {
+			if mv.ambientColor[i] < minAmbient {
+				mv.ambientColor[i] = minAmbient
+			}
+		}
+	}
 
 	// Load ground textures
 	mv.loadGroundTextures(gnd, texLoader)
@@ -443,6 +721,22 @@ func (mv *MapViewer) LoadMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(
 	if rsw != nil {
 		mv.loadModels(rsw, texLoader)
 	}
+
+	// Create water plane (Stage 4 - ADR-014)
+	if rsw != nil && rsw.Water.Level != 0 {
+		mv.createWaterPlane(gnd, rsw.Water.Level)
+		mv.loadWaterTextures(rsw.Water.Type, texLoader)
+		mv.waterAnimSpeed = float32(rsw.Water.AnimSpeed)
+		if mv.waterAnimSpeed == 0 {
+			mv.waterAnimSpeed = 30.0 // Fast animation speed for shimmering effect
+		}
+	}
+
+	// Set up fog (Stage 4 - ADR-014)
+	mv.fogEnabled = true
+	mv.fogNear = 500.0
+	mv.fogFar = 3000.0
+	mv.fogColor = [3]float32{0.6, 0.75, 0.9} // Light blue-gray fog
 
 	// Fit camera to map
 	mv.fitCamera()
@@ -515,6 +809,9 @@ func (mv *MapViewer) loadGroundTextures(gnd *formats.GND, texLoader func(string)
 	}
 }
 
+// DebugModelPositioning enables debug output for model positioning issues.
+var DebugModelPositioning = false
+
 // loadModels loads RSM models from RSW object list.
 func (mv *MapViewer) loadModels(rsw *formats.RSW, texLoader func(string) ([]byte, error)) {
 	models := rsw.GetModels()
@@ -523,6 +820,10 @@ func (mv *MapViewer) loadModels(rsw *formats.RSW, texLoader func(string) ([]byte
 	maxModels := 500
 	if len(models) > maxModels {
 		models = models[:maxModels]
+	}
+
+	if DebugModelPositioning {
+		fmt.Printf("Loading %d models (max %d)\n", len(models), maxModels)
 	}
 
 	// Cache loaded RSM files to avoid reloading
@@ -682,6 +983,22 @@ func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texL
 		vertices[i].Position[2] -= centerZ
 	}
 
+	// Store bounding box after centering (for debug visualization)
+	bboxAfter := [6]float32{
+		minVertX - centerX, minVertY - minVertY, minVertZ - centerZ,
+		maxVertX - centerX, maxVertY - minVertY, maxVertZ - centerZ,
+	}
+
+	// Debug: log model centering info
+	if DebugModelPositioning {
+		height := maxVertY - minVertY
+		fmt.Printf("Model: %s | RSW pos: (%.1f,%.1f,%.1f) rot: (%.1f,%.1f,%.1f) | BBox: (%.1f,%.1f,%.1f)-(%.1f,%.1f,%.1f) | Height: %.1f\n",
+			ref.ModelName,
+			ref.Position[0], ref.Position[1], ref.Position[2],
+			ref.Rotation[0], ref.Rotation[1], ref.Rotation[2],
+			minVertX, minVertY, minVertZ, maxVertX, maxVertY, maxVertZ, height)
+	}
+
 	// Build texture groups
 	var groups []modelTexGroup
 	for texIdx, idxs := range texGroups {
@@ -703,6 +1020,8 @@ func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texL
 		position:  ref.Position,
 		rotation:  ref.Rotation,
 		scale:     ref.Scale,
+		modelName: ref.ModelName,
+		bbox:      bboxAfter,
 	}
 
 	// Upload mesh to GPU
@@ -1028,95 +1347,120 @@ func (mv *MapViewer) buildTerrainMesh(gnd *formats.GND) ([]terrainVertex, []uint
 				)
 			}
 
-			// Front surface (vertical wall facing -Z)
-			// Only render if there's actual height difference between tiles
-			if tile.FrontSurface >= 0 && int(tile.FrontSurface) < len(gnd.Surfaces) {
-				surface := &gnd.Surfaces[tile.FrontSurface]
-				texID := int(surface.TextureID)
-
-				// Get neighboring tile for bottom edge
-				nextTile := gnd.GetTile(x, y+1)
-				if nextTile != nil {
-					// Check if there's a height difference (skip flat connections)
-					heightDiff0 := absf(tile.Altitude[0] - nextTile.Altitude[2])
-					heightDiff1 := absf(tile.Altitude[1] - nextTile.Altitude[3])
-					if heightDiff0 > 1.0 || heightDiff1 > 1.0 {
-						// Wall corners
-						wallCorners := [4][3]float32{
-							corners[0], // Top-left
-							corners[1], // Top-right
-							{baseX, -nextTile.Altitude[2], baseZ + tileSize},            // Bottom-left
-							{baseX + tileSize, -nextTile.Altitude[3], baseZ + tileSize}, // Bottom-right
-						}
-
-						normal := [3]float32{0, 0, -1} // Facing -Z
-						color := [4]float32{1.0, 1.0, 1.0, 1.0}
-
-						// Calculate lightmap UVs for wall
-						wlmUV0 := mv.calculateLightmapUV(surface.LightmapID, 0, gnd)
-						wlmUV1 := mv.calculateLightmapUV(surface.LightmapID, 1, gnd)
-						wlmUV2 := mv.calculateLightmapUV(surface.LightmapID, 2, gnd)
-						wlmUV3 := mv.calculateLightmapUV(surface.LightmapID, 3, gnd)
-
-						baseIdx := uint32(len(vertices))
-						vertices = append(vertices,
-							terrainVertex{Position: wallCorners[0], Normal: normal, TexCoord: [2]float32{surface.U[0], surface.V[0]}, LightmapUV: wlmUV0, Color: color},
-							terrainVertex{Position: wallCorners[1], Normal: normal, TexCoord: [2]float32{surface.U[1], surface.V[1]}, LightmapUV: wlmUV1, Color: color},
-							terrainVertex{Position: wallCorners[2], Normal: normal, TexCoord: [2]float32{surface.U[2], surface.V[2]}, LightmapUV: wlmUV2, Color: color},
-							terrainVertex{Position: wallCorners[3], Normal: normal, TexCoord: [2]float32{surface.U[3], surface.V[3]}, LightmapUV: wlmUV3, Color: color},
-						)
-
-						textureIndices[texID] = append(textureIndices[texID],
-							baseIdx, baseIdx+2, baseIdx+1,
-							baseIdx+1, baseIdx+2, baseIdx+3,
-						)
+			// Front surface (vertical wall facing -Z) - fill gaps between tiles
+			nextTile := gnd.GetTile(x, y+1)
+			if nextTile != nil {
+				heightDiff0 := absf(tile.Altitude[0] - nextTile.Altitude[2])
+				heightDiff1 := absf(tile.Altitude[1] - nextTile.Altitude[3])
+				if heightDiff0 > 0.001 || heightDiff1 > 0.001 {
+					// Wall corners
+					wallCorners := [4][3]float32{
+						corners[0], // Top-left
+						corners[1], // Top-right
+						{baseX, -nextTile.Altitude[2], baseZ + tileSize},            // Bottom-left
+						{baseX + tileSize, -nextTile.Altitude[3], baseZ + tileSize}, // Bottom-right
 					}
+
+					normal := [3]float32{0, 0, -1} // Facing -Z
+					color := [4]float32{1.0, 1.0, 1.0, 1.0}
+					var texID int
+					var texU, texV [4]float32
+					var lmID int16
+
+					// Use front surface if available, otherwise use top surface
+					if tile.FrontSurface >= 0 && int(tile.FrontSurface) < len(gnd.Surfaces) {
+						surface := &gnd.Surfaces[tile.FrontSurface]
+						texID = int(surface.TextureID)
+						texU = surface.U
+						texV = surface.V
+						lmID = surface.LightmapID
+					} else if tile.TopSurface >= 0 && int(tile.TopSurface) < len(gnd.Surfaces) {
+						// Fallback to top surface texture for gap filling
+						surface := &gnd.Surfaces[tile.TopSurface]
+						texID = int(surface.TextureID)
+						texU = [4]float32{0, 1, 0, 1}
+						texV = [4]float32{0, 0, 1, 1}
+						lmID = surface.LightmapID
+					} else {
+						continue
+					}
+
+					wlmUV0 := mv.calculateLightmapUV(lmID, 0, gnd)
+					wlmUV1 := mv.calculateLightmapUV(lmID, 1, gnd)
+					wlmUV2 := mv.calculateLightmapUV(lmID, 2, gnd)
+					wlmUV3 := mv.calculateLightmapUV(lmID, 3, gnd)
+
+					baseIdx := uint32(len(vertices))
+					vertices = append(vertices,
+						terrainVertex{Position: wallCorners[0], Normal: normal, TexCoord: [2]float32{texU[0], texV[0]}, LightmapUV: wlmUV0, Color: color},
+						terrainVertex{Position: wallCorners[1], Normal: normal, TexCoord: [2]float32{texU[1], texV[1]}, LightmapUV: wlmUV1, Color: color},
+						terrainVertex{Position: wallCorners[2], Normal: normal, TexCoord: [2]float32{texU[2], texV[2]}, LightmapUV: wlmUV2, Color: color},
+						terrainVertex{Position: wallCorners[3], Normal: normal, TexCoord: [2]float32{texU[3], texV[3]}, LightmapUV: wlmUV3, Color: color},
+					)
+
+					textureIndices[texID] = append(textureIndices[texID],
+						baseIdx, baseIdx+2, baseIdx+1,
+						baseIdx+1, baseIdx+2, baseIdx+3,
+					)
 				}
 			}
 
-			// Right surface (vertical wall facing +X)
-			// Only render if there's actual height difference between tiles
-			if tile.RightSurface >= 0 && int(tile.RightSurface) < len(gnd.Surfaces) {
-				surface := &gnd.Surfaces[tile.RightSurface]
-				texID := int(surface.TextureID)
-
-				// Get neighboring tile for right edge
-				nextTile := gnd.GetTile(x+1, y)
-				if nextTile != nil {
-					// Check if there's a height difference (skip flat connections)
-					heightDiff0 := absf(tile.Altitude[1] - nextTile.Altitude[0])
-					heightDiff1 := absf(tile.Altitude[3] - nextTile.Altitude[2])
-					if heightDiff0 > 1.0 || heightDiff1 > 1.0 {
-						// Wall corners
-						wallCorners := [4][3]float32{
-							corners[3], // Top-back
-							corners[1], // Top-front
-							{baseX + tileSize, -nextTile.Altitude[2], baseZ},            // Bottom-back
-							{baseX + tileSize, -nextTile.Altitude[0], baseZ + tileSize}, // Bottom-front
-						}
-
-						normal := [3]float32{1, 0, 0} // Facing +X
-						color := [4]float32{1.0, 1.0, 1.0, 1.0}
-
-						// Calculate lightmap UVs for wall
-						wlmUV0 := mv.calculateLightmapUV(surface.LightmapID, 0, gnd)
-						wlmUV1 := mv.calculateLightmapUV(surface.LightmapID, 1, gnd)
-						wlmUV2 := mv.calculateLightmapUV(surface.LightmapID, 2, gnd)
-						wlmUV3 := mv.calculateLightmapUV(surface.LightmapID, 3, gnd)
-
-						baseIdx := uint32(len(vertices))
-						vertices = append(vertices,
-							terrainVertex{Position: wallCorners[0], Normal: normal, TexCoord: [2]float32{surface.U[0], surface.V[0]}, LightmapUV: wlmUV0, Color: color},
-							terrainVertex{Position: wallCorners[1], Normal: normal, TexCoord: [2]float32{surface.U[1], surface.V[1]}, LightmapUV: wlmUV1, Color: color},
-							terrainVertex{Position: wallCorners[2], Normal: normal, TexCoord: [2]float32{surface.U[2], surface.V[2]}, LightmapUV: wlmUV2, Color: color},
-							terrainVertex{Position: wallCorners[3], Normal: normal, TexCoord: [2]float32{surface.U[3], surface.V[3]}, LightmapUV: wlmUV3, Color: color},
-						)
-
-						textureIndices[texID] = append(textureIndices[texID],
-							baseIdx, baseIdx+2, baseIdx+1,
-							baseIdx+1, baseIdx+2, baseIdx+3,
-						)
+			// Right surface (vertical wall facing +X) - fill gaps between tiles
+			rightNextTile := gnd.GetTile(x+1, y)
+			if rightNextTile != nil {
+				heightDiff0 := absf(tile.Altitude[1] - rightNextTile.Altitude[0])
+				heightDiff1 := absf(tile.Altitude[3] - rightNextTile.Altitude[2])
+				if heightDiff0 > 0.001 || heightDiff1 > 0.001 {
+					// Wall corners
+					wallCorners := [4][3]float32{
+						corners[3], // Top-back
+						corners[1], // Top-front
+						{baseX + tileSize, -rightNextTile.Altitude[2], baseZ},            // Bottom-back
+						{baseX + tileSize, -rightNextTile.Altitude[0], baseZ + tileSize}, // Bottom-front
 					}
+
+					normal := [3]float32{1, 0, 0} // Facing +X
+					color := [4]float32{1.0, 1.0, 1.0, 1.0}
+					var texID int
+					var texU, texV [4]float32
+					var lmID int16
+
+					// Use right surface if available, otherwise use top surface
+					if tile.RightSurface >= 0 && int(tile.RightSurface) < len(gnd.Surfaces) {
+						surface := &gnd.Surfaces[tile.RightSurface]
+						texID = int(surface.TextureID)
+						texU = surface.U
+						texV = surface.V
+						lmID = surface.LightmapID
+					} else if tile.TopSurface >= 0 && int(tile.TopSurface) < len(gnd.Surfaces) {
+						// Fallback to top surface texture for gap filling
+						surface := &gnd.Surfaces[tile.TopSurface]
+						texID = int(surface.TextureID)
+						texU = [4]float32{0, 1, 0, 1}
+						texV = [4]float32{0, 0, 1, 1}
+						lmID = surface.LightmapID
+					} else {
+						continue
+					}
+
+					// Calculate lightmap UVs for wall
+					wlmUV0 := mv.calculateLightmapUV(lmID, 0, gnd)
+					wlmUV1 := mv.calculateLightmapUV(lmID, 1, gnd)
+					wlmUV2 := mv.calculateLightmapUV(lmID, 2, gnd)
+					wlmUV3 := mv.calculateLightmapUV(lmID, 3, gnd)
+
+					baseIdx := uint32(len(vertices))
+					vertices = append(vertices,
+						terrainVertex{Position: wallCorners[0], Normal: normal, TexCoord: [2]float32{texU[0], texV[0]}, LightmapUV: wlmUV0, Color: color},
+						terrainVertex{Position: wallCorners[1], Normal: normal, TexCoord: [2]float32{texU[1], texV[1]}, LightmapUV: wlmUV1, Color: color},
+						terrainVertex{Position: wallCorners[2], Normal: normal, TexCoord: [2]float32{texU[2], texV[2]}, LightmapUV: wlmUV2, Color: color},
+						terrainVertex{Position: wallCorners[3], Normal: normal, TexCoord: [2]float32{texU[3], texV[3]}, LightmapUV: wlmUV3, Color: color},
+					)
+
+					textureIndices[texID] = append(textureIndices[texID],
+						baseIdx, baseIdx+2, baseIdx+1,
+						baseIdx+1, baseIdx+2, baseIdx+3,
+					)
 				}
 			}
 		}
@@ -1253,12 +1597,12 @@ func (mv *MapViewer) Render() uint32 {
 
 	viewProj := proj.Mul(view)
 
-	// Use terrain shader
+	// Use terrain shader with RSW lighting data
 	gl.UseProgram(mv.terrainProgram)
 	gl.UniformMatrix4fv(mv.locViewProj, 1, false, &viewProj[0])
-	gl.Uniform3f(mv.locLightDir, 0.5, 1.0, 0.3)
-	gl.Uniform3f(mv.locAmbient, 0.4, 0.4, 0.4)
-	gl.Uniform1f(mv.locSunStrength, mv.SunStrength)
+	gl.Uniform3f(mv.locLightDir, mv.lightDir[0], mv.lightDir[1], mv.lightDir[2])
+	gl.Uniform3f(mv.locAmbient, mv.ambientColor[0], mv.ambientColor[1], mv.ambientColor[2])
+	gl.Uniform3f(mv.locDiffuse, mv.diffuseColor[0], mv.diffuseColor[1], mv.diffuseColor[2])
 	gl.Uniform1i(mv.locTexture, 0)
 	gl.Uniform1i(mv.locLightmap, 1)
 
@@ -1289,9 +1633,67 @@ func (mv *MapViewer) Render() uint32 {
 	// Render placed models
 	mv.renderModels(viewProj)
 
+	// Render water (last, with transparency)
+	mv.renderWater(viewProj)
+
 	gl.BindFramebuffer(gl.FRAMEBUFFER, 0)
 
 	return mv.colorTexture
+}
+
+// renderWater renders the water plane with transparency.
+func (mv *MapViewer) renderWater(viewProj math.Mat4) {
+	if !mv.hasWater || mv.waterVAO == 0 {
+		return
+	}
+
+	// Update water animation time
+	mv.waterTime += 0.016
+
+	// Enable blending for transparency
+	gl.Enable(gl.BLEND)
+	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+
+	// Use water shader
+	gl.UseProgram(mv.waterProgram)
+	gl.UniformMatrix4fv(mv.locWaterMVP, 1, false, &viewProj[0])
+
+	// Water color: fully opaque when using texture
+	gl.Uniform4f(mv.locWaterColor, 0.2, 0.4, 0.7, 1.0)
+
+	// Pass animation time and scroll speed
+	gl.Uniform1f(mv.locWaterTime, mv.waterTime)
+	locScrollSpeed := gl.GetUniformLocation(mv.waterProgram, gl.Str("uScrollSpeed\x00"))
+	gl.Uniform1f(locScrollSpeed, mv.waterAnimSpeed)
+
+	// Set up texture if we have water textures loaded
+	if mv.useWaterTex && len(mv.waterTextures) > 0 {
+		// Update animation frame based on time and speed
+		// At speed 10, cycle through 32 frames in ~3 seconds
+		frameTime := mv.waterTime * mv.waterAnimSpeed * 0.5
+		mv.waterFrame = int(frameTime) % len(mv.waterTextures)
+
+		// Bind water texture
+		gl.ActiveTexture(gl.TEXTURE0)
+		gl.BindTexture(gl.TEXTURE_2D, mv.waterTextures[mv.waterFrame])
+		gl.Uniform1i(mv.locWaterTex, 0)
+
+		// Tell shader to use texture
+		locUseTexture := gl.GetUniformLocation(mv.waterProgram, gl.Str("uUseTexture\x00"))
+		gl.Uniform1i(locUseTexture, 1)
+	} else {
+		// Tell shader to use procedural water
+		locUseTexture := gl.GetUniformLocation(mv.waterProgram, gl.Str("uUseTexture\x00"))
+		gl.Uniform1i(locUseTexture, 0)
+	}
+
+	// Render water quad
+	gl.BindVertexArray(mv.waterVAO)
+	gl.DrawArrays(gl.TRIANGLE_FAN, 0, 4)
+	gl.BindVertexArray(0)
+
+	// Disable blending
+	gl.Disable(gl.BLEND)
 }
 
 // renderModels renders all placed RSM models.
@@ -1301,9 +1703,9 @@ func (mv *MapViewer) renderModels(viewProj math.Mat4) {
 	}
 
 	gl.UseProgram(mv.modelProgram)
-	gl.Uniform3f(mv.locModelLightDir, 0.5, 1.0, 0.3)
-	gl.Uniform3f(mv.locModelAmbient, 0.5, 0.5, 0.5)
-	gl.Uniform3f(mv.locModelDiffuse, 0.7, 0.7, 0.7)
+	gl.Uniform3f(mv.locModelLightDir, mv.lightDir[0], mv.lightDir[1], mv.lightDir[2])
+	gl.Uniform3f(mv.locModelAmbient, mv.ambientColor[0], mv.ambientColor[1], mv.ambientColor[2])
+	gl.Uniform3f(mv.locModelDiffuse, mv.diffuseColor[0], mv.diffuseColor[1], mv.diffuseColor[2])
 	gl.Uniform1i(mv.locModelTexture, 0)
 
 	gl.ActiveTexture(gl.TEXTURE0)
@@ -1321,7 +1723,7 @@ func (mv *MapViewer) renderModels(viewProj math.Mat4) {
 
 		// Convert RSW position to GND world coordinates:
 		// - RSW X (0 = center) -> World X = rswX + mapWidth/2
-		// - RSW Y (altitude) -> World Y = -rswY (same as GND altitude convention)
+		// - RSW Y (altitude) -> World Y = -rswY (same convention as GND: positive = lower)
 		// - RSW Z (0 = center) -> World Z = rswZ + mapHeight/2
 		worldX := model.position[0] + offsetX
 		worldY := -model.position[1]
@@ -1335,6 +1737,7 @@ func (mv *MapViewer) renderModels(viewProj math.Mat4) {
 		modelMatrix = modelMatrix.Mul(math.Translate(worldX, worldY, worldZ))
 
 		// Apply RSW rotations (in degrees)
+		// Note: RSW stores rotation as [X, Y, Z] in degrees
 		modelMatrix = modelMatrix.Mul(math.RotateY(model.rotation[1] * gomath.Pi / 180))
 		modelMatrix = modelMatrix.Mul(math.RotateX(model.rotation[0] * gomath.Pi / 180))
 		modelMatrix = modelMatrix.Mul(math.RotateZ(model.rotation[2] * gomath.Pi / 180))
@@ -1495,6 +1898,55 @@ func (mv *MapViewer) updateBounds(p [3]float32) {
 	}
 }
 
+// GetLightDir returns the current light direction vector (from RSW data).
+func (mv *MapViewer) GetLightDir() [3]float32 {
+	return mv.lightDir
+}
+
+// GetWaterAnimSpeed returns the current water animation speed.
+func (mv *MapViewer) GetWaterAnimSpeed() float32 {
+	return mv.waterAnimSpeed
+}
+
+// SetWaterAnimSpeed sets the water animation speed.
+func (mv *MapViewer) SetWaterAnimSpeed(speed float32) {
+	mv.waterAnimSpeed = speed
+}
+
+// HasWater returns whether the map has water.
+func (mv *MapViewer) HasWater() bool {
+	return mv.hasWater
+}
+
+// GetModelCount returns the number of loaded models.
+func (mv *MapViewer) GetModelCount() int {
+	return len(mv.models)
+}
+
+// GetModelInfo returns debug info for a specific model by index.
+func (mv *MapViewer) GetModelInfo(idx int) (name string, pos, rot, scale [3]float32, bbox [6]float32) {
+	if idx < 0 || idx >= len(mv.models) {
+		return "", [3]float32{}, [3]float32{}, [3]float32{}, [6]float32{}
+	}
+	m := mv.models[idx]
+	return m.modelName, m.position, m.rotation, m.scale, m.bbox
+}
+
+// SetDebugMode enables/disables debug output for model positioning.
+func SetDebugMode(enabled bool) {
+	DebugModelPositioning = enabled
+}
+
+// GetAmbientColor returns the current ambient light color (from RSW data).
+func (mv *MapViewer) GetAmbientColor() [3]float32 {
+	return mv.ambientColor
+}
+
+// GetDiffuseColor returns the current diffuse light color (from RSW data).
+func (mv *MapViewer) GetDiffuseColor() [3]float32 {
+	return mv.diffuseColor
+}
+
 // Destroy frees all GPU resources.
 func (mv *MapViewer) Destroy() {
 	mv.clearTerrain()
@@ -1554,4 +2006,91 @@ func absf(x float32) float32 {
 		return -x
 	}
 	return x
+}
+
+// buildTerrainHeightMap builds a lookup table of terrain heights for model positioning.
+func (mv *MapViewer) buildTerrainHeightMap(gnd *formats.GND) {
+	mv.terrainTilesX = int(gnd.Width)
+	mv.terrainTilesZ = int(gnd.Height)
+	mv.terrainTileZoom = gnd.Zoom
+
+	// Allocate 2D array for terrain heights
+	mv.terrainAltitudes = make([][]float32, mv.terrainTilesX)
+	for x := 0; x < mv.terrainTilesX; x++ {
+		mv.terrainAltitudes[x] = make([]float32, mv.terrainTilesZ)
+		for z := 0; z < mv.terrainTilesZ; z++ {
+			tile := gnd.GetTile(x, z)
+			if tile != nil {
+				// Average of 4 corners
+				avgAlt := (tile.Altitude[0] + tile.Altitude[1] + tile.Altitude[2] + tile.Altitude[3]) / 4.0
+				mv.terrainAltitudes[x][z] = avgAlt
+			}
+		}
+	}
+}
+
+// createWaterPlane creates a water surface plane at the specified height.
+func (mv *MapViewer) createWaterPlane(_ *formats.GND, waterLevel float32) {
+	// Delete old water if exists
+	if mv.waterVAO != 0 {
+		gl.DeleteVertexArrays(1, &mv.waterVAO)
+		gl.DeleteBuffers(1, &mv.waterVBO)
+	}
+
+	// Water level in RSW is typically positive for below ground level
+	// Convert to our Y-up coordinate system
+	waterY := -waterLevel
+
+	// Create a large water plane covering the map
+	// Extend slightly beyond map bounds
+	padding := float32(50.0)
+	minX := mv.minBounds[0] - padding
+	maxX := mv.maxBounds[0] + padding
+	minZ := mv.minBounds[2] - padding
+	maxZ := mv.maxBounds[2] + padding
+
+	// Simple quad vertices (position only)
+	vertices := []float32{
+		minX, waterY, minZ,
+		maxX, waterY, minZ,
+		maxX, waterY, maxZ,
+		minX, waterY, maxZ,
+	}
+
+	// Create VAO/VBO
+	gl.GenVertexArrays(1, &mv.waterVAO)
+	gl.GenBuffers(1, &mv.waterVBO)
+
+	gl.BindVertexArray(mv.waterVAO)
+	gl.BindBuffer(gl.ARRAY_BUFFER, mv.waterVBO)
+	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*4, gl.Ptr(vertices), gl.STATIC_DRAW)
+
+	// Position attribute
+	gl.EnableVertexAttribArray(0)
+	gl.VertexAttribPointerWithOffset(0, 3, gl.FLOAT, false, 3*4, 0)
+
+	gl.BindVertexArray(0)
+
+	mv.waterLevel = waterLevel
+	mv.hasWater = true
+}
+
+// calculateSunDirection converts RSW spherical coordinates (longitude, latitude in degrees)
+// to a directional light vector. This matches how the RO client interprets the sun position.
+// Longitude: azimuth angle (0-360), horizontal rotation around Y axis
+// Latitude: elevation angle (0-90), 0 = horizon, 90 = directly overhead
+func calculateSunDirection(longitude, latitude int32) [3]float32 {
+	// Convert degrees to radians
+	lonRad := float64(longitude) * gomath.Pi / 180.0
+	latRad := float64(latitude) * gomath.Pi / 180.0
+
+	// Spherical to Cartesian conversion
+	// The sun direction points FROM the sun TO the surface (towards origin)
+	// Latitude: 0 = horizon, 90 = directly overhead
+	// Longitude: angle around Y axis
+	x := float32(gomath.Cos(latRad) * gomath.Sin(lonRad))
+	y := float32(gomath.Sin(latRad))
+	z := float32(gomath.Cos(latRad) * gomath.Cos(lonRad))
+
+	return [3]float32{x, y, z}
 }

@@ -614,11 +614,13 @@ func (app *App) renderMap3DView() {
 		imgui.TextDisabled("Drag to rotate | Scroll to zoom")
 	}
 
-	// Sun strength slider
-	imgui.Text("Sun:")
+	// Display RSW lighting info (from ADR-014 Stage 1)
+	imgui.Text("Light Dir:")
 	imgui.SameLine()
-	imgui.SetNextItemWidth(150)
-	imgui.SliderFloatV("##sunstrength", &app.mapViewer.SunStrength, 0.0, 2.0, "%.2f", imgui.SliderFlagsNone)
+	imgui.TextDisabled(fmt.Sprintf("(%.2f, %.2f, %.2f)",
+		app.mapViewer.GetLightDir()[0],
+		app.mapViewer.GetLightDir()[1],
+		app.mapViewer.GetLightDir()[2]))
 
 	imgui.Separator()
 
