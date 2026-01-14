@@ -397,6 +397,31 @@ func (app *App) renderRSWPreview() {
 			}
 		}
 
+		// Brightness slider (applies in real-time)
+		imgui.SetNextItemWidth(150)
+		brightness := app.terrainBrightness
+		if imgui.SliderFloatV("Brightness", &brightness, 0.5, 3.0, "%.2f", imgui.SliderFlagsNone) {
+			app.terrainBrightness = brightness
+			if app.mapViewer != nil {
+				app.mapViewer.Brightness = brightness
+			}
+		}
+		imgui.SameLine()
+
+		// Max models slider (requires reload)
+		imgui.SetNextItemWidth(100)
+		maxModels := int32(app.maxModelsLimit)
+		if imgui.SliderInt("Max Models", &maxModels, 100, 5000) {
+			app.maxModelsLimit = int(maxModels)
+		}
+		imgui.SameLine()
+		if imgui.Button("Reload") {
+			if app.mapViewer != nil {
+				app.mapViewer.MaxModels = app.maxModelsLimit
+			}
+			app.initMap3DView()
+		}
+
 		// Render 3D view
 		app.renderMap3DView()
 		return
@@ -407,6 +432,13 @@ func (app *App) renderRSWPreview() {
 	}
 	imgui.SameLine()
 	imgui.TextDisabled("2D Info")
+	imgui.SameLine()
+	// Max models slider
+	imgui.SetNextItemWidth(100)
+	maxModels := int32(app.maxModelsLimit)
+	if imgui.SliderInt("Max Models", &maxModels, 100, 5000) {
+		app.maxModelsLimit = int(maxModels)
+	}
 
 	imgui.Separator()
 
@@ -580,6 +612,10 @@ func (app *App) initMap3DView() {
 		app.mapViewer = mv
 	}
 
+	// Apply settings from App
+	app.mapViewer.MaxModels = app.maxModelsLimit
+	app.mapViewer.Brightness = app.terrainBrightness
+
 	// Texture loader function
 	texLoader := func(path string) ([]byte, error) {
 		return app.archive.Read(path)
@@ -590,6 +626,9 @@ func (app *App) initMap3DView() {
 		fmt.Fprintf(os.Stderr, "Error loading map: %v\n", err)
 		return
 	}
+
+	// Print loading diagnostics
+	app.mapViewer.PrintDiagnostics()
 
 	app.map3DViewMode = true
 }

@@ -135,8 +135,10 @@ type App struct {
 	magentaTransparency bool         // Enable magenta (255,0,255) as transparency key
 
 	// Map 3D viewer state (ADR-013)
-	mapViewer     *MapViewer // 3D map renderer
-	map3DViewMode bool       // Whether 3D view is active for map
+	mapViewer         *MapViewer // 3D map renderer
+	map3DViewMode     bool       // Whether 3D view is active for map
+	maxModelsLimit    int        // Max models to load (default 1500)
+	terrainBrightness float32    // Terrain brightness multiplier (default 1.5)
 }
 
 var (
@@ -183,6 +185,8 @@ func NewApp() *App {
 		previewSpeed:        1.0,  // Normal playback speed
 		previewLooping:      true, // Loop by default
 		magentaTransparency: true, // Enable magenta key transparency by default
+		maxModelsLimit:      1500, // Default max models to load
+		terrainBrightness:   1.3,  // Default terrain brightness
 	}
 
 	// Ensure screenshot directory exists (ADR-010)
