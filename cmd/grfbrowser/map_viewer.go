@@ -1274,7 +1274,7 @@ func (m *MapModel) GetNodes() []NodeDebugInfo {
 	return m.nodes
 }
 
-// GetWorldPosition returns the world position of the model.
+// GetModelWorldPosition returns the world position of the model.
 func (mv *MapViewer) GetModelWorldPosition(idx int) (float32, float32, float32) {
 	model := mv.GetModel(idx)
 	if model == nil {
@@ -2250,8 +2250,11 @@ func (mv *MapViewer) fitCamera() {
 		maxSize = sizeZ
 	}
 
-	// Default zoom distance
-	mv.Distance = 200
+	// Default zoom distance (proportional to map size)
+	mv.Distance = maxSize * 0.3
+	if mv.Distance < 200 {
+		mv.Distance = 200
+	}
 
 	mv.rotationX = 0.6 // Look down at ~35 degrees
 	mv.rotationY = 0.0
