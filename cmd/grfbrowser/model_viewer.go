@@ -706,9 +706,11 @@ func decodeModelTexture(data []byte, path string, magentaKey bool) (*image.RGBA,
 			// Convert from 16-bit to 8-bit
 			r8, g8, b8, a8 := uint8(r>>8), uint8(g>>8), uint8(b>>8), uint8(a>>8)
 
-			// Apply magenta key transparency (RGB 255,0,255 becomes transparent)
-			if magentaKey && r8 == 255 && g8 == 0 && b8 == 255 {
-				a8 = 0
+			// Apply magenta key transparency (RGB ~255,~0,~255 becomes transparent)
+			// Use tolerance for BMP decoding variations
+			// Also set RGB to black to prevent color bleeding when texture is filtered
+			if magentaKey && r8 >= 250 && g8 <= 10 && b8 >= 250 {
+				r8, g8, b8, a8 = 0, 0, 0, 0
 			}
 
 			rgba.SetRGBA(x, y, color.RGBA{R: r8, G: g8, B: b8, A: a8})
