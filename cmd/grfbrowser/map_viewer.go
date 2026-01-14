@@ -73,15 +73,15 @@ type MapViewer struct {
 	height       int32
 
 	// Terrain shader
-	terrainProgram uint32
-	locViewProj    int32
-	locLightDir    int32
-	locAmbient     int32
-	locDiffuse     int32
-	locTexture     int32
-	locLightmap      int32
-	locBrightness    int32
-	locLightOpacity  int32
+	terrainProgram  uint32
+	locViewProj     int32
+	locLightDir     int32
+	locAmbient      int32
+	locDiffuse      int32
+	locTexture      int32
+	locLightmap     int32
+	locBrightness   int32
+	locLightOpacity int32
 
 	// Model shader
 	modelProgram     uint32
