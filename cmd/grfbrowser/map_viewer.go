@@ -42,6 +42,25 @@ type MapDiagnostics struct {
 }
 
 // MapModel represents a placed RSM model in the map.
+// NodeDebugInfo stores debug information about an RSM node.
+type NodeDebugInfo struct {
+	Name         string
+	Parent       string
+	Offset       [3]float32
+	Position     [3]float32
+	Scale        [3]float32
+	RotAngle     float32
+	RotAxis      [3]float32
+	Matrix       [9]float32
+	HasRotKeys   bool
+	HasPosKeys   bool
+	HasScaleKeys bool
+	// First rotation keyframe (if any)
+	FirstRotQuat [4]float32
+	RotKeyCount  int
+}
+
+// MapModel represents a placed RSM model in the map.
 type MapModel struct {
 	vao        uint32
 	vbo        uint32
@@ -57,17 +76,21 @@ type MapModel struct {
 	bbox       [6]float32 // minX, minY, minZ, maxX, maxY, maxZ (after centering)
 	instanceID int        // Unique instance ID for this model placement
 	// Visibility and selection
-	Visible    bool // Whether this instance is rendered
+	Visible bool // Whether this instance is rendered
 	// Stats for debugging
 	totalFaces   int
 	twoSideFaces int
+	// Extended debug info
+	rsmVersion string
+	nodeCount  int
+	nodes      []NodeDebugInfo
 }
 
 // ModelGroup represents a group of model instances sharing the same RSM.
 type ModelGroup struct {
-	RSMName     string // RSM filename (without path)
-	Instances   []int  // Indices into MapViewer.models
-	AllVisible  bool   // Quick toggle for all instances
+	RSMName    string // RSM filename (without path)
+	Instances  []int  // Indices into MapViewer.models
+	AllVisible bool   // Quick toggle for all instances
 }
 
 // modelTexGroup groups faces by texture for rendering.
@@ -102,16 +125,16 @@ type MapViewer struct {
 	locFogColor     int32
 
 	// Model shader
-	modelProgram      uint32
-	locModelMVP       int32
-	locModelLightDir  int32
-	locModelAmbient   int32
-	locModelDiffuse   int32
-	locModelTexture   int32
-	locModelFogUse    int32
-	locModelFogNear   int32
-	locModelFogFar    int32
-	locModelFogColor  int32
+	modelProgram     uint32
+	locModelMVP      int32
+	locModelLightDir int32
+	locModelAmbient  int32
+	locModelDiffuse  int32
+	locModelTexture  int32
+	locModelFogUse   int32
+	locModelFogNear  int32
+	locModelFogFar   int32
+	locModelFogColor int32
 
 	// Terrain mesh
 	terrainVAO    uint32
@@ -127,11 +150,14 @@ type MapViewer struct {
 	tilesPerRow    int32 // Number of lightmap tiles per row in atlas
 
 	// Placed models
-	models       []*MapModel
-	ModelGroups  []ModelGroup // Models grouped by RSM name
-	MaxModels    int          // Maximum models to load (0 = unlimited)
-	SelectedIdx  int          // Currently selected model index (-1 = none)
-	ModelFilter  string       // Filter string for model names
+	models      []*MapModel
+	ModelGroups []ModelGroup // Models grouped by RSM name
+	MaxModels   int          // Maximum models to load (0 = unlimited)
+	SelectedIdx int          // Currently selected model index (-1 = none)
+	ModelFilter string       // Filter string for model names
+
+	// Debug options
+	ForceAllTwoSided bool // Force all faces to render as two-sided (debug)
 
 	// Diagnostics
 	Diagnostics MapDiagnostics
@@ -1233,6 +1259,21 @@ func (m *MapModel) HasNegativeScale() bool {
 	return m.scale[0]*m.scale[1]*m.scale[2] < 0
 }
 
+// GetRSMVersion returns the RSM version string.
+func (m *MapModel) GetRSMVersion() string {
+	return m.rsmVersion
+}
+
+// GetNodeCount returns the number of nodes in the RSM.
+func (m *MapModel) GetNodeCount() int {
+	return m.nodeCount
+}
+
+// GetNodes returns the node debug info for this model.
+func (m *MapModel) GetNodes() []NodeDebugInfo {
+	return m.nodes
+}
+
 // GetWorldPosition returns the world position of the model.
 func (mv *MapViewer) GetModelWorldPosition(idx int) (float32, float32, float32) {
 	model := mv.GetModel(idx)
@@ -1301,82 +1342,135 @@ func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texL
 		// Build node transform matrix (with parent hierarchy)
 		nodeMatrix := mv.buildNodeMatrix(node, rsm)
 
+		// Check if we need to reverse winding due to negative scale
+		reverseWinding := ref.Scale[0]*ref.Scale[1]*ref.Scale[2] < 0
+
 		// Process faces
 		for _, face := range node.Faces {
 			// Track face stats
 			mv.Diagnostics.TotalFaces++
-			if face.TwoSide != 0 {
+			isTwoSided := face.TwoSide != 0
+			if isTwoSided {
 				mv.Diagnostics.TwoSidedFaces++
 			}
 
-			// Get face normal
-			normal := [3]float32{0, 1, 0}
-			if len(face.VertexIDs) >= 3 && int(face.VertexIDs[0]) < len(node.Vertices) &&
-				int(face.VertexIDs[1]) < len(node.Vertices) && int(face.VertexIDs[2]) < len(node.Vertices) {
-				// Calculate face normal from vertices
-				v0 := node.Vertices[face.VertexIDs[0]]
-				v1 := node.Vertices[face.VertexIDs[1]]
-				v2 := node.Vertices[face.VertexIDs[2]]
-				e1 := [3]float32{v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]}
-				e2 := [3]float32{v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]}
-				normal = normalize(cross(e1, e2))
+			// Skip faces with insufficient vertices
+			if len(face.VertexIDs) < 3 {
+				continue
 			}
 
-			// Add vertices for this face
-			faceBaseIdx := uint32(len(vertices))
-			for i, vid := range face.VertexIDs {
+			// Bounds check vertex IDs
+			validFace := true
+			for _, vid := range face.VertexIDs {
 				if int(vid) >= len(node.Vertices) {
-					continue
+					validFace = false
+					break
 				}
-				v := node.Vertices[vid]
-
-				// Transform vertex position by node matrix
-				pos := transformPoint(nodeMatrix, v)
-
-				// Flip Y for RO coordinate system (same as model_viewer.go)
-				pos[1] = -pos[1]
-
-				// Track bounding box
-				if pos[0] < minVertX {
-					minVertX = pos[0]
-				}
-				if pos[0] > maxVertX {
-					maxVertX = pos[0]
-				}
-				if pos[1] < minVertY {
-					minVertY = pos[1]
-				}
-				if pos[1] > maxVertY {
-					maxVertY = pos[1]
-				}
-				if pos[2] < minVertZ {
-					minVertZ = pos[2]
-				}
-				if pos[2] > maxVertZ {
-					maxVertZ = pos[2]
-				}
-
-				// Get texture coordinates
-				var uv [2]float32
-				if i < len(face.TexCoordIDs) && int(face.TexCoordIDs[i]) < len(node.TexCoords) {
-					tc := node.TexCoords[face.TexCoordIDs[i]]
-					uv = [2]float32{tc.U, tc.V}
-				}
-
-				vertices = append(vertices, modelVertex{
-					Position: pos,
-					Normal:   normal,
-					TexCoord: uv,
-				})
+			}
+			if !validFace {
+				continue
 			}
 
-			// Add indices for triangles (face can have 3+ vertices)
+			// Calculate face normal from first 3 vertices
+			v0 := node.Vertices[face.VertexIDs[0]]
+			v1 := node.Vertices[face.VertexIDs[1]]
+			v2 := node.Vertices[face.VertexIDs[2]]
+			e1 := [3]float32{v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]}
+			e2 := [3]float32{v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]}
+			normalVec := cross(e1, e2)
+
+			// Degenerate triangle detection - skip if normal is too small
+			normalMag := float32(gomath.Sqrt(float64(normalVec[0]*normalVec[0] + normalVec[1]*normalVec[1] + normalVec[2]*normalVec[2])))
+			if normalMag < 1e-5 {
+				continue // Skip degenerate triangle
+			}
+
+			normal := [3]float32{normalVec[0] / normalMag, normalVec[1] / normalMag, normalVec[2] / normalMag}
+
+			// Helper to add face vertices
+			addFaceVertices := func(reverseOrder bool, flipNormal bool) uint32 {
+				faceBaseIdx := uint32(len(vertices))
+				faceNormal := normal
+				if flipNormal {
+					faceNormal = [3]float32{-normal[0], -normal[1], -normal[2]}
+				}
+
+				// Determine vertex order (RSM faces are always triangles = 3 vertices)
+				var vertIDs [3]uint16
+				var texIDs [3]uint16
+				if reverseOrder {
+					// Reverse vertex order for back face: 0,1,2 -> 2,1,0
+					vertIDs = [3]uint16{face.VertexIDs[2], face.VertexIDs[1], face.VertexIDs[0]}
+					texIDs = [3]uint16{face.TexCoordIDs[2], face.TexCoordIDs[1], face.TexCoordIDs[0]}
+				} else {
+					vertIDs = face.VertexIDs
+					texIDs = face.TexCoordIDs
+				}
+
+				for i := 0; i < 3; i++ {
+					vid := vertIDs[i]
+					v := node.Vertices[vid]
+
+					// Transform vertex position by node matrix
+					pos := transformPoint(nodeMatrix, v)
+
+					// Flip Y for RO coordinate system
+					pos[1] = -pos[1]
+
+					// Track bounding box
+					if pos[0] < minVertX {
+						minVertX = pos[0]
+					}
+					if pos[0] > maxVertX {
+						maxVertX = pos[0]
+					}
+					if pos[1] < minVertY {
+						minVertY = pos[1]
+					}
+					if pos[1] > maxVertY {
+						maxVertY = pos[1]
+					}
+					if pos[2] < minVertZ {
+						minVertZ = pos[2]
+					}
+					if pos[2] > maxVertZ {
+						maxVertZ = pos[2]
+					}
+
+					// Get texture coordinates
+					var uv [2]float32
+					if int(texIDs[i]) < len(node.TexCoords) {
+						tc := node.TexCoords[texIDs[i]]
+						uv = [2]float32{tc.U, tc.V}
+					}
+
+					vertices = append(vertices, modelVertex{
+						Position: pos,
+						Normal:   faceNormal,
+						TexCoord: uv,
+					})
+				}
+				return faceBaseIdx
+			}
+
+			// Add front face (with winding reversal if negative scale)
+			faceBaseIdx := addFaceVertices(reverseWinding, false)
+
+			// Add indices for triangle (RSM faces are always triangles)
 			texIdx := int(face.TextureID)
-			for i := 2; i < len(face.VertexIDs); i++ {
+			texGroups[texIdx] = append(texGroups[texIdx],
+				faceBaseIdx,
+				faceBaseIdx+1,
+				faceBaseIdx+2,
+			)
+
+			// If TwoSide (or ForceAllTwoSided debug flag), add back face
+			if isTwoSided || mv.ForceAllTwoSided {
+				backFaceBaseIdx := addFaceVertices(!reverseWinding, true)
 				texGroups[texIdx] = append(texGroups[texIdx],
-					faceBaseIdx,
-					faceBaseIdx+uint32(i-1),
-					faceBaseIdx+uint32(i),
+					backFaceBaseIdx,
+					backFaceBaseIdx+1,
+					backFaceBaseIdx+2,
 				)
 			}
 		}
@@ -1390,20 +1484,20 @@ func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texL
 		return nil
 	}
 
-	// Center all models based on bounding box (standard RO approach)
-	// Subtract centerX/Z for horizontal centering, minY to put base at ground
+	// Center models horizontally (X/Z) but NOT vertically (Y)
+	// Preserving Y offset fixes positioning of decorative elements attached to structures
 	centerX := (minVertX + maxVertX) / 2
 	centerZ := (minVertZ + maxVertZ) / 2
 	for i := range vertices {
 		vertices[i].Position[0] -= centerX
-		vertices[i].Position[1] -= minVertY
+		// Don't center Y - preserve original vertical offset from RSM
 		vertices[i].Position[2] -= centerZ
 	}
 
 	// Store bounding box after centering (for debug visualization)
 	bboxAfter := [6]float32{
-		minVertX - centerX, minVertY - minVertY, minVertZ - centerZ,
-		maxVertX - centerX, maxVertY - minVertY, maxVertZ - centerZ,
+		minVertX - centerX, minVertY, minVertZ - centerZ,
+		maxVertX - centerX, maxVertY, maxVertZ - centerZ,
 	}
 
 	// Debug: log model centering info
@@ -1445,6 +1539,29 @@ func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texL
 		}
 	}
 
+	// Build node debug info
+	nodeDebugInfo := make([]NodeDebugInfo, len(rsm.Nodes))
+	for i, node := range rsm.Nodes {
+		info := NodeDebugInfo{
+			Name:         node.Name,
+			Parent:       node.Parent,
+			Offset:       node.Offset,
+			Position:     node.Position,
+			Scale:        node.Scale,
+			RotAngle:     node.RotAngle,
+			RotAxis:      node.RotAxis,
+			Matrix:       node.Matrix,
+			HasRotKeys:   len(node.RotKeys) > 0,
+			HasPosKeys:   len(node.PosKeys) > 0,
+			HasScaleKeys: len(node.ScaleKeys) > 0,
+			RotKeyCount:  len(node.RotKeys),
+		}
+		if len(node.RotKeys) > 0 {
+			info.FirstRotQuat = node.RotKeys[0].Quaternion
+		}
+		nodeDebugInfo[i] = info
+	}
+
 	// Create GPU resources
 	model := &MapModel{
 		textures:     modelTextures,
@@ -1457,6 +1574,9 @@ func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texL
 		Visible:      true, // Visible by default
 		totalFaces:   modelTotalFaces,
 		twoSideFaces: modelTwoSideFaces,
+		rsmVersion:   rsm.Version.String(),
+		nodeCount:    len(rsm.Nodes),
+		nodes:        nodeDebugInfo,
 	}
 
 	// Upload mesh to GPU
@@ -1500,20 +1620,68 @@ func (mv *MapViewer) buildNodeMatrixRecursive(node *formats.RSMNode, rsm *format
 	}
 	visited[node.Name] = true
 
-	result := math.Identity()
+	// Check if node has animation - use different transform order
+	hasAnimation := len(node.RotKeys) > 0 || len(node.PosKeys) > 0 || len(node.ScaleKeys) > 0
 
-	// Apply scale
-	result = result.Mul(math.Scale(node.Scale[0], node.Scale[1], node.Scale[2]))
+	var result math.Mat4
 
-	// Apply rotation from 3x3 matrix (not axis-angle)
-	rotMat := math.FromMat3x3(node.Matrix)
-	result = result.Mul(rotMat)
+	if hasAnimation {
+		// For animated nodes, use simpler transform order that works with keyframes
+		// Order: Scale -> Rotation -> Position (then parent)
+		result = math.Identity()
 
-	// Apply offset (pivot point) - note the negative sign
-	result = result.Mul(math.Translate(-node.Offset[0], -node.Offset[1], -node.Offset[2]))
+		// Scale (use first keyframe if animated)
+		scale := node.Scale
+		if len(node.ScaleKeys) > 0 {
+			scale = node.ScaleKeys[0].Scale
+		}
+		result = result.Mul(math.Scale(scale[0], scale[1], scale[2]))
 
-	// Apply position
-	result = result.Mul(math.Translate(node.Position[0], node.Position[1], node.Position[2]))
+		// Rotation from keyframe or matrix
+		if len(node.RotKeys) > 0 {
+			k := node.RotKeys[0]
+			rotQuat := math.Quat{X: k.Quaternion[0], Y: k.Quaternion[1], Z: k.Quaternion[2], W: k.Quaternion[3]}
+			result = result.Mul(rotQuat.ToMat4())
+		} else {
+			// Use 3x3 matrix
+			result = result.Mul(math.FromMat3x3(node.Matrix))
+		}
+
+		// Position (use first keyframe if animated)
+		position := node.Position
+		if len(node.PosKeys) > 0 {
+			position = node.PosKeys[0].Position
+		}
+		result = result.Mul(math.Translate(position[0], position[1], position[2]))
+	} else {
+		// For static nodes, use korangar transform order:
+		// main = Translate(Offset) * Mat3x3
+		// transform = Translate(Position) * Scale
+		// result = transform * main
+		main := math.Translate(node.Offset[0], node.Offset[1], node.Offset[2])
+		main = main.Mul(math.FromMat3x3(node.Matrix))
+
+		transform := math.Translate(node.Position[0], node.Position[1], node.Position[2])
+
+		// Apply axis-angle rotation if present
+		if node.RotAngle != 0 {
+			axisLen := float32(gomath.Sqrt(float64(
+				node.RotAxis[0]*node.RotAxis[0] +
+					node.RotAxis[1]*node.RotAxis[1] +
+					node.RotAxis[2]*node.RotAxis[2])))
+			if axisLen > 1e-6 {
+				normalizedAxis := [3]float32{
+					node.RotAxis[0] / axisLen,
+					node.RotAxis[1] / axisLen,
+					node.RotAxis[2] / axisLen,
+				}
+				transform = transform.Mul(math.RotateAxis(normalizedAxis, node.RotAngle))
+			}
+		}
+
+		transform = transform.Mul(math.Scale(node.Scale[0], node.Scale[1], node.Scale[2]))
+		result = transform.Mul(main)
+	}
 
 	// If node has parent, multiply by parent's matrix
 	if node.Parent != "" && node.Parent != node.Name {
