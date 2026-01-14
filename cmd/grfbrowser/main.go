@@ -29,6 +29,7 @@ func main() {
 
 	// Parse command line arguments
 	grfPath := flag.String("grf", "", "Path to GRF file to open")
+	debugMap := flag.String("map", "", "Map name to auto-load (e.g., 'prontera' for prontera.rsw)")
 	flag.Parse()
 
 	// Create and run application
@@ -40,6 +41,11 @@ func main() {
 		if err := app.OpenGRF(*grfPath); err != nil {
 			fmt.Fprintf(os.Stderr, "Error opening GRF: %v\n", err)
 		}
+	}
+
+	// Auto-load map if specified (requires GRF to be loaded)
+	if *debugMap != "" && app.archive != nil {
+		app.autoLoadMap(*debugMap)
 	}
 
 	app.Run()
@@ -138,7 +144,7 @@ type App struct {
 	mapViewer         *MapViewer // 3D map renderer
 	map3DViewMode     bool       // Whether 3D view is active for map
 	maxModelsLimit    int        // Max models to load (default 1500)
-	terrainBrightness float32    // Terrain brightness multiplier (default 1.5)
+	terrainBrightness float32    // Terrain brightness multiplier (default 1.0)
 }
 
 var (
@@ -186,7 +192,7 @@ func NewApp() *App {
 		previewLooping:      true, // Loop by default
 		magentaTransparency: true, // Enable magenta key transparency by default
 		maxModelsLimit:      1500, // Default max models to load
-		terrainBrightness:   1.3,  // Default terrain brightness
+		terrainBrightness:   1.0,  // Default terrain brightness
 	}
 
 	// Ensure screenshot directory exists (ADR-010)
@@ -335,6 +341,38 @@ func (app *App) OpenGRF(path string) error {
 	app.backend.SetWindowTitle(fmt.Sprintf("GRF Browser - %s", filepath.Base(path)))
 
 	return nil
+}
+
+// autoLoadMap automatically loads a map and opens 3D view.
+// Called from command line with -map flag for debugging.
+func (app *App) autoLoadMap(mapName string) {
+	if app.archive == nil {
+		fmt.Fprintf(os.Stderr, "Cannot auto-load map: no GRF loaded\n")
+		return
+	}
+
+	// Construct RSW path (maps are stored as data/{mapname}.rsw)
+	rswPath := "data\\" + mapName + ".rsw"
+
+	// Check if file exists in archive
+	if !app.archive.Contains(rswPath) {
+		// Try with forward slash
+		rswPath = "data/" + mapName + ".rsw"
+		if !app.archive.Contains(rswPath) {
+			fmt.Fprintf(os.Stderr, "Map not found in archive: %s\n", mapName)
+			return
+		}
+	}
+
+	// Set selection to trigger preview
+	app.selectedPath = rswPath
+	app.selectedOriginalPath = rswPath
+
+	// Load RSW preview
+	app.loadRSWPreview(rswPath)
+
+	// Initialize 3D view
+	app.initMap3DView()
 }
 
 // render is called each frame to draw the UI.
@@ -488,12 +526,14 @@ func (app *App) render() {
 
 	// Layout dimensions
 	leftPanelWidth := float32(350)
-	rightPanelWidth := float32(200) // Actions panel for animations
+	rightPanelWidth := float32(200) // Actions panel for animations / map controls
 	statusBarHeight := float32(30)
 	contentHeight := workSize.Y - statusBarHeight
 
-	// Show actions panel only for ACT files
+	// Show actions panel for ACT files
 	showActionsPanel := app.previewACT != nil
+	// Show map controls panel for 3D map view
+	showMapControlsPanel := app.map3DViewMode && app.mapViewer != nil
 
 	// Window flags for fixed panels
 	flags := imgui.WindowFlagsNoMove | imgui.WindowFlagsNoResize | imgui.WindowFlagsNoCollapse
@@ -508,9 +548,9 @@ func (app *App) render() {
 	}
 	imgui.End()
 
-	// Calculate preview panel width (shrinks when actions panel is shown)
+	// Calculate preview panel width (shrinks when right panel is shown)
 	previewWidth := workSize.X - leftPanelWidth
-	if showActionsPanel {
+	if showActionsPanel || showMapControlsPanel {
 		previewWidth -= rightPanelWidth
 	}
 
@@ -528,6 +568,16 @@ func (app *App) render() {
 		imgui.SetNextWindowSize(imgui.NewVec2(rightPanelWidth, contentHeight))
 		if imgui.BeginV("Actions", nil, flags) {
 			app.renderActionsPanel()
+		}
+		imgui.End()
+	}
+
+	// Right panel - Map Controls (only for 3D map view)
+	if showMapControlsPanel {
+		imgui.SetNextWindowPos(imgui.NewVec2(workPos.X+leftPanelWidth+previewWidth, workPos.Y))
+		imgui.SetNextWindowSize(imgui.NewVec2(rightPanelWidth, contentHeight))
+		if imgui.BeginV("Controls", nil, flags) {
+			app.renderMapControlsPanel()
 		}
 		imgui.End()
 	}

@@ -370,59 +370,8 @@ func (app *App) renderRSWPreview() {
 
 	rsw := app.previewRSW
 
-	// View mode toggle buttons
+	// In 3D mode, just render the 3D view filling available space
 	if app.map3DViewMode {
-		if imgui.Button("2D Info") {
-			app.map3DViewMode = false
-		}
-		imgui.SameLine()
-		imgui.TextDisabled("3D View")
-		imgui.SameLine()
-		if imgui.Button("Reset Camera") {
-			if app.mapViewer != nil {
-				app.mapViewer.Reset()
-			}
-		}
-		imgui.SameLine()
-		// FPS/Orbit mode toggle
-		if app.mapViewer != nil {
-			if app.mapViewer.FPSMode {
-				if imgui.Button("Orbit Mode") {
-					app.mapViewer.ToggleFPSMode()
-				}
-			} else {
-				if imgui.Button("FPS Mode") {
-					app.mapViewer.ToggleFPSMode()
-				}
-			}
-		}
-
-		// Brightness slider (applies in real-time)
-		imgui.SetNextItemWidth(150)
-		brightness := app.terrainBrightness
-		if imgui.SliderFloatV("Brightness", &brightness, 0.5, 3.0, "%.2f", imgui.SliderFlagsNone) {
-			app.terrainBrightness = brightness
-			if app.mapViewer != nil {
-				app.mapViewer.Brightness = brightness
-			}
-		}
-		imgui.SameLine()
-
-		// Max models slider (requires reload)
-		imgui.SetNextItemWidth(100)
-		maxModels := int32(app.maxModelsLimit)
-		if imgui.SliderInt("Max Models", &maxModels, 100, 5000) {
-			app.maxModelsLimit = int(maxModels)
-		}
-		imgui.SameLine()
-		if imgui.Button("Reload") {
-			if app.mapViewer != nil {
-				app.mapViewer.MaxModels = app.maxModelsLimit
-			}
-			app.initMap3DView()
-		}
-
-		// Render 3D view
 		app.renderMap3DView()
 		return
 	}
@@ -636,83 +585,64 @@ func (app *App) initMap3DView() {
 // Track last mouse position for drag delta calculation
 var mapViewerLastMousePos imgui.Vec2
 
-// renderMap3DView renders the 3D map view.
+// renderMap3DView renders the 3D map view filling available space.
 func (app *App) renderMap3DView() {
 	if app.mapViewer == nil {
 		imgui.TextDisabled("Map viewer not initialized")
 		return
 	}
 
-	// Help text based on mode
-	if app.mapViewer.FPSMode {
-		imgui.TextDisabled("WASD: Move | QE: Up/Down | Drag: Look | Scroll: Speed")
-		// Show current speed
-		imgui.SameLine()
-		imgui.Text(fmt.Sprintf("Speed: %.1f", app.mapViewer.MoveSpeed))
-	} else {
-		imgui.TextDisabled("Drag to rotate | Scroll to zoom")
+	// Handle keyboard input for camera movement
+	var forward, right, up float32
+	if imgui.IsKeyDown(imgui.KeyW) {
+		forward = 1
+	}
+	if imgui.IsKeyDown(imgui.KeyS) {
+		forward = -1
+	}
+	if imgui.IsKeyDown(imgui.KeyD) {
+		right = 1
+	}
+	if imgui.IsKeyDown(imgui.KeyA) {
+		right = -1
+	}
+	if imgui.IsKeyDown(imgui.KeyE) {
+		up = 1
+	}
+	if imgui.IsKeyDown(imgui.KeyQ) {
+		up = -1
 	}
 
-	// Display RSW lighting info (from ADR-014 Stage 1)
-	imgui.Text("Light Dir:")
-	imgui.SameLine()
-	imgui.TextDisabled(fmt.Sprintf("(%.2f, %.2f, %.2f)",
-		app.mapViewer.GetLightDir()[0],
-		app.mapViewer.GetLightDir()[1],
-		app.mapViewer.GetLightDir()[2]))
-
-	imgui.Separator()
-
-	// Handle FPS keyboard input
-	if app.mapViewer.FPSMode {
-		var forward, right, up float32
-		if imgui.IsKeyDown(imgui.KeyW) {
-			forward = 1
-		}
-		if imgui.IsKeyDown(imgui.KeyS) {
-			forward = -1
-		}
-		if imgui.IsKeyDown(imgui.KeyD) {
-			right = 1
-		}
-		if imgui.IsKeyDown(imgui.KeyA) {
-			right = -1
-		}
-		if imgui.IsKeyDown(imgui.KeyE) {
-			up = 1
-		}
-		if imgui.IsKeyDown(imgui.KeyQ) {
-			up = -1
-		}
-		if forward != 0 || right != 0 || up != 0 {
+	if forward != 0 || right != 0 || up != 0 {
+		if app.mapViewer.FPSMode {
 			app.mapViewer.HandleFPSMovement(forward, right, up)
+		} else {
+			app.mapViewer.HandleOrbitMovement(forward, right, up)
 		}
 	}
+
+	// Get available space and resize render target to match
+	avail := imgui.ContentRegionAvail()
+	width := avail.X
+	height := avail.Y
+	if width < 100 {
+		width = 100
+	}
+	if height < 100 {
+		height = 100
+	}
+
+	// Resize render target to match display size (prevents blurry scaling)
+	app.mapViewer.Resize(int32(width), int32(height))
 
 	// Render the map
 	texID := app.mapViewer.Render()
-
-	// Display the rendered texture
-	avail := imgui.ContentRegionAvail()
-	size := avail.X
-	if avail.Y < size {
-		size = avail.Y
-	}
-	if size < 100 {
-		size = 100
-	}
-
-	// Center the image
-	cursorX := imgui.CursorPosX()
-	if avail.X > size {
-		imgui.SetCursorPosX(cursorX + (avail.X-size)/2)
-	}
 
 	// Display with flipped V coordinates (OpenGL to ImGui)
 	texRef := imgui.NewTextureRefTextureID(imgui.TextureID(texID))
 	imgui.ImageWithBgV(
 		*texRef,
-		imgui.NewVec2(size, size),
+		imgui.NewVec2(width, height),
 		imgui.NewVec2(0, 1), // UV flipped
 		imgui.NewVec2(1, 0),
 		imgui.NewVec4(0.1, 0.1, 0.1, 1.0), // Dark background
@@ -735,5 +665,107 @@ func (app *App) renderMap3DView() {
 		if wheel != 0 {
 			app.mapViewer.HandleMouseWheel(wheel)
 		}
+	}
+}
+
+// renderMapControlsPanel renders the map controls in the right panel.
+func (app *App) renderMapControlsPanel() {
+	if app.mapViewer == nil {
+		return
+	}
+
+	// Camera section
+	imgui.Text("Camera")
+	imgui.Separator()
+
+	// Zoom slider with label
+	imgui.Text("Zoom:")
+	zoom := app.mapViewer.Distance
+	imgui.SetNextItemWidth(-1)
+	if imgui.SliderFloatV("##Zoom", &zoom, 50, 2000, "%.0f", imgui.SliderFlagsNone) {
+		app.mapViewer.Distance = zoom
+	}
+
+	// Camera mode buttons
+	if app.mapViewer.FPSMode {
+		if imgui.ButtonV("Orbit Mode", imgui.NewVec2(-1, 0)) {
+			app.mapViewer.ToggleFPSMode()
+		}
+	} else {
+		if imgui.ButtonV("FPS Mode", imgui.NewVec2(-1, 0)) {
+			app.mapViewer.ToggleFPSMode()
+		}
+	}
+
+	if imgui.ButtonV("Reset Camera", imgui.NewVec2(-1, 0)) {
+		app.mapViewer.Reset()
+	}
+
+	imgui.Spacing()
+	imgui.Spacing()
+
+	// Fog section
+	imgui.Text("Fog")
+	imgui.Separator()
+
+	fogEnabled := app.mapViewer.FogEnabled
+	if imgui.Checkbox("Enabled", &fogEnabled) {
+		app.mapViewer.FogEnabled = fogEnabled
+	}
+
+	imgui.Text("Near:")
+	fogNear := app.mapViewer.FogNear
+	imgui.SetNextItemWidth(-1)
+	if imgui.SliderFloatV("##FogNear", &fogNear, 10, 500, "%.0f", imgui.SliderFlagsNone) {
+		app.mapViewer.FogNear = fogNear
+	}
+
+	imgui.Text("Far:")
+	fogFar := app.mapViewer.FogFar
+	imgui.SetNextItemWidth(-1)
+	if imgui.SliderFloatV("##FogFar", &fogFar, 100, 2000, "%.0f", imgui.SliderFlagsNone) {
+		app.mapViewer.FogFar = fogFar
+	}
+
+	imgui.Spacing()
+	imgui.Spacing()
+
+	// Lighting section
+	imgui.Text("Lighting")
+	imgui.Separator()
+
+	imgui.Text("Brightness:")
+	brightness := app.terrainBrightness
+	imgui.SetNextItemWidth(-1)
+	if imgui.SliderFloatV("##Brightness", &brightness, 0.5, 3.0, "%.2f", imgui.SliderFlagsNone) {
+		app.terrainBrightness = brightness
+		app.mapViewer.Brightness = brightness
+	}
+
+	imgui.Spacing()
+	imgui.Spacing()
+
+	// Model section
+	imgui.Text("Models")
+	imgui.Separator()
+
+	imgui.Text("Max Models:")
+	maxModels := int32(app.maxModelsLimit)
+	imgui.SetNextItemWidth(-1)
+	if imgui.SliderIntV("##MaxModels", &maxModels, 100, 5000, "%d", imgui.SliderFlagsNone) {
+		app.maxModelsLimit = int(maxModels)
+	}
+
+	if imgui.ButtonV("Reload Map", imgui.NewVec2(-1, 0)) {
+		app.mapViewer.MaxModels = app.maxModelsLimit
+		app.initMap3DView()
+	}
+
+	imgui.Spacing()
+	imgui.Spacing()
+
+	// View toggle
+	if imgui.ButtonV("2D Info View", imgui.NewVec2(-1, 0)) {
+		app.map3DViewMode = false
 	}
 }
