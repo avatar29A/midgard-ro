@@ -82,14 +82,22 @@ type MapViewer struct {
 	locLightmap     int32
 	locBrightness   int32
 	locLightOpacity int32
+	locFogUse       int32
+	locFogNear      int32
+	locFogFar       int32
+	locFogColor     int32
 
 	// Model shader
-	modelProgram     uint32
-	locModelMVP      int32
-	locModelLightDir int32
-	locModelAmbient  int32
-	locModelDiffuse  int32
-	locModelTexture  int32
+	modelProgram      uint32
+	locModelMVP       int32
+	locModelLightDir  int32
+	locModelAmbient   int32
+	locModelDiffuse   int32
+	locModelTexture   int32
+	locModelFogUse    int32
+	locModelFogNear   int32
+	locModelFogFar    int32
+	locModelFogColor  int32
 
 	// Terrain mesh
 	terrainVAO    uint32
@@ -114,7 +122,7 @@ type MapViewer struct {
 	// Camera - Orbit mode
 	rotationX float32
 	rotationY float32
-	distance  float32
+	Distance  float32 // Public for zoom control
 	centerX   float32
 	centerY   float32
 	centerZ   float32
@@ -133,7 +141,7 @@ type MapViewer struct {
 	ambientColor [3]float32 // From RSW.Light.Ambient
 	diffuseColor [3]float32 // From RSW.Light.Diffuse
 	lightOpacity float32    // Shadow opacity from RSW (affects ambient strength)
-	Brightness   float32    // Terrain brightness multiplier (default 1.3)
+	Brightness   float32    // Terrain brightness multiplier (default 1.0)
 
 	// Map bounds
 	minBounds [3]float32
@@ -165,11 +173,11 @@ type MapViewer struct {
 	waterFrame     int      // Current animation frame
 	useWaterTex    bool     // Whether we have loaded water textures
 
-	// Fog settings (Stage 4 - ADR-014)
-	fogEnabled bool
-	fogNear    float32
-	fogFar     float32
-	fogColor   [3]float32
+	// Fog settings (Stage 4 - ADR-014) - public for UI controls
+	FogEnabled bool
+	FogNear    float32
+	FogFar     float32
+	FogColor   [3]float32
 }
 
 // terrainVertex is the vertex format for terrain mesh.
@@ -225,6 +233,12 @@ uniform vec3 uDiffuse;
 uniform float uBrightness;
 uniform float uLightOpacity;
 
+// Fog uniforms (roBrowser style)
+uniform bool uFogUse;
+uniform float uFogNear;
+uniform float uFogFar;
+uniform vec3 uFogColor;
+
 out vec4 FragColor;
 
 void main() {
@@ -261,6 +275,13 @@ void main() {
     // Final color: (texture * lighting * vertColor * brightness) + colorTint
     // roBrowser formula: texture * LightColor + ColorMap
     vec3 finalColor = texColor.rgb * lighting * vertColor * uBrightness + colorTint;
+
+    // Apply fog (roBrowser formula using smoothstep)
+    if (uFogUse) {
+        float depth = gl_FragCoord.z / gl_FragCoord.w;
+        float fogFactor = smoothstep(uFogNear, uFogFar, depth);
+        finalColor = mix(finalColor, uFogColor, fogFactor);
+    }
 
     FragColor = vec4(finalColor, texColor.a * vColor.a);
 }
@@ -299,6 +320,12 @@ uniform vec3 uLightDir;
 uniform vec3 uAmbient;
 uniform vec3 uDiffuse;
 
+// Fog uniforms (roBrowser style)
+uniform bool uFogUse;
+uniform float uFogNear;
+uniform float uFogFar;
+uniform vec3 uFogColor;
+
 out vec4 FragColor;
 
 void main() {
@@ -309,11 +336,19 @@ void main() {
         discard;
     }
 
-    // Simple lighting
-    float NdotL = max(dot(normalize(vNormal), normalize(uLightDir)), 0.0);
+    // Simple lighting with shadow lift (roBrowser uses min 0.5 for models)
+    float NdotL = max(dot(normalize(vNormal), normalize(uLightDir)), 0.5);
     vec3 lighting = uAmbient + uDiffuse * NdotL;
 
     vec3 color = texColor.rgb * lighting;
+
+    // Apply fog (roBrowser formula using smoothstep)
+    if (uFogUse) {
+        float depth = gl_FragCoord.z / gl_FragCoord.w;
+        float fogFactor = smoothstep(uFogNear, uFogFar, depth);
+        color = mix(color, uFogColor, fogFactor);
+    }
+
     FragColor = vec4(color, texColor.a);
 }
 `
@@ -416,10 +451,10 @@ func NewMapViewer(width, height int32) (*MapViewer, error) {
 		groundTextures: make(map[int]uint32),
 		rotationX:      0.5,
 		rotationY:      0.0,
-		distance:       500.0,
+		Distance:       200.0,
 		MoveSpeed:      5.0,
 		MaxModels:      1500, // Default model limit
-		Brightness:     1.3,  // Default terrain brightness multiplier
+		Brightness:     1.0,  // Default terrain brightness multiplier
 		// Default lighting (will be overwritten by RSW data)
 		lightDir:     [3]float32{0.5, 0.866, 0.0}, // 60 degrees elevation
 		ambientColor: [3]float32{0.3, 0.3, 0.3},
@@ -471,6 +506,30 @@ func (mv *MapViewer) createFramebuffer() error {
 
 	gl.BindFramebuffer(gl.FRAMEBUFFER, 0)
 	return nil
+}
+
+// Resize updates the framebuffer size if dimensions changed.
+func (mv *MapViewer) Resize(width, height int32) {
+	if width == mv.width && height == mv.height {
+		return
+	}
+	if width < 1 {
+		width = 1
+	}
+	if height < 1 {
+		height = 1
+	}
+
+	mv.width = width
+	mv.height = height
+
+	// Resize color texture
+	gl.BindTexture(gl.TEXTURE_2D, mv.colorTexture)
+	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, mv.width, mv.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, nil)
+
+	// Resize depth renderbuffer
+	gl.BindRenderbuffer(gl.RENDERBUFFER, mv.depthRBO)
+	gl.RenderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, mv.width, mv.height)
 }
 
 // createTerrainShader compiles the terrain shader program.
@@ -535,6 +594,10 @@ func (mv *MapViewer) createTerrainShader() error {
 	mv.locLightmap = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uLightmap\x00"))
 	mv.locBrightness = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uBrightness\x00"))
 	mv.locLightOpacity = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uLightOpacity\x00"))
+	mv.locFogUse = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uFogUse\x00"))
+	mv.locFogNear = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uFogNear\x00"))
+	mv.locFogFar = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uFogFar\x00"))
+	mv.locFogColor = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uFogColor\x00"))
 
 	return nil
 }
@@ -598,6 +661,10 @@ func (mv *MapViewer) createModelShader() error {
 	mv.locModelAmbient = gl.GetUniformLocation(mv.modelProgram, gl.Str("uAmbient\x00"))
 	mv.locModelDiffuse = gl.GetUniformLocation(mv.modelProgram, gl.Str("uDiffuse\x00"))
 	mv.locModelTexture = gl.GetUniformLocation(mv.modelProgram, gl.Str("uTexture\x00"))
+	mv.locModelFogUse = gl.GetUniformLocation(mv.modelProgram, gl.Str("uFogUse\x00"))
+	mv.locModelFogNear = gl.GetUniformLocation(mv.modelProgram, gl.Str("uFogNear\x00"))
+	mv.locModelFogFar = gl.GetUniformLocation(mv.modelProgram, gl.Str("uFogFar\x00"))
+	mv.locModelFogColor = gl.GetUniformLocation(mv.modelProgram, gl.Str("uFogColor\x00"))
 
 	// Compile water shader
 	if err := mv.compileWaterShader(); err != nil {
@@ -789,10 +856,10 @@ func (mv *MapViewer) LoadMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(
 	}
 
 	// Set up fog (Stage 4 - ADR-014)
-	mv.fogEnabled = true
-	mv.fogNear = 500.0
-	mv.fogFar = 3000.0
-	mv.fogColor = [3]float32{0.6, 0.75, 0.9} // Light blue-gray fog
+	mv.FogEnabled = true
+	mv.FogNear = 150.0
+	mv.FogFar = 800.0
+	mv.FogColor = [3]float32{0.95, 0.90, 0.85} // Very subtle warm tint (barely visible)
 
 	// Fit camera to map
 	mv.fitCamera()
@@ -1535,18 +1602,19 @@ func (mv *MapViewer) buildTerrainMesh(gnd *formats.GND) ([]terrainVertex, []uint
 				lmUV3 := mv.calculateLightmapUV(surface.LightmapID, 3, gnd)
 
 				// Create vertices for quad
+				// Try swapped UV mapping: our corners are BL,BR,TL,TR but UV might be TL,TR,BL,BR
 				baseIdx := uint32(len(vertices))
 				vertices = append(vertices,
-					terrainVertex{Position: corners[0], Normal: normal, TexCoord: [2]float32{surface.U[0], surface.V[0]}, LightmapUV: lmUV0, Color: color},
-					terrainVertex{Position: corners[1], Normal: normal, TexCoord: [2]float32{surface.U[1], surface.V[1]}, LightmapUV: lmUV1, Color: color},
-					terrainVertex{Position: corners[2], Normal: normal, TexCoord: [2]float32{surface.U[2], surface.V[2]}, LightmapUV: lmUV2, Color: color},
-					terrainVertex{Position: corners[3], Normal: normal, TexCoord: [2]float32{surface.U[3], surface.V[3]}, LightmapUV: lmUV3, Color: color},
+					terrainVertex{Position: corners[0], Normal: normal, TexCoord: [2]float32{surface.U[2], surface.V[2]}, LightmapUV: lmUV0, Color: color},
+					terrainVertex{Position: corners[1], Normal: normal, TexCoord: [2]float32{surface.U[3], surface.V[3]}, LightmapUV: lmUV1, Color: color},
+					terrainVertex{Position: corners[2], Normal: normal, TexCoord: [2]float32{surface.U[0], surface.V[0]}, LightmapUV: lmUV2, Color: color},
+					terrainVertex{Position: corners[3], Normal: normal, TexCoord: [2]float32{surface.U[1], surface.V[1]}, LightmapUV: lmUV3, Color: color},
 				)
 
-				// Two triangles for quad
+				// Two triangles for quad (diagonal from BL to TR per RO spec)
 				textureIndices[texID] = append(textureIndices[texID],
 					baseIdx, baseIdx+1, baseIdx+2,
-					baseIdx+1, baseIdx+3, baseIdx+2,
+					baseIdx+2, baseIdx+1, baseIdx+3,
 				)
 			}
 
@@ -1751,9 +1819,9 @@ func (mv *MapViewer) fitCamera() {
 		maxSize = sizeZ
 	}
 
-	mv.distance = maxSize * 0.7
-	if mv.distance < 100 {
-		mv.distance = 100
+	mv.Distance = maxSize * 0.7
+	if mv.Distance < 100 {
+		mv.Distance = 100
 	}
 
 	mv.rotationX = 0.6 // Look down at ~35 degrees
@@ -1813,6 +1881,16 @@ func (mv *MapViewer) Render() uint32 {
 	gl.Uniform1i(mv.locLightmap, 1)
 	gl.Uniform1f(mv.locBrightness, mv.Brightness)
 	gl.Uniform1f(mv.locLightOpacity, mv.lightOpacity)
+
+	// Fog uniforms
+	if mv.FogEnabled {
+		gl.Uniform1i(mv.locFogUse, 1)
+	} else {
+		gl.Uniform1i(mv.locFogUse, 0)
+	}
+	gl.Uniform1f(mv.locFogNear, mv.FogNear)
+	gl.Uniform1f(mv.locFogFar, mv.FogFar)
+	gl.Uniform3f(mv.locFogColor, mv.FogColor[0], mv.FogColor[1], mv.FogColor[2])
 
 	// Bind lightmap atlas to texture unit 1
 	gl.ActiveTexture(gl.TEXTURE1)
@@ -1916,6 +1994,16 @@ func (mv *MapViewer) renderModels(viewProj math.Mat4) {
 	gl.Uniform3f(mv.locModelDiffuse, mv.diffuseColor[0], mv.diffuseColor[1], mv.diffuseColor[2])
 	gl.Uniform1i(mv.locModelTexture, 0)
 
+	// Fog uniforms for models
+	if mv.FogEnabled {
+		gl.Uniform1i(mv.locModelFogUse, 1)
+	} else {
+		gl.Uniform1i(mv.locModelFogUse, 0)
+	}
+	gl.Uniform1f(mv.locModelFogNear, mv.FogNear)
+	gl.Uniform1f(mv.locModelFogFar, mv.FogFar)
+	gl.Uniform3f(mv.locModelFogColor, mv.FogColor[0], mv.FogColor[1], mv.FogColor[2])
+
 	gl.ActiveTexture(gl.TEXTURE0)
 
 	// RSW positions are centered at map origin (0,0,0)
@@ -1976,9 +2064,9 @@ func (mv *MapViewer) renderModels(viewProj math.Mat4) {
 // calculateCameraPosition computes camera position from orbit parameters.
 func (mv *MapViewer) calculateCameraPosition() math.Vec3 {
 	// Spherical to Cartesian
-	x := mv.distance * float32(cosf(mv.rotationX)*sinf(mv.rotationY))
-	y := mv.distance * float32(sinf(mv.rotationX))
-	z := mv.distance * float32(cosf(mv.rotationX)*cosf(mv.rotationY))
+	x := mv.Distance * float32(cosf(mv.rotationX)*sinf(mv.rotationY))
+	y := mv.Distance * float32(sinf(mv.rotationX))
+	z := mv.Distance * float32(cosf(mv.rotationX)*cosf(mv.rotationY))
 
 	return math.Vec3{
 		X: mv.centerX + x,
@@ -2031,12 +2119,12 @@ func (mv *MapViewer) HandleMouseWheel(delta float32) {
 		}
 	} else {
 		// Orbit mode - zoom in/out
-		mv.distance -= delta * mv.distance * 0.1
-		if mv.distance < 50 {
-			mv.distance = 50
+		mv.Distance -= delta * mv.Distance * 0.1
+		if mv.Distance < 50 {
+			mv.Distance = 50
 		}
-		if mv.distance > 5000 {
-			mv.distance = 5000
+		if mv.Distance > 5000 {
+			mv.Distance = 5000
 		}
 	}
 }
@@ -2060,6 +2148,32 @@ func (mv *MapViewer) HandleFPSMovement(forward, right, up float32) {
 	mv.camPosX += (dirX*forward + rightX*right) * mv.MoveSpeed
 	mv.camPosZ += (dirZ*forward + rightZ*right) * mv.MoveSpeed
 	mv.camPosY += up * mv.MoveSpeed
+}
+
+// HandleOrbitMovement handles WASD movement in Orbit mode.
+// Pans the camera's focal point (center).
+// forward/right are -1, 0, or 1 based on key presses.
+func (mv *MapViewer) HandleOrbitMovement(forward, right, up float32) {
+	if mv.FPSMode {
+		return
+	}
+
+	// Speed scales with distance for consistent feel
+	speed := mv.Distance * 0.01
+
+	// Calculate movement direction based on current camera rotation
+	// Forward direction in world space (based on rotationY)
+	dirX := float32(sinf(mv.rotationY))
+	dirZ := float32(cosf(mv.rotationY))
+
+	// Right direction (perpendicular to forward)
+	rightX := float32(cosf(mv.rotationY))
+	rightZ := float32(-sinf(mv.rotationY))
+
+	// Apply movement to center point (negate forward so W moves "into" the scene)
+	mv.centerX += (-dirX*forward + rightX*right) * speed
+	mv.centerZ += (-dirZ*forward + rightZ*right) * speed
+	mv.centerY += up * speed
 }
 
 // ToggleFPSMode toggles between orbit and FPS camera modes.
