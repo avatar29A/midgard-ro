@@ -165,15 +165,25 @@ type PlayerCharacter struct {
 	CurrentFrame  int     // Current frame within action
 	FrameTime     float32 // Accumulated time for frame timing (ms)
 
-	// Sprite data
+	// Sprite data (body)
 	SPR      *formats.SPR
 	ACT      *formats.ACT
 	Textures []uint32 // GPU textures for each SPR image
+
+	// Head sprite data
+	HeadSPR      *formats.SPR
+	HeadACT      *formats.ACT
+	HeadTextures []uint32 // GPU textures for head SPR images
 
 	// Billboard rendering
 	VAO         uint32
 	VBO         uint32
 	SpriteScale float32 // Scale factor for sprite (default 1.0)
+
+	// Shadow
+	ShadowTex uint32 // Shadow texture (ellipse)
+	ShadowVAO uint32
+	ShadowVBO uint32
 }
 
 // MapViewer handles 3D rendering of complete RO maps.
@@ -2871,6 +2881,9 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 		return
 	}
 
+	// Render shadow first (below character)
+	mv.renderPlayerShadow(viewProj)
+
 	var spriteID int
 	var spriteWidth, spriteHeight float32
 	var tint [4]float32
@@ -2910,18 +2923,21 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 			return
 		}
 
-		// Get sprite dimensions from SPR
+		// Get sprite dimensions from SPR, apply layer scale
 		sprImg := &player.SPR.Images[spriteID]
-		spriteWidth = float32(sprImg.Width) * player.SpriteScale
-		spriteHeight = float32(sprImg.Height) * player.SpriteScale
-
-		// Tint color from layer
-		tint = [4]float32{
-			float32(layer.Color[0]) / 255.0,
-			float32(layer.Color[1]) / 255.0,
-			float32(layer.Color[2]) / 255.0,
-			float32(layer.Color[3]) / 255.0,
+		layerScaleX := layer.ScaleX
+		layerScaleY := layer.ScaleY
+		if layerScaleX == 0 {
+			layerScaleX = 1.0
 		}
+		if layerScaleY == 0 {
+			layerScaleY = 1.0
+		}
+		spriteWidth = float32(sprImg.Width) * player.SpriteScale * layerScaleX
+		spriteHeight = float32(sprImg.Height) * player.SpriteScale * layerScaleY
+
+		// Force white tint for now (layer colors often have issues)
+		tint = [4]float32{1.0, 1.0, 1.0, 1.0}
 	} else {
 		// Procedural player - use fixed size
 		spriteID = 0
@@ -2936,6 +2952,12 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 
 	// Use sprite shader
 	gl.UseProgram(mv.spriteProgram)
+
+	// Mirror sprite horizontally for left-facing directions (SW=1, W=2, NW=3)
+	// RO sprites typically only have right-facing images, left is mirrored
+	if player.Direction == DirSW || player.Direction == DirW || player.Direction == DirNW {
+		spriteWidth = -spriteWidth // Negative width flips horizontally
+	}
 
 	// Set uniforms
 	gl.UniformMatrix4fv(mv.locSpriteVP, 1, false, &viewProj[0])
@@ -2953,7 +2975,145 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 	gl.DrawArrays(gl.TRIANGLE_STRIP, 0, 4)
 	gl.BindVertexArray(0)
 
+	// Render head sprite ONLY if body has anchor points (composite character)
+	// Complete sprites like b_novice already include the head and have no anchors
+	if player.HeadSPR != nil && player.HeadACT != nil && len(player.HeadTextures) > 0 && player.ACT != nil {
+		// Get body's current frame anchor point
+		bodyActionIdx := player.CurrentAction*8 + player.Direction
+		if bodyActionIdx >= len(player.ACT.Actions) {
+			bodyActionIdx = 0
+		}
+		bodyAction := &player.ACT.Actions[bodyActionIdx]
+		bodyFrameIdx := player.CurrentFrame % len(bodyAction.Frames)
+		if bodyFrameIdx >= len(bodyAction.Frames) {
+			bodyFrameIdx = 0
+		}
+		bodyFrame := &bodyAction.Frames[bodyFrameIdx]
+
+		// Only render head if body has anchor points
+		if len(bodyFrame.AnchorPoints) > 0 {
+			// Body anchor in pixels
+			bodyAnchorX := float32(bodyFrame.AnchorPoints[0].X)
+			bodyAnchorY := float32(bodyFrame.AnchorPoints[0].Y)
+
+			// Head uses same action index as body (direction * 8 + action)
+			headActionIdx := player.CurrentAction*8 + player.Direction
+			if headActionIdx >= len(player.HeadACT.Actions) {
+				headActionIdx = player.Direction // Fallback to just direction
+			}
+			if headActionIdx >= len(player.HeadACT.Actions) {
+				headActionIdx = 0
+			}
+
+			headAction := &player.HeadACT.Actions[headActionIdx]
+			if len(headAction.Frames) > 0 {
+				// Use frame 0 for standing, sync with body for walking
+				headFrameIdx := 0
+				if player.CurrentAction == 1 && len(headAction.Frames) > 1 {
+					// Walking - sync frames
+					headFrameIdx = player.CurrentFrame % len(headAction.Frames)
+				}
+				headFrame := &headAction.Frames[headFrameIdx]
+
+				// Head anchor in pixels
+				var headAnchorX, headAnchorY float32
+				if len(headFrame.AnchorPoints) > 0 {
+					headAnchorX = float32(headFrame.AnchorPoints[0].X)
+					headAnchorY = float32(headFrame.AnchorPoints[0].Y)
+				}
+
+				// Calculate offset: body_anchor - head_anchor (roBrowser formula)
+				offsetX := (bodyAnchorX - headAnchorX) * player.SpriteScale
+				offsetY := (bodyAnchorY - headAnchorY) * player.SpriteScale
+
+				// Render all head layers
+				for _, headLayer := range headFrame.Layers {
+					headSpriteID := int(headLayer.SpriteID)
+					if headSpriteID < 0 || headSpriteID >= len(player.HeadTextures) {
+						continue
+					}
+
+					headImg := &player.HeadSPR.Images[headSpriteID]
+					headScaleX := headLayer.ScaleX
+					headScaleY := headLayer.ScaleY
+					if headScaleX == 0 {
+						headScaleX = 1.0
+					}
+					if headScaleY == 0 {
+						headScaleY = 1.0
+					}
+
+					headWidth := float32(headImg.Width) * player.SpriteScale * headScaleX
+					headHeight := float32(headImg.Height) * player.SpriteScale * headScaleY
+
+					// Mirror for left-facing directions
+					if player.Direction == DirSW || player.Direction == DirW || player.Direction == DirNW {
+						headWidth = -headWidth
+					}
+
+					// Layer offset in pixels, converted to world units
+					layerX := float32(headLayer.X) * player.SpriteScale
+					layerY := float32(headLayer.Y) * player.SpriteScale
+
+					// Final position: body center + anchor offset + layer offset
+					// Y is inverted (sprite Y down = world Y up)
+					headPosX := player.WorldX + offsetX + layerX
+					headPosY := player.WorldY + spriteHeight*0.5 - offsetY - layerY
+
+					gl.Disable(gl.DEPTH_TEST)
+					gl.Uniform3f(mv.locSpritePos, headPosX, headPosY, player.WorldZ)
+					gl.Uniform2f(mv.locSpriteSize, headWidth, headHeight)
+					gl.BindTexture(gl.TEXTURE_2D, player.HeadTextures[headSpriteID])
+					gl.BindVertexArray(player.VAO)
+					gl.DrawArrays(gl.TRIANGLE_STRIP, 0, 4)
+					gl.BindVertexArray(0)
+					gl.Enable(gl.DEPTH_TEST)
+				}
+			}
+		}
+	}
+
 	gl.Disable(gl.BLEND)
+}
+
+// renderPlayerShadow renders the shadow ellipse on the ground under the player.
+func (mv *MapViewer) renderPlayerShadow(viewProj math.Mat4) {
+	player := mv.Player
+	if player == nil || player.ShadowVAO == 0 || player.ShadowTex == 0 {
+		return
+	}
+
+	// Enable blending for semi-transparent shadow
+	gl.Enable(gl.BLEND)
+	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+
+	// Disable depth write so shadow doesn't occlude terrain
+	gl.DepthMask(false)
+
+	// Use sprite shader (reuse for simplicity)
+	gl.UseProgram(mv.spriteProgram)
+
+	// Shadow position slightly above ground to avoid z-fighting
+	shadowY := player.WorldY + 0.5
+
+	// Set uniforms - position the shadow flat on the ground
+	gl.UniformMatrix4fv(mv.locSpriteVP, 1, false, &viewProj[0])
+	gl.Uniform3f(mv.locSpritePos, player.WorldX, shadowY, player.WorldZ)
+	gl.Uniform2f(mv.locSpriteSize, 1.0, 1.0) // Size is baked into VBO
+	gl.Uniform4f(mv.locSpriteTint, 1.0, 1.0, 1.0, 1.0)
+
+	// Bind shadow texture
+	gl.ActiveTexture(gl.TEXTURE0)
+	gl.BindTexture(gl.TEXTURE_2D, player.ShadowTex)
+	gl.Uniform1i(mv.locSpriteTex, 0)
+
+	// Draw shadow quad
+	gl.BindVertexArray(player.ShadowVAO)
+	gl.DrawArrays(gl.TRIANGLE_STRIP, 0, 4)
+	gl.BindVertexArray(0)
+
+	// Restore depth write
+	gl.DepthMask(true)
 }
 
 // UpdatePlayerAnimation advances player animation frame based on time.
@@ -2964,14 +3124,22 @@ func (mv *MapViewer) UpdatePlayerAnimation(deltaMs float32) {
 
 	player := mv.Player
 
-	// If not moving, switch to idle
-	if !player.IsMoving {
-		player.CurrentAction = ActionIdle
-	}
-
 	// Procedural players don't have animation data
 	if player.ACT == nil {
 		return
+	}
+
+	// Determine action based on movement state
+	newAction := ActionIdle
+	if player.IsMoving {
+		newAction = ActionWalk
+	}
+
+	// Reset frame when action changes
+	if newAction != player.CurrentAction {
+		player.CurrentAction = newAction
+		player.CurrentFrame = 0
+		player.FrameTime = 0
 	}
 
 	// Get current action
@@ -2984,10 +3152,14 @@ func (mv *MapViewer) UpdatePlayerAnimation(deltaMs float32) {
 		return
 	}
 
-	// Get animation interval (default 100ms per frame)
-	interval := float32(100.0)
+	// Get animation interval from ACT (default 150ms for smoother animation)
+	interval := float32(150.0)
 	if actionIdx < len(player.ACT.Intervals) && player.ACT.Intervals[actionIdx] > 0 {
 		interval = player.ACT.Intervals[actionIdx]
+		// ACT intervals can be very small, enforce minimum
+		if interval < 50 {
+			interval = 50
+		}
 	}
 
 	// Accumulate time
@@ -3480,8 +3652,8 @@ func (mv *MapViewer) HandlePlayMovement(forward, right, up float32) {
 		mv.Player.WorldY = mv.GetInterpolatedTerrainHeight(newX, newZ)
 	}
 
-	// Calculate 8-direction facing from movement
-	mv.Player.Direction = calculateDirection(moveX, moveZ)
+	// Calculate 8-direction facing from movement (negate to face movement direction)
+	mv.Player.Direction = calculateDirection(-moveX, -moveZ)
 
 	// Set walk animation
 	mv.Player.CurrentAction = ActionWalk
@@ -3580,8 +3752,8 @@ func (mv *MapViewer) LoadPlayerCharacter(texLoader func(string) ([]byte, error))
 	player := &PlayerCharacter{
 		SPR:         spr,
 		ACT:         act,
-		SpriteScale: 1.0,
-		MoveSpeed:   150.0, // World units per second
+		SpriteScale: 0.28, // Scale down sprite pixels to world units
+		MoveSpeed:   80.0, // World units per second // World units per second
 		Direction:   DirS,  // Face south (camera) initially
 	}
 
@@ -3615,10 +3787,10 @@ func (mv *MapViewer) LoadPlayerCharacter(texLoader func(string) ([]byte, error))
 	// Positioned at feet, extending upward
 	vertices := []float32{
 		// Position (x, y)  TexCoord (u, v)
-		-0.5, 0.0, 0.0, 1.0, // Bottom-left
-		0.5, 0.0, 1.0, 1.0, // Bottom-right
-		-0.5, 1.0, 0.0, 0.0, // Top-left
+		-0.5, 1.0, 0.0, 0.0, // Top-left (sprite top at Y=1)
 		0.5, 1.0, 1.0, 0.0, // Top-right
+		-0.5, 0.0, 0.0, 1.0, // Bottom-left (sprite bottom at Y=0)
+		0.5, 0.0, 1.0, 1.0, // Bottom-right
 	}
 
 	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*4, gl.Ptr(vertices), gl.STATIC_DRAW)
@@ -3633,6 +3805,9 @@ func (mv *MapViewer) LoadPlayerCharacter(texLoader func(string) ([]byte, error))
 
 	gl.BindVertexArray(0)
 
+	// Create shadow
+	mv.createPlayerShadow(player)
+
 	mv.Player = player
 
 	// Initialize player position to map center
@@ -3641,6 +3816,222 @@ func (mv *MapViewer) LoadPlayerCharacter(texLoader func(string) ([]byte, error))
 	fmt.Printf("Loaded player sprite: %d images, %d actions\n", len(spr.Images), len(act.Actions))
 
 	return nil
+}
+
+// LoadPlayerCharacterFromPath loads a player sprite from specific paths.
+// Used when the sprite path is found by searching the archive.
+func (mv *MapViewer) LoadPlayerCharacterFromPath(texLoader func(string) ([]byte, error), sprPath, actPath, headSprPath, headActPath string) error {
+	if mv.Player != nil {
+		return nil // Already loaded
+	}
+
+	fmt.Printf("Loading sprite from: %s\n", sprPath)
+
+	sprData, err := texLoader(sprPath)
+	if err != nil {
+		return fmt.Errorf("loading sprite %s: %w", sprPath, err)
+	}
+
+	actData, err := texLoader(actPath)
+	if err != nil {
+		return fmt.Errorf("loading animation %s: %w", actPath, err)
+	}
+
+	// Parse SPR file
+	spr, err := formats.ParseSPR(sprData)
+	if err != nil {
+		return fmt.Errorf("parsing sprite %s: %w", sprPath, err)
+	}
+
+	// Parse ACT file
+	act, err := formats.ParseACT(actData)
+	if err != nil {
+		return fmt.Errorf("parsing animation %s: %w", actPath, err)
+	}
+
+	// Create player character
+	player := &PlayerCharacter{
+		SPR:         spr,
+		ACT:         act,
+		SpriteScale: 0.28, // Scale down sprite pixels to world units
+		MoveSpeed:   80.0, // World units per second
+		Direction:   DirS,
+	}
+
+	// Load head sprite if path provided
+	if headSprPath != "" {
+		fmt.Printf("Loading head sprite from: %s\n", headSprPath)
+		headSprData, err := texLoader(headSprPath)
+		if err != nil {
+			fmt.Printf("Warning: could not load head sprite: %v\n", err)
+		} else {
+			headActData, err := texLoader(headActPath)
+			if err != nil {
+				fmt.Printf("Warning: could not load head animation: %v\n", err)
+			} else {
+				headSpr, err := formats.ParseSPR(headSprData)
+				if err != nil {
+					fmt.Printf("Warning: could not parse head sprite: %v\n", err)
+				} else {
+					headAct, err := formats.ParseACT(headActData)
+					if err != nil {
+						fmt.Printf("Warning: could not parse head animation: %v\n", err)
+					} else {
+						player.HeadSPR = headSpr
+						player.HeadACT = headAct
+						fmt.Printf("Loaded head sprite: %d images, %d actions\n", len(headSpr.Images), len(headAct.Actions))
+						// Debug: check anchor points
+						if len(headAct.Actions) > 0 && len(headAct.Actions[0].Frames) > 0 {
+							frame := &headAct.Actions[0].Frames[0]
+							fmt.Printf("  Head action 0 frame 0: %d layers, %d anchors\n", len(frame.Layers), len(frame.AnchorPoints))
+							for i, ap := range frame.AnchorPoints {
+								fmt.Printf("    Anchor %d: X=%d Y=%d Attr=%d\n", i, ap.X, ap.Y, ap.Attribute)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Create GPU textures for each sprite image
+	player.Textures = make([]uint32, len(spr.Images))
+	for i, img := range spr.Images {
+		var tex uint32
+		gl.GenTextures(1, &tex)
+		gl.BindTexture(gl.TEXTURE_2D, tex)
+
+		gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8,
+			int32(img.Width), int32(img.Height), 0,
+			gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(img.Pixels))
+
+		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+
+		player.Textures[i] = tex
+	}
+
+	// Create GPU textures for head sprite images
+	if player.HeadSPR != nil {
+		player.HeadTextures = make([]uint32, len(player.HeadSPR.Images))
+		for i, img := range player.HeadSPR.Images {
+			var tex uint32
+			gl.GenTextures(1, &tex)
+			gl.BindTexture(gl.TEXTURE_2D, tex)
+
+			gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8,
+				int32(img.Width), int32(img.Height), 0,
+				gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(img.Pixels))
+
+			gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+			gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+			gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+			gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+
+			player.HeadTextures[i] = tex
+		}
+	}
+
+	// Create billboard VAO/VBO
+	gl.GenVertexArrays(1, &player.VAO)
+	gl.GenBuffers(1, &player.VBO)
+
+	gl.BindVertexArray(player.VAO)
+	gl.BindBuffer(gl.ARRAY_BUFFER, player.VBO)
+
+	vertices := []float32{
+		-0.5, 1.0, 0.0, 0.0,
+		0.5, 1.0, 1.0, 0.0,
+		-0.5, 0.0, 0.0, 1.0,
+		0.5, 0.0, 1.0, 1.0,
+	}
+
+	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*4, gl.Ptr(vertices), gl.STATIC_DRAW)
+	gl.VertexAttribPointerWithOffset(0, 2, gl.FLOAT, false, 4*4, 0)
+	gl.EnableVertexAttribArray(0)
+	gl.VertexAttribPointerWithOffset(1, 2, gl.FLOAT, false, 4*4, 2*4)
+	gl.EnableVertexAttribArray(1)
+	gl.BindVertexArray(0)
+
+	// Create shadow
+	mv.createPlayerShadow(player)
+
+	mv.Player = player
+	mv.initializePlayerPosition()
+
+	fmt.Printf("Loaded player sprite: %d images, %d actions\n", len(spr.Images), len(act.Actions))
+	// Debug: check body anchor points
+	if len(act.Actions) > 0 && len(act.Actions[0].Frames) > 0 {
+		frame := &act.Actions[0].Frames[0]
+		fmt.Printf("  Body action 0 frame 0: %d layers, %d anchors\n", len(frame.Layers), len(frame.AnchorPoints))
+		for i, ap := range frame.AnchorPoints {
+			fmt.Printf("    Anchor %d: X=%d Y=%d Attr=%d\n", i, ap.X, ap.Y, ap.Attribute)
+		}
+	}
+	return nil
+}
+
+// createPlayerShadow creates a shadow ellipse texture and VAO for the player.
+func (mv *MapViewer) createPlayerShadow(player *PlayerCharacter) {
+	// Create circular shadow texture (24x24 pixels)
+	size := 24
+	pixels := make([]byte, size*size*4)
+
+	center := float32(size) / 2
+	radius := float32(size)/2 - 1
+
+	for y := 0; y < size; y++ {
+		for x := 0; x < size; x++ {
+			idx := (y*size + x) * 4
+			// Calculate distance from center (circle equation)
+			dx := (float32(x) - center) / radius
+			dy := (float32(y) - center) / radius
+			dist := dx*dx + dy*dy
+
+			if dist <= 1.0 {
+				// Inside circle - light shadow with soft falloff
+				alpha := (1.0 - dist) * 0.25 // Max 25% opacity, fading to edge
+				pixels[idx+0] = 0            // R
+				pixels[idx+1] = 0            // G
+				pixels[idx+2] = 0            // B
+				pixels[idx+3] = byte(alpha * 255)
+			}
+		}
+	}
+
+	// Create shadow texture
+	gl.GenTextures(1, &player.ShadowTex)
+	gl.BindTexture(gl.TEXTURE_2D, player.ShadowTex)
+	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, int32(size), int32(size), 0,
+		gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(pixels))
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+
+	// Create shadow VAO/VBO (flat on ground)
+	gl.GenVertexArrays(1, &player.ShadowVAO)
+	gl.GenBuffers(1, &player.ShadowVBO)
+
+	gl.BindVertexArray(player.ShadowVAO)
+	gl.BindBuffer(gl.ARRAY_BUFFER, player.ShadowVBO)
+
+	// Shadow quad on XZ plane (Y=0), centered at origin
+	shadowSize := float32(4.0) // Shadow size in world units (smaller, circular)
+	shadowVerts := []float32{
+		// Position (x, z)  TexCoord (u, v)
+		-shadowSize, -shadowSize, 0.0, 0.0,
+		shadowSize, -shadowSize, 1.0, 0.0,
+		-shadowSize, shadowSize, 0.0, 1.0,
+		shadowSize, shadowSize, 1.0, 1.0,
+	}
+
+	gl.BufferData(gl.ARRAY_BUFFER, len(shadowVerts)*4, gl.Ptr(shadowVerts), gl.STATIC_DRAW)
+	gl.VertexAttribPointerWithOffset(0, 2, gl.FLOAT, false, 4*4, 0)
+	gl.EnableVertexAttribArray(0)
+	gl.VertexAttribPointerWithOffset(1, 2, gl.FLOAT, false, 4*4, 2*4)
+	gl.EnableVertexAttribArray(1)
+	gl.BindVertexArray(0)
 }
 
 // createProceduralPlayer creates a simple colored player marker when no sprite is available.
@@ -3688,7 +4079,7 @@ func (mv *MapViewer) createProceduralPlayer() error {
 	// Create player character
 	player := &PlayerCharacter{
 		SpriteScale: 0.4, // Reasonable scale for character size (~13x26 world units)
-		MoveSpeed:   150.0,
+		MoveSpeed:   80.0, // World units per second
 		Direction:   DirS,
 	}
 
@@ -3711,10 +4102,10 @@ func (mv *MapViewer) createProceduralPlayer() error {
 	gl.BindBuffer(gl.ARRAY_BUFFER, player.VBO)
 
 	vertices := []float32{
-		-0.5, 0.0, 0.0, 1.0,
-		0.5, 0.0, 1.0, 1.0,
 		-0.5, 1.0, 0.0, 0.0,
 		0.5, 1.0, 1.0, 0.0,
+		-0.5, 0.0, 0.0, 1.0,
+		0.5, 0.0, 1.0, 1.0,
 	}
 
 	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*4, gl.Ptr(vertices), gl.STATIC_DRAW)
@@ -3725,6 +4116,9 @@ func (mv *MapViewer) createProceduralPlayer() error {
 	gl.BindVertexArray(0)
 
 	mv.Player = player
+
+	// Create shadow for the player
+	mv.createPlayerShadow(player)
 
 	// Initialize player position to map center
 	mv.initializePlayerPosition()
@@ -3841,7 +4235,7 @@ func (mv *MapViewer) TogglePlayMode() {
 
 	if mv.PlayMode {
 		// Set appropriate zoom distance for Play mode (RO-style)
-		mv.Distance = 300 // Good starting distance for third-person
+		mv.Distance = 145 // Good starting distance for third-person
 
 		// Reset camera yaw (rotation around player)
 		mv.camYaw = 0
@@ -3859,7 +4253,7 @@ func (mv *MapViewer) Reset() {
 	if mv.PlayMode {
 		// Reset play camera
 		mv.camYaw = 0
-		mv.Distance = 300 // Default Play mode distance
+		mv.Distance = 145 // Default Play mode distance
 
 		// Reset player to map center
 		if mv.Player != nil {

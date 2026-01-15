@@ -614,12 +614,11 @@ func (app *App) renderMap3DView() {
 		up = -1
 	}
 
-	if forward != 0 || right != 0 || up != 0 {
-		if app.mapViewer.PlayMode {
-			app.mapViewer.HandlePlayMovement(forward, right, up)
-		} else {
-			app.mapViewer.HandleOrbitMovement(forward, right, up)
-		}
+	if app.mapViewer.PlayMode {
+		// Always call in Play mode to update IsMoving state
+		app.mapViewer.HandlePlayMovement(forward, right, up)
+	} else if forward != 0 || right != 0 || up != 0 {
+		app.mapViewer.HandleOrbitMovement(forward, right, up)
 	}
 
 	// Get available space and resize render target to match
@@ -729,11 +728,120 @@ func (app *App) renderMapControlsPanel() {
 		if imgui.ButtonV("Play", imgui.NewVec2(-1, 0)) {
 			// Load player character if not already loaded
 			if app.mapViewer.Player == nil && app.archive != nil {
+				var spritePath string
+				var headPath string
+
+				// Search for Novice body sprite (midgarts approach)
+				// Path: data/sprite/인간족/몸통/남/초보자_남.spr
+				// EUC-KR bytes from midgarts:
+				// 인간족 = {0xC0, 0xCE, 0xB0, 0xA3, 0xC1, 0xB7}
+				// 몸통 = {0xB8, 0xF6, 0xC5, 0xEB}
+				// 초보자 = {0xC3, 0xCA, 0xBA, 0xB8, 0xC0, 0xDA}
+				// 남 = {0xB3, 0xB2}
+				fmt.Println("Searching for Novice body sprite...")
+				humanFolderBytes := []byte{0xC0, 0xCE, 0xB0, 0xA3, 0xC1, 0xB7} // 인간족
+				bodyFolderBytes := []byte{0xB8, 0xF6, 0xC5, 0xEB}              // 몸통
+				noviceBytes := []byte{0xC3, 0xCA, 0xBA, 0xB8, 0xC0, 0xDA}      // 초보자
+				maleBytes := []byte{0xB3, 0xB2}                                // 남
+
+				// First: look for Novice specifically in 인간족/몸통/남 folder (NOT costume subfolder)
+				// Base sprite path: data/sprite/인간족/몸통/남/초보자_남.spr (6 parts)
+				// Costume path: data/sprite/인간족/몸통/남/costume_1/초보자_남_1.spr (7 parts)
+				for _, f := range app.flatFiles {
+					if strings.HasSuffix(f, ".spr") && strings.HasPrefix(f, "data/sprite/") {
+						// Skip costume variants
+						if strings.Contains(f, "costume") {
+							continue
+						}
+						// MUST have 인간족 folder AND 몸통 folder AND 초보자 name
+						if strings.Contains(f, string(humanFolderBytes)) &&
+							strings.Contains(f, string(bodyFolderBytes)) &&
+							strings.Contains(f, string(noviceBytes)) {
+							// Check path depth: base sprite has exactly 6 parts
+							parts := strings.Split(f, "/")
+							if len(parts) == 6 {
+								spritePath = f
+								fmt.Printf("  Found Novice body: %s\n", f)
+								break
+							}
+						}
+					}
+				}
+
+				// Fallback: any body sprite in 인간족/몸통/남 folder
+				if spritePath == "" {
+					fmt.Println("  Novice not found, searching for any body in human folder...")
+					for _, f := range app.flatFiles {
+						if strings.HasSuffix(f, ".spr") &&
+							strings.HasPrefix(f, "data/sprite/") &&
+							strings.Contains(f, string(humanFolderBytes)) &&
+							strings.Contains(f, string(bodyFolderBytes)) &&
+							strings.Contains(f, string(maleBytes)) {
+							spritePath = f
+							fmt.Printf("  Found body: %s\n", f)
+							break
+						}
+					}
+				}
+
+				// Final fallback to b_novice
+				if spritePath == "" {
+					fmt.Println("  No body sprite found, trying b_novice fallback...")
+					for _, f := range app.flatFiles {
+						fLower := strings.ToLower(f)
+						if strings.HasSuffix(fLower, "/b_novice.spr") {
+							spritePath = f
+							fmt.Printf("  Fallback to b_novice: %s\n", f)
+							break
+						}
+					}
+				}
+
+				// Search for head sprite #1
+				// Head sprites are in paths like data/sprite/인간족/머리통/남/1_남.spr
+				// 머리통 = {0xB8, 0xD3, 0xB8, 0xAE, 0xC5, 0xEB} (head folder)
+				fmt.Println("Searching for head sprites...")
+				headFolderBytes := []byte{0xB8, 0xD3, 0xB8, 0xAE, 0xC5, 0xEB} // 머리통
+
+				// Look for head #1 in 인간족/머리통/남 folder
+				for _, f := range app.flatFiles {
+					if strings.HasPrefix(f, "data/sprite/") &&
+						strings.HasSuffix(f, ".spr") &&
+						strings.Contains(f, string(humanFolderBytes)) &&
+						strings.Contains(f, string(headFolderBytes)) &&
+						strings.Contains(f, string(maleBytes)) {
+						parts := strings.Split(f, "/")
+						if len(parts) >= 5 {
+							filename := parts[len(parts)-1]
+							// Look for head #1: exactly "1_" at start
+							if len(filename) >= 4 && filename[0] == '1' && filename[1] == '_' {
+								headPath = f
+								fmt.Printf("  Found head #1: %s\n", f)
+								break
+							}
+						}
+					}
+				}
+
 				texLoader := func(path string) ([]byte, error) {
 					return app.archive.Read(path)
 				}
-				if err := app.mapViewer.LoadPlayerCharacter(texLoader); err != nil {
-					fmt.Fprintf(os.Stderr, "Error loading player: %v\n", err)
+
+				if spritePath != "" {
+					// Found sprite, pass the path to loader
+					actPath := spritePath[:len(spritePath)-4] + ".act"
+					headActPath := ""
+					if headPath != "" {
+						headActPath = headPath[:len(headPath)-4] + ".act"
+					}
+					if err := app.mapViewer.LoadPlayerCharacterFromPath(texLoader, spritePath, actPath, headPath, headActPath); err != nil {
+						fmt.Fprintf(os.Stderr, "Error loading player sprite: %v\n", err)
+					}
+				} else {
+					// Fallback to default search
+					if err := app.mapViewer.LoadPlayerCharacter(texLoader); err != nil {
+						fmt.Fprintf(os.Stderr, "Error loading player: %v\n", err)
+					}
 				}
 			}
 			app.mapViewer.TogglePlayMode()
