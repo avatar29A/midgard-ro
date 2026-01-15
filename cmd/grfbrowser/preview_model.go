@@ -207,6 +207,75 @@ func (app *App) renderRSMPreview() {
 				app.modelViewer.SetAnimationLooping(looping)
 			}
 		}
+
+		// Coordinates section
+		imgui.Separator()
+		imgui.Text("Coordinates")
+
+		// Show Axes checkbox
+		showAxes := app.modelViewer.ShowAxes()
+		if imgui.Checkbox("Show Axes", &showAxes) {
+			app.modelViewer.SetShowAxes(showAxes)
+		}
+		imgui.SameLine()
+
+		// Wireframe checkbox
+		wireframe := app.modelViewer.WireframeMode()
+		if imgui.Checkbox("Wireframe", &wireframe) {
+			app.modelViewer.SetWireframeMode(wireframe)
+		}
+
+		// Get coordinate data
+		center := app.modelViewer.GetCenter()
+		pivot := app.modelViewer.GetRootNodeOffset()
+
+		// Center coordinates with colored indicators and labels
+		imgui.Text("Center:")
+		imgui.SameLine()
+		// X - Red square with label
+		imgui.PushStyleColorVec4(imgui.ColButton, imgui.NewVec4(1, 0, 0, 1))
+		imgui.SmallButton("X")
+		imgui.PopStyleColor()
+		imgui.SameLine()
+		imgui.Text(fmt.Sprintf("%.1f", center[0]))
+		imgui.SameLine()
+		// Y - Green square with label
+		imgui.PushStyleColorVec4(imgui.ColButton, imgui.NewVec4(0, 1, 0, 1))
+		imgui.SmallButton("Y")
+		imgui.PopStyleColor()
+		imgui.SameLine()
+		imgui.Text(fmt.Sprintf("%.1f", center[1]))
+		imgui.SameLine()
+		// Z - Blue square with label
+		imgui.PushStyleColorVec4(imgui.ColButton, imgui.NewVec4(0, 0, 1, 1))
+		imgui.SmallButton("Z")
+		imgui.PopStyleColor()
+		imgui.SameLine()
+		imgui.Text(fmt.Sprintf("%.1f", center[2]))
+
+		// Pivot coordinates with colored indicators and labels
+		imgui.Text("Pivot: ")
+		imgui.SameLine()
+		// X - Red square with label
+		imgui.PushStyleColorVec4(imgui.ColButton, imgui.NewVec4(1, 0, 0, 1))
+		imgui.SmallButton("X##P")
+		imgui.PopStyleColor()
+		imgui.SameLine()
+		imgui.Text(fmt.Sprintf("%.1f", pivot[0]))
+		imgui.SameLine()
+		// Y - Green square with label
+		imgui.PushStyleColorVec4(imgui.ColButton, imgui.NewVec4(0, 1, 0, 1))
+		imgui.SmallButton("Y##P")
+		imgui.PopStyleColor()
+		imgui.SameLine()
+		imgui.Text(fmt.Sprintf("%.1f", pivot[1]))
+		imgui.SameLine()
+		// Z - Blue square with label
+		imgui.PushStyleColorVec4(imgui.ColButton, imgui.NewVec4(0, 0, 1, 1))
+		imgui.SmallButton("Z##P")
+		imgui.PopStyleColor()
+		imgui.SameLine()
+		imgui.Text(fmt.Sprintf("%.1f", pivot[2]))
 	}
 
 	imgui.Separator()
@@ -244,6 +313,20 @@ func (app *App) renderRSMPreview() {
 	// Node hierarchy (collapsed by default now that we have 3D view)
 	if len(rsm.Nodes) > 0 {
 		if imgui.TreeNodeExStrV(fmt.Sprintf("Node Hierarchy (%d)", len(rsm.Nodes)), imgui.TreeNodeFlagsNone) {
+			// Show All / Hide All buttons for compound models
+			if len(rsm.Nodes) > 1 {
+				if imgui.SmallButton("Show All") {
+					app.modelViewer.SetAllNodesVisible()
+				}
+				imgui.SameLine()
+				if imgui.SmallButton("Solo") {
+					// Hide all nodes - user can then enable just one
+					for i := range rsm.Nodes {
+						app.modelViewer.SetNodeVisibility(rsm.Nodes[i].Name, false)
+					}
+				}
+				imgui.Separator()
+			}
 			// Find and render root node first
 			root := rsm.GetRootNode()
 			if root != nil {
@@ -280,6 +363,13 @@ func (app *App) renderRSMNodeTree(rsm *formats.RSM, node *formats.RSMNode, depth
 	if node == nil || depth > 10 { // Prevent infinite recursion
 		return
 	}
+
+	// Visibility checkbox for this node
+	visible := app.modelViewer.GetNodeVisibility(node.Name)
+	if imgui.Checkbox(fmt.Sprintf("##vis_%s", node.Name), &visible) {
+		app.modelViewer.SetNodeVisibility(node.Name, visible)
+	}
+	imgui.SameLine()
 
 	// Build node label with stats
 	label := fmt.Sprintf("%s (V:%d F:%d)", node.Name, len(node.Vertices), len(node.Faces))
