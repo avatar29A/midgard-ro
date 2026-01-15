@@ -29,6 +29,7 @@ func main() {
 
 	// Parse command line arguments
 	grfPath := flag.String("grf", "", "Path to GRF file to open")
+	debugMap := flag.String("map", "", "Map name to auto-load (e.g., 'prontera' for prontera.rsw)")
 	flag.Parse()
 
 	// Create and run application
@@ -40,6 +41,11 @@ func main() {
 		if err := app.OpenGRF(*grfPath); err != nil {
 			fmt.Fprintf(os.Stderr, "Error opening GRF: %v\n", err)
 		}
+	}
+
+	// Auto-load map if specified (requires GRF to be loaded)
+	if *debugMap != "" && app.archive != nil {
+		app.autoLoadMap(*debugMap)
 	}
 
 	app.Run()
@@ -138,7 +144,11 @@ type App struct {
 	mapViewer         *MapViewer // 3D map renderer
 	map3DViewMode     bool       // Whether 3D view is active for map
 	maxModelsLimit    int        // Max models to load (default 1500)
-	terrainBrightness float32    // Terrain brightness multiplier (default 1.5)
+	terrainBrightness float32    // Terrain brightness multiplier (default 1.0)
+
+	// Scene debug UI state
+	modelFilterText     string // Filter text for model list
+	showPropertiesPanel bool   // Whether to show properties panel
 }
 
 var (
@@ -186,7 +196,7 @@ func NewApp() *App {
 		previewLooping:      true, // Loop by default
 		magentaTransparency: true, // Enable magenta key transparency by default
 		maxModelsLimit:      1500, // Default max models to load
-		terrainBrightness:   1.3,  // Default terrain brightness
+		terrainBrightness:   1.0,  // Default terrain brightness
 	}
 
 	// Ensure screenshot directory exists (ADR-010)
@@ -335,6 +345,38 @@ func (app *App) OpenGRF(path string) error {
 	app.backend.SetWindowTitle(fmt.Sprintf("GRF Browser - %s", filepath.Base(path)))
 
 	return nil
+}
+
+// autoLoadMap automatically loads a map and opens 3D view.
+// Called from command line with -map flag for debugging.
+func (app *App) autoLoadMap(mapName string) {
+	if app.archive == nil {
+		fmt.Fprintf(os.Stderr, "Cannot auto-load map: no GRF loaded\n")
+		return
+	}
+
+	// Construct RSW path (maps are stored as data/{mapname}.rsw)
+	rswPath := "data\\" + mapName + ".rsw"
+
+	// Check if file exists in archive
+	if !app.archive.Contains(rswPath) {
+		// Try with forward slash
+		rswPath = "data/" + mapName + ".rsw"
+		if !app.archive.Contains(rswPath) {
+			fmt.Fprintf(os.Stderr, "Map not found in archive: %s\n", mapName)
+			return
+		}
+	}
+
+	// Set selection to trigger preview
+	app.selectedPath = rswPath
+	app.selectedOriginalPath = rswPath
+
+	// Load RSW preview
+	app.loadRSWPreview(rswPath)
+
+	// Initialize 3D view
+	app.initMap3DView()
 }
 
 // render is called each frame to draw the UI.
@@ -488,12 +530,17 @@ func (app *App) render() {
 
 	// Layout dimensions
 	leftPanelWidth := float32(350)
-	rightPanelWidth := float32(200) // Actions panel for animations
+	rightPanelWidth := float32(200)      // Actions panel for animations / map controls
+	propertiesPanelWidth := float32(180) // Properties panel for selected model
 	statusBarHeight := float32(30)
 	contentHeight := workSize.Y - statusBarHeight
 
-	// Show actions panel only for ACT files
+	// Show actions panel for ACT files
 	showActionsPanel := app.previewACT != nil
+	// Show map controls panel for 3D map view
+	showMapControlsPanel := app.map3DViewMode && app.mapViewer != nil
+	// Show properties panel when a model is selected
+	showPropertiesPanel := app.showPropertiesPanel && app.mapViewer != nil && app.mapViewer.SelectedIdx >= 0
 
 	// Window flags for fixed panels
 	flags := imgui.WindowFlagsNoMove | imgui.WindowFlagsNoResize | imgui.WindowFlagsNoCollapse
@@ -508,10 +555,13 @@ func (app *App) render() {
 	}
 	imgui.End()
 
-	// Calculate preview panel width (shrinks when actions panel is shown)
+	// Calculate preview panel width (shrinks when right panels are shown)
 	previewWidth := workSize.X - leftPanelWidth
-	if showActionsPanel {
+	if showActionsPanel || showMapControlsPanel {
 		previewWidth -= rightPanelWidth
+	}
+	if showPropertiesPanel {
+		previewWidth -= propertiesPanelWidth
 	}
 
 	// Center panel - Preview
@@ -528,6 +578,28 @@ func (app *App) render() {
 		imgui.SetNextWindowSize(imgui.NewVec2(rightPanelWidth, contentHeight))
 		if imgui.BeginV("Actions", nil, flags) {
 			app.renderActionsPanel()
+		}
+		imgui.End()
+	}
+
+	// Right panel - Map Controls (only for 3D map view)
+	controlsPanelX := workPos.X + leftPanelWidth + previewWidth
+	if showMapControlsPanel {
+		imgui.SetNextWindowPos(imgui.NewVec2(controlsPanelX, workPos.Y))
+		imgui.SetNextWindowSize(imgui.NewVec2(rightPanelWidth, contentHeight))
+		if imgui.BeginV("Controls", nil, flags) {
+			app.renderMapControlsPanel()
+		}
+		imgui.End()
+		controlsPanelX += rightPanelWidth
+	}
+
+	// Far right panel - Properties (only when model selected)
+	if showPropertiesPanel {
+		imgui.SetNextWindowPos(imgui.NewVec2(controlsPanelX, workPos.Y))
+		imgui.SetNextWindowSize(imgui.NewVec2(propertiesPanelWidth, contentHeight))
+		if imgui.BeginV("Properties", nil, flags) {
+			app.renderModelPropertiesPanel()
 		}
 		imgui.End()
 	}
@@ -794,4 +866,201 @@ func (app *App) renderStatusBar() {
 	} else {
 		imgui.Text("No GRF loaded")
 	}
+}
+
+// renderModelPropertiesPanel renders the properties panel for selected model.
+func (app *App) renderModelPropertiesPanel() {
+	if app.mapViewer == nil || app.mapViewer.SelectedIdx < 0 {
+		return
+	}
+
+	model := app.mapViewer.GetModel(app.mapViewer.SelectedIdx)
+	if model == nil {
+		return
+	}
+
+	// Close button at top right
+	if imgui.Button("X##closeprops") {
+		app.showPropertiesPanel = false
+		app.mapViewer.SelectedIdx = -1
+	}
+	imgui.SameLine()
+	imgui.Text("Properties")
+	imgui.Separator()
+
+	// Model name (convert from EUC-KR to UTF-8 for Korean display)
+	displayName := euckrToUTF8(model.modelName)
+	fullPath := "data/model/" + model.modelName
+
+	imgui.Text("Model:")
+	imgui.TextWrapped(displayName)
+
+	// Copy and Viewer buttons
+	if imgui.SmallButton("Copy") {
+		imgui.SetClipboardText(fullPath)
+	}
+	imgui.SameLine()
+	if imgui.SmallButton("Viewer") {
+		// Load this model in the model viewer
+		app.openModelInViewer(fullPath)
+	}
+
+	imgui.Spacing()
+
+	// Instance ID
+	imgui.Text(fmt.Sprintf("Instance: %d", model.instanceID))
+
+	imgui.Spacing()
+
+	// Visibility toggle
+	visible := model.Visible
+	if imgui.Checkbox("Visible", &visible) {
+		model.Visible = visible
+	}
+
+	imgui.Spacing()
+	imgui.Separator()
+
+	// Position
+	imgui.Text("Position:")
+	imgui.Text(fmt.Sprintf("  X: %.2f", model.position[0]))
+	imgui.Text(fmt.Sprintf("  Y: %.2f", model.position[1]))
+	imgui.Text(fmt.Sprintf("  Z: %.2f", model.position[2]))
+
+	imgui.Spacing()
+
+	// Rotation
+	imgui.Text("Rotation:")
+	imgui.Text(fmt.Sprintf("  X: %.1f", model.rotation[0]))
+	imgui.Text(fmt.Sprintf("  Y: %.1f", model.rotation[1]))
+	imgui.Text(fmt.Sprintf("  Z: %.1f", model.rotation[2]))
+
+	imgui.Spacing()
+
+	// Scale with warning for negative
+	imgui.Text("Scale:")
+	imgui.Text(fmt.Sprintf("  X: %.3f", model.scale[0]))
+	imgui.Text(fmt.Sprintf("  Y: %.3f", model.scale[1]))
+	imgui.Text(fmt.Sprintf("  Z: %.3f", model.scale[2]))
+
+	if model.HasNegativeScale() {
+		imgui.Spacing()
+		imgui.TextColored(imgui.NewVec4(1, 0.8, 0, 1), "Warning: Negative scale")
+		imgui.TextColored(imgui.NewVec4(0.7, 0.7, 0.7, 1), "(may flip winding)")
+	}
+
+	imgui.Spacing()
+	imgui.Separator()
+
+	// Bounding box
+	imgui.Text("Bounding Box:")
+	imgui.Text(fmt.Sprintf("  Min: (%.1f, %.1f, %.1f)",
+		model.bbox[0], model.bbox[1], model.bbox[2]))
+	imgui.Text(fmt.Sprintf("  Max: (%.1f, %.1f, %.1f)",
+		model.bbox[3], model.bbox[4], model.bbox[5]))
+
+	imgui.Spacing()
+	imgui.Separator()
+
+	// Face statistics
+	imgui.Text("Geometry:")
+	imgui.Text(fmt.Sprintf("  Total faces: %d", model.totalFaces))
+	imgui.Text(fmt.Sprintf("  Two-sided: %d", model.twoSideFaces))
+	if model.totalFaces > 0 {
+		pct := float32(model.twoSideFaces) * 100.0 / float32(model.totalFaces)
+		imgui.Text(fmt.Sprintf("  (%.1f%%)", pct))
+	}
+
+	imgui.Spacing()
+	imgui.Separator()
+
+	// RSM debug info
+	imgui.Text("RSM Info:")
+	imgui.Text(fmt.Sprintf("  Version: %s", model.GetRSMVersion()))
+	imgui.Text(fmt.Sprintf("  Nodes: %d", model.GetNodeCount()))
+
+	// Show node details in a collapsible tree
+	if model.GetNodeCount() > 0 && imgui.TreeNodeExStrV("Node Details", 0) {
+		for i, node := range model.GetNodes() {
+			nodeLabel := fmt.Sprintf("Node %d: %s", i, node.Name)
+			if imgui.TreeNodeExStrV(nodeLabel, 0) {
+				if node.Parent != "" {
+					imgui.Text(fmt.Sprintf("Parent: %s", node.Parent))
+				} else {
+					imgui.TextColored(imgui.NewVec4(0.5, 1, 0.5, 1), "Root node")
+				}
+				imgui.Text(fmt.Sprintf("Offset: (%.2f, %.2f, %.2f)",
+					node.Offset[0], node.Offset[1], node.Offset[2]))
+				imgui.Text(fmt.Sprintf("Position: (%.2f, %.2f, %.2f)",
+					node.Position[0], node.Position[1], node.Position[2]))
+				imgui.Text(fmt.Sprintf("Scale: (%.3f, %.3f, %.3f)",
+					node.Scale[0], node.Scale[1], node.Scale[2]))
+				if node.RotAngle != 0 {
+					imgui.TextColored(imgui.NewVec4(1, 1, 0.5, 1),
+						fmt.Sprintf("RotAngle: %.3f", node.RotAngle))
+					imgui.Text(fmt.Sprintf("RotAxis: (%.3f, %.3f, %.3f)",
+						node.RotAxis[0], node.RotAxis[1], node.RotAxis[2]))
+				}
+				// Show 3x3 matrix
+				if imgui.TreeNodeExStrV("Matrix 3x3", 0) {
+					imgui.Text(fmt.Sprintf("[%.3f %.3f %.3f]",
+						node.Matrix[0], node.Matrix[3], node.Matrix[6]))
+					imgui.Text(fmt.Sprintf("[%.3f %.3f %.3f]",
+						node.Matrix[1], node.Matrix[4], node.Matrix[7]))
+					imgui.Text(fmt.Sprintf("[%.3f %.3f %.3f]",
+						node.Matrix[2], node.Matrix[5], node.Matrix[8]))
+					imgui.TreePop()
+				}
+				// Animation flags
+				if node.HasRotKeys || node.HasPosKeys || node.HasScaleKeys {
+					imgui.TextColored(imgui.NewVec4(0.5, 0.8, 1, 1), "Animated:")
+					if node.HasRotKeys {
+						imgui.SameLine()
+						imgui.Text(fmt.Sprintf("Rot(%d)", node.RotKeyCount))
+					}
+					if node.HasPosKeys {
+						imgui.SameLine()
+						imgui.Text("Pos")
+					}
+					if node.HasScaleKeys {
+						imgui.SameLine()
+						imgui.Text("Scale")
+					}
+					// Show first rotation quaternion if present
+					if node.HasRotKeys {
+						q := node.FirstRotQuat
+						imgui.Text(fmt.Sprintf("Quat[0]: (%.3f, %.3f, %.3f, %.3f)",
+							q[0], q[1], q[2], q[3]))
+					}
+				}
+				imgui.TreePop()
+			}
+		}
+		imgui.TreePop()
+	}
+
+	imgui.Spacing()
+	imgui.Separator()
+
+	// Focus camera button
+	if imgui.ButtonV("Focus Camera", imgui.NewVec2(-1, 0)) {
+		app.mapViewer.FocusOnModel(app.mapViewer.SelectedIdx)
+	}
+}
+
+// openModelInViewer switches from map view to model preview for the given path.
+func (app *App) openModelInViewer(path string) {
+	// Exit 3D map view mode
+	app.map3DViewMode = false
+	app.showPropertiesPanel = false
+
+	// Set selected path (both display and archive path)
+	app.selectedPath = path
+	app.selectedOriginalPath = path
+
+	// Clear preview path to force reload
+	app.previewPath = ""
+
+	// Load the RSM preview
+	app.loadRSMPreview(path)
 }
