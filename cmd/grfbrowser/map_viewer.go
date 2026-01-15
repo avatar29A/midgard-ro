@@ -105,6 +105,77 @@ type modelTexGroup struct {
 	indexCount int32
 }
 
+// Direction constants for 8-directional sprites (RO standard order)
+const (
+	DirS  = 0 // South (facing camera)
+	DirSW = 1
+	DirW  = 2
+	DirNW = 3
+	DirN  = 4 // North (away from camera)
+	DirNE = 5
+	DirE  = 6
+	DirSE = 7
+)
+
+// Action type constants for character animations
+const (
+	ActionIdle = 0
+	ActionWalk = 1
+)
+
+// calculateDirection returns 0-7 direction index from movement vector.
+// RO directions: 0=S, 1=SW, 2=W, 3=NW, 4=N, 5=NE, 6=E, 7=SE
+func calculateDirection(dx, dz float32) int {
+	// Calculate angle in radians (atan2 gives -PI to PI)
+	angle := gomath.Atan2(float64(dx), float64(dz))
+
+	// Convert to 0-2*PI range
+	if angle < 0 {
+		angle += 2 * gomath.Pi
+	}
+
+	// Divide circle into 8 sectors (each 45 degrees = PI/4)
+	// Add PI/8 offset to center each sector
+	sector := int((angle + gomath.Pi/8) / (gomath.Pi / 4))
+	if sector >= 8 {
+		sector = 0
+	}
+
+	// Map sectors to RO direction order
+	// angle=0 is +Z direction (South in RO terms = facing camera)
+	// Clockwise: S(0), SE(7), E(6), NE(5), N(4), NW(3), W(2), SW(1)
+	directionMap := []int{0, 7, 6, 5, 4, 3, 2, 1}
+	return directionMap[sector]
+}
+
+// PlayerCharacter represents the player's character in Play Mode.
+type PlayerCharacter struct {
+	// Position in world coordinates
+	WorldX float32
+	WorldY float32 // Altitude (follows terrain)
+	WorldZ float32
+
+	// Movement state
+	IsMoving  bool
+	Direction int     // 0-7: S, SW, W, NW, N, NE, E, SE
+	MoveSpeed float32 // Units per second
+
+	// Animation state
+	CurrentAction int     // 0=Idle, 1=Walk
+	CurrentFrame  int     // Current frame within action
+	FrameTime     float32 // Accumulated time for frame timing (ms)
+
+	// Sprite data
+	SPR      *formats.SPR
+	ACT      *formats.ACT
+	Textures []uint32 // GPU textures for each SPR image
+
+	// Billboard rendering
+	VAO         uint32
+	VBO         uint32
+	SpriteScale float32 // Scale factor for sprite (default 1.0)
+}
+
 // MapViewer handles 3D rendering of complete RO maps.
 type MapViewer struct {
 	// Framebuffer resources
@@ -175,14 +246,26 @@ type MapViewer struct {
 	centerY   float32
 	centerZ   float32
 
-	// Camera - FPS mode
-	FPSMode   bool
+	// Camera - Play mode (RO-style third-person)
+	PlayMode  bool
 	camPosX   float32
 	camPosY   float32
 	camPosZ   float32
 	camYaw    float32 // Horizontal angle (radians)
 	camPitch  float32 // Vertical angle (radians)
 	MoveSpeed float32
+
+	// Player character (Play mode)
+	Player        *PlayerCharacter
+	spriteProgram uint32 // Shader for billboard sprites
+	locSpriteVP   int32  // viewProj uniform
+	locSpritePos  int32  // world position uniform
+	locSpriteSize int32  // sprite size uniform
+	locSpriteTex  int32  // texture uniform
+	locSpriteTint int32  // color tint uniform
+
+	// GAT data for terrain collision
+	GAT *formats.GAT
 
 	// Lighting from RSW
 	lightDir     [3]float32 // Calculated from longitude/latitude
@@ -537,6 +620,49 @@ void main() {
 }
 `
 
+// Sprite billboard shader for character rendering
+const spriteVertexShader = `#version 410 core
+layout (location = 0) in vec2 aPosition;
+layout (location = 1) in vec2 aTexCoord;
+
+uniform mat4 uViewProj;
+uniform vec3 uWorldPos;
+uniform vec2 uSpriteSize;
+
+out vec2 vTexCoord;
+
+void main() {
+    // Billboard transform: position sprite quad in world space
+    // The sprite is positioned at feet, extending upward
+    vec3 pos = uWorldPos;
+    pos.x += aPosition.x * uSpriteSize.x;
+    pos.y += aPosition.y * uSpriteSize.y;
+
+    vTexCoord = aTexCoord;
+    gl_Position = uViewProj * vec4(pos, 1.0);
+}
+`
+
+const spriteFragmentShader = `#version 410 core
+in vec2 vTexCoord;
+
+uniform sampler2D uTexture;
+uniform vec4 uTint;
+
+out vec4 FragColor;
+
+void main() {
+    vec4 texColor = texture(uTexture, vTexCoord);
+
+    // Discard transparent pixels
+    if (texColor.a < 0.1) {
+        discard;
+    }
+
+    FragColor = texColor * uTint;
+}
+`
+
 // NewMapViewer creates a new 3D map viewer.
 func NewMapViewer(width, height int32) (*MapViewer, error) {
 	mv := &MapViewer{
@@ -571,6 +697,10 @@ func NewMapViewer(width, height int32) (*MapViewer, error) {
 
 	if err := mv.createBboxShader(); err != nil {
 		return nil, fmt.Errorf("creating bbox shader: %w", err)
+	}
+
+	if err := mv.createSpriteShader(); err != nil {
+		return nil, fmt.Errorf("creating sprite shader: %w", err)
 	}
 
 	mv.createFallbackTexture()
@@ -848,6 +978,69 @@ func (mv *MapViewer) createBboxShader() error {
 	return nil
 }
 
+// createSpriteShader compiles the sprite billboard shader program.
+func (mv *MapViewer) createSpriteShader() error {
+	// Compile vertex shader
+	vertShader := gl.CreateShader(gl.VERTEX_SHADER)
+	csource, free := gl.Strs(spriteVertexShader + "\x00")
+	gl.ShaderSource(vertShader, 1, csource, nil)
+	free()
+	gl.CompileShader(vertShader)
+
+	var status int32
+	gl.GetShaderiv(vertShader, gl.COMPILE_STATUS, &status)
+	if status == gl.FALSE {
+		var logLen int32
+		gl.GetShaderiv(vertShader, gl.INFO_LOG_LENGTH, &logLen)
+		log := make([]byte, logLen)
+		gl.GetShaderInfoLog(vertShader, logLen, nil, &log[0])
+		return fmt.Errorf("sprite vertex shader: %s", string(log))
+	}
+
+	// Compile fragment shader
+	fragShader := gl.CreateShader(gl.FRAGMENT_SHADER)
+	csource, free = gl.Strs(spriteFragmentShader + "\x00")
+	gl.ShaderSource(fragShader, 1, csource, nil)
+	free()
+	gl.CompileShader(fragShader)
+
+	gl.GetShaderiv(fragShader, gl.COMPILE_STATUS, &status)
+	if status == gl.FALSE {
+		var logLen int32
+		gl.GetShaderiv(fragShader, gl.INFO_LOG_LENGTH, &logLen)
+		log := make([]byte, logLen)
+		gl.GetShaderInfoLog(fragShader, logLen, nil, &log[0])
+		return fmt.Errorf("sprite fragment shader: %s", string(log))
+	}
+
+	// Link program
+	mv.spriteProgram = gl.CreateProgram()
+	gl.AttachShader(mv.spriteProgram, vertShader)
+	gl.AttachShader(mv.spriteProgram, fragShader)
+	gl.LinkProgram(mv.spriteProgram)
+
+	gl.GetProgramiv(mv.spriteProgram, gl.LINK_STATUS, &status)
+	if status == gl.FALSE {
+		var logLen int32
+		gl.GetProgramiv(mv.spriteProgram, gl.INFO_LOG_LENGTH, &logLen)
+		log := make([]byte, logLen)
+		gl.GetProgramInfoLog(mv.spriteProgram, logLen, nil, &log[0])
+		return fmt.Errorf("sprite shader link: %s", string(log))
+	}
+
+	gl.DeleteShader(vertShader)
+	gl.DeleteShader(fragShader)
+
+	// Get uniform locations
+	mv.locSpriteVP = gl.GetUniformLocation(mv.spriteProgram, gl.Str("uViewProj\x00"))
+	mv.locSpritePos = gl.GetUniformLocation(mv.spriteProgram, gl.Str("uWorldPos\x00"))
+	mv.locSpriteSize = gl.GetUniformLocation(mv.spriteProgram, gl.Str("uSpriteSize\x00"))
+	mv.locSpriteTex = gl.GetUniformLocation(mv.spriteProgram, gl.Str("uTexture\x00"))
+	mv.locSpriteTint = gl.GetUniformLocation(mv.spriteProgram, gl.Str("uTint\x00"))
+
+	return nil
+}
+
 // createFallbackTexture creates a simple white texture for missing textures.
 func (mv *MapViewer) createFallbackTexture() {
 	gl.GenTextures(1, &mv.fallbackTex)
@@ -973,6 +1166,27 @@ func (mv *MapViewer) LoadMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(
 
 	// Store terrain height data for model positioning (Stage 2 - ADR-014)
 	mv.buildTerrainHeightMap(gnd)
+
+	// Load GAT file for collision data (Play mode)
+	if rsw != nil && rsw.GndFile != "" {
+		// Derive GAT path from GND path (replace .gnd with .gat)
+		// GndFile is like "prontera.gnd", need "data/prontera.gat"
+		gatPath := "data/" + rsw.GndFile
+		if len(gatPath) > 4 {
+			gatPath = gatPath[:len(gatPath)-4] + ".gat"
+		}
+		gatData, err := texLoader(gatPath)
+		if err == nil {
+			gat, err := formats.ParseGAT(gatData)
+			if err == nil {
+				mv.GAT = gat
+			} else {
+				fmt.Printf("Warning: Failed to parse GAT: %v\n", err)
+			}
+		} else {
+			fmt.Printf("Warning: GAT file not found: %s\n", gatPath)
+		}
+	}
 
 	// Extract lighting data from RSW (Stage 1: Correct Lighting - ADR-014)
 	if rsw != nil {
@@ -2522,10 +2736,47 @@ func (mv *MapViewer) Render() uint32 {
 	proj := math.Perspective(45.0, aspect, 1.0, 10000.0)
 
 	var view math.Mat4
-	if mv.FPSMode {
-		// FPS camera - look from position in direction of yaw/pitch
+	if mv.PlayMode && mv.Player != nil {
+		// Play camera - RO-style third-person following player
+		player := mv.Player
+
+		// Camera distance (use Distance directly for more zoom range)
+		camDistance := mv.Distance
+		if camDistance < 100 {
+			camDistance = 100
+		}
+		if camDistance > 800 {
+			camDistance = 800
+		}
+
+		// Vertical angle (RO-style top-down view, ~45-50 degrees from vertical)
+		pitch := float32(0.85) // ~48 degrees - more top-down like RO
+
+		// Calculate camera offset from player using yaw for rotation
+		offsetY := camDistance * float32(gomath.Sin(float64(pitch)))
+		horizDist := camDistance * float32(gomath.Cos(float64(pitch)))
+		offsetX := horizDist * float32(gomath.Sin(float64(mv.camYaw)))
+		offsetZ := horizDist * float32(gomath.Cos(float64(mv.camYaw)))
+
+		// Camera position: behind and above player
+		camPos := math.Vec3{
+			X: player.WorldX - offsetX,
+			Y: player.WorldY + offsetY,
+			Z: player.WorldZ - offsetZ,
+		}
+
+		// Look at player position (slightly above feet)
+		target := math.Vec3{
+			X: player.WorldX,
+			Y: player.WorldY + 30, // Look at character center, not feet
+			Z: player.WorldZ,
+		}
+
+		up := math.Vec3{X: 0, Y: 1, Z: 0}
+		view = math.LookAt(camPos, target, up)
+	} else if mv.PlayMode {
+		// Fallback if no player - use FPS-style camera
 		camPos := math.Vec3{X: mv.camPosX, Y: mv.camPosY, Z: mv.camPosZ}
-		// Calculate look direction from yaw and pitch
 		dirX := float32(cosf(mv.camPitch) * sinf(mv.camYaw))
 		dirY := float32(sinf(mv.camPitch))
 		dirZ := float32(cosf(mv.camPitch) * cosf(mv.camYaw))
@@ -2595,6 +2846,13 @@ func (mv *MapViewer) Render() uint32 {
 	// Render placed models
 	mv.renderModels(viewProj)
 
+	// Render player character (in Play mode)
+	if mv.PlayMode && mv.Player != nil {
+		// Update animation (assuming ~60fps = 16ms per frame)
+		mv.UpdatePlayerAnimation(16.0)
+		mv.renderPlayerCharacter(viewProj)
+	}
+
 	// Render water (last, with transparency)
 	mv.renderWater(viewProj)
 
@@ -2604,6 +2862,143 @@ func (mv *MapViewer) Render() uint32 {
 	gl.BindFramebuffer(gl.FRAMEBUFFER, 0)
 
 	return mv.colorTexture
+}
+
+// renderPlayerCharacter renders the player sprite as a billboard in the 3D scene.
+func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
+	player := mv.Player
+	if player == nil || player.VAO == 0 || len(player.Textures) == 0 {
+		return
+	}
+
+	var spriteID int
+	var spriteWidth, spriteHeight float32
+	var tint [4]float32
+
+	// Check if we have ACT animation data
+	if player.ACT != nil && player.SPR != nil {
+		// Get current animation frame
+		actionIdx := player.CurrentAction*8 + player.Direction
+		if actionIdx >= len(player.ACT.Actions) {
+			actionIdx = 0 // Fallback to first action
+		}
+		action := &player.ACT.Actions[actionIdx]
+		if len(action.Frames) == 0 {
+			return
+		}
+
+		frameIdx := player.CurrentFrame % len(action.Frames)
+		frame := &action.Frames[frameIdx]
+		if len(frame.Layers) == 0 {
+			return
+		}
+
+		// Get the first valid layer (body sprite)
+		var layer *formats.Layer
+		for i := range frame.Layers {
+			if frame.Layers[i].SpriteID >= 0 && int(frame.Layers[i].SpriteID) < len(player.Textures) {
+				layer = &frame.Layers[i]
+				break
+			}
+		}
+		if layer == nil {
+			return
+		}
+
+		spriteID = int(layer.SpriteID)
+		if spriteID >= len(player.Textures) {
+			return
+		}
+
+		// Get sprite dimensions from SPR
+		sprImg := &player.SPR.Images[spriteID]
+		spriteWidth = float32(sprImg.Width) * player.SpriteScale
+		spriteHeight = float32(sprImg.Height) * player.SpriteScale
+
+		// Tint color from layer
+		tint = [4]float32{
+			float32(layer.Color[0]) / 255.0,
+			float32(layer.Color[1]) / 255.0,
+			float32(layer.Color[2]) / 255.0,
+			float32(layer.Color[3]) / 255.0,
+		}
+	} else {
+		// Procedural player - use fixed size
+		spriteID = 0
+		spriteWidth = 32 * player.SpriteScale
+		spriteHeight = 64 * player.SpriteScale
+		tint = [4]float32{1.0, 1.0, 1.0, 1.0} // White (no tint)
+	}
+
+	// Enable blending for transparency
+	gl.Enable(gl.BLEND)
+	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+
+	// Use sprite shader
+	gl.UseProgram(mv.spriteProgram)
+
+	// Set uniforms
+	gl.UniformMatrix4fv(mv.locSpriteVP, 1, false, &viewProj[0])
+	gl.Uniform3f(mv.locSpritePos, player.WorldX, player.WorldY, player.WorldZ)
+	gl.Uniform2f(mv.locSpriteSize, spriteWidth, spriteHeight)
+	gl.Uniform4f(mv.locSpriteTint, tint[0], tint[1], tint[2], tint[3])
+
+	// Bind sprite texture
+	gl.ActiveTexture(gl.TEXTURE0)
+	gl.BindTexture(gl.TEXTURE_2D, player.Textures[spriteID])
+	gl.Uniform1i(mv.locSpriteTex, 0)
+
+	// Draw billboard quad
+	gl.BindVertexArray(player.VAO)
+	gl.DrawArrays(gl.TRIANGLE_STRIP, 0, 4)
+	gl.BindVertexArray(0)
+
+	gl.Disable(gl.BLEND)
+}
+
+// UpdatePlayerAnimation advances player animation frame based on time.
+func (mv *MapViewer) UpdatePlayerAnimation(deltaMs float32) {
+	if mv.Player == nil {
+		return
+	}
+
+	player := mv.Player
+
+	// If not moving, switch to idle
+	if !player.IsMoving {
+		player.CurrentAction = ActionIdle
+	}
+
+	// Procedural players don't have animation data
+	if player.ACT == nil {
+		return
+	}
+
+	// Get current action
+	actionIdx := player.CurrentAction*8 + player.Direction
+	if actionIdx >= len(player.ACT.Actions) {
+		actionIdx = 0
+	}
+	action := &player.ACT.Actions[actionIdx]
+	if len(action.Frames) == 0 {
+		return
+	}
+
+	// Get animation interval (default 100ms per frame)
+	interval := float32(100.0)
+	if actionIdx < len(player.ACT.Intervals) && player.ACT.Intervals[actionIdx] > 0 {
+		interval = player.ACT.Intervals[actionIdx]
+	}
+
+	// Accumulate time
+	player.FrameTime += deltaMs
+	if player.FrameTime >= interval {
+		player.FrameTime -= interval
+		player.CurrentFrame++
+		if player.CurrentFrame >= len(action.Frames) {
+			player.CurrentFrame = 0 // Loop animation
+		}
+	}
 }
 
 // renderWater renders the water plane with transparency.
@@ -3006,18 +3401,10 @@ func (mv *MapViewer) calculateCameraPosition() math.Vec3 {
 func (mv *MapViewer) HandleMouseDrag(deltaX, deltaY float32) {
 	sensitivity := float32(0.005)
 
-	if mv.FPSMode {
-		// FPS mode - adjust yaw and pitch
+	if mv.PlayMode {
+		// Play mode - rotate camera around player (horizontal only)
 		mv.camYaw -= deltaX * sensitivity
-		mv.camPitch -= deltaY * sensitivity
-
-		// Clamp pitch to avoid gimbal lock
-		if mv.camPitch < -1.5 {
-			mv.camPitch = -1.5
-		}
-		if mv.camPitch > 1.5 {
-			mv.camPitch = 1.5
-		}
+		// Note: We don't adjust pitch in Play mode - fixed viewing angle
 	} else {
 		// Orbit mode - rotate around center
 		mv.rotationY -= deltaX * sensitivity
@@ -3035,53 +3422,76 @@ func (mv *MapViewer) HandleMouseDrag(deltaX, deltaY float32) {
 
 // HandleMouseWheel handles mouse scroll for zoom.
 func (mv *MapViewer) HandleMouseWheel(delta float32) {
-	if mv.FPSMode {
-		// In FPS mode, scroll adjusts move speed
-		mv.MoveSpeed += delta * 0.5
-		if mv.MoveSpeed < 1.0 {
-			mv.MoveSpeed = 1.0
-		}
-		if mv.MoveSpeed > 50.0 {
-			mv.MoveSpeed = 50.0
-		}
-	} else {
-		// Orbit mode - zoom in/out
-		mv.Distance -= delta * mv.Distance * 0.1
-		if mv.Distance < 50 {
-			mv.Distance = 50
-		}
-		if mv.Distance > 5000 {
-			mv.Distance = 5000
-		}
+	// Both Play mode and Orbit mode use Distance for zoom
+	mv.Distance -= delta * mv.Distance * 0.1
+	if mv.Distance < 50 {
+		mv.Distance = 50
+	}
+	if mv.Distance > 5000 {
+		mv.Distance = 5000
 	}
 }
 
-// HandleFPSMovement handles WASD movement in FPS mode.
+// HandlePlayMovement handles WASD movement in Play mode.
 // forward/right are -1, 0, or 1 based on key presses.
-func (mv *MapViewer) HandleFPSMovement(forward, right, up float32) {
-	if !mv.FPSMode {
+func (mv *MapViewer) HandlePlayMovement(forward, right, up float32) {
+	if !mv.PlayMode || mv.Player == nil {
 		return
 	}
 
-	// Calculate forward direction (horizontal only for walking)
-	dirX := float32(sinf(mv.camYaw))
-	dirZ := float32(cosf(mv.camYaw))
+	// Check if any movement input
+	if forward == 0 && right == 0 {
+		mv.Player.IsMoving = false
+		return
+	}
 
-	// Right direction (perpendicular to forward) - negated for correct A/D mapping
-	rightX := float32(-cosf(mv.camYaw))
-	rightZ := float32(sinf(mv.camYaw))
+	mv.Player.IsMoving = true
 
-	// Apply movement
-	mv.camPosX += (dirX*forward + rightX*right) * mv.MoveSpeed
-	mv.camPosZ += (dirZ*forward + rightZ*right) * mv.MoveSpeed
-	mv.camPosY += up * mv.MoveSpeed
+	// Calculate movement direction based on camera yaw
+	// Forward is toward camera direction, right is perpendicular
+	camDirX := float32(sinf(mv.camYaw))
+	camDirZ := float32(cosf(mv.camYaw))
+
+	// Right direction (perpendicular to forward) - negated for correct A/D
+	camRightX := float32(-cosf(mv.camYaw))
+	camRightZ := float32(sinf(mv.camYaw))
+
+	// Combined movement direction
+	moveX := camDirX*forward + camRightX*right
+	moveZ := camDirZ*forward + camRightZ*right
+
+	// Normalize if diagonal
+	length := float32(gomath.Sqrt(float64(moveX*moveX + moveZ*moveZ)))
+	if length > 0 {
+		moveX /= length
+		moveZ /= length
+	}
+
+	// Calculate new position
+	speed := mv.Player.MoveSpeed * 0.016 // ~60fps delta
+	newX := mv.Player.WorldX + moveX*speed
+	newZ := mv.Player.WorldZ + moveZ*speed
+
+	// Check if new position is walkable
+	if mv.IsWalkable(newX, newZ) {
+		mv.Player.WorldX = newX
+		mv.Player.WorldZ = newZ
+		// Update Y to follow terrain
+		mv.Player.WorldY = mv.GetInterpolatedTerrainHeight(newX, newZ)
+	}
+
+	// Calculate 8-direction facing from movement
+	mv.Player.Direction = calculateDirection(moveX, moveZ)
+
+	// Set walk animation
+	mv.Player.CurrentAction = ActionWalk
 }
 
 // HandleOrbitMovement handles WASD movement in Orbit mode.
 // Pans the camera's focal point (center).
 // forward/right are -1, 0, or 1 based on key presses.
 func (mv *MapViewer) HandleOrbitMovement(forward, right, up float32) {
-	if mv.FPSMode {
+	if mv.PlayMode {
 		return
 	}
 
@@ -3103,32 +3513,358 @@ func (mv *MapViewer) HandleOrbitMovement(forward, right, up float32) {
 	mv.centerY += up * speed
 }
 
-// ToggleFPSMode toggles between orbit and FPS camera modes.
-func (mv *MapViewer) ToggleFPSMode() {
-	mv.FPSMode = !mv.FPSMode
+// LoadPlayerCharacter loads the Novice sprite for Play Mode.
+func (mv *MapViewer) LoadPlayerCharacter(texLoader func(string) ([]byte, error)) error {
+	if mv.Player != nil {
+		return nil // Already loaded
+	}
 
-	if mv.FPSMode {
-		// Initialize FPS camera at map center, slightly above ground level
-		mv.camPosX = mv.centerX
-		mv.camPosY = mv.centerY + 50 // Slightly above center height
-		mv.camPosZ = mv.centerZ
+	// Try multiple sprite paths (different GRF versions have different paths)
+	// Note: In RO, body and head are separate sprites that can be customized
+	// For simplicity, we use complete character sprites like b_novice or monsters
+	spritePaths := []struct {
+		spr string
+		act string
+	}{
+		// Baby Novice (complete sprite without separate head)
+		{"data/sprite/몬스터/b_novice.spr", "data/sprite/몬스터/b_novice.act"},
+		// Korean Novice male body (would need head separately)
+		{"data/sprite/인간족/몸통/남/초보자_남.spr", "data/sprite/인간족/몸통/남/초보자_남.act"},
+		// English paths
+		{"data/sprite/human/body/male/novice_m.spr", "data/sprite/human/body/male/novice_m.act"},
+		// Poring as fallback (should exist in most GRFs)
+		{"data/sprite/몬스터/poring.spr", "data/sprite/몬스터/poring.act"},
+		{"data/sprite/monster/poring.spr", "data/sprite/monster/poring.act"},
+	}
 
-		// Look forward (towards +Z direction)
+	var sprData, actData []byte
+	var sprPath, actPath string
+	var err error
+
+	// Try each path until one works
+	for _, paths := range spritePaths {
+		sprData, err = texLoader(paths.spr)
+		if err != nil {
+			continue
+		}
+		actData, err = texLoader(paths.act)
+		if err != nil {
+			continue
+		}
+		sprPath = paths.spr
+		actPath = paths.act
+		break
+	}
+
+	if sprData == nil || actData == nil {
+		// Create a simple colored marker as fallback
+		fmt.Println("No sprite found, creating procedural player marker")
+		return mv.createProceduralPlayer()
+	}
+
+	fmt.Printf("Using sprite: %s\n", sprPath)
+
+	// Parse SPR file
+	spr, err := formats.ParseSPR(sprData)
+	if err != nil {
+		return fmt.Errorf("parsing player sprite %s: %w", sprPath, err)
+	}
+
+	// Parse ACT file
+	act, err := formats.ParseACT(actData)
+	if err != nil {
+		return fmt.Errorf("parsing player animation %s: %w", actPath, err)
+	}
+
+	// Create player character
+	player := &PlayerCharacter{
+		SPR:         spr,
+		ACT:         act,
+		SpriteScale: 1.0,
+		MoveSpeed:   150.0, // World units per second
+		Direction:   DirS,  // Face south (camera) initially
+	}
+
+	// Create GPU textures for each sprite image
+	player.Textures = make([]uint32, len(spr.Images))
+	for i, img := range spr.Images {
+		var tex uint32
+		gl.GenTextures(1, &tex)
+		gl.BindTexture(gl.TEXTURE_2D, tex)
+
+		gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8,
+			int32(img.Width), int32(img.Height), 0,
+			gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(img.Pixels))
+
+		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+
+		player.Textures[i] = tex
+	}
+
+	// Create billboard VAO/VBO
+	gl.GenVertexArrays(1, &player.VAO)
+	gl.GenBuffers(1, &player.VBO)
+
+	gl.BindVertexArray(player.VAO)
+	gl.BindBuffer(gl.ARRAY_BUFFER, player.VBO)
+
+	// Billboard quad vertices: position (x,y) + texcoord (u,v)
+	// Positioned at feet, extending upward
+	vertices := []float32{
+		// Position (x, y)  TexCoord (u, v)
+		-0.5, 0.0, 0.0, 1.0, // Bottom-left
+		0.5, 0.0, 1.0, 1.0, // Bottom-right
+		-0.5, 1.0, 0.0, 0.0, // Top-left
+		0.5, 1.0, 1.0, 0.0, // Top-right
+	}
+
+	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*4, gl.Ptr(vertices), gl.STATIC_DRAW)
+
+	// Position attribute (location 0)
+	gl.VertexAttribPointerWithOffset(0, 2, gl.FLOAT, false, 4*4, 0)
+	gl.EnableVertexAttribArray(0)
+
+	// TexCoord attribute (location 1)
+	gl.VertexAttribPointerWithOffset(1, 2, gl.FLOAT, false, 4*4, 2*4)
+	gl.EnableVertexAttribArray(1)
+
+	gl.BindVertexArray(0)
+
+	mv.Player = player
+
+	// Initialize player position to map center
+	mv.initializePlayerPosition()
+
+	fmt.Printf("Loaded player sprite: %d images, %d actions\n", len(spr.Images), len(act.Actions))
+
+	return nil
+}
+
+// createProceduralPlayer creates a simple colored player marker when no sprite is available.
+func (mv *MapViewer) createProceduralPlayer() error {
+	// Create a simple 32x64 colored texture (blue player marker)
+	width, height := 32, 64
+	pixels := make([]byte, width*height*4)
+
+	// Fill with semi-transparent blue color
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			idx := (y*width + x) * 4
+			// Create a simple humanoid shape
+			centerX := width / 2
+			distFromCenter := x - centerX
+			if distFromCenter < 0 {
+				distFromCenter = -distFromCenter
+			}
+
+			// Head (top 1/4)
+			if y < height/4 && distFromCenter < width/4 {
+				pixels[idx+0] = 100  // R
+				pixels[idx+1] = 150  // G
+				pixels[idx+2] = 255  // B
+				pixels[idx+3] = 255  // A
+			} else if y >= height/4 && y < height*3/4 && distFromCenter < width/3 {
+				// Body (middle half)
+				pixels[idx+0] = 50   // R
+				pixels[idx+1] = 100  // G
+				pixels[idx+2] = 200  // B
+				pixels[idx+3] = 255  // A
+			} else if y >= height*3/4 && distFromCenter < width/4 {
+				// Legs (bottom quarter)
+				pixels[idx+0] = 50  // R
+				pixels[idx+1] = 80  // G
+				pixels[idx+2] = 150 // B
+				pixels[idx+3] = 255 // A
+			} else {
+				// Transparent
+				pixels[idx+3] = 0
+			}
+		}
+	}
+
+	// Create player character
+	player := &PlayerCharacter{
+		SpriteScale: 0.4, // Reasonable scale for character size (~13x26 world units)
+		MoveSpeed:   150.0,
+		Direction:   DirS,
+	}
+
+	// Create single texture
+	player.Textures = make([]uint32, 1)
+	var tex uint32
+	gl.GenTextures(1, &tex)
+	gl.BindTexture(gl.TEXTURE_2D, tex)
+	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, int32(width), int32(height), 0,
+		gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(pixels))
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+	player.Textures[0] = tex
+
+	// Create billboard VAO/VBO
+	gl.GenVertexArrays(1, &player.VAO)
+	gl.GenBuffers(1, &player.VBO)
+
+	gl.BindVertexArray(player.VAO)
+	gl.BindBuffer(gl.ARRAY_BUFFER, player.VBO)
+
+	vertices := []float32{
+		-0.5, 0.0, 0.0, 1.0,
+		0.5, 0.0, 1.0, 1.0,
+		-0.5, 1.0, 0.0, 0.0,
+		0.5, 1.0, 1.0, 0.0,
+	}
+
+	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*4, gl.Ptr(vertices), gl.STATIC_DRAW)
+	gl.VertexAttribPointerWithOffset(0, 2, gl.FLOAT, false, 4*4, 0)
+	gl.EnableVertexAttribArray(0)
+	gl.VertexAttribPointerWithOffset(1, 2, gl.FLOAT, false, 4*4, 2*4)
+	gl.EnableVertexAttribArray(1)
+	gl.BindVertexArray(0)
+
+	mv.Player = player
+
+	// Initialize player position to map center
+	mv.initializePlayerPosition()
+
+	fmt.Println("Created procedural player marker")
+	return nil
+}
+
+// initializePlayerPosition places the player at the map center.
+func (mv *MapViewer) initializePlayerPosition() {
+	if mv.Player == nil {
+		return
+	}
+
+	// Calculate map center from bounds
+	centerX := (mv.minBounds[0] + mv.maxBounds[0]) / 2
+	centerZ := (mv.minBounds[2] + mv.maxBounds[2]) / 2
+
+	// If bounds aren't set, use center from map dimensions
+	if centerX == 0 && centerZ == 0 && mv.mapWidth > 0 {
+		centerX = mv.mapWidth / 2
+		centerZ = mv.mapHeight / 2
+	}
+
+	// Set player position
+	mv.Player.WorldX = centerX
+	mv.Player.WorldZ = centerZ
+	mv.Player.WorldY = mv.GetInterpolatedTerrainHeight(centerX, centerZ)
+
+	fmt.Printf("Player spawned at (%.0f, %.0f, %.0f)\n", mv.Player.WorldX, mv.Player.WorldY, mv.Player.WorldZ)
+}
+
+// GetInterpolatedTerrainHeight returns the terrain height at a world position.
+// Uses bilinear interpolation between GAT cell corner heights.
+func (mv *MapViewer) GetInterpolatedTerrainHeight(worldX, worldZ float32) float32 {
+	if mv.GAT == nil {
+		return 0
+	}
+
+	// Convert world coordinates to GAT cell coordinates
+	// GAT cells are 5x5 world units (half of GND tile size which is 10)
+	cellSize := float32(5.0)
+	cellFX := worldX / cellSize
+	cellFZ := worldZ / cellSize
+
+	cellX := int(cellFX)
+	cellZ := int(cellFZ)
+
+	// Clamp to valid range
+	if cellX < 0 {
+		cellX = 0
+	}
+	if cellZ < 0 {
+		cellZ = 0
+	}
+	if cellX >= int(mv.GAT.Width)-1 {
+		cellX = int(mv.GAT.Width) - 2
+	}
+	if cellZ >= int(mv.GAT.Height)-1 {
+		cellZ = int(mv.GAT.Height) - 2
+	}
+
+	// Get fractional position within cell (0-1)
+	fracX := cellFX - float32(cellX)
+	fracZ := cellFZ - float32(cellZ)
+	if fracX < 0 {
+		fracX = 0
+	}
+	if fracX > 1 {
+		fracX = 1
+	}
+	if fracZ < 0 {
+		fracZ = 0
+	}
+	if fracZ > 1 {
+		fracZ = 1
+	}
+
+	// Get cell heights (corners: 0=BL, 1=BR, 2=TL, 3=TR)
+	cell := mv.GAT.GetCell(cellX, cellZ)
+	if cell == nil {
+		return 0
+	}
+
+	// Bilinear interpolation
+	// Bottom edge: lerp between bottom-left and bottom-right
+	bottom := cell.Heights[0]*(1-fracX) + cell.Heights[1]*fracX
+	// Top edge: lerp between top-left and top-right
+	top := cell.Heights[2]*(1-fracX) + cell.Heights[3]*fracX
+	// Final: lerp between bottom and top edges
+	height := bottom*(1-fracZ) + top*fracZ
+
+	// GAT heights are typically negative (lower = higher in RO coordinate system)
+	return -height
+}
+
+// IsWalkable checks if a world position is walkable.
+func (mv *MapViewer) IsWalkable(worldX, worldZ float32) bool {
+	if mv.GAT == nil {
+		return true // No GAT data, allow movement
+	}
+
+	// Convert world coordinates to GAT cell coordinates
+	cellSize := float32(5.0)
+	cellX := int(worldX / cellSize)
+	cellZ := int(worldZ / cellSize)
+
+	return mv.GAT.IsWalkable(cellX, cellZ)
+}
+
+// TogglePlayMode toggles between orbit and play camera modes.
+func (mv *MapViewer) TogglePlayMode() {
+	mv.PlayMode = !mv.PlayMode
+
+	if mv.PlayMode {
+		// Set appropriate zoom distance for Play mode (RO-style)
+		mv.Distance = 300 // Good starting distance for third-person
+
+		// Reset camera yaw (rotation around player)
 		mv.camYaw = 0
-		mv.camPitch = 0
+
+		// Player position should already be initialized by LoadPlayerCharacter
+		// If not, initialize now
+		if mv.Player != nil && mv.Player.WorldX == 0 && mv.Player.WorldZ == 0 {
+			mv.initializePlayerPosition()
+		}
 	}
 }
 
 // Reset resets camera to default position.
 func (mv *MapViewer) Reset() {
-	if mv.FPSMode {
-		// Reset FPS camera to map center
-		mv.camPosX = mv.centerX
-		mv.camPosY = mv.centerY + 50
-		mv.camPosZ = mv.centerZ
+	if mv.PlayMode {
+		// Reset play camera
 		mv.camYaw = 0
-		mv.camPitch = 0
-		mv.MoveSpeed = 5.0
+		mv.Distance = 300 // Default Play mode distance
+
+		// Reset player to map center
+		if mv.Player != nil {
+			mv.initializePlayerPosition()
+		}
 	} else {
 		mv.rotationX = 0.6
 		mv.rotationY = 0.0
