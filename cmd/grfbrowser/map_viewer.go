@@ -320,13 +320,16 @@ void main() {
     float NdotL = max(dot(normal, lightDir), 0.0);
     vec3 directional = uDiffuse * NdotL;
 
-    // roBrowser lighting formula:
-    // Ambient is scaled by opacity (lower opacity = darker ambient = more visible shadows)
-    vec3 ambient = uAmbient * uLightOpacity;
+    // Lighting formula:
+    // Ambient provides base illumination (not fully shadowed)
+    // Directional light (sun) is affected by lightmap shadows
+    // Opacity controls shadow visibility (higher = darker shadows)
+    vec3 ambient = uAmbient;
 
-    // Combine ambient + directional, modulated by lightmap shadow
-    // LightColor = (Ambient + Diffuse) * lightmap.a
-    vec3 lighting = (ambient + directional) * shadowIntensity;
+    // Shadow affects directional light, ambient provides minimum illumination
+    // Mix ambient shadow based on opacity (0 = no shadow effect, 1 = full shadow)
+    float ambientShadow = mix(1.0, shadowIntensity, uLightOpacity);
+    vec3 lighting = ambient * ambientShadow + directional * shadowIntensity;
 
     // Clamp lighting to [0, 1] range (prevents overbright)
     lighting = clamp(lighting, vec3(0.0), vec3(1.0));
@@ -1032,7 +1035,7 @@ func (mv *MapViewer) LoadMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(
 
 	// Override with preferred defaults
 	mv.Distance = 340.0
-	mv.modelAnimPlaying = true // Auto-play animations
+	mv.modelAnimPlaying = true // Animation tracking enabled (rebuild disabled until fixed)
 
 	return nil
 }
@@ -1077,6 +1080,8 @@ func (mv *MapViewer) clearTerrain() {
 		}
 	}
 	mv.models = nil
+	mv.animatedModels = nil // Clear animated models list too
+	mv.modelAnimTime = 0    // Reset animation time
 }
 
 // loadGroundTextures loads textures from GRF.
@@ -1585,13 +1590,16 @@ func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texL
 		nodeDebugInfo[i] = info
 	}
 
-	// Check if model has animation (any node with keyframes)
+	// Check if model has animation (any node with >1 keyframes AND animLength > 0)
+	// Models with only 1 keyframe are static poses, not animations
 	hasAnimation := false
-	for i := range rsm.Nodes {
-		node := &rsm.Nodes[i]
-		if len(node.RotKeys) > 0 || len(node.PosKeys) > 0 || len(node.ScaleKeys) > 0 {
-			hasAnimation = true
-			break
+	if rsm.AnimLength > 0 {
+		for i := range rsm.Nodes {
+			node := &rsm.Nodes[i]
+			if len(node.RotKeys) > 1 || len(node.PosKeys) > 1 || len(node.ScaleKeys) > 1 {
+				hasAnimation = true
+				break
+			}
 		}
 	}
 
@@ -1728,14 +1736,16 @@ func (mv *MapViewer) buildNodeMatrixRecursive(node *formats.RSMNode, rsm *format
 	}
 
 	// If node has parent, multiply by parent's matrix
-	// For animated nodes, DON'T multiply by parent - they use world-space coordinates
+	// For TRULY animated nodes (>1 keyframes), DON'T multiply by parent - they use world-space coordinates
+	// Nodes with exactly 1 keyframe are static poses and SHOULD inherit parent transform
 	// This matches korangar's implementation and the fix in model_viewer.go
 	if node.Parent != "" && node.Parent != node.Name {
 		parentNode := rsm.GetNodeByName(node.Parent)
 		if parentNode != nil {
-			// Only static nodes inherit parent transform
-			hasAnimation := len(node.RotKeys) > 0 || len(node.PosKeys) > 0 || len(node.ScaleKeys) > 0
-			if !hasAnimation {
+			// Only truly animated nodes (>1 keyframes) skip parent transform
+			// Static poses (1 keyframe) should still inherit parent
+			hasTrueAnimation := len(node.RotKeys) > 1 || len(node.PosKeys) > 1 || len(node.ScaleKeys) > 1
+			if !hasTrueAnimation {
 				parentMatrix := mv.buildNodeMatrixRecursive(parentNode, rsm, animTimeMs, visited)
 				result = parentMatrix.Mul(result)
 			}
