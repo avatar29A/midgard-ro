@@ -615,8 +615,8 @@ func (app *App) renderMap3DView() {
 	}
 
 	if forward != 0 || right != 0 || up != 0 {
-		if app.mapViewer.FPSMode {
-			app.mapViewer.HandleFPSMovement(forward, right, up)
+		if app.mapViewer.PlayMode {
+			app.mapViewer.HandlePlayMovement(forward, right, up)
 		} else {
 			app.mapViewer.HandleOrbitMovement(forward, right, up)
 		}
@@ -721,13 +721,22 @@ func (app *App) renderMapControlsPanel() {
 	}
 
 	// Camera mode buttons
-	if app.mapViewer.FPSMode {
+	if app.mapViewer.PlayMode {
 		if imgui.ButtonV("Orbit Mode", imgui.NewVec2(-1, 0)) {
-			app.mapViewer.ToggleFPSMode()
+			app.mapViewer.TogglePlayMode()
 		}
 	} else {
-		if imgui.ButtonV("FPS Mode", imgui.NewVec2(-1, 0)) {
-			app.mapViewer.ToggleFPSMode()
+		if imgui.ButtonV("Play", imgui.NewVec2(-1, 0)) {
+			// Load player character if not already loaded
+			if app.mapViewer.Player == nil && app.archive != nil {
+				texLoader := func(path string) ([]byte, error) {
+					return app.archive.Read(path)
+				}
+				if err := app.mapViewer.LoadPlayerCharacter(texLoader); err != nil {
+					fmt.Fprintf(os.Stderr, "Error loading player: %v\n", err)
+				}
+			}
+			app.mapViewer.TogglePlayMode()
 		}
 	}
 
