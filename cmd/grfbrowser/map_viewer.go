@@ -309,6 +309,11 @@ out vec4 FragColor;
 void main() {
     vec4 texColor = texture(uTexture, vTexCoord);
 
+    // Discard transparent pixels (magenta key areas)
+    if (texColor.a < 0.5) {
+        discard;
+    }
+
     // Lightmap: RGB = color tint, A = shadow intensity (0=shadow, 1=lit)
     vec4 lightmap = texture(uLightmap, vLightmapUV);
     float shadowIntensity = lightmap.a;  // 0.0 = full shadow, 1.0 = fully lit
@@ -1095,8 +1100,9 @@ func (mv *MapViewer) loadGroundTextures(gnd *formats.GND, texLoader func(string)
 			continue
 		}
 
-		// Decode texture (reuse existing decoders)
-		img, err := decodeModelTexture(data, fullPath, false)
+		// Decode texture with magenta key enabled
+		// Some terrain textures (like Yuno railings) use magenta for transparency
+		img, err := decodeModelTexture(data, fullPath, true)
 		if err != nil {
 			continue
 		}
@@ -1658,101 +1664,73 @@ func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texL
 }
 
 // buildNodeMatrix builds the transformation matrix for an RSM node.
-// This matches the model_viewer.go implementation for consistency.
+// Following roBrowser's approach: hierarchy matrix (inherited) + vertex transform (not inherited).
 func (mv *MapViewer) buildNodeMatrix(node *formats.RSMNode, rsm *formats.RSM, animTimeMs float32) math.Mat4 {
-	return mv.buildNodeMatrixRecursive(node, rsm, animTimeMs, make(map[string]bool))
+	// Get hierarchy matrix (parent * Position * Rotation * Scale)
+	visited := make(map[string]bool)
+	hierarchyMatrix := mv.buildNodeHierarchyMatrix(node, rsm, animTimeMs, visited)
+
+	// Add Offset and Mat3 for vertex transformation (NOT inherited by children)
+	result := hierarchyMatrix
+	result = result.Mul(math.Translate(node.Offset[0], node.Offset[1], node.Offset[2]))
+	result = result.Mul(math.FromMat3x3(node.Matrix))
+
+	return result
 }
 
-func (mv *MapViewer) buildNodeMatrixRecursive(node *formats.RSMNode, rsm *formats.RSM, animTimeMs float32, visited map[string]bool) math.Mat4 {
+// buildNodeHierarchyMatrix returns the matrix that children inherit.
+// This is: parent_hierarchy * Position * Rotation * Scale
+// It does NOT include Offset or Mat3 (those are vertex-only transforms).
+func (mv *MapViewer) buildNodeHierarchyMatrix(node *formats.RSMNode, rsm *formats.RSM, animTimeMs float32, visited map[string]bool) math.Mat4 {
 	// Prevent infinite recursion
 	if visited[node.Name] {
 		return math.Identity()
 	}
 	visited[node.Name] = true
 
-	// Check if node has animation - use different transform order
-	hasAnimation := len(node.RotKeys) > 0 || len(node.PosKeys) > 0 || len(node.ScaleKeys) > 0
+	// Check if node has rotation keyframes
+	hasRotKeyframes := len(node.RotKeys) > 0
 
-	var result math.Mat4
+	// Build local hierarchy matrix: Position * Rotation * Scale
+	localMatrix := math.Translate(node.Position[0], node.Position[1], node.Position[2])
 
-	if hasAnimation {
-		// For animated nodes, use same transform order as model_viewer.go:
-		// Position * KeyframeRotation * Scale * Offset * Matrix
-		result = math.Identity()
-
-		// Position (interpolated if animated)
-		position := node.Position
-		if len(node.PosKeys) > 0 {
-			position = mv.interpolatePosKeys(node.PosKeys, animTimeMs)
-		}
-		result = result.Mul(math.Translate(position[0], position[1], position[2]))
-
-		// Keyframe rotation (interpolated)
-		if len(node.RotKeys) > 0 {
-			rotQuat := mv.interpolateRotKeys(node.RotKeys, animTimeMs)
-			result = result.Mul(rotQuat.ToMat4())
-		}
-
-		// Scale (interpolated if animated)
-		scale := node.Scale
-		if len(node.ScaleKeys) > 0 {
-			scale = mv.interpolateScaleKeys(node.ScaleKeys, animTimeMs)
-		}
-		result = result.Mul(math.Scale(scale[0], scale[1], scale[2]))
-
-		// Offset (pivot point)
-		result = result.Mul(math.Translate(node.Offset[0], node.Offset[1], node.Offset[2]))
-
-		// Matrix (base orientation)
-		result = result.Mul(math.FromMat3x3(node.Matrix))
-	} else {
-		// For static nodes, use korangar transform order:
-		// main = Translate(Offset) * Mat3x3
-		// transform = Translate(Position) * Scale
-		// result = transform * main
-		main := math.Translate(node.Offset[0], node.Offset[1], node.Offset[2])
-		main = main.Mul(math.FromMat3x3(node.Matrix))
-
-		transform := math.Translate(node.Position[0], node.Position[1], node.Position[2])
-
-		// Apply axis-angle rotation if present
-		if node.RotAngle != 0 {
-			axisLen := float32(gomath.Sqrt(float64(
-				node.RotAxis[0]*node.RotAxis[0] +
-					node.RotAxis[1]*node.RotAxis[1] +
-					node.RotAxis[2]*node.RotAxis[2])))
-			if axisLen > 1e-6 {
-				normalizedAxis := [3]float32{
-					node.RotAxis[0] / axisLen,
-					node.RotAxis[1] / axisLen,
-					node.RotAxis[2] / axisLen,
-				}
-				transform = transform.Mul(math.RotateAxis(normalizedAxis, node.RotAngle))
+	// Apply rotation (axis-angle OR keyframe, not both)
+	if !hasRotKeyframes && node.RotAngle != 0 {
+		axisLen := float32(gomath.Sqrt(float64(
+			node.RotAxis[0]*node.RotAxis[0] +
+				node.RotAxis[1]*node.RotAxis[1] +
+				node.RotAxis[2]*node.RotAxis[2])))
+		if axisLen > 1e-6 {
+			normalizedAxis := [3]float32{
+				node.RotAxis[0] / axisLen,
+				node.RotAxis[1] / axisLen,
+				node.RotAxis[2] / axisLen,
 			}
+			localMatrix = localMatrix.Mul(math.RotateAxis(normalizedAxis, node.RotAngle))
 		}
-
-		transform = transform.Mul(math.Scale(node.Scale[0], node.Scale[1], node.Scale[2]))
-		result = transform.Mul(main)
+	} else if hasRotKeyframes {
+		rotQuat := mv.interpolateRotKeys(node.RotKeys, animTimeMs)
+		localMatrix = localMatrix.Mul(rotQuat.ToMat4())
 	}
 
-	// If node has parent, multiply by parent's matrix
-	// For TRULY animated nodes (>1 keyframes), DON'T multiply by parent - they use world-space coordinates
-	// Nodes with exactly 1 keyframe are static poses and SHOULD inherit parent transform
-	// This matches korangar's implementation and the fix in model_viewer.go
+	localMatrix = localMatrix.Mul(math.Scale(node.Scale[0], node.Scale[1], node.Scale[2]))
+
+	// Apply animation scale if present
+	if len(node.ScaleKeys) > 0 {
+		scale := mv.interpolateScaleKeys(node.ScaleKeys, animTimeMs)
+		localMatrix = localMatrix.Mul(math.Scale(scale[0], scale[1], scale[2]))
+	}
+
+	// If node has parent, get parent's hierarchy matrix first
 	if node.Parent != "" && node.Parent != node.Name {
 		parentNode := rsm.GetNodeByName(node.Parent)
 		if parentNode != nil {
-			// Only truly animated nodes (>1 keyframes) skip parent transform
-			// Static poses (1 keyframe) should still inherit parent
-			hasTrueAnimation := len(node.RotKeys) > 1 || len(node.PosKeys) > 1 || len(node.ScaleKeys) > 1
-			if !hasTrueAnimation {
-				parentMatrix := mv.buildNodeMatrixRecursive(parentNode, rsm, animTimeMs, visited)
-				result = parentMatrix.Mul(result)
-			}
+			parentHierarchy := mv.buildNodeHierarchyMatrix(parentNode, rsm, animTimeMs, visited)
+			return parentHierarchy.Mul(localMatrix)
 		}
 	}
 
-	return result
+	return localMatrix
 }
 
 // transformPoint transforms a point by a 4x4 matrix.
