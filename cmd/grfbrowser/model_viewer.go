@@ -73,6 +73,20 @@ type ModelViewer struct {
 	currentRSM      *formats.RSM
 	textureLoader   func(string) ([]byte, error)
 	magentaKeyCache bool
+
+	// Axis visualization
+	showAxes        bool
+	axisVAO         uint32
+	axisVBO         uint32
+	axisShader      uint32
+	axisLocView     int32
+	axisLocProj     int32
+
+	// Rendering modes
+	wireframeMode bool
+
+	// Node visibility (for compound models)
+	nodeVisibility map[string]bool // true = visible, false = hidden
 }
 
 // rsmVertex is the vertex format for RSM mesh.
@@ -129,16 +143,43 @@ void main() {
 }
 ` + "\x00"
 
+// Line shader for axis visualization
+const lineVertexShader = `#version 410 core
+layout (location = 0) in vec3 aPosition;
+layout (location = 1) in vec3 aColor;
+
+uniform mat4 uView;
+uniform mat4 uProjection;
+
+out vec3 vColor;
+
+void main() {
+    vColor = aColor;
+    gl_Position = uProjection * uView * vec4(aPosition, 1.0);
+}
+` + "\x00"
+
+const lineFragmentShader = `#version 410 core
+in vec3 vColor;
+out vec4 FragColor;
+
+void main() {
+    FragColor = vec4(vColor, 1.0);
+}
+` + "\x00"
+
 // NewModelViewer creates a new 3D model viewer.
 func NewModelViewer(width, height int32) (*ModelViewer, error) {
 	mv := &ModelViewer{
-		width:       width,
-		height:      height,
-		rotationX:   0.3,   // Slight downward angle
-		rotationY:   0.5,   // Slight sideways angle
-		distance:    100.0, // Default zoom
-		animSpeed:   1.0,   // Normal animation speed
-		animLooping: true,  // Loop by default
+		width:          width,
+		height:         height,
+		rotationX:      0.3,   // Slight downward angle
+		rotationY:      0.5,   // Slight sideways angle
+		distance:       100.0, // Default zoom
+		animSpeed:      1.0,   // Normal animation speed
+		animLooping:    true,  // Loop by default
+		showAxes:       true,  // Show axes by default
+		nodeVisibility: make(map[string]bool),
 	}
 
 	// Create framebuffer
@@ -150,6 +191,12 @@ func NewModelViewer(width, height int32) (*ModelViewer, error) {
 	if err := mv.createShaderProgram(); err != nil {
 		mv.Destroy()
 		return nil, fmt.Errorf("shader: %w", err)
+	}
+
+	// Create axis visualization
+	if err := mv.createAxisVisualization(); err != nil {
+		mv.Destroy()
+		return nil, fmt.Errorf("axis viz: %w", err)
 	}
 
 	// Create fallback texture
@@ -265,6 +312,9 @@ func (mv *ModelViewer) LoadModel(rsm *formats.RSM, texLoader func(string) ([]byt
 	// Clear previous model
 	mv.clearModel()
 
+	// Reset node visibility (all visible by default)
+	mv.nodeVisibility = make(map[string]bool)
+
 	// Store references for animation rebuild
 	mv.currentRSM = rsm
 	mv.textureLoader = texLoader
@@ -309,6 +359,11 @@ func (mv *ModelViewer) buildMeshFromRSM(rsm *formats.RSM, animTimeMs float32) ([
 
 	for nodeIdx := range rsm.Nodes {
 		node := &rsm.Nodes[nodeIdx]
+
+		// Skip hidden nodes (for compound model inspection)
+		if !mv.GetNodeVisibility(node.Name) {
+			continue
+		}
 
 		// Build node transformation matrix with animation
 		nodeMatrix := mv.buildNodeMatrix(node, rsm, animTimeMs)
@@ -439,9 +494,24 @@ func (mv *ModelViewer) buildNodeMatrixRecursive(node *formats.RSMNode, rsm *form
 	var result math.Mat4
 
 	if hasAnimation {
-		// For animated nodes, use simpler transform order that works with keyframes
-		// Order: Scale -> Rotation -> Position (then parent)
+		// For animated nodes:
+		// Transform: Position * KeyframeRotation * Scale * Offset * Matrix * vertex
+		// This matches static: Position * AxisAngle * Scale * Offset * Matrix
 		result = math.Identity()
+
+		// Position (interpolated if animated)
+		// Position is the offset from parent in local space
+		position := node.Position
+		if len(node.PosKeys) > 0 {
+			position = mv.interpolatePosKeys(node.PosKeys, animTimeMs)
+		}
+		result = result.Mul(math.Translate(position[0], position[1], position[2]))
+
+		// Keyframe rotation (replaces AxisAngle from static nodes)
+		if len(node.RotKeys) > 0 {
+			rotQuat := mv.interpolateRotKeys(node.RotKeys, animTimeMs)
+			result = result.Mul(rotQuat.ToMat4())
+		}
 
 		// Scale (interpolated if animated)
 		scale := node.Scale
@@ -450,20 +520,11 @@ func (mv *ModelViewer) buildNodeMatrixRecursive(node *formats.RSMNode, rsm *form
 		}
 		result = result.Mul(math.Scale(scale[0], scale[1], scale[2]))
 
-		// Rotation from keyframe interpolation or matrix
-		if len(node.RotKeys) > 0 {
-			rotQuat := mv.interpolateRotKeys(node.RotKeys, animTimeMs)
-			result = result.Mul(rotQuat.ToMat4())
-		} else {
-			result = result.Mul(math.FromMat3x3(node.Matrix))
-		}
+		// Offset (pivot point)
+		result = result.Mul(math.Translate(node.Offset[0], node.Offset[1], node.Offset[2]))
 
-		// Position (interpolated if animated)
-		position := node.Position
-		if len(node.PosKeys) > 0 {
-			position = mv.interpolatePosKeys(node.PosKeys, animTimeMs)
-		}
-		result = result.Mul(math.Translate(position[0], position[1], position[2]))
+		// Matrix (base orientation) - applied first to vertex, same as static
+		result = result.Mul(math.FromMat3x3(node.Matrix))
 	} else {
 		// For static nodes, use korangar transform order:
 		// main = Translate(Offset) * Mat3x3
@@ -495,11 +556,19 @@ func (mv *ModelViewer) buildNodeMatrixRecursive(node *formats.RSMNode, rsm *form
 	}
 
 	// If node has parent, multiply by parent's matrix
+	// For animated nodes, korangar suggests NOT multiplying by parent (they animate independently)
+	// But we still need parent for static nodes in the hierarchy
 	if node.Parent != "" && node.Parent != node.Name {
 		parentNode := rsm.GetNodeByName(node.Parent)
 		if parentNode != nil {
-			parentMatrix := mv.buildNodeMatrixRecursive(parentNode, rsm, animTimeMs, visited)
-			result = parentMatrix.Mul(result)
+			// Check if THIS node (not parent) has animation
+			hasAnimation := len(node.RotKeys) > 0 || len(node.PosKeys) > 0 || len(node.ScaleKeys) > 0
+			if !hasAnimation {
+				// Static child nodes get parent transform
+				parentMatrix := mv.buildNodeMatrixRecursive(parentNode, rsm, animTimeMs, visited)
+				result = parentMatrix.Mul(result)
+			}
+			// Animated nodes keep their own transform without parent multiplication
 		}
 	}
 
@@ -816,8 +885,12 @@ func (mv *ModelViewer) Render() uint32 {
 	gl.BindFramebuffer(gl.FRAMEBUFFER, mv.fbo)
 	gl.Viewport(0, 0, mv.width, mv.height)
 
-	// Clear
-	gl.ClearColor(0.15, 0.15, 0.2, 1.0)
+	// Clear - use light background for wireframe mode
+	if mv.wireframeMode {
+		gl.ClearColor(0.7, 0.7, 0.75, 1.0) // Light gray for wireframe visibility
+	} else {
+		gl.ClearColor(0.15, 0.15, 0.2, 1.0) // Dark blue-gray for normal mode
+	}
 	gl.Clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 
 	// Enable depth testing
@@ -853,6 +926,11 @@ func (mv *ModelViewer) Render() uint32 {
 	gl.Uniform3f(mv.locAmbient, 0.4, 0.4, 0.4)
 	gl.Uniform3f(mv.locDiffuse, 0.6, 0.6, 0.6)
 
+	// Set wireframe mode if enabled
+	if mv.wireframeMode {
+		gl.PolygonMode(gl.FRONT_AND_BACK, gl.LINE)
+	}
+
 	// Draw each texture group
 	gl.ActiveTexture(gl.TEXTURE0)
 	gl.Uniform1i(mv.locTexture, 0)
@@ -872,6 +950,14 @@ func (mv *ModelViewer) Render() uint32 {
 	}
 
 	gl.BindVertexArray(0)
+
+	// Restore fill mode
+	if mv.wireframeMode {
+		gl.PolygonMode(gl.FRONT_AND_BACK, gl.FILL)
+	}
+
+	// Draw axes overlay if enabled
+	mv.renderAxes(view, projection)
 
 	// Restore state
 	gl.BindFramebuffer(gl.FRAMEBUFFER, uint32(prevFBO))
@@ -1061,6 +1147,190 @@ func (mv *ModelViewer) HasAnimation() bool {
 	return mv.currentRSM != nil && mv.currentRSM.HasAnimation()
 }
 
+// GetCenter returns the model's center point (X, Y, Z).
+func (mv *ModelViewer) GetCenter() [3]float32 {
+	return [3]float32{mv.centerX, mv.centerY, mv.centerZ}
+}
+
+// GetBounds returns the model's bounding box (minX, minY, minZ, maxX, maxY, maxZ).
+func (mv *ModelViewer) GetBounds() (min, max [3]float32) {
+	return mv.minBounds, mv.maxBounds
+}
+
+// GetRootNodeOffset returns the root node's offset (pivot point) if available.
+func (mv *ModelViewer) GetRootNodeOffset() [3]float32 {
+	if mv.currentRSM == nil || len(mv.currentRSM.Nodes) == 0 {
+		return [3]float32{0, 0, 0}
+	}
+	root := mv.currentRSM.GetRootNode()
+	if root != nil {
+		return root.Offset
+	}
+	return mv.currentRSM.Nodes[0].Offset
+}
+
+// createAxisVisualization creates the shader and geometry for axis visualization.
+func (mv *ModelViewer) createAxisVisualization() error {
+	// Compile line vertex shader
+	vertexShader, err := compileModelShader(lineVertexShader, gl.VERTEX_SHADER)
+	if err != nil {
+		return fmt.Errorf("line vertex shader: %w", err)
+	}
+	defer gl.DeleteShader(vertexShader)
+
+	// Compile line fragment shader
+	fragmentShader, err := compileModelShader(lineFragmentShader, gl.FRAGMENT_SHADER)
+	if err != nil {
+		return fmt.Errorf("line fragment shader: %w", err)
+	}
+	defer gl.DeleteShader(fragmentShader)
+
+	// Link program
+	mv.axisShader = gl.CreateProgram()
+	gl.AttachShader(mv.axisShader, vertexShader)
+	gl.AttachShader(mv.axisShader, fragmentShader)
+	gl.LinkProgram(mv.axisShader)
+
+	var status int32
+	gl.GetProgramiv(mv.axisShader, gl.LINK_STATUS, &status)
+	if status == gl.FALSE {
+		var logLength int32
+		gl.GetProgramiv(mv.axisShader, gl.INFO_LOG_LENGTH, &logLength)
+		log := strings.Repeat("\x00", int(logLength+1))
+		gl.GetProgramInfoLog(mv.axisShader, logLength, nil, gl.Str(log))
+		return fmt.Errorf("link failed: %s", log)
+	}
+
+	// Get uniform locations
+	mv.axisLocView = gl.GetUniformLocation(mv.axisShader, gl.Str("uView\x00"))
+	mv.axisLocProj = gl.GetUniformLocation(mv.axisShader, gl.Str("uProjection\x00"))
+
+	// Create axis line geometry
+	// Each line: 2 vertices with position (3 floats) + color (3 floats) = 6 floats per vertex
+	// 3 axes x 2 vertices = 6 vertices total
+	axisLength := float32(50.0) // World units
+	axisData := []float32{
+		// X axis (red) - from origin to positive X
+		0, 0, 0, 1, 0, 0,
+		axisLength, 0, 0, 1, 0, 0,
+		// Y axis (green) - from origin to positive Y
+		0, 0, 0, 0, 1, 0,
+		0, axisLength, 0, 0, 1, 0,
+		// Z axis (blue) - from origin to positive Z
+		0, 0, 0, 0, 0, 1,
+		0, 0, axisLength, 0, 0, 1,
+	}
+
+	// Create VAO for axes
+	gl.GenVertexArrays(1, &mv.axisVAO)
+	gl.BindVertexArray(mv.axisVAO)
+
+	// Create VBO
+	gl.GenBuffers(1, &mv.axisVBO)
+	gl.BindBuffer(gl.ARRAY_BUFFER, mv.axisVBO)
+	gl.BufferData(gl.ARRAY_BUFFER, len(axisData)*4, unsafe.Pointer(&axisData[0]), gl.STATIC_DRAW)
+
+	// Position attribute (location = 0)
+	gl.VertexAttribPointerWithOffset(0, 3, gl.FLOAT, false, 24, 0) // 6 floats * 4 bytes = 24 stride
+	gl.EnableVertexAttribArray(0)
+
+	// Color attribute (location = 1)
+	gl.VertexAttribPointerWithOffset(1, 3, gl.FLOAT, false, 24, 12) // Offset 3 floats * 4 = 12
+	gl.EnableVertexAttribArray(1)
+
+	gl.BindVertexArray(0)
+
+	return nil
+}
+
+// renderAxes draws the XYZ axis visualization.
+func (mv *ModelViewer) renderAxes(view, projection math.Mat4) {
+	if !mv.showAxes || mv.axisVAO == 0 {
+		return
+	}
+
+	// Use line shader
+	gl.UseProgram(mv.axisShader)
+
+	// Set uniforms
+	gl.UniformMatrix4fv(mv.axisLocView, 1, false, view.Ptr())
+	gl.UniformMatrix4fv(mv.axisLocProj, 1, false, projection.Ptr())
+
+	// Draw thicker lines for visibility
+	gl.LineWidth(2.0)
+
+	// Disable depth test so axes are always visible
+	gl.Disable(gl.DEPTH_TEST)
+
+	gl.BindVertexArray(mv.axisVAO)
+	gl.DrawArrays(gl.LINES, 0, 6) // 6 vertices = 3 lines
+	gl.BindVertexArray(0)
+
+	// Re-enable depth test
+	gl.Enable(gl.DEPTH_TEST)
+}
+
+// SetShowAxes toggles axis visualization.
+func (mv *ModelViewer) SetShowAxes(show bool) {
+	mv.showAxes = show
+}
+
+// ShowAxes returns whether axis visualization is enabled.
+func (mv *ModelViewer) ShowAxes() bool {
+	return mv.showAxes
+}
+
+// SetWireframeMode enables or disables wireframe rendering.
+func (mv *ModelViewer) SetWireframeMode(enabled bool) {
+	mv.wireframeMode = enabled
+}
+
+// WireframeMode returns whether wireframe rendering is enabled.
+func (mv *ModelViewer) WireframeMode() bool {
+	return mv.wireframeMode
+}
+
+// SetNodeVisibility sets visibility for a specific node.
+func (mv *ModelViewer) SetNodeVisibility(nodeName string, visible bool) {
+	if mv.nodeVisibility == nil {
+		mv.nodeVisibility = make(map[string]bool)
+	}
+	mv.nodeVisibility[nodeName] = visible
+	// Rebuild mesh with new visibility settings
+	mv.rebuildMesh()
+}
+
+// GetNodeVisibility returns whether a specific node is visible.
+// Returns true if node is not in the map (visible by default).
+func (mv *ModelViewer) GetNodeVisibility(nodeName string) bool {
+	if mv.nodeVisibility == nil {
+		return true // Visible by default
+	}
+	visible, ok := mv.nodeVisibility[nodeName]
+	if !ok {
+		return true // Visible by default if not explicitly set
+	}
+	return visible
+}
+
+// SetAllNodesVisible sets all nodes to visible.
+func (mv *ModelViewer) SetAllNodesVisible() {
+	mv.nodeVisibility = make(map[string]bool)
+	mv.rebuildMesh()
+}
+
+// GetNodeNames returns the names of all nodes in the current model.
+func (mv *ModelViewer) GetNodeNames() []string {
+	if mv.currentRSM == nil {
+		return nil
+	}
+	names := make([]string, len(mv.currentRSM.Nodes))
+	for i := range mv.currentRSM.Nodes {
+		names[i] = mv.currentRSM.Nodes[i].Name
+	}
+	return names
+}
+
 func (mv *ModelViewer) clearModel() {
 	if mv.vao != 0 {
 		gl.DeleteVertexArrays(1, &mv.vao)
@@ -1103,5 +1373,15 @@ func (mv *ModelViewer) Destroy() {
 	}
 	if mv.depthRBO != 0 {
 		gl.DeleteRenderbuffers(1, &mv.depthRBO)
+	}
+	// Clean up axis visualization
+	if mv.axisShader != 0 {
+		gl.DeleteProgram(mv.axisShader)
+	}
+	if mv.axisVAO != 0 {
+		gl.DeleteVertexArrays(1, &mv.axisVAO)
+	}
+	if mv.axisVBO != 0 {
+		gl.DeleteBuffers(1, &mv.axisVBO)
 	}
 }
