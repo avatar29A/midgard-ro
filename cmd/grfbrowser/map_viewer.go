@@ -4,6 +4,7 @@ package main
 import (
 	"fmt"
 	gomath "math"
+	"sort"
 	"unsafe"
 
 	"github.com/go-gl/gl/v4.1-core/gl"
@@ -41,6 +42,25 @@ type MapDiagnostics struct {
 }
 
 // MapModel represents a placed RSM model in the map.
+// NodeDebugInfo stores debug information about an RSM node.
+type NodeDebugInfo struct {
+	Name         string
+	Parent       string
+	Offset       [3]float32
+	Position     [3]float32
+	Scale        [3]float32
+	RotAngle     float32
+	RotAxis      [3]float32
+	Matrix       [9]float32
+	HasRotKeys   bool
+	HasPosKeys   bool
+	HasScaleKeys bool
+	// First rotation keyframe (if any)
+	FirstRotQuat [4]float32
+	RotKeyCount  int
+}
+
+// MapModel represents a placed RSM model in the map.
 type MapModel struct {
 	vao        uint32
 	vbo        uint32
@@ -52,8 +72,25 @@ type MapModel struct {
 	rotation   [3]float32
 	scale      [3]float32
 	// Debug info
-	modelName string
-	bbox      [6]float32 // minX, minY, minZ, maxX, maxY, maxZ (after centering)
+	modelName  string
+	bbox       [6]float32 // minX, minY, minZ, maxX, maxY, maxZ (after centering)
+	instanceID int        // Unique instance ID for this model placement
+	// Visibility and selection
+	Visible bool // Whether this instance is rendered
+	// Stats for debugging
+	totalFaces   int
+	twoSideFaces int
+	// Extended debug info
+	rsmVersion string
+	nodeCount  int
+	nodes      []NodeDebugInfo
+}
+
+// ModelGroup represents a group of model instances sharing the same RSM.
+type ModelGroup struct {
+	RSMName    string // RSM filename (without path)
+	Instances  []int  // Indices into MapViewer.models
+	AllVisible bool   // Quick toggle for all instances
 }
 
 // modelTexGroup groups faces by texture for rendering.
@@ -82,6 +119,10 @@ type MapViewer struct {
 	locLightmap     int32
 	locBrightness   int32
 	locLightOpacity int32
+	locFogUse       int32
+	locFogNear      int32
+	locFogFar       int32
+	locFogColor     int32
 
 	// Model shader
 	modelProgram     uint32
@@ -90,6 +131,10 @@ type MapViewer struct {
 	locModelAmbient  int32
 	locModelDiffuse  int32
 	locModelTexture  int32
+	locModelFogUse   int32
+	locModelFogNear  int32
+	locModelFogFar   int32
+	locModelFogColor int32
 
 	// Terrain mesh
 	terrainVAO    uint32
@@ -105,8 +150,14 @@ type MapViewer struct {
 	tilesPerRow    int32 // Number of lightmap tiles per row in atlas
 
 	// Placed models
-	models    []*MapModel
-	MaxModels int // Maximum models to load (0 = unlimited)
+	models      []*MapModel
+	ModelGroups []ModelGroup // Models grouped by RSM name
+	MaxModels   int          // Maximum models to load (0 = unlimited)
+	SelectedIdx int          // Currently selected model index (-1 = none)
+	ModelFilter string       // Filter string for model names
+
+	// Debug options
+	ForceAllTwoSided bool // Force all faces to render as two-sided (debug)
 
 	// Diagnostics
 	Diagnostics MapDiagnostics
@@ -114,7 +165,7 @@ type MapViewer struct {
 	// Camera - Orbit mode
 	rotationX float32
 	rotationY float32
-	distance  float32
+	Distance  float32 // Public for zoom control
 	centerX   float32
 	centerY   float32
 	centerZ   float32
@@ -133,7 +184,7 @@ type MapViewer struct {
 	ambientColor [3]float32 // From RSW.Light.Ambient
 	diffuseColor [3]float32 // From RSW.Light.Diffuse
 	lightOpacity float32    // Shadow opacity from RSW (affects ambient strength)
-	Brightness   float32    // Terrain brightness multiplier (default 1.3)
+	Brightness   float32    // Terrain brightness multiplier (default 1.0)
 
 	// Map bounds
 	minBounds [3]float32
@@ -165,11 +216,23 @@ type MapViewer struct {
 	waterFrame     int      // Current animation frame
 	useWaterTex    bool     // Whether we have loaded water textures
 
-	// Fog settings (Stage 4 - ADR-014)
-	fogEnabled bool
-	fogNear    float32
-	fogFar     float32
-	fogColor   [3]float32
+	// Fog settings (Stage 4 - ADR-014) - public for UI controls
+	FogEnabled bool
+	FogNear    float32
+	FogFar     float32
+	FogColor   [3]float32
+
+	// Selection bounding box rendering
+	bboxProgram  uint32
+	bboxVAO      uint32
+	bboxVBO      uint32
+	locBboxMVP   int32
+	locBboxColor int32
+
+	// Cached matrices for picking
+	lastViewProj math.Mat4
+	lastView     math.Mat4
+	lastProj     math.Mat4
 }
 
 // terrainVertex is the vertex format for terrain mesh.
@@ -225,6 +288,12 @@ uniform vec3 uDiffuse;
 uniform float uBrightness;
 uniform float uLightOpacity;
 
+// Fog uniforms (roBrowser style)
+uniform bool uFogUse;
+uniform float uFogNear;
+uniform float uFogFar;
+uniform vec3 uFogColor;
+
 out vec4 FragColor;
 
 void main() {
@@ -261,6 +330,13 @@ void main() {
     // Final color: (texture * lighting * vertColor * brightness) + colorTint
     // roBrowser formula: texture * LightColor + ColorMap
     vec3 finalColor = texColor.rgb * lighting * vertColor * uBrightness + colorTint;
+
+    // Apply fog (roBrowser formula using smoothstep)
+    if (uFogUse) {
+        float depth = gl_FragCoord.z / gl_FragCoord.w;
+        float fogFactor = smoothstep(uFogNear, uFogFar, depth);
+        finalColor = mix(finalColor, uFogColor, fogFactor);
+    }
 
     FragColor = vec4(finalColor, texColor.a * vColor.a);
 }
@@ -299,6 +375,12 @@ uniform vec3 uLightDir;
 uniform vec3 uAmbient;
 uniform vec3 uDiffuse;
 
+// Fog uniforms (roBrowser style)
+uniform bool uFogUse;
+uniform float uFogNear;
+uniform float uFogFar;
+uniform vec3 uFogColor;
+
 out vec4 FragColor;
 
 void main() {
@@ -309,11 +391,19 @@ void main() {
         discard;
     }
 
-    // Simple lighting
-    float NdotL = max(dot(normalize(vNormal), normalize(uLightDir)), 0.0);
+    // Simple lighting with shadow lift (roBrowser uses min 0.5 for models)
+    float NdotL = max(dot(normalize(vNormal), normalize(uLightDir)), 0.5);
     vec3 lighting = uAmbient + uDiffuse * NdotL;
 
     vec3 color = texColor.rgb * lighting;
+
+    // Apply fog (roBrowser formula using smoothstep)
+    if (uFogUse) {
+        float depth = gl_FragCoord.z / gl_FragCoord.w;
+        float fogFactor = smoothstep(uFogNear, uFogFar, depth);
+        color = mix(color, uFogColor, fogFactor);
+    }
+
     FragColor = vec4(color, texColor.a);
 }
 `
@@ -408,6 +498,27 @@ void main() {
 }
 `
 
+// Bounding box shader - simple wireframe lines
+const bboxVertexShader = `#version 410 core
+layout (location = 0) in vec3 aPosition;
+
+uniform mat4 uMVP;
+
+void main() {
+    gl_Position = uMVP * vec4(aPosition, 1.0);
+}
+`
+
+const bboxFragmentShader = `#version 410 core
+uniform vec4 uColor;
+
+out vec4 FragColor;
+
+void main() {
+    FragColor = uColor;
+}
+`
+
 // NewMapViewer creates a new 3D map viewer.
 func NewMapViewer(width, height int32) (*MapViewer, error) {
 	mv := &MapViewer{
@@ -416,10 +527,11 @@ func NewMapViewer(width, height int32) (*MapViewer, error) {
 		groundTextures: make(map[int]uint32),
 		rotationX:      0.5,
 		rotationY:      0.0,
-		distance:       500.0,
+		Distance:       200.0,
 		MoveSpeed:      5.0,
 		MaxModels:      1500, // Default model limit
-		Brightness:     1.3,  // Default terrain brightness multiplier
+		Brightness:     1.0,  // Default terrain brightness multiplier
+		SelectedIdx:    -1,   // No model selected initially
 		// Default lighting (will be overwritten by RSW data)
 		lightDir:     [3]float32{0.5, 0.866, 0.0}, // 60 degrees elevation
 		ambientColor: [3]float32{0.3, 0.3, 0.3},
@@ -437,6 +549,10 @@ func NewMapViewer(width, height int32) (*MapViewer, error) {
 
 	if err := mv.createModelShader(); err != nil {
 		return nil, fmt.Errorf("creating model shader: %w", err)
+	}
+
+	if err := mv.createBboxShader(); err != nil {
+		return nil, fmt.Errorf("creating bbox shader: %w", err)
 	}
 
 	mv.createFallbackTexture()
@@ -471,6 +587,30 @@ func (mv *MapViewer) createFramebuffer() error {
 
 	gl.BindFramebuffer(gl.FRAMEBUFFER, 0)
 	return nil
+}
+
+// Resize updates the framebuffer size if dimensions changed.
+func (mv *MapViewer) Resize(width, height int32) {
+	if width == mv.width && height == mv.height {
+		return
+	}
+	if width < 1 {
+		width = 1
+	}
+	if height < 1 {
+		height = 1
+	}
+
+	mv.width = width
+	mv.height = height
+
+	// Resize color texture
+	gl.BindTexture(gl.TEXTURE_2D, mv.colorTexture)
+	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, mv.width, mv.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, nil)
+
+	// Resize depth renderbuffer
+	gl.BindRenderbuffer(gl.RENDERBUFFER, mv.depthRBO)
+	gl.RenderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, mv.width, mv.height)
 }
 
 // createTerrainShader compiles the terrain shader program.
@@ -535,6 +675,10 @@ func (mv *MapViewer) createTerrainShader() error {
 	mv.locLightmap = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uLightmap\x00"))
 	mv.locBrightness = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uBrightness\x00"))
 	mv.locLightOpacity = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uLightOpacity\x00"))
+	mv.locFogUse = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uFogUse\x00"))
+	mv.locFogNear = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uFogNear\x00"))
+	mv.locFogFar = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uFogFar\x00"))
+	mv.locFogColor = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uFogColor\x00"))
 
 	return nil
 }
@@ -598,11 +742,90 @@ func (mv *MapViewer) createModelShader() error {
 	mv.locModelAmbient = gl.GetUniformLocation(mv.modelProgram, gl.Str("uAmbient\x00"))
 	mv.locModelDiffuse = gl.GetUniformLocation(mv.modelProgram, gl.Str("uDiffuse\x00"))
 	mv.locModelTexture = gl.GetUniformLocation(mv.modelProgram, gl.Str("uTexture\x00"))
+	mv.locModelFogUse = gl.GetUniformLocation(mv.modelProgram, gl.Str("uFogUse\x00"))
+	mv.locModelFogNear = gl.GetUniformLocation(mv.modelProgram, gl.Str("uFogNear\x00"))
+	mv.locModelFogFar = gl.GetUniformLocation(mv.modelProgram, gl.Str("uFogFar\x00"))
+	mv.locModelFogColor = gl.GetUniformLocation(mv.modelProgram, gl.Str("uFogColor\x00"))
 
 	// Compile water shader
 	if err := mv.compileWaterShader(); err != nil {
 		return fmt.Errorf("water shader: %w", err)
 	}
+
+	return nil
+}
+
+// createBboxShader compiles the bounding box wireframe shader.
+func (mv *MapViewer) createBboxShader() error {
+	// Compile vertex shader
+	vertShader := gl.CreateShader(gl.VERTEX_SHADER)
+	csource, free := gl.Strs(bboxVertexShader + "\x00")
+	gl.ShaderSource(vertShader, 1, csource, nil)
+	free()
+	gl.CompileShader(vertShader)
+
+	var status int32
+	gl.GetShaderiv(vertShader, gl.COMPILE_STATUS, &status)
+	if status == gl.FALSE {
+		var logLen int32
+		gl.GetShaderiv(vertShader, gl.INFO_LOG_LENGTH, &logLen)
+		log := make([]byte, logLen)
+		gl.GetShaderInfoLog(vertShader, logLen, nil, &log[0])
+		return fmt.Errorf("bbox vertex shader: %s", string(log))
+	}
+
+	// Compile fragment shader
+	fragShader := gl.CreateShader(gl.FRAGMENT_SHADER)
+	csource, free = gl.Strs(bboxFragmentShader + "\x00")
+	gl.ShaderSource(fragShader, 1, csource, nil)
+	free()
+	gl.CompileShader(fragShader)
+
+	gl.GetShaderiv(fragShader, gl.COMPILE_STATUS, &status)
+	if status == gl.FALSE {
+		var logLen int32
+		gl.GetShaderiv(fragShader, gl.INFO_LOG_LENGTH, &logLen)
+		log := make([]byte, logLen)
+		gl.GetShaderInfoLog(fragShader, logLen, nil, &log[0])
+		return fmt.Errorf("bbox fragment shader: %s", string(log))
+	}
+
+	// Link program
+	mv.bboxProgram = gl.CreateProgram()
+	gl.AttachShader(mv.bboxProgram, vertShader)
+	gl.AttachShader(mv.bboxProgram, fragShader)
+	gl.LinkProgram(mv.bboxProgram)
+
+	gl.GetProgramiv(mv.bboxProgram, gl.LINK_STATUS, &status)
+	if status == gl.FALSE {
+		var logLen int32
+		gl.GetProgramiv(mv.bboxProgram, gl.INFO_LOG_LENGTH, &logLen)
+		log := make([]byte, logLen)
+		gl.GetProgramInfoLog(mv.bboxProgram, logLen, nil, &log[0])
+		return fmt.Errorf("bbox shader link: %s", string(log))
+	}
+
+	gl.DeleteShader(vertShader)
+	gl.DeleteShader(fragShader)
+
+	// Get uniform locations
+	mv.locBboxMVP = gl.GetUniformLocation(mv.bboxProgram, gl.Str("uMVP\x00"))
+	mv.locBboxColor = gl.GetUniformLocation(mv.bboxProgram, gl.Str("uColor\x00"))
+
+	// Create VAO/VBO for bounding box (12 lines = 24 vertices)
+	gl.GenVertexArrays(1, &mv.bboxVAO)
+	gl.GenBuffers(1, &mv.bboxVBO)
+
+	gl.BindVertexArray(mv.bboxVAO)
+	gl.BindBuffer(gl.ARRAY_BUFFER, mv.bboxVBO)
+	// Allocate space for 24 vertices (12 lines), will be updated per-frame
+	gl.BufferData(gl.ARRAY_BUFFER, 24*3*4, nil, gl.DYNAMIC_DRAW)
+
+	// Position attribute
+	gl.VertexAttribPointerWithOffset(0, 3, gl.FLOAT, false, 3*4, 0)
+	gl.EnableVertexAttribArray(0)
+
+	gl.BindVertexArray(0)
 
 	return nil
 }
@@ -789,10 +1012,10 @@ func (mv *MapViewer) LoadMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(
 	}
 
 	// Set up fog (Stage 4 - ADR-014)
-	mv.fogEnabled = true
-	mv.fogNear = 500.0
-	mv.fogFar = 3000.0
-	mv.fogColor = [3]float32{0.6, 0.75, 0.9} // Light blue-gray fog
+	mv.FogEnabled = true
+	mv.FogNear = 150.0
+	mv.FogFar = 800.0
+	mv.FogColor = [3]float32{0.95, 0.90, 0.85} // Very subtle warm tint (barely visible)
 
 	// Fit camera to map
 	mv.fitCamera()
@@ -919,6 +1142,7 @@ func (mv *MapViewer) loadModels(rsw *formats.RSW, texLoader func(string) ([]byte
 		// Build map model from RSM
 		mapModel := mv.buildMapModel(rsm, modelRef, texLoader)
 		if mapModel != nil {
+			mapModel.instanceID = len(mv.models)
 			mv.models = append(mv.models, mapModel)
 			mv.Diagnostics.ModelsLoaded++
 		} else {
@@ -927,6 +1151,138 @@ func (mv *MapViewer) loadModels(rsw *formats.RSW, texLoader func(string) ([]byte
 	}
 
 	mv.Diagnostics.UniqueRSMFiles = len(rsmCache)
+
+	// Build model groups for scene tree
+	mv.buildModelGroups()
+}
+
+// buildModelGroups creates groups of model instances by RSM name.
+func (mv *MapViewer) buildModelGroups() {
+	groupMap := make(map[string][]int)
+
+	for i, model := range mv.models {
+		if model == nil {
+			continue
+		}
+		groupMap[model.modelName] = append(groupMap[model.modelName], i)
+	}
+
+	// Convert to slice and sort by name
+	mv.ModelGroups = make([]ModelGroup, 0, len(groupMap))
+	for name, indices := range groupMap {
+		mv.ModelGroups = append(mv.ModelGroups, ModelGroup{
+			RSMName:    name,
+			Instances:  indices,
+			AllVisible: true,
+		})
+	}
+
+	// Sort groups alphabetically
+	sort.Slice(mv.ModelGroups, func(i, j int) bool {
+		return mv.ModelGroups[i].RSMName < mv.ModelGroups[j].RSMName
+	})
+}
+
+// SetGroupVisibility sets visibility for all instances in a model group.
+func (mv *MapViewer) SetGroupVisibility(groupIdx int, visible bool) {
+	if groupIdx < 0 || groupIdx >= len(mv.ModelGroups) {
+		return
+	}
+	mv.ModelGroups[groupIdx].AllVisible = visible
+	for _, modelIdx := range mv.ModelGroups[groupIdx].Instances {
+		if modelIdx >= 0 && modelIdx < len(mv.models) && mv.models[modelIdx] != nil {
+			mv.models[modelIdx].Visible = visible
+		}
+	}
+}
+
+// SetAllModelsVisible sets visibility for all models.
+func (mv *MapViewer) SetAllModelsVisible(visible bool) {
+	for i := range mv.ModelGroups {
+		mv.ModelGroups[i].AllVisible = visible
+	}
+	for _, model := range mv.models {
+		if model != nil {
+			model.Visible = visible
+		}
+	}
+}
+
+// GetModel returns a model by index, or nil if invalid.
+func (mv *MapViewer) GetModel(idx int) *MapModel {
+	if idx < 0 || idx >= len(mv.models) {
+		return nil
+	}
+	return mv.models[idx]
+}
+
+// GetVisibleCount returns the number of visible models.
+func (mv *MapViewer) GetVisibleCount() int {
+	count := 0
+	for _, model := range mv.models {
+		if model != nil && model.Visible {
+			count++
+		}
+	}
+	return count
+}
+
+// FocusOnModel moves the camera to focus on a specific model.
+func (mv *MapViewer) FocusOnModel(idx int) {
+	model := mv.GetModel(idx)
+	if model == nil {
+		return
+	}
+
+	// Calculate world position of model
+	offsetX := mv.mapWidth / 2
+	offsetZ := mv.mapHeight / 2
+	worldX := model.position[0] + offsetX
+	worldY := -model.position[1]
+	worldZ := model.position[2] + offsetZ
+
+	// Set camera center to model position
+	mv.centerX = worldX
+	mv.centerY = worldY
+	mv.centerZ = worldZ
+
+	// Set reasonable zoom distance based on model bounding box
+	bboxSize := gomath.Max(
+		float64(model.bbox[3]-model.bbox[0]),
+		gomath.Max(float64(model.bbox[4]-model.bbox[1]), float64(model.bbox[5]-model.bbox[2])),
+	)
+	mv.Distance = float32(gomath.Max(bboxSize*2, 50))
+}
+
+// HasNegativeScale returns true if the model has a negative scale determinant.
+func (m *MapModel) HasNegativeScale() bool {
+	return m.scale[0]*m.scale[1]*m.scale[2] < 0
+}
+
+// GetRSMVersion returns the RSM version string.
+func (m *MapModel) GetRSMVersion() string {
+	return m.rsmVersion
+}
+
+// GetNodeCount returns the number of nodes in the RSM.
+func (m *MapModel) GetNodeCount() int {
+	return m.nodeCount
+}
+
+// GetNodes returns the node debug info for this model.
+func (m *MapModel) GetNodes() []NodeDebugInfo {
+	return m.nodes
+}
+
+// GetModelWorldPosition returns the world position of the model.
+func (mv *MapViewer) GetModelWorldPosition(idx int) (float32, float32, float32) {
+	model := mv.GetModel(idx)
+	if model == nil {
+		return 0, 0, 0
+	}
+	offsetX := mv.mapWidth / 2
+	offsetZ := mv.mapHeight / 2
+	return model.position[0] + offsetX, -model.position[1], model.position[2] + offsetZ
 }
 
 // buildMapModel creates a MapModel from RSM data with world transform.
@@ -986,82 +1342,135 @@ func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texL
 		// Build node transform matrix (with parent hierarchy)
 		nodeMatrix := mv.buildNodeMatrix(node, rsm)
 
+		// Check if we need to reverse winding due to negative scale
+		reverseWinding := ref.Scale[0]*ref.Scale[1]*ref.Scale[2] < 0
+
 		// Process faces
 		for _, face := range node.Faces {
 			// Track face stats
 			mv.Diagnostics.TotalFaces++
-			if face.TwoSide != 0 {
+			isTwoSided := face.TwoSide != 0
+			if isTwoSided {
 				mv.Diagnostics.TwoSidedFaces++
 			}
 
-			// Get face normal
-			normal := [3]float32{0, 1, 0}
-			if len(face.VertexIDs) >= 3 && int(face.VertexIDs[0]) < len(node.Vertices) &&
-				int(face.VertexIDs[1]) < len(node.Vertices) && int(face.VertexIDs[2]) < len(node.Vertices) {
-				// Calculate face normal from vertices
-				v0 := node.Vertices[face.VertexIDs[0]]
-				v1 := node.Vertices[face.VertexIDs[1]]
-				v2 := node.Vertices[face.VertexIDs[2]]
-				e1 := [3]float32{v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]}
-				e2 := [3]float32{v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]}
-				normal = normalize(cross(e1, e2))
+			// Skip faces with insufficient vertices
+			if len(face.VertexIDs) < 3 {
+				continue
 			}
 
-			// Add vertices for this face
-			faceBaseIdx := uint32(len(vertices))
-			for i, vid := range face.VertexIDs {
+			// Bounds check vertex IDs
+			validFace := true
+			for _, vid := range face.VertexIDs {
 				if int(vid) >= len(node.Vertices) {
-					continue
+					validFace = false
+					break
 				}
-				v := node.Vertices[vid]
-
-				// Transform vertex position by node matrix
-				pos := transformPoint(nodeMatrix, v)
-
-				// Flip Y for RO coordinate system (same as model_viewer.go)
-				pos[1] = -pos[1]
-
-				// Track bounding box
-				if pos[0] < minVertX {
-					minVertX = pos[0]
-				}
-				if pos[0] > maxVertX {
-					maxVertX = pos[0]
-				}
-				if pos[1] < minVertY {
-					minVertY = pos[1]
-				}
-				if pos[1] > maxVertY {
-					maxVertY = pos[1]
-				}
-				if pos[2] < minVertZ {
-					minVertZ = pos[2]
-				}
-				if pos[2] > maxVertZ {
-					maxVertZ = pos[2]
-				}
-
-				// Get texture coordinates
-				var uv [2]float32
-				if i < len(face.TexCoordIDs) && int(face.TexCoordIDs[i]) < len(node.TexCoords) {
-					tc := node.TexCoords[face.TexCoordIDs[i]]
-					uv = [2]float32{tc.U, tc.V}
-				}
-
-				vertices = append(vertices, modelVertex{
-					Position: pos,
-					Normal:   normal,
-					TexCoord: uv,
-				})
+			}
+			if !validFace {
+				continue
 			}
 
-			// Add indices for triangles (face can have 3+ vertices)
+			// Calculate face normal from first 3 vertices
+			v0 := node.Vertices[face.VertexIDs[0]]
+			v1 := node.Vertices[face.VertexIDs[1]]
+			v2 := node.Vertices[face.VertexIDs[2]]
+			e1 := [3]float32{v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]}
+			e2 := [3]float32{v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]}
+			normalVec := cross(e1, e2)
+
+			// Degenerate triangle detection - skip if normal is too small
+			normalMag := float32(gomath.Sqrt(float64(normalVec[0]*normalVec[0] + normalVec[1]*normalVec[1] + normalVec[2]*normalVec[2])))
+			if normalMag < 1e-5 {
+				continue // Skip degenerate triangle
+			}
+
+			normal := [3]float32{normalVec[0] / normalMag, normalVec[1] / normalMag, normalVec[2] / normalMag}
+
+			// Helper to add face vertices
+			addFaceVertices := func(reverseOrder bool, flipNormal bool) uint32 {
+				faceBaseIdx := uint32(len(vertices))
+				faceNormal := normal
+				if flipNormal {
+					faceNormal = [3]float32{-normal[0], -normal[1], -normal[2]}
+				}
+
+				// Determine vertex order (RSM faces are always triangles = 3 vertices)
+				var vertIDs [3]uint16
+				var texIDs [3]uint16
+				if reverseOrder {
+					// Reverse vertex order for back face: 0,1,2 -> 2,1,0
+					vertIDs = [3]uint16{face.VertexIDs[2], face.VertexIDs[1], face.VertexIDs[0]}
+					texIDs = [3]uint16{face.TexCoordIDs[2], face.TexCoordIDs[1], face.TexCoordIDs[0]}
+				} else {
+					vertIDs = face.VertexIDs
+					texIDs = face.TexCoordIDs
+				}
+
+				for i := 0; i < 3; i++ {
+					vid := vertIDs[i]
+					v := node.Vertices[vid]
+
+					// Transform vertex position by node matrix
+					pos := transformPoint(nodeMatrix, v)
+
+					// Flip Y for RO coordinate system
+					pos[1] = -pos[1]
+
+					// Track bounding box
+					if pos[0] < minVertX {
+						minVertX = pos[0]
+					}
+					if pos[0] > maxVertX {
+						maxVertX = pos[0]
+					}
+					if pos[1] < minVertY {
+						minVertY = pos[1]
+					}
+					if pos[1] > maxVertY {
+						maxVertY = pos[1]
+					}
+					if pos[2] < minVertZ {
+						minVertZ = pos[2]
+					}
+					if pos[2] > maxVertZ {
+						maxVertZ = pos[2]
+					}
+
+					// Get texture coordinates
+					var uv [2]float32
+					if int(texIDs[i]) < len(node.TexCoords) {
+						tc := node.TexCoords[texIDs[i]]
+						uv = [2]float32{tc.U, tc.V}
+					}
+
+					vertices = append(vertices, modelVertex{
+						Position: pos,
+						Normal:   faceNormal,
+						TexCoord: uv,
+					})
+				}
+				return faceBaseIdx
+			}
+
+			// Add front face (with winding reversal if negative scale)
+			faceBaseIdx := addFaceVertices(reverseWinding, false)
+
+			// Add indices for triangle (RSM faces are always triangles)
 			texIdx := int(face.TextureID)
-			for i := 2; i < len(face.VertexIDs); i++ {
+			texGroups[texIdx] = append(texGroups[texIdx],
+				faceBaseIdx,
+				faceBaseIdx+1,
+				faceBaseIdx+2,
+			)
+
+			// If TwoSide (or ForceAllTwoSided debug flag), add back face
+			if isTwoSided || mv.ForceAllTwoSided {
+				backFaceBaseIdx := addFaceVertices(!reverseWinding, true)
 				texGroups[texIdx] = append(texGroups[texIdx],
-					faceBaseIdx,
-					faceBaseIdx+uint32(i-1),
-					faceBaseIdx+uint32(i),
+					backFaceBaseIdx,
+					backFaceBaseIdx+1,
+					backFaceBaseIdx+2,
 				)
 			}
 		}
@@ -1075,20 +1484,20 @@ func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texL
 		return nil
 	}
 
-	// Center all models based on bounding box (standard RO approach)
-	// Subtract centerX/Z for horizontal centering, minY to put base at ground
+	// Center models horizontally (X/Z) but NOT vertically (Y)
+	// Preserving Y offset fixes positioning of decorative elements attached to structures
 	centerX := (minVertX + maxVertX) / 2
 	centerZ := (minVertZ + maxVertZ) / 2
 	for i := range vertices {
 		vertices[i].Position[0] -= centerX
-		vertices[i].Position[1] -= minVertY
+		// Don't center Y - preserve original vertical offset from RSM
 		vertices[i].Position[2] -= centerZ
 	}
 
 	// Store bounding box after centering (for debug visualization)
 	bboxAfter := [6]float32{
-		minVertX - centerX, minVertY - minVertY, minVertZ - centerZ,
-		maxVertX - centerX, maxVertY - minVertY, maxVertZ - centerZ,
+		minVertX - centerX, minVertY, minVertZ - centerZ,
+		maxVertX - centerX, maxVertY, maxVertZ - centerZ,
 	}
 
 	// Debug: log model centering info
@@ -1118,15 +1527,56 @@ func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texL
 	// Smooth normals for models (reduces faceted appearance)
 	smoothModelNormals(vertices)
 
+	// Count total and two-sided faces for this model
+	modelTotalFaces := 0
+	modelTwoSideFaces := 0
+	for i := range rsm.Nodes {
+		for _, face := range rsm.Nodes[i].Faces {
+			modelTotalFaces++
+			if face.TwoSide != 0 {
+				modelTwoSideFaces++
+			}
+		}
+	}
+
+	// Build node debug info
+	nodeDebugInfo := make([]NodeDebugInfo, len(rsm.Nodes))
+	for i, node := range rsm.Nodes {
+		info := NodeDebugInfo{
+			Name:         node.Name,
+			Parent:       node.Parent,
+			Offset:       node.Offset,
+			Position:     node.Position,
+			Scale:        node.Scale,
+			RotAngle:     node.RotAngle,
+			RotAxis:      node.RotAxis,
+			Matrix:       node.Matrix,
+			HasRotKeys:   len(node.RotKeys) > 0,
+			HasPosKeys:   len(node.PosKeys) > 0,
+			HasScaleKeys: len(node.ScaleKeys) > 0,
+			RotKeyCount:  len(node.RotKeys),
+		}
+		if len(node.RotKeys) > 0 {
+			info.FirstRotQuat = node.RotKeys[0].Quaternion
+		}
+		nodeDebugInfo[i] = info
+	}
+
 	// Create GPU resources
 	model := &MapModel{
-		textures:  modelTextures,
-		texGroups: groups,
-		position:  ref.Position,
-		rotation:  ref.Rotation,
-		scale:     ref.Scale,
-		modelName: ref.ModelName,
-		bbox:      bboxAfter,
+		textures:     modelTextures,
+		texGroups:    groups,
+		position:     ref.Position,
+		rotation:     ref.Rotation,
+		scale:        ref.Scale,
+		modelName:    ref.ModelName,
+		bbox:         bboxAfter,
+		Visible:      true, // Visible by default
+		totalFaces:   modelTotalFaces,
+		twoSideFaces: modelTwoSideFaces,
+		rsmVersion:   rsm.Version.String(),
+		nodeCount:    len(rsm.Nodes),
+		nodes:        nodeDebugInfo,
 	}
 
 	// Upload mesh to GPU
@@ -1170,20 +1620,68 @@ func (mv *MapViewer) buildNodeMatrixRecursive(node *formats.RSMNode, rsm *format
 	}
 	visited[node.Name] = true
 
-	result := math.Identity()
+	// Check if node has animation - use different transform order
+	hasAnimation := len(node.RotKeys) > 0 || len(node.PosKeys) > 0 || len(node.ScaleKeys) > 0
 
-	// Apply scale
-	result = result.Mul(math.Scale(node.Scale[0], node.Scale[1], node.Scale[2]))
+	var result math.Mat4
 
-	// Apply rotation from 3x3 matrix (not axis-angle)
-	rotMat := math.FromMat3x3(node.Matrix)
-	result = result.Mul(rotMat)
+	if hasAnimation {
+		// For animated nodes, use simpler transform order that works with keyframes
+		// Order: Scale -> Rotation -> Position (then parent)
+		result = math.Identity()
 
-	// Apply offset (pivot point) - note the negative sign
-	result = result.Mul(math.Translate(-node.Offset[0], -node.Offset[1], -node.Offset[2]))
+		// Scale (use first keyframe if animated)
+		scale := node.Scale
+		if len(node.ScaleKeys) > 0 {
+			scale = node.ScaleKeys[0].Scale
+		}
+		result = result.Mul(math.Scale(scale[0], scale[1], scale[2]))
 
-	// Apply position
-	result = result.Mul(math.Translate(node.Position[0], node.Position[1], node.Position[2]))
+		// Rotation from keyframe or matrix
+		if len(node.RotKeys) > 0 {
+			k := node.RotKeys[0]
+			rotQuat := math.Quat{X: k.Quaternion[0], Y: k.Quaternion[1], Z: k.Quaternion[2], W: k.Quaternion[3]}
+			result = result.Mul(rotQuat.ToMat4())
+		} else {
+			// Use 3x3 matrix
+			result = result.Mul(math.FromMat3x3(node.Matrix))
+		}
+
+		// Position (use first keyframe if animated)
+		position := node.Position
+		if len(node.PosKeys) > 0 {
+			position = node.PosKeys[0].Position
+		}
+		result = result.Mul(math.Translate(position[0], position[1], position[2]))
+	} else {
+		// For static nodes, use korangar transform order:
+		// main = Translate(Offset) * Mat3x3
+		// transform = Translate(Position) * Scale
+		// result = transform * main
+		main := math.Translate(node.Offset[0], node.Offset[1], node.Offset[2])
+		main = main.Mul(math.FromMat3x3(node.Matrix))
+
+		transform := math.Translate(node.Position[0], node.Position[1], node.Position[2])
+
+		// Apply axis-angle rotation if present
+		if node.RotAngle != 0 {
+			axisLen := float32(gomath.Sqrt(float64(
+				node.RotAxis[0]*node.RotAxis[0] +
+					node.RotAxis[1]*node.RotAxis[1] +
+					node.RotAxis[2]*node.RotAxis[2])))
+			if axisLen > 1e-6 {
+				normalizedAxis := [3]float32{
+					node.RotAxis[0] / axisLen,
+					node.RotAxis[1] / axisLen,
+					node.RotAxis[2] / axisLen,
+				}
+				transform = transform.Mul(math.RotateAxis(normalizedAxis, node.RotAngle))
+			}
+		}
+
+		transform = transform.Mul(math.Scale(node.Scale[0], node.Scale[1], node.Scale[2]))
+		result = transform.Mul(main)
+	}
 
 	// If node has parent, multiply by parent's matrix
 	if node.Parent != "" && node.Parent != node.Name {
@@ -1535,18 +2033,19 @@ func (mv *MapViewer) buildTerrainMesh(gnd *formats.GND) ([]terrainVertex, []uint
 				lmUV3 := mv.calculateLightmapUV(surface.LightmapID, 3, gnd)
 
 				// Create vertices for quad
+				// Try swapped UV mapping: our corners are BL,BR,TL,TR but UV might be TL,TR,BL,BR
 				baseIdx := uint32(len(vertices))
 				vertices = append(vertices,
-					terrainVertex{Position: corners[0], Normal: normal, TexCoord: [2]float32{surface.U[0], surface.V[0]}, LightmapUV: lmUV0, Color: color},
-					terrainVertex{Position: corners[1], Normal: normal, TexCoord: [2]float32{surface.U[1], surface.V[1]}, LightmapUV: lmUV1, Color: color},
-					terrainVertex{Position: corners[2], Normal: normal, TexCoord: [2]float32{surface.U[2], surface.V[2]}, LightmapUV: lmUV2, Color: color},
-					terrainVertex{Position: corners[3], Normal: normal, TexCoord: [2]float32{surface.U[3], surface.V[3]}, LightmapUV: lmUV3, Color: color},
+					terrainVertex{Position: corners[0], Normal: normal, TexCoord: [2]float32{surface.U[2], surface.V[2]}, LightmapUV: lmUV0, Color: color},
+					terrainVertex{Position: corners[1], Normal: normal, TexCoord: [2]float32{surface.U[3], surface.V[3]}, LightmapUV: lmUV1, Color: color},
+					terrainVertex{Position: corners[2], Normal: normal, TexCoord: [2]float32{surface.U[0], surface.V[0]}, LightmapUV: lmUV2, Color: color},
+					terrainVertex{Position: corners[3], Normal: normal, TexCoord: [2]float32{surface.U[1], surface.V[1]}, LightmapUV: lmUV3, Color: color},
 				)
 
-				// Two triangles for quad
+				// Two triangles for quad (diagonal from BL to TR per RO spec)
 				textureIndices[texID] = append(textureIndices[texID],
 					baseIdx, baseIdx+1, baseIdx+2,
-					baseIdx+1, baseIdx+3, baseIdx+2,
+					baseIdx+2, baseIdx+1, baseIdx+3,
 				)
 			}
 
@@ -1751,9 +2250,10 @@ func (mv *MapViewer) fitCamera() {
 		maxSize = sizeZ
 	}
 
-	mv.distance = maxSize * 0.7
-	if mv.distance < 100 {
-		mv.distance = 100
+	// Default zoom distance (proportional to map size)
+	mv.Distance = maxSize * 0.3
+	if mv.Distance < 200 {
+		mv.Distance = 200
 	}
 
 	mv.rotationX = 0.6 // Look down at ~35 degrees
@@ -1803,6 +2303,11 @@ func (mv *MapViewer) Render() uint32 {
 
 	viewProj := proj.Mul(view)
 
+	// Cache matrices for picking
+	mv.lastView = view
+	mv.lastProj = proj
+	mv.lastViewProj = viewProj
+
 	// Use terrain shader with RSW lighting data
 	gl.UseProgram(mv.terrainProgram)
 	gl.UniformMatrix4fv(mv.locViewProj, 1, false, &viewProj[0])
@@ -1813,6 +2318,16 @@ func (mv *MapViewer) Render() uint32 {
 	gl.Uniform1i(mv.locLightmap, 1)
 	gl.Uniform1f(mv.locBrightness, mv.Brightness)
 	gl.Uniform1f(mv.locLightOpacity, mv.lightOpacity)
+
+	// Fog uniforms
+	if mv.FogEnabled {
+		gl.Uniform1i(mv.locFogUse, 1)
+	} else {
+		gl.Uniform1i(mv.locFogUse, 0)
+	}
+	gl.Uniform1f(mv.locFogNear, mv.FogNear)
+	gl.Uniform1f(mv.locFogFar, mv.FogFar)
+	gl.Uniform3f(mv.locFogColor, mv.FogColor[0], mv.FogColor[1], mv.FogColor[2])
 
 	// Bind lightmap atlas to texture unit 1
 	gl.ActiveTexture(gl.TEXTURE1)
@@ -1843,6 +2358,9 @@ func (mv *MapViewer) Render() uint32 {
 
 	// Render water (last, with transparency)
 	mv.renderWater(viewProj)
+
+	// Render selection bounding box (on top of everything)
+	mv.renderSelectionBbox(viewProj)
 
 	gl.BindFramebuffer(gl.FRAMEBUFFER, 0)
 
@@ -1904,6 +2422,254 @@ func (mv *MapViewer) renderWater(viewProj math.Mat4) {
 	gl.Disable(gl.BLEND)
 }
 
+// renderSelectionBbox draws a wireframe bounding box around the selected model.
+func (mv *MapViewer) renderSelectionBbox(viewProj math.Mat4) {
+	if mv.SelectedIdx < 0 || mv.bboxVAO == 0 {
+		return
+	}
+
+	model := mv.GetModel(mv.SelectedIdx)
+	if model == nil || !model.Visible {
+		return
+	}
+
+	// Calculate world position
+	offsetX := mv.mapWidth / 2
+	offsetZ := mv.mapHeight / 2
+	worldX := model.position[0] + offsetX
+	worldY := -model.position[1]
+	worldZ := model.position[2] + offsetZ
+
+	// Get model bounding box (local space, already centered)
+	minX := model.bbox[0] * model.scale[0]
+	minY := model.bbox[1] * model.scale[1]
+	minZ := model.bbox[2] * model.scale[2]
+	maxX := model.bbox[3] * model.scale[0]
+	maxY := model.bbox[4] * model.scale[1]
+	maxZ := model.bbox[5] * model.scale[2]
+
+	// Handle negative scales
+	if minX > maxX {
+		minX, maxX = maxX, minX
+	}
+	if minY > maxY {
+		minY, maxY = maxY, minY
+	}
+	if minZ > maxZ {
+		minZ, maxZ = maxZ, minZ
+	}
+
+	// Expand box slightly for visibility
+	pad := float32(1.0)
+	minX -= pad
+	minY -= pad
+	minZ -= pad
+	maxX += pad
+	maxY += pad
+	maxZ += pad
+
+	// Transform to world space
+	minX += worldX
+	minY += worldY
+	minZ += worldZ
+	maxX += worldX
+	maxY += worldY
+	maxZ += worldZ
+
+	// Build line vertices for 12 edges of the box
+	vertices := []float32{
+		// Bottom face
+		minX, minY, minZ, maxX, minY, minZ,
+		maxX, minY, minZ, maxX, minY, maxZ,
+		maxX, minY, maxZ, minX, minY, maxZ,
+		minX, minY, maxZ, minX, minY, minZ,
+		// Top face
+		minX, maxY, minZ, maxX, maxY, minZ,
+		maxX, maxY, minZ, maxX, maxY, maxZ,
+		maxX, maxY, maxZ, minX, maxY, maxZ,
+		minX, maxY, maxZ, minX, maxY, minZ,
+		// Vertical edges
+		minX, minY, minZ, minX, maxY, minZ,
+		maxX, minY, minZ, maxX, maxY, minZ,
+		maxX, minY, maxZ, maxX, maxY, maxZ,
+		minX, minY, maxZ, minX, maxY, maxZ,
+	}
+
+	// Update VBO
+	gl.BindBuffer(gl.ARRAY_BUFFER, mv.bboxVBO)
+	gl.BufferSubData(gl.ARRAY_BUFFER, 0, len(vertices)*4, unsafe.Pointer(&vertices[0]))
+
+	// Disable depth test to draw on top
+	gl.Disable(gl.DEPTH_TEST)
+	gl.LineWidth(2.0)
+
+	// Draw
+	gl.UseProgram(mv.bboxProgram)
+	gl.UniformMatrix4fv(mv.locBboxMVP, 1, false, &viewProj[0])
+	gl.Uniform4f(mv.locBboxColor, 1.0, 0.0, 1.0, 1.0) // Purple/Magenta
+
+	gl.BindVertexArray(mv.bboxVAO)
+	gl.DrawArrays(gl.LINES, 0, 24)
+	gl.BindVertexArray(0)
+
+	// Re-enable depth test
+	gl.Enable(gl.DEPTH_TEST)
+	gl.LineWidth(1.0)
+}
+
+// PickModelAtScreen returns the index of the model at screen coordinates, or -1 if none.
+func (mv *MapViewer) PickModelAtScreen(screenX, screenY, viewWidth, viewHeight float32) int {
+	if len(mv.models) == 0 {
+		return -1
+	}
+
+	// Convert screen coords to normalized device coords (-1 to 1)
+	ndcX := (2.0*screenX/viewWidth - 1.0)
+	ndcY := (1.0 - 2.0*screenY/viewHeight) // Flip Y
+
+	// Create ray from camera through the click point
+	// Unproject near and far points
+	invViewProj := mv.lastViewProj.Inverse()
+
+	nearPoint := math.Vec4{ndcX, ndcY, -1.0, 1.0}
+	farPoint := math.Vec4{ndcX, ndcY, 1.0, 1.0}
+
+	nearWorld := invViewProj.MulVec4(nearPoint)
+	farWorld := invViewProj.MulVec4(farPoint)
+
+	// Perspective divide
+	if nearWorld[3] != 0 {
+		nearWorld[0] /= nearWorld[3]
+		nearWorld[1] /= nearWorld[3]
+		nearWorld[2] /= nearWorld[3]
+	}
+	if farWorld[3] != 0 {
+		farWorld[0] /= farWorld[3]
+		farWorld[1] /= farWorld[3]
+		farWorld[2] /= farWorld[3]
+	}
+
+	rayOrigin := [3]float32{nearWorld[0], nearWorld[1], nearWorld[2]}
+	rayDir := [3]float32{
+		farWorld[0] - nearWorld[0],
+		farWorld[1] - nearWorld[1],
+		farWorld[2] - nearWorld[2],
+	}
+
+	// Normalize ray direction
+	rayLen := float32(gomath.Sqrt(float64(rayDir[0]*rayDir[0] + rayDir[1]*rayDir[1] + rayDir[2]*rayDir[2])))
+	if rayLen > 0 {
+		rayDir[0] /= rayLen
+		rayDir[1] /= rayLen
+		rayDir[2] /= rayLen
+	}
+
+	// Test intersection with each visible model's bounding box
+	offsetX := mv.mapWidth / 2
+	offsetZ := mv.mapHeight / 2
+
+	bestIdx := -1
+	bestDist := float32(gomath.MaxFloat32)
+
+	for i, model := range mv.models {
+		if model == nil || !model.Visible {
+			continue
+		}
+
+		// Calculate world-space bounding box
+		worldX := model.position[0] + offsetX
+		worldY := -model.position[1]
+		worldZ := model.position[2] + offsetZ
+
+		minX := model.bbox[0]*model.scale[0] + worldX
+		minY := model.bbox[1]*model.scale[1] + worldY
+		minZ := model.bbox[2]*model.scale[2] + worldZ
+		maxX := model.bbox[3]*model.scale[0] + worldX
+		maxY := model.bbox[4]*model.scale[1] + worldY
+		maxZ := model.bbox[5]*model.scale[2] + worldZ
+
+		// Handle negative scales
+		if minX > maxX {
+			minX, maxX = maxX, minX
+		}
+		if minY > maxY {
+			minY, maxY = maxY, minY
+		}
+		if minZ > maxZ {
+			minZ, maxZ = maxZ, minZ
+		}
+
+		// Ray-AABB intersection test
+		tmin := float32(-gomath.MaxFloat32)
+		tmax := float32(gomath.MaxFloat32)
+
+		// X slab
+		if rayDir[0] != 0 {
+			t1 := (minX - rayOrigin[0]) / rayDir[0]
+			t2 := (maxX - rayOrigin[0]) / rayDir[0]
+			if t1 > t2 {
+				t1, t2 = t2, t1
+			}
+			if t1 > tmin {
+				tmin = t1
+			}
+			if t2 < tmax {
+				tmax = t2
+			}
+		} else if rayOrigin[0] < minX || rayOrigin[0] > maxX {
+			continue
+		}
+
+		// Y slab
+		if rayDir[1] != 0 {
+			t1 := (minY - rayOrigin[1]) / rayDir[1]
+			t2 := (maxY - rayOrigin[1]) / rayDir[1]
+			if t1 > t2 {
+				t1, t2 = t2, t1
+			}
+			if t1 > tmin {
+				tmin = t1
+			}
+			if t2 < tmax {
+				tmax = t2
+			}
+		} else if rayOrigin[1] < minY || rayOrigin[1] > maxY {
+			continue
+		}
+
+		// Z slab
+		if rayDir[2] != 0 {
+			t1 := (minZ - rayOrigin[2]) / rayDir[2]
+			t2 := (maxZ - rayOrigin[2]) / rayDir[2]
+			if t1 > t2 {
+				t1, t2 = t2, t1
+			}
+			if t1 > tmin {
+				tmin = t1
+			}
+			if t2 < tmax {
+				tmax = t2
+			}
+		} else if rayOrigin[2] < minZ || rayOrigin[2] > maxZ {
+			continue
+		}
+
+		// Check if intersection is valid
+		if tmax >= tmin && tmax >= 0 {
+			hitDist := tmin
+			if hitDist < 0 {
+				hitDist = tmax
+			}
+			if hitDist < bestDist {
+				bestDist = hitDist
+				bestIdx = i
+			}
+		}
+	}
+
+	return bestIdx
+}
+
 // renderModels renders all placed RSM models.
 func (mv *MapViewer) renderModels(viewProj math.Mat4) {
 	if len(mv.models) == 0 {
@@ -1916,6 +2682,16 @@ func (mv *MapViewer) renderModels(viewProj math.Mat4) {
 	gl.Uniform3f(mv.locModelDiffuse, mv.diffuseColor[0], mv.diffuseColor[1], mv.diffuseColor[2])
 	gl.Uniform1i(mv.locModelTexture, 0)
 
+	// Fog uniforms for models
+	if mv.FogEnabled {
+		gl.Uniform1i(mv.locModelFogUse, 1)
+	} else {
+		gl.Uniform1i(mv.locModelFogUse, 0)
+	}
+	gl.Uniform1f(mv.locModelFogNear, mv.FogNear)
+	gl.Uniform1f(mv.locModelFogFar, mv.FogFar)
+	gl.Uniform3f(mv.locModelFogColor, mv.FogColor[0], mv.FogColor[1], mv.FogColor[2])
+
 	gl.ActiveTexture(gl.TEXTURE0)
 
 	// RSW positions are centered at map origin (0,0,0)
@@ -1925,7 +2701,7 @@ func (mv *MapViewer) renderModels(viewProj math.Mat4) {
 	offsetZ := mv.mapHeight / 2
 
 	for _, model := range mv.models {
-		if model.vao == 0 || model.indexCount == 0 {
+		if model.vao == 0 || model.indexCount == 0 || !model.Visible {
 			continue
 		}
 
@@ -1976,9 +2752,9 @@ func (mv *MapViewer) renderModels(viewProj math.Mat4) {
 // calculateCameraPosition computes camera position from orbit parameters.
 func (mv *MapViewer) calculateCameraPosition() math.Vec3 {
 	// Spherical to Cartesian
-	x := mv.distance * float32(cosf(mv.rotationX)*sinf(mv.rotationY))
-	y := mv.distance * float32(sinf(mv.rotationX))
-	z := mv.distance * float32(cosf(mv.rotationX)*cosf(mv.rotationY))
+	x := mv.Distance * float32(cosf(mv.rotationX)*sinf(mv.rotationY))
+	y := mv.Distance * float32(sinf(mv.rotationX))
+	z := mv.Distance * float32(cosf(mv.rotationX)*cosf(mv.rotationY))
 
 	return math.Vec3{
 		X: mv.centerX + x,
@@ -2031,12 +2807,12 @@ func (mv *MapViewer) HandleMouseWheel(delta float32) {
 		}
 	} else {
 		// Orbit mode - zoom in/out
-		mv.distance -= delta * mv.distance * 0.1
-		if mv.distance < 50 {
-			mv.distance = 50
+		mv.Distance -= delta * mv.Distance * 0.1
+		if mv.Distance < 50 {
+			mv.Distance = 50
 		}
-		if mv.distance > 5000 {
-			mv.distance = 5000
+		if mv.Distance > 5000 {
+			mv.Distance = 5000
 		}
 	}
 }
@@ -2060,6 +2836,32 @@ func (mv *MapViewer) HandleFPSMovement(forward, right, up float32) {
 	mv.camPosX += (dirX*forward + rightX*right) * mv.MoveSpeed
 	mv.camPosZ += (dirZ*forward + rightZ*right) * mv.MoveSpeed
 	mv.camPosY += up * mv.MoveSpeed
+}
+
+// HandleOrbitMovement handles WASD movement in Orbit mode.
+// Pans the camera's focal point (center).
+// forward/right are -1, 0, or 1 based on key presses.
+func (mv *MapViewer) HandleOrbitMovement(forward, right, up float32) {
+	if mv.FPSMode {
+		return
+	}
+
+	// Speed scales with distance for consistent feel
+	speed := mv.Distance * 0.01
+
+	// Calculate movement direction based on current camera rotation
+	// Forward direction in world space (based on rotationY)
+	dirX := float32(sinf(mv.rotationY))
+	dirZ := float32(cosf(mv.rotationY))
+
+	// Right direction (perpendicular to forward)
+	rightX := float32(cosf(mv.rotationY))
+	rightZ := float32(-sinf(mv.rotationY))
+
+	// Apply movement to center point (negate forward so W moves "into" the scene)
+	mv.centerX += (-dirX*forward + rightX*right) * speed
+	mv.centerZ += (-dirZ*forward + rightZ*right) * speed
+	mv.centerY += up * speed
 }
 
 // ToggleFPSMode toggles between orbit and FPS camera modes.

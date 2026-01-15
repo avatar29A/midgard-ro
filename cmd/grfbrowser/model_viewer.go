@@ -433,37 +433,66 @@ func (mv *ModelViewer) buildNodeMatrixRecursive(node *formats.RSMNode, rsm *form
 	}
 	visited[node.Name] = true
 
-	// Start with identity
-	result := math.Identity()
+	// Check if node has animation - use different transform order
+	hasAnimation := len(node.RotKeys) > 0 || len(node.PosKeys) > 0 || len(node.ScaleKeys) > 0
 
-	// Get animated scale (or use static scale)
-	scale := node.Scale
-	if len(node.ScaleKeys) > 0 {
-		scale = mv.interpolateScaleKeys(node.ScaleKeys, animTimeMs)
-	}
-	result = result.Mul(math.Scale(scale[0], scale[1], scale[2]))
+	var result math.Mat4
 
-	// Get animated rotation (quaternion) or use static matrix
-	if len(node.RotKeys) > 0 {
-		// Interpolate rotation keyframes
-		rotQuat := mv.interpolateRotKeys(node.RotKeys, animTimeMs)
-		rotMat := rotQuat.ToMat4()
-		result = result.Mul(rotMat)
+	if hasAnimation {
+		// For animated nodes, use simpler transform order that works with keyframes
+		// Order: Scale -> Rotation -> Position (then parent)
+		result = math.Identity()
+
+		// Scale (interpolated if animated)
+		scale := node.Scale
+		if len(node.ScaleKeys) > 0 {
+			scale = mv.interpolateScaleKeys(node.ScaleKeys, animTimeMs)
+		}
+		result = result.Mul(math.Scale(scale[0], scale[1], scale[2]))
+
+		// Rotation from keyframe interpolation or matrix
+		if len(node.RotKeys) > 0 {
+			rotQuat := mv.interpolateRotKeys(node.RotKeys, animTimeMs)
+			result = result.Mul(rotQuat.ToMat4())
+		} else {
+			result = result.Mul(math.FromMat3x3(node.Matrix))
+		}
+
+		// Position (interpolated if animated)
+		position := node.Position
+		if len(node.PosKeys) > 0 {
+			position = mv.interpolatePosKeys(node.PosKeys, animTimeMs)
+		}
+		result = result.Mul(math.Translate(position[0], position[1], position[2]))
 	} else {
-		// Use static 3x3 rotation matrix from node
-		rotMat := math.FromMat3x3(node.Matrix)
-		result = result.Mul(rotMat)
-	}
+		// For static nodes, use korangar transform order:
+		// main = Translate(Offset) * Mat3x3
+		// transform = Translate(Position) * Scale
+		// result = transform * main
+		main := math.Translate(node.Offset[0], node.Offset[1], node.Offset[2])
+		main = main.Mul(math.FromMat3x3(node.Matrix))
 
-	// Apply offset (pivot point)
-	result = result.Mul(math.Translate(-node.Offset[0], -node.Offset[1], -node.Offset[2]))
+		transform := math.Translate(node.Position[0], node.Position[1], node.Position[2])
 
-	// Get animated position or use static position
-	position := node.Position
-	if len(node.PosKeys) > 0 {
-		position = mv.interpolatePosKeys(node.PosKeys, animTimeMs)
+		// Apply axis-angle rotation if present
+		if node.RotAngle != 0 {
+			axisLen := float32(gomath.Sqrt(float64(
+				node.RotAxis[0]*node.RotAxis[0] +
+					node.RotAxis[1]*node.RotAxis[1] +
+					node.RotAxis[2]*node.RotAxis[2])))
+			if axisLen > 1e-6 {
+				normalizedAxis := [3]float32{
+					node.RotAxis[0] / axisLen,
+					node.RotAxis[1] / axisLen,
+					node.RotAxis[2] / axisLen,
+				}
+				transform = transform.Mul(math.RotateAxis(normalizedAxis, node.RotAngle))
+			}
+		}
+
+		transform = transform.Mul(math.Scale(node.Scale[0], node.Scale[1], node.Scale[2]))
+		result = transform.Mul(main)
 	}
-	result = result.Mul(math.Translate(position[0], position[1], position[2]))
 
 	// If node has parent, multiply by parent's matrix
 	if node.Parent != "" && node.Parent != node.Name {
