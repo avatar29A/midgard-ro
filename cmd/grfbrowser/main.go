@@ -68,6 +68,7 @@ type App struct {
 	selectedPath         string // Display path (UTF-8)
 	selectedOriginalPath string // Archive path (for file reading)
 	expandedPaths        map[string]bool
+	scrollToPath         string // Path to scroll to in file tree (cleared after scroll)
 	// TODO (Stage 5): TAB key to cycle focus between Search/Tree/Preview panels
 	// Requires research into ImGui keyboard navigation activation
 
@@ -1054,13 +1055,50 @@ func (app *App) openModelInViewer(path string) {
 	app.map3DViewMode = false
 	app.showPropertiesPanel = false
 
-	// Set selected path (both display and archive path)
-	app.selectedPath = path
-	app.selectedOriginalPath = path
+	// Normalize path: backslashes to forward slashes, then convert to UTF-8
+	// This must match how buildFileTree processes paths
+	normalizedPath := strings.ReplaceAll(path, "\\", "/")
+	displayPath := euckrToUTF8(normalizedPath)
+
+	// Reset filters to ensure the model is visible in the tree
+	app.filterSprites = true
+	app.filterAnimations = true
+	app.filterTextures = true
+	app.filterModels = true
+	app.filterMaps = true
+	app.filterAudio = true
+	app.filterOther = true
+	app.searchText = "" // Clear search
+
+	// Rebuild file tree with new filters
+	app.fileTree = app.buildFileTree()
+
+	// Set selected path (UTF-8 for display, normalized for archive)
+	app.selectedPath = displayPath
+	app.selectedOriginalPath = normalizedPath
+
+	// Expand all parent directories in the file tree (use display path)
+	app.expandPathToFile(displayPath)
+
+	// Set scroll target so tree scrolls to show the file
+	app.scrollToPath = displayPath
 
 	// Clear preview path to force reload
 	app.previewPath = ""
 
-	// Load the RSM preview
+	// Load the RSM preview (use original path for archive)
 	app.loadRSMPreview(path)
+}
+
+// expandPathToFile expands all parent directories leading to a file path.
+func (app *App) expandPathToFile(filePath string) {
+	parts := strings.Split(filePath, "/")
+	currentPath := ""
+	for i := 0; i < len(parts)-1; i++ { // Exclude the filename itself
+		if currentPath != "" {
+			currentPath += "/"
+		}
+		currentPath += parts[i]
+		app.expandedPaths[currentPath] = true
+	}
 }

@@ -213,10 +213,10 @@ func (app *App) renderTreeNode(node *FileNode) {
 				flags |= imgui.TreeNodeFlagsSelected
 			}
 
-			// Check if expanded
+			// Check if expanded - force open if in expandedPaths
 			isExpanded := app.expandedPaths[child.Path]
 			if isExpanded {
-				flags |= imgui.TreeNodeFlagsDefaultOpen
+				imgui.SetNextItemOpen(true)
 			}
 
 			// Folder icon (text-based for font compatibility)
@@ -261,6 +261,12 @@ func (app *App) renderTreeNode(node *FileNode) {
 			if imgui.IsItemClicked() || imgui.IsItemFocused() {
 				app.selectedPath = child.Path
 				app.selectedOriginalPath = child.OriginalPath
+			}
+
+			// Scroll to this item if it matches scrollToPath
+			if app.scrollToPath != "" && child.Path == app.scrollToPath {
+				imgui.SetScrollHereY() // Scroll to center in view
+				app.scrollToPath = ""  // Clear after scrolling
 			}
 		}
 	}

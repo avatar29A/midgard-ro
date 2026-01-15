@@ -636,6 +636,12 @@ func (app *App) renderMap3DView() {
 	// Resize render target to match display size (prevents blurry scaling)
 	app.mapViewer.Resize(int32(width), int32(height))
 
+	// Update model animations if playing
+	if app.mapViewer.IsModelAnimationPlaying() {
+		// Use 16ms as approximate frame delta (60 FPS)
+		app.mapViewer.UpdateModelAnimation(16.0)
+	}
+
 	// Render the map
 	texID := app.mapViewer.Render()
 
@@ -800,6 +806,28 @@ func (app *App) renderMapControlsPanel() {
 	imgui.TextDisabled("(?)")
 	if imgui.IsItemHovered() {
 		imgui.SetTooltip("Render all faces from both sides (reloads map)")
+	}
+
+	imgui.Spacing()
+	imgui.Spacing()
+
+	// Animation section
+	imgui.Text("Animation")
+	imgui.Separator()
+
+	animCount := app.mapViewer.GetAnimatedModelCount()
+	imgui.Text(fmt.Sprintf("Animated Models: %d", animCount))
+
+	if animCount > 0 {
+		if app.mapViewer.IsModelAnimationPlaying() {
+			if imgui.ButtonV("Pause", imgui.NewVec2(-1, 0)) {
+				app.mapViewer.PauseModelAnimation()
+			}
+		} else {
+			if imgui.ButtonV("Play", imgui.NewVec2(-1, 0)) {
+				app.mapViewer.PlayModelAnimation()
+			}
+		}
 	}
 
 	imgui.Spacing()

@@ -84,6 +84,11 @@ type MapModel struct {
 	rsmVersion string
 	nodeCount  int
 	nodes      []NodeDebugInfo
+	// Animation support
+	isAnimated bool         // Whether this model has keyframe animation
+	rsm        *formats.RSM // Reference to RSM for animation rebuild
+	rswRef     *formats.RSWModel // Reference to RSW placement info
+	animLength int32        // Animation length in ms
 }
 
 // ModelGroup represents a group of model instances sharing the same RSM.
@@ -215,6 +220,11 @@ type MapViewer struct {
 	waterAnimSpeed float32  // Animation speed from RSW
 	waterFrame     int      // Current animation frame
 	useWaterTex    bool     // Whether we have loaded water textures
+
+	// Model animation (Stage 1 - ADR-014)
+	modelAnimTime    float32 // Current animation time in ms
+	modelAnimPlaying bool    // Whether model animations are playing
+	animatedModels   []*MapModel // Models that need animation updates
 
 	// Fog settings (Stage 4 - ADR-014) - public for UI controls
 	FogEnabled bool
@@ -1014,11 +1024,15 @@ func (mv *MapViewer) LoadMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(
 	// Set up fog (Stage 4 - ADR-014)
 	mv.FogEnabled = true
 	mv.FogNear = 150.0
-	mv.FogFar = 800.0
+	mv.FogFar = 1400.0
 	mv.FogColor = [3]float32{0.95, 0.90, 0.85} // Very subtle warm tint (barely visible)
 
 	// Fit camera to map
 	mv.fitCamera()
+
+	// Override with preferred defaults
+	mv.Distance = 340.0
+	mv.modelAnimPlaying = true // Auto-play animations
 
 	return nil
 }
@@ -1145,6 +1159,10 @@ func (mv *MapViewer) loadModels(rsw *formats.RSW, texLoader func(string) ([]byte
 			mapModel.instanceID = len(mv.models)
 			mv.models = append(mv.models, mapModel)
 			mv.Diagnostics.ModelsLoaded++
+			// Track animated models for animation updates
+			if mapModel.isAnimated {
+				mv.animatedModels = append(mv.animatedModels, mapModel)
+			}
 		} else {
 			mv.Diagnostics.ModelsNoNodes++
 		}
@@ -1340,7 +1358,7 @@ func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texL
 		baseIdx := uint32(len(vertices))
 
 		// Build node transform matrix (with parent hierarchy)
-		nodeMatrix := mv.buildNodeMatrix(node, rsm)
+		nodeMatrix := mv.buildNodeMatrix(node, rsm, 0) // Initial pose (time=0)
 
 		// Check if we need to reverse winding due to negative scale
 		reverseWinding := ref.Scale[0]*ref.Scale[1]*ref.Scale[2] < 0
@@ -1457,8 +1475,13 @@ func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texL
 			faceBaseIdx := addFaceVertices(reverseWinding, false)
 
 			// Add indices for triangle (RSM faces are always triangles)
-			texIdx := int(face.TextureID)
-			texGroups[texIdx] = append(texGroups[texIdx],
+			// face.TextureID is index into node.TextureIDs
+			// node.TextureIDs[i] is the global index into rsm.Textures
+			globalTexIdx := 0
+			if int(face.TextureID) < len(node.TextureIDs) {
+				globalTexIdx = int(node.TextureIDs[face.TextureID])
+			}
+			texGroups[globalTexIdx] = append(texGroups[globalTexIdx],
 				faceBaseIdx,
 				faceBaseIdx+1,
 				faceBaseIdx+2,
@@ -1467,7 +1490,7 @@ func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texL
 			// If TwoSide (or ForceAllTwoSided debug flag), add back face
 			if isTwoSided || mv.ForceAllTwoSided {
 				backFaceBaseIdx := addFaceVertices(!reverseWinding, true)
-				texGroups[texIdx] = append(texGroups[texIdx],
+				texGroups[globalTexIdx] = append(texGroups[globalTexIdx],
 					backFaceBaseIdx,
 					backFaceBaseIdx+1,
 					backFaceBaseIdx+2,
@@ -1562,6 +1585,16 @@ func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texL
 		nodeDebugInfo[i] = info
 	}
 
+	// Check if model has animation (any node with keyframes)
+	hasAnimation := false
+	for i := range rsm.Nodes {
+		node := &rsm.Nodes[i]
+		if len(node.RotKeys) > 0 || len(node.PosKeys) > 0 || len(node.ScaleKeys) > 0 {
+			hasAnimation = true
+			break
+		}
+	}
+
 	// Create GPU resources
 	model := &MapModel{
 		textures:     modelTextures,
@@ -1577,6 +1610,15 @@ func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texL
 		rsmVersion:   rsm.Version.String(),
 		nodeCount:    len(rsm.Nodes),
 		nodes:        nodeDebugInfo,
+		// Animation support
+		isAnimated: hasAnimation,
+		animLength: rsm.AnimLength,
+	}
+
+	// Store RSM reference for animated models (needed for mesh rebuild)
+	if hasAnimation {
+		model.rsm = rsm
+		model.rswRef = ref
 	}
 
 	// Upload mesh to GPU
@@ -1609,11 +1651,11 @@ func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texL
 
 // buildNodeMatrix builds the transformation matrix for an RSM node.
 // This matches the model_viewer.go implementation for consistency.
-func (mv *MapViewer) buildNodeMatrix(node *formats.RSMNode, rsm *formats.RSM) math.Mat4 {
-	return mv.buildNodeMatrixRecursive(node, rsm, make(map[string]bool))
+func (mv *MapViewer) buildNodeMatrix(node *formats.RSMNode, rsm *formats.RSM, animTimeMs float32) math.Mat4 {
+	return mv.buildNodeMatrixRecursive(node, rsm, animTimeMs, make(map[string]bool))
 }
 
-func (mv *MapViewer) buildNodeMatrixRecursive(node *formats.RSMNode, rsm *formats.RSM, visited map[string]bool) math.Mat4 {
+func (mv *MapViewer) buildNodeMatrixRecursive(node *formats.RSMNode, rsm *formats.RSM, animTimeMs float32, visited map[string]bool) math.Mat4 {
 	// Prevent infinite recursion
 	if visited[node.Name] {
 		return math.Identity()
@@ -1626,33 +1668,35 @@ func (mv *MapViewer) buildNodeMatrixRecursive(node *formats.RSMNode, rsm *format
 	var result math.Mat4
 
 	if hasAnimation {
-		// For animated nodes, use simpler transform order that works with keyframes
-		// Order: Scale -> Rotation -> Position (then parent)
+		// For animated nodes, use same transform order as model_viewer.go:
+		// Position * KeyframeRotation * Scale * Offset * Matrix
 		result = math.Identity()
 
-		// Scale (use first keyframe if animated)
+		// Position (interpolated if animated)
+		position := node.Position
+		if len(node.PosKeys) > 0 {
+			position = mv.interpolatePosKeys(node.PosKeys, animTimeMs)
+		}
+		result = result.Mul(math.Translate(position[0], position[1], position[2]))
+
+		// Keyframe rotation (interpolated)
+		if len(node.RotKeys) > 0 {
+			rotQuat := mv.interpolateRotKeys(node.RotKeys, animTimeMs)
+			result = result.Mul(rotQuat.ToMat4())
+		}
+
+		// Scale (interpolated if animated)
 		scale := node.Scale
 		if len(node.ScaleKeys) > 0 {
-			scale = node.ScaleKeys[0].Scale
+			scale = mv.interpolateScaleKeys(node.ScaleKeys, animTimeMs)
 		}
 		result = result.Mul(math.Scale(scale[0], scale[1], scale[2]))
 
-		// Rotation from keyframe or matrix
-		if len(node.RotKeys) > 0 {
-			k := node.RotKeys[0]
-			rotQuat := math.Quat{X: k.Quaternion[0], Y: k.Quaternion[1], Z: k.Quaternion[2], W: k.Quaternion[3]}
-			result = result.Mul(rotQuat.ToMat4())
-		} else {
-			// Use 3x3 matrix
-			result = result.Mul(math.FromMat3x3(node.Matrix))
-		}
+		// Offset (pivot point)
+		result = result.Mul(math.Translate(node.Offset[0], node.Offset[1], node.Offset[2]))
 
-		// Position (use first keyframe if animated)
-		position := node.Position
-		if len(node.PosKeys) > 0 {
-			position = node.PosKeys[0].Position
-		}
-		result = result.Mul(math.Translate(position[0], position[1], position[2]))
+		// Matrix (base orientation)
+		result = result.Mul(math.FromMat3x3(node.Matrix))
 	} else {
 		// For static nodes, use korangar transform order:
 		// main = Translate(Offset) * Mat3x3
@@ -1684,11 +1728,17 @@ func (mv *MapViewer) buildNodeMatrixRecursive(node *formats.RSMNode, rsm *format
 	}
 
 	// If node has parent, multiply by parent's matrix
+	// For animated nodes, DON'T multiply by parent - they use world-space coordinates
+	// This matches korangar's implementation and the fix in model_viewer.go
 	if node.Parent != "" && node.Parent != node.Name {
 		parentNode := rsm.GetNodeByName(node.Parent)
 		if parentNode != nil {
-			parentMatrix := mv.buildNodeMatrixRecursive(parentNode, rsm, visited)
-			result = parentMatrix.Mul(result)
+			// Only static nodes inherit parent transform
+			hasAnimation := len(node.RotKeys) > 0 || len(node.PosKeys) > 0 || len(node.ScaleKeys) > 0
+			if !hasAnimation {
+				parentMatrix := mv.buildNodeMatrixRecursive(parentNode, rsm, animTimeMs, visited)
+				result = parentMatrix.Mul(result)
+			}
 		}
 	}
 
@@ -1701,6 +1751,244 @@ func transformPoint(m math.Mat4, p [3]float32) [3]float32 {
 	y := m[1]*p[0] + m[5]*p[1] + m[9]*p[2] + m[13]
 	z := m[2]*p[0] + m[6]*p[1] + m[10]*p[2] + m[14]
 	return [3]float32{x, y, z}
+}
+
+// --- Animation Interpolation Functions ---
+
+// interpolateRotKeys interpolates rotation keyframes at the given time.
+func (mv *MapViewer) interpolateRotKeys(keys []formats.RSMRotKeyframe, timeMs float32) math.Quat {
+	if len(keys) == 0 {
+		return math.QuatIdentity()
+	}
+	if len(keys) == 1 {
+		k := keys[0]
+		return math.Quat{X: k.Quaternion[0], Y: k.Quaternion[1], Z: k.Quaternion[2], W: k.Quaternion[3]}
+	}
+
+	// Find surrounding keyframes (assuming keys are sorted by frame)
+	// RSM frame numbers need to be converted to time
+	var prev, next int
+	for i := range keys {
+		if float32(keys[i].Frame) > timeMs {
+			next = i
+			break
+		}
+		prev = i
+		next = i
+	}
+
+	// If at or past last frame, return last frame's rotation
+	if prev == next {
+		k := keys[prev]
+		return math.Quat{X: k.Quaternion[0], Y: k.Quaternion[1], Z: k.Quaternion[2], W: k.Quaternion[3]}
+	}
+
+	// Interpolate between prev and next
+	k0 := keys[prev]
+	k1 := keys[next]
+	t := float32(0)
+	if k1.Frame != k0.Frame {
+		t = (timeMs - float32(k0.Frame)) / float32(k1.Frame-k0.Frame)
+	}
+
+	q0 := math.Quat{X: k0.Quaternion[0], Y: k0.Quaternion[1], Z: k0.Quaternion[2], W: k0.Quaternion[3]}
+	q1 := math.Quat{X: k1.Quaternion[0], Y: k1.Quaternion[1], Z: k1.Quaternion[2], W: k1.Quaternion[3]}
+	return q0.Slerp(q1, t)
+}
+
+// interpolatePosKeys interpolates position keyframes at the given time.
+func (mv *MapViewer) interpolatePosKeys(keys []formats.RSMPosKeyframe, timeMs float32) [3]float32 {
+	if len(keys) == 0 {
+		return [3]float32{}
+	}
+	if len(keys) == 1 {
+		return keys[0].Position
+	}
+
+	var prev, next int
+	for i := range keys {
+		if float32(keys[i].Frame) > timeMs {
+			next = i
+			break
+		}
+		prev = i
+		next = i
+	}
+
+	if prev == next {
+		return keys[prev].Position
+	}
+
+	k0 := keys[prev]
+	k1 := keys[next]
+	t := float32(0)
+	if k1.Frame != k0.Frame {
+		t = (timeMs - float32(k0.Frame)) / float32(k1.Frame-k0.Frame)
+	}
+
+	return [3]float32{
+		k0.Position[0] + t*(k1.Position[0]-k0.Position[0]),
+		k0.Position[1] + t*(k1.Position[1]-k0.Position[1]),
+		k0.Position[2] + t*(k1.Position[2]-k0.Position[2]),
+	}
+}
+
+// interpolateScaleKeys interpolates scale keyframes at the given time.
+func (mv *MapViewer) interpolateScaleKeys(keys []formats.RSMScaleKeyframe, timeMs float32) [3]float32 {
+	if len(keys) == 0 {
+		return [3]float32{1, 1, 1}
+	}
+	if len(keys) == 1 {
+		return keys[0].Scale
+	}
+
+	var prev, next int
+	for i := range keys {
+		if float32(keys[i].Frame) > timeMs {
+			next = i
+			break
+		}
+		prev = i
+		next = i
+	}
+
+	if prev == next {
+		return keys[prev].Scale
+	}
+
+	k0 := keys[prev]
+	k1 := keys[next]
+	t := float32(0)
+	if k1.Frame != k0.Frame {
+		t = (timeMs - float32(k0.Frame)) / float32(k1.Frame-k0.Frame)
+	}
+
+	return [3]float32{
+		k0.Scale[0] + t*(k1.Scale[0]-k0.Scale[0]),
+		k0.Scale[1] + t*(k1.Scale[1]-k0.Scale[1]),
+		k0.Scale[2] + t*(k1.Scale[2]-k0.Scale[2]),
+	}
+}
+
+// buildAnimatedModelMesh builds vertices and indices for an animated model at a given time.
+func (mv *MapViewer) buildAnimatedModelMesh(rsm *formats.RSM, ref *formats.RSWModel, animTimeMs float32) ([]modelVertex, []uint32, []modelTexGroup) {
+	var vertices []modelVertex
+	var indices []uint32
+	texGroups := make(map[int][]uint32)
+
+	// Process each node
+	for i := range rsm.Nodes {
+		node := &rsm.Nodes[i]
+
+		// Build node transform with animation time
+		nodeMatrix := mv.buildNodeMatrix(node, rsm, animTimeMs)
+
+		// Check if we need to reverse winding
+		reverseWinding := ref.Scale[0]*ref.Scale[1]*ref.Scale[2] < 0
+
+		// Process faces
+		for _, face := range node.Faces {
+			if len(face.VertexIDs) < 3 {
+				continue
+			}
+
+			// Bounds check
+			validFace := true
+			for _, vid := range face.VertexIDs {
+				if int(vid) >= len(node.Vertices) {
+					validFace = false
+					break
+				}
+			}
+			if !validFace {
+				continue
+			}
+
+			// Calculate face normal
+			v0 := node.Vertices[face.VertexIDs[0]]
+			v1 := node.Vertices[face.VertexIDs[1]]
+			v2 := node.Vertices[face.VertexIDs[2]]
+			e1 := [3]float32{v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]}
+			e2 := [3]float32{v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]}
+			normalVec := cross(e1, e2)
+			normalMag := float32(gomath.Sqrt(float64(normalVec[0]*normalVec[0] + normalVec[1]*normalVec[1] + normalVec[2]*normalVec[2])))
+			if normalMag < 1e-5 {
+				continue
+			}
+			normal := [3]float32{normalVec[0] / normalMag, normalVec[1] / normalMag, normalVec[2] / normalMag}
+
+			// Helper to add face vertices
+			addFaceVerts := func(reverseOrder bool, flipNormal bool) uint32 {
+				faceBaseIdx := uint32(len(vertices))
+				faceNormal := normal
+				if flipNormal {
+					faceNormal = [3]float32{-normal[0], -normal[1], -normal[2]}
+				}
+
+				var vertIDs [3]uint16
+				var texIDs [3]uint16
+				if reverseOrder {
+					vertIDs = [3]uint16{face.VertexIDs[2], face.VertexIDs[1], face.VertexIDs[0]}
+					texIDs = [3]uint16{face.TexCoordIDs[2], face.TexCoordIDs[1], face.TexCoordIDs[0]}
+				} else {
+					vertIDs = face.VertexIDs
+					texIDs = face.TexCoordIDs
+				}
+
+				for j := 0; j < 3; j++ {
+					pos := node.Vertices[vertIDs[j]]
+					transformedPos := transformPoint(nodeMatrix, pos)
+					// Flip Y for RO coordinate system
+					transformedPos[1] = -transformedPos[1]
+
+					var uv [2]float32
+					if int(texIDs[j]) < len(node.TexCoords) {
+						tc := node.TexCoords[texIDs[j]]
+						uv = [2]float32{tc.U, tc.V}
+					}
+
+					vertices = append(vertices, modelVertex{
+						Position: transformedPos,
+						Normal:   faceNormal,
+						TexCoord: uv,
+					})
+				}
+				return faceBaseIdx
+			}
+
+			// Add front face
+			faceBaseIdx := addFaceVerts(reverseWinding, false)
+
+			// Get global texture index
+			globalTexIdx := 0
+			if int(face.TextureID) < len(node.TextureIDs) {
+				globalTexIdx = int(node.TextureIDs[face.TextureID])
+			}
+			texGroups[globalTexIdx] = append(texGroups[globalTexIdx],
+				faceBaseIdx, faceBaseIdx+1, faceBaseIdx+2)
+
+			// Add back face if two-sided
+			if face.TwoSide != 0 || mv.ForceAllTwoSided {
+				backIdx := addFaceVerts(!reverseWinding, true)
+				texGroups[globalTexIdx] = append(texGroups[globalTexIdx],
+					backIdx, backIdx+1, backIdx+2)
+			}
+		}
+	}
+
+	// Build indices and groups
+	var groups []modelTexGroup
+	for texIdx, idxs := range texGroups {
+		startIdx := int32(len(indices))
+		indices = append(indices, idxs...)
+		groups = append(groups, modelTexGroup{
+			texIdx:     texIdx,
+			startIndex: startIdx,
+			indexCount: int32(len(idxs)),
+		})
+	}
+
+	return vertices, indices, groups
 }
 
 // buildLightmapAtlas creates a texture atlas from GND lightmaps.
@@ -2926,6 +3214,85 @@ func (mv *MapViewer) SetWaterAnimSpeed(speed float32) {
 // HasWater returns whether the map has water.
 func (mv *MapViewer) HasWater() bool {
 	return mv.hasWater
+}
+
+// --- Model Animation Functions ---
+
+// UpdateModelAnimation advances model animation time and rebuilds animated models.
+// Returns true if any models were updated.
+func (mv *MapViewer) UpdateModelAnimation(deltaMs float32) bool {
+	if !mv.modelAnimPlaying || len(mv.animatedModels) == 0 {
+		return false
+	}
+
+	mv.modelAnimTime += deltaMs
+
+	// Rebuild all animated models with new time
+	for _, model := range mv.animatedModels {
+		if model.rsm != nil && model.Visible {
+			mv.rebuildAnimatedModel(model, mv.modelAnimTime)
+		}
+	}
+
+	return true
+}
+
+// rebuildAnimatedModel rebuilds a single model's mesh at the given animation time.
+func (mv *MapViewer) rebuildAnimatedModel(model *MapModel, animTimeMs float32) {
+	if model.rsm == nil || model.rswRef == nil {
+		return
+	}
+
+	// Loop animation time based on model's animation length
+	loopedTime := animTimeMs
+	if model.animLength > 0 {
+		loopedTime = float32(int(animTimeMs) % int(model.animLength))
+	}
+
+	// Build vertices and indices at current animation time
+	vertices, indices, groups := mv.buildAnimatedModelMesh(model.rsm, model.rswRef, loopedTime)
+	if len(vertices) == 0 {
+		return
+	}
+
+	// Update GPU buffers
+	gl.BindVertexArray(model.vao)
+
+	gl.BindBuffer(gl.ARRAY_BUFFER, model.vbo)
+	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*int(unsafe.Sizeof(modelVertex{})), gl.Ptr(vertices), gl.DYNAMIC_DRAW)
+
+	gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, model.ebo)
+	gl.BufferData(gl.ELEMENT_ARRAY_BUFFER, len(indices)*4, gl.Ptr(indices), gl.DYNAMIC_DRAW)
+
+	model.indexCount = int32(len(indices))
+	model.texGroups = groups
+
+	gl.BindVertexArray(0)
+}
+
+// PlayModelAnimation starts model animations.
+func (mv *MapViewer) PlayModelAnimation() {
+	mv.modelAnimPlaying = true
+}
+
+// PauseModelAnimation pauses model animations.
+func (mv *MapViewer) PauseModelAnimation() {
+	mv.modelAnimPlaying = false
+}
+
+// ToggleModelAnimation toggles model animation playback.
+func (mv *MapViewer) ToggleModelAnimation() {
+	mv.modelAnimPlaying = !mv.modelAnimPlaying
+}
+
+// IsModelAnimationPlaying returns whether model animations are playing.
+func (mv *MapViewer) IsModelAnimationPlaying() bool {
+	return mv.modelAnimPlaying
+}
+
+// GetAnimatedModelCount returns the number of animated models.
+func (mv *MapViewer) GetAnimatedModelCount() int {
+	return len(mv.animatedModels)
 }
 
 // GetModelCount returns the number of loaded models.
