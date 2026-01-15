@@ -85,10 +85,10 @@ type MapModel struct {
 	nodeCount  int
 	nodes      []NodeDebugInfo
 	// Animation support
-	isAnimated bool         // Whether this model has keyframe animation
-	rsm        *formats.RSM // Reference to RSM for animation rebuild
+	isAnimated bool              // Whether this model has keyframe animation
+	rsm        *formats.RSM      // Reference to RSM for animation rebuild
 	rswRef     *formats.RSWModel // Reference to RSW placement info
-	animLength int32        // Animation length in ms
+	animLength int32             // Animation length in ms
 }
 
 // ModelGroup represents a group of model instances sharing the same RSM.
@@ -222,8 +222,8 @@ type MapViewer struct {
 	useWaterTex    bool     // Whether we have loaded water textures
 
 	// Model animation (Stage 1 - ADR-014)
-	modelAnimTime    float32 // Current animation time in ms
-	modelAnimPlaying bool    // Whether model animations are playing
+	modelAnimTime    float32     // Current animation time in ms
+	modelAnimPlaying bool        // Whether model animations are playing
 	animatedModels   []*MapModel // Models that need animation updates
 
 	// Fog settings (Stage 4 - ADR-014) - public for UI controls
@@ -1782,43 +1782,6 @@ func (mv *MapViewer) interpolateRotKeys(keys []formats.RSMRotKeyframe, timeMs fl
 	q0 := math.Quat{X: k0.Quaternion[0], Y: k0.Quaternion[1], Z: k0.Quaternion[2], W: k0.Quaternion[3]}
 	q1 := math.Quat{X: k1.Quaternion[0], Y: k1.Quaternion[1], Z: k1.Quaternion[2], W: k1.Quaternion[3]}
 	return q0.Slerp(q1, t)
-}
-
-// interpolatePosKeys interpolates position keyframes at the given time.
-func (mv *MapViewer) interpolatePosKeys(keys []formats.RSMPosKeyframe, timeMs float32) [3]float32 {
-	if len(keys) == 0 {
-		return [3]float32{}
-	}
-	if len(keys) == 1 {
-		return keys[0].Position
-	}
-
-	var prev, next int
-	for i := range keys {
-		if float32(keys[i].Frame) > timeMs {
-			next = i
-			break
-		}
-		prev = i
-		next = i
-	}
-
-	if prev == next {
-		return keys[prev].Position
-	}
-
-	k0 := keys[prev]
-	k1 := keys[next]
-	t := float32(0)
-	if k1.Frame != k0.Frame {
-		t = (timeMs - float32(k0.Frame)) / float32(k1.Frame-k0.Frame)
-	}
-
-	return [3]float32{
-		k0.Position[0] + t*(k1.Position[0]-k0.Position[0]),
-		k0.Position[1] + t*(k1.Position[1]-k0.Position[1]),
-		k0.Position[2] + t*(k1.Position[2]-k0.Position[2]),
-	}
 }
 
 // interpolateScaleKeys interpolates scale keyframes at the given time.

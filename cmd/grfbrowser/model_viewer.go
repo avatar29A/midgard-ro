@@ -75,12 +75,12 @@ type ModelViewer struct {
 	magentaKeyCache bool
 
 	// Axis visualization
-	showAxes        bool
-	axisVAO         uint32
-	axisVBO         uint32
-	axisShader      uint32
-	axisLocView     int32
-	axisLocProj     int32
+	showAxes    bool
+	axisVAO     uint32
+	axisVBO     uint32
+	axisShader  uint32
+	axisLocView int32
+	axisLocProj int32
 
 	// Rendering modes
 	wireframeMode bool
@@ -594,46 +594,6 @@ func (mv *ModelViewer) interpolateRotKeys(keys []formats.RSMRotKeyframe, timeMs 
 	q1 := math.Quat{X: k1.Quaternion[0], Y: k1.Quaternion[1], Z: k1.Quaternion[2], W: k1.Quaternion[3]}
 
 	return q0.Slerp(q1, t)
-}
-
-// interpolatePosKeys interpolates position keyframes at the given time.
-func (mv *ModelViewer) interpolatePosKeys(keys []formats.RSMPosKeyframe, timeMs float32) [3]float32 {
-	if len(keys) == 0 {
-		return [3]float32{0, 0, 0}
-	}
-	if len(keys) == 1 {
-		return keys[0].Position
-	}
-
-	frame := timeMs
-
-	// Find surrounding keyframes
-	var k0, k1 formats.RSMPosKeyframe
-	k0 = keys[0]
-	k1 = keys[0]
-
-	for i := 0; i < len(keys)-1; i++ {
-		if float32(keys[i].Frame) <= frame && float32(keys[i+1].Frame) > frame {
-			k0 = keys[i]
-			k1 = keys[i+1]
-			break
-		}
-	}
-
-	if frame >= float32(keys[len(keys)-1].Frame) {
-		return keys[len(keys)-1].Position
-	}
-	if frame <= float32(keys[0].Frame) {
-		return keys[0].Position
-	}
-
-	frameDiff := float32(k1.Frame - k0.Frame)
-	if frameDiff <= 0 {
-		return k0.Position
-	}
-
-	t := (frame - float32(k0.Frame)) / frameDiff
-	return math.LerpVec3(k0.Position, k1.Position, t)
 }
 
 // interpolateScaleKeys interpolates scale keyframes at the given time.
