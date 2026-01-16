@@ -149,6 +149,15 @@ func calculateDirection(dx, dz float32) int {
 }
 
 // PlayerCharacter represents the player's character in Play Mode.
+// CompositeFrame holds a pre-composited sprite frame (head + body merged).
+type CompositeFrame struct {
+	Texture uint32 // OpenGL texture ID
+	Width   int    // Texture width in pixels
+	Height  int    // Texture height in pixels
+	OriginX int    // X offset from sprite origin to texture center
+	OriginY int    // Y offset from sprite origin to texture center
+}
+
 type PlayerCharacter struct {
 	// Position in world coordinates
 	WorldX float32
@@ -159,6 +168,11 @@ type PlayerCharacter struct {
 	IsMoving  bool
 	Direction int     // 0-7: S, SW, W, NW, N, NE, E, SE
 	MoveSpeed float32 // Units per second
+
+	// Click-to-move destination
+	DestX          float32 // Target X position
+	DestZ          float32 // Target Z position
+	HasDestination bool    // Whether moving to a destination
 
 	// Animation state
 	CurrentAction int     // 0=Idle, 1=Walk
@@ -175,6 +189,11 @@ type PlayerCharacter struct {
 	HeadACT      *formats.ACT
 	HeadTextures []uint32 // GPU textures for head SPR images
 
+	// Composite textures: [action*8+direction][frame] -> CompositeFrame
+	// Pre-composited head+body for each animation frame
+	CompositeFrames map[int][]CompositeFrame
+	UseComposite    bool // Whether to use composite rendering
+
 	// Billboard rendering
 	VAO         uint32
 	VBO         uint32
@@ -184,6 +203,220 @@ type PlayerCharacter struct {
 	ShadowTex uint32 // Shadow texture (ellipse)
 	ShadowVAO uint32
 	ShadowVBO uint32
+}
+
+// compositeSprites creates a single RGBA image by compositing body and head sprites.
+// It uses anchor points to correctly position the head relative to the body.
+// Returns the composite image pixels, dimensions, and origin offset.
+func compositeSprites(
+	bodySPR *formats.SPR, bodyACT *formats.ACT,
+	headSPR *formats.SPR, headACT *formats.ACT,
+	action, direction, frame int,
+) (pixels []byte, width, height, originX, originY int) {
+	// Get body action/frame
+	bodyActionIdx := action*8 + direction
+	if bodyActionIdx >= len(bodyACT.Actions) {
+		bodyActionIdx = direction % len(bodyACT.Actions)
+	}
+	bodyAction := &bodyACT.Actions[bodyActionIdx]
+	if len(bodyAction.Frames) == 0 {
+		return nil, 0, 0, 0, 0
+	}
+	bodyFrameIdx := frame % len(bodyAction.Frames)
+	bodyFrame := &bodyAction.Frames[bodyFrameIdx]
+
+	// Get head action/frame (always use frame 0 for stability)
+	headActionIdx := action*8 + direction
+	if headActionIdx >= len(headACT.Actions) {
+		headActionIdx = direction % len(headACT.Actions)
+	}
+	headAction := &headACT.Actions[headActionIdx]
+	if len(headAction.Frames) == 0 {
+		return nil, 0, 0, 0, 0
+	}
+	headFrame := &headAction.Frames[0] // Always frame 0 for head
+
+	// Find body layer bounds
+	var bodyMinX, bodyMinY, bodyMaxX, bodyMaxY int
+	bodyMinX, bodyMinY = 10000, 10000
+	bodyMaxX, bodyMaxY = -10000, -10000
+
+	for _, layer := range bodyFrame.Layers {
+		if layer.SpriteID < 0 || int(layer.SpriteID) >= len(bodySPR.Images) {
+			continue
+		}
+		img := &bodySPR.Images[layer.SpriteID]
+		x, y := int(layer.X), int(layer.Y)
+		w, h := int(img.Width), int(img.Height)
+
+		// Layer position is center of sprite
+		left := x - w/2
+		top := y - h/2
+		right := left + w
+		bottom := top + h
+
+		if left < bodyMinX {
+			bodyMinX = left
+		}
+		if top < bodyMinY {
+			bodyMinY = top
+		}
+		if right > bodyMaxX {
+			bodyMaxX = right
+		}
+		if bottom > bodyMaxY {
+			bodyMaxY = bottom
+		}
+	}
+
+	// Get body anchor point (where head attaches)
+	var bodyAnchorX, bodyAnchorY int
+	if len(bodyFrame.AnchorPoints) > 0 {
+		bodyAnchorX = int(bodyFrame.AnchorPoints[0].X)
+		bodyAnchorY = int(bodyFrame.AnchorPoints[0].Y)
+	}
+
+	// Get head anchor point
+	var headAnchorX, headAnchorY int
+	if len(headFrame.AnchorPoints) > 0 {
+		headAnchorX = int(headFrame.AnchorPoints[0].X)
+		headAnchorY = int(headFrame.AnchorPoints[0].Y)
+	}
+
+	// Calculate head offset: head anchor aligns with body anchor
+	headOffsetX := bodyAnchorX - headAnchorX
+	headOffsetY := bodyAnchorY - headAnchorY
+
+	// Find head layer bounds (relative to head origin + offset)
+	var headMinX, headMinY, headMaxX, headMaxY int
+	headMinX, headMinY = 10000, 10000
+	headMaxX, headMaxY = -10000, -10000
+
+	for _, layer := range headFrame.Layers {
+		if layer.SpriteID < 0 || int(layer.SpriteID) >= len(headSPR.Images) {
+			continue
+		}
+		img := &headSPR.Images[layer.SpriteID]
+		x, y := int(layer.X)+headOffsetX, int(layer.Y)+headOffsetY
+		w, h := int(img.Width), int(img.Height)
+
+		left := x - w/2
+		top := y - h/2
+		right := left + w
+		bottom := top + h
+
+		if left < headMinX {
+			headMinX = left
+		}
+		if top < headMinY {
+			headMinY = top
+		}
+		if right > headMaxX {
+			headMaxX = right
+		}
+		if bottom > headMaxY {
+			headMaxY = bottom
+		}
+	}
+
+	// Combine bounds
+	minX := bodyMinX
+	if headMinX < minX {
+		minX = headMinX
+	}
+	minY := bodyMinY
+	if headMinY < minY {
+		minY = headMinY
+	}
+	maxX := bodyMaxX
+	if headMaxX > maxX {
+		maxX = headMaxX
+	}
+	maxY := bodyMaxY
+	if headMaxY > maxY {
+		maxY = headMaxY
+	}
+
+	// Handle empty sprites
+	if minX >= maxX || minY >= maxY {
+		return nil, 0, 0, 0, 0
+	}
+
+	// Create canvas
+	width = maxX - minX
+	height = maxY - minY
+	originX = -minX // Offset from canvas origin to sprite origin
+	originY = -minY
+	pixels = make([]byte, width*height*4)
+
+	// Helper to blit a sprite layer onto canvas
+	blitLayer := func(spr *formats.SPR, layer *formats.Layer, offsetX, offsetY int) {
+		if layer.SpriteID < 0 || int(layer.SpriteID) >= len(spr.Images) {
+			return
+		}
+		img := &spr.Images[layer.SpriteID]
+		imgW, imgH := int(img.Width), int(img.Height)
+
+		// SPR images are already converted to RGBA format
+		rgba := img.Pixels
+		if rgba == nil || len(rgba) == 0 {
+			return
+		}
+
+		// Layer center position + offset
+		cx := int(layer.X) + offsetX + originX
+		cy := int(layer.Y) + offsetY + originY
+
+		// Blit with alpha blending
+		for py := 0; py < imgH; py++ {
+			for px := 0; px < imgW; px++ {
+				dx := cx + px - imgW/2
+				dy := cy + py - imgH/2
+				if dx < 0 || dx >= width || dy < 0 || dy >= height {
+					continue
+				}
+
+				srcIdx := (py*imgW + px) * 4
+				dstIdx := (dy*width + dx) * 4
+
+				// Source pixel
+				sr, sg, sb, sa := rgba[srcIdx], rgba[srcIdx+1], rgba[srcIdx+2], rgba[srcIdx+3]
+				if sa == 0 {
+					continue // Fully transparent
+				}
+
+				// Alpha blend
+				if sa == 255 {
+					pixels[dstIdx] = sr
+					pixels[dstIdx+1] = sg
+					pixels[dstIdx+2] = sb
+					pixels[dstIdx+3] = sa
+				} else {
+					// Simple alpha blend
+					da := pixels[dstIdx+3]
+					outA := sa + da*(255-sa)/255
+					if outA > 0 {
+						pixels[dstIdx] = byte((int(sr)*int(sa) + int(pixels[dstIdx])*int(da)*(255-int(sa))/255) / int(outA))
+						pixels[dstIdx+1] = byte((int(sg)*int(sa) + int(pixels[dstIdx+1])*int(da)*(255-int(sa))/255) / int(outA))
+						pixels[dstIdx+2] = byte((int(sb)*int(sa) + int(pixels[dstIdx+2])*int(da)*(255-int(sa))/255) / int(outA))
+						pixels[dstIdx+3] = outA
+					}
+				}
+			}
+		}
+	}
+
+	// Draw body layers first (bottom)
+	for _, layer := range bodyFrame.Layers {
+		blitLayer(bodySPR, &layer, 0, 0)
+	}
+
+	// Draw head layers on top
+	for _, layer := range headFrame.Layers {
+		blitLayer(headSPR, &layer, headOffsetX, headOffsetY)
+	}
+
+	return pixels, width, height, originX, originY
 }
 
 // MapViewer handles 3D rendering of complete RO maps.
@@ -267,10 +500,12 @@ type MapViewer struct {
 
 	// Player character (Play mode)
 	Player        *PlayerCharacter
-	spriteProgram uint32 // Shader for billboard sprites
-	locSpriteVP   int32  // viewProj uniform
-	locSpritePos  int32  // world position uniform
-	locSpriteSize int32  // sprite size uniform
+	spriteProgram    uint32 // Shader for billboard sprites
+	locSpriteVP      int32  // viewProj uniform
+	locSpritePos     int32  // world position uniform
+	locSpriteSize    int32  // sprite size uniform
+	locSpriteCamRight int32 // camera right vector for billboard
+	locSpriteCamUp    int32 // camera up vector for billboard
 	locSpriteTex  int32  // texture uniform
 	locSpriteTint int32  // color tint uniform
 
@@ -638,15 +873,17 @@ layout (location = 1) in vec2 aTexCoord;
 uniform mat4 uViewProj;
 uniform vec3 uWorldPos;
 uniform vec2 uSpriteSize;
+uniform vec3 uCamRight;  // Camera right vector for billboard
+uniform vec3 uCamUp;     // Camera up vector for billboard
 
 out vec2 vTexCoord;
 
 void main() {
-    // Billboard transform: position sprite quad in world space
-    // The sprite is positioned at feet, extending upward
+    // Camera-facing billboard: sprite always faces the camera
+    // This creates the 3D illusion when combined with directional sprite frames
     vec3 pos = uWorldPos;
-    pos.x += aPosition.x * uSpriteSize.x;
-    pos.y += aPosition.y * uSpriteSize.y;
+    pos += uCamRight * aPosition.x * uSpriteSize.x;
+    pos += uCamUp * aPosition.y * uSpriteSize.y;
 
     vTexCoord = aTexCoord;
     gl_Position = uViewProj * vec4(pos, 1.0);
@@ -1047,6 +1284,8 @@ func (mv *MapViewer) createSpriteShader() error {
 	mv.locSpriteSize = gl.GetUniformLocation(mv.spriteProgram, gl.Str("uSpriteSize\x00"))
 	mv.locSpriteTex = gl.GetUniformLocation(mv.spriteProgram, gl.Str("uTexture\x00"))
 	mv.locSpriteTint = gl.GetUniformLocation(mv.spriteProgram, gl.Str("uTint\x00"))
+	mv.locSpriteCamRight = gl.GetUniformLocation(mv.spriteProgram, gl.Str("uCamRight\x00"))
+	mv.locSpriteCamUp = gl.GetUniformLocation(mv.spriteProgram, gl.Str("uCamUp\x00"))
 
 	return nil
 }
@@ -2775,6 +3014,11 @@ func (mv *MapViewer) Render() uint32 {
 			Z: player.WorldZ - offsetZ,
 		}
 
+		// Store camera position for sprite direction calculation
+		mv.camPosX = camPos.X
+		mv.camPosY = camPos.Y
+		mv.camPosZ = camPos.Z
+
 		// Look at player position (slightly above feet)
 		target := math.Vec3{
 			X: player.WorldX,
@@ -2875,25 +3119,148 @@ func (mv *MapViewer) Render() uint32 {
 }
 
 // renderPlayerCharacter renders the player sprite as a billboard in the 3D scene.
+// Uses camera-facing billboard + directional sprite selection for 3D illusion.
 func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 	player := mv.Player
-	if player == nil || player.VAO == 0 || len(player.Textures) == 0 {
+	if player == nil || player.VAO == 0 {
 		return
 	}
 
 	// Render shadow first (below character)
 	mv.renderPlayerShadow(viewProj)
 
+	// ========== STEP 1: Calculate camera-facing billboard vectors ==========
+	// Y-axis aligned billboard: rotates horizontally to face camera, stays upright
+	dirX := mv.camPosX - player.WorldX
+	dirZ := mv.camPosZ - player.WorldZ
+	length := float32(gomath.Sqrt(float64(dirX*dirX + dirZ*dirZ)))
+	if length > 0.001 {
+		dirX /= length
+		dirZ /= length
+	} else {
+		dirX = 0
+		dirZ = 1
+	}
+	// Right vector perpendicular to camera direction in XZ plane
+	camRight := [3]float32{-dirZ, 0, dirX}
+	camUp := [3]float32{0, 1, 0} // World up
+
+	// ========== STEP 2: Calculate visual direction using atan2 algorithm ==========
+	// This is the key to the 3D illusion: sprite frame changes based on camera angle
+
+	// Camera angle: from player to camera (in XZ plane)
+	cameraAngle := float32(gomath.Atan2(float64(dirX), float64(dirZ)))
+
+	// Player facing angle: convert direction 0-7 to radians
+	// RO directions: 0=S, 1=SW, 2=W, 3=NW, 4=N, 5=NE, 6=E, 7=SE
+	// S=0 means facing toward default camera (south), which is angle 0
+	playerAngle := float32(player.Direction) * (gomath.Pi / 4.0)
+
+	// Combine angles: camera angle + player facing
+	combinedAngle := cameraAngle + playerAngle
+
+	// Normalize to 0-2π
+	for combinedAngle < 0 {
+		combinedAngle += 2 * gomath.Pi
+	}
+	for combinedAngle >= 2*gomath.Pi {
+		combinedAngle -= 2 * gomath.Pi
+	}
+
+	// Map to direction index (0-7) using 45° sectors with 22.5° offset
+	sector := int((combinedAngle + gomath.Pi/8) / (gomath.Pi / 4))
+	if sector >= 8 {
+		sector = 0
+	}
+	visualDir := sector
+
+	// ========== STEP 3: Use composite sprites if available ==========
+	// Composite sprites have head+body pre-merged for solid appearance
+	if player.UseComposite && player.CompositeFrames != nil {
+		actionDirKey := player.CurrentAction*8 + visualDir
+		if frames, ok := player.CompositeFrames[actionDirKey]; ok && len(frames) > 0 {
+			// For idle action, always use frame 0 to prevent head bobbing
+			// Walking uses animated frames
+			frameIdx := 0
+			if player.CurrentAction == ActionWalk && len(frames) > 1 {
+				frameIdx = player.CurrentFrame % len(frames)
+			}
+			composite := frames[frameIdx]
+
+			if composite.Texture != 0 && composite.Width > 0 && composite.Height > 0 {
+				// Calculate sprite size in world units
+				spriteWidth := float32(composite.Width) * player.SpriteScale
+				spriteHeight := float32(composite.Height) * player.SpriteScale
+
+				// Origin offset: originX/originY is distance from canvas top-left to sprite origin (0,0)
+				// originYNorm = how far down from top the origin is (0-1)
+				// In quad space: Y=0 is bottom, Y=1 is top
+				// UV space: V=0 is top, V=1 is bottom
+				// Origin at originYNorm from top means it's at quad Y = (1 - originYNorm)
+				// We want origin at player feet (Y=0 of quad base at player.WorldY)
+				// So shift DOWN by (1 - originYNorm) * spriteHeight
+				originXNorm := float32(composite.OriginX) / float32(composite.Width)
+				originYNorm := float32(composite.OriginY) / float32(composite.Height)
+
+				// Horizontal offset: shift so origin X is at center
+				offsetX := (0.5 - originXNorm) * spriteWidth
+
+				// Vertical offset: shift DOWN so origin is at player feet
+				// Origin is at (1-originYNorm) from bottom of quad, we want it at 0
+				// Add small lift (10%) to keep feet above ground
+				offsetY := -(1.0-originYNorm)*spriteHeight + spriteHeight*0.10
+
+				// Mirror for left-facing directions
+				mirrorScale := float32(1.0)
+				if visualDir == DirSW || visualDir == DirW || visualDir == DirNW {
+					mirrorScale = -1.0
+					offsetX = -offsetX
+				}
+
+				gl.Enable(gl.BLEND)
+				gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+				gl.UseProgram(mv.spriteProgram)
+
+				// Apply offsets
+				posX := player.WorldX + offsetX*camRight[0]*mirrorScale
+				posY := player.WorldY + offsetY
+				posZ := player.WorldZ + offsetX*camRight[2]*mirrorScale
+
+				gl.UniformMatrix4fv(mv.locSpriteVP, 1, false, &viewProj[0])
+				gl.Uniform3f(mv.locSpritePos, posX, posY, posZ)
+				gl.Uniform2f(mv.locSpriteSize, spriteWidth*mirrorScale, spriteHeight)
+				gl.Uniform4f(mv.locSpriteTint, 1.0, 1.0, 1.0, 1.0)
+				gl.Uniform3f(mv.locSpriteCamRight, camRight[0], camRight[1], camRight[2])
+				gl.Uniform3f(mv.locSpriteCamUp, camUp[0], camUp[1], camUp[2])
+
+				gl.ActiveTexture(gl.TEXTURE0)
+				gl.BindTexture(gl.TEXTURE_2D, composite.Texture)
+				gl.Uniform1i(mv.locSpriteTex, 0)
+
+				gl.BindVertexArray(player.VAO)
+				gl.DrawArrays(gl.TRIANGLE_STRIP, 0, 4)
+				gl.BindVertexArray(0)
+
+				gl.Disable(gl.BLEND)
+				return // Done - composite rendered
+			}
+		}
+	}
+
+	// ========== FALLBACK: Render body + head separately ==========
+	if len(player.Textures) == 0 {
+		return
+	}
+
 	var spriteID int
 	var spriteWidth, spriteHeight float32
 	var tint [4]float32
 
-	// Check if we have ACT animation data
 	if player.ACT != nil && player.SPR != nil {
-		// Get current animation frame
-		actionIdx := player.CurrentAction*8 + player.Direction
+		// Get animation frame using visualDir for the 3D illusion
+		actionIdx := player.CurrentAction*8 + visualDir
 		if actionIdx >= len(player.ACT.Actions) {
-			actionIdx = 0 // Fallback to first action
+			actionIdx = 0
 		}
 		action := &player.ACT.Actions[actionIdx]
 		if len(action.Frames) == 0 {
@@ -2906,7 +3273,7 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 			return
 		}
 
-		// Get the first valid layer (body sprite)
+		// Get the first valid layer
 		var layer *formats.Layer
 		for i := range frame.Layers {
 			if frame.Layers[i].SpriteID >= 0 && int(frame.Layers[i].SpriteID) < len(player.Textures) {
@@ -2923,7 +3290,7 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 			return
 		}
 
-		// Get sprite dimensions from SPR, apply layer scale
+		// Get sprite dimensions
 		sprImg := &player.SPR.Images[spriteID]
 		layerScaleX := layer.ScaleX
 		layerScaleY := layer.ScaleY
@@ -2935,73 +3302,55 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 		}
 		spriteWidth = float32(sprImg.Width) * player.SpriteScale * layerScaleX
 		spriteHeight = float32(sprImg.Height) * player.SpriteScale * layerScaleY
-
-		// Force white tint for now (layer colors often have issues)
 		tint = [4]float32{1.0, 1.0, 1.0, 1.0}
 	} else {
-		// Procedural player - use fixed size
 		spriteID = 0
 		spriteWidth = 32 * player.SpriteScale
 		spriteHeight = 64 * player.SpriteScale
-		tint = [4]float32{1.0, 1.0, 1.0, 1.0} // White (no tint)
+		tint = [4]float32{1.0, 1.0, 1.0, 1.0}
 	}
 
-	// Enable blending for transparency
+	// Mirror for left-facing directions
+	if visualDir == DirSW || visualDir == DirW || visualDir == DirNW {
+		spriteWidth = -spriteWidth
+	}
+
 	gl.Enable(gl.BLEND)
 	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-
-	// Use sprite shader
 	gl.UseProgram(mv.spriteProgram)
 
-	// Mirror sprite horizontally for left-facing directions (SW=1, W=2, NW=3)
-	// RO sprites typically only have right-facing images, left is mirrored
-	if player.Direction == DirSW || player.Direction == DirW || player.Direction == DirNW {
-		spriteWidth = -spriteWidth // Negative width flips horizontally
-	}
-
-	// Set uniforms
 	gl.UniformMatrix4fv(mv.locSpriteVP, 1, false, &viewProj[0])
 	gl.Uniform3f(mv.locSpritePos, player.WorldX, player.WorldY, player.WorldZ)
 	gl.Uniform2f(mv.locSpriteSize, spriteWidth, spriteHeight)
 	gl.Uniform4f(mv.locSpriteTint, tint[0], tint[1], tint[2], tint[3])
+	gl.Uniform3f(mv.locSpriteCamRight, camRight[0], camRight[1], camRight[2])
+	gl.Uniform3f(mv.locSpriteCamUp, camUp[0], camUp[1], camUp[2])
 
-	// Bind sprite texture
 	gl.ActiveTexture(gl.TEXTURE0)
 	gl.BindTexture(gl.TEXTURE_2D, player.Textures[spriteID])
 	gl.Uniform1i(mv.locSpriteTex, 0)
 
-	// Draw billboard quad
 	gl.BindVertexArray(player.VAO)
 	gl.DrawArrays(gl.TRIANGLE_STRIP, 0, 4)
 	gl.BindVertexArray(0)
 
-	// Render head sprite ONLY if body has anchor points (composite character)
-	// Complete sprites like b_novice already include the head and have no anchors
+	// Render head separately if no composite available
 	if player.HeadSPR != nil && player.HeadACT != nil && len(player.HeadTextures) > 0 && player.ACT != nil {
-		// Get body's frame anchor point
-		// Use frame 0 when idle to prevent head shaking from anchor point variations
-		bodyActionIdx := player.CurrentAction*8 + player.Direction
+		bodyActionIdx := player.CurrentAction*8 + visualDir
 		if bodyActionIdx >= len(player.ACT.Actions) {
 			bodyActionIdx = 0
 		}
 		bodyAction := &player.ACT.Actions[bodyActionIdx]
-		bodyFrameIdx := 0 // Use frame 0 for stable anchor
-		if player.CurrentAction == 1 && len(bodyAction.Frames) > 1 {
-			// Walking - sync frames
-			bodyFrameIdx = player.CurrentFrame % len(bodyAction.Frames)
-		}
+		bodyFrameIdx := 0
 		if bodyFrameIdx >= len(bodyAction.Frames) {
 			bodyFrameIdx = 0
 		}
 		bodyFrame := &bodyAction.Frames[bodyFrameIdx]
 
-		// Only render head if body has anchor points
 		if len(bodyFrame.AnchorPoints) > 0 {
-			// Body anchor in pixels (negative Y is UP in sprite coords)
 			bodyAnchorX := float32(bodyFrame.AnchorPoints[0].X)
 			bodyAnchorY := float32(bodyFrame.AnchorPoints[0].Y)
 
-			// Get body layer offset for head position compensation
 			var bodyLayerY float32
 			for _, bl := range bodyFrame.Layers {
 				if bl.SpriteID >= 0 {
@@ -3010,10 +3359,9 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 				}
 			}
 
-			// Head uses same action index as body (direction * 8 + action)
-			headActionIdx := player.CurrentAction*8 + player.Direction
+			headActionIdx := player.CurrentAction*8 + visualDir
 			if headActionIdx >= len(player.HeadACT.Actions) {
-				headActionIdx = player.Direction // Fallback to just direction
+				headActionIdx = visualDir
 			}
 			if headActionIdx >= len(player.HeadACT.Actions) {
 				headActionIdx = 0
@@ -3021,26 +3369,18 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 
 			headAction := &player.HeadACT.Actions[headActionIdx]
 			if len(headAction.Frames) > 0 {
-				// Use frame 0 for standing, sync with body for walking
 				headFrameIdx := 0
-				if player.CurrentAction == 1 && len(headAction.Frames) > 1 {
-					// Walking - sync frames
-					headFrameIdx = player.CurrentFrame % len(headAction.Frames)
-				}
 				headFrame := &headAction.Frames[headFrameIdx]
 
-				// Head anchor in pixels
 				var headAnchorX, headAnchorY float32
 				if len(headFrame.AnchorPoints) > 0 {
 					headAnchorX = float32(headFrame.AnchorPoints[0].X)
 					headAnchorY = float32(headFrame.AnchorPoints[0].Y)
 				}
 
-				// Calculate offset: body_anchor - head_anchor (roBrowser formula)
 				offsetX := (bodyAnchorX - headAnchorX) * player.SpriteScale
 				offsetY := (bodyAnchorY - headAnchorY) * player.SpriteScale
 
-				// Render all head layers
 				for _, headLayer := range headFrame.Layers {
 					headSpriteID := int(headLayer.SpriteID)
 					if headSpriteID < 0 || headSpriteID >= len(player.HeadTextures) {
@@ -3060,22 +3400,21 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 					headWidth := float32(headImg.Width) * player.SpriteScale * headScaleX
 					headHeight := float32(headImg.Height) * player.SpriteScale * headScaleY
 
-					// Mirror for left-facing directions
-					if player.Direction == DirSW || player.Direction == DirW || player.Direction == DirNW {
+					if visualDir == DirSW || visualDir == DirW || visualDir == DirNW {
 						headWidth = -headWidth
 					}
 
-					// Layer offset in pixels, converted to world units
 					layerX := float32(headLayer.X) * player.SpriteScale
 					layerY := float32(headLayer.Y) * player.SpriteScale
 
-					// Final position using anchor alignment + body layer compensation
-					// Compensate ~35% of body layer offset for proper head-body alignment
-					headPosX := player.WorldX + (offsetX + layerX)
+					totalOffsetX := offsetX + layerX
+
+					headPosX := player.WorldX + totalOffsetX*camRight[0]
 					headPosY := player.WorldY - (offsetY + layerY) + (bodyLayerY * player.SpriteScale * 0.35)
+					headPosZ := player.WorldZ + totalOffsetX*camRight[2]
 
 					gl.Disable(gl.DEPTH_TEST)
-					gl.Uniform3f(mv.locSpritePos, headPosX, headPosY, player.WorldZ)
+					gl.Uniform3f(mv.locSpritePos, headPosX, headPosY, headPosZ)
 					gl.Uniform2f(mv.locSpriteSize, headWidth, headHeight)
 					gl.BindTexture(gl.TEXTURE_2D, player.HeadTextures[headSpriteID])
 					gl.BindVertexArray(player.VAO)
@@ -3115,6 +3454,9 @@ func (mv *MapViewer) renderPlayerShadow(viewProj math.Mat4) {
 	gl.Uniform3f(mv.locSpritePos, player.WorldX, shadowY, player.WorldZ)
 	gl.Uniform2f(mv.locSpriteSize, 1.0, 1.0) // Size is baked into VBO
 	gl.Uniform4f(mv.locSpriteTint, 1.0, 1.0, 1.0, 1.0)
+	// Shadow is flat on ground (XZ plane), not camera-facing
+	gl.Uniform3f(mv.locSpriteCamRight, 1.0, 0.0, 0.0) // X axis
+	gl.Uniform3f(mv.locSpriteCamUp, 0.0, 0.0, 1.0)    // Z axis (flat)
 
 	// Bind shadow texture
 	gl.ActiveTexture(gl.TEXTURE0)
@@ -3673,6 +4015,149 @@ func (mv *MapViewer) HandlePlayMovement(forward, right, up float32) {
 	mv.Player.CurrentAction = ActionWalk
 }
 
+// UpdatePlayerMovement updates player position for click-to-move navigation.
+// Called each frame to move player toward destination.
+func (mv *MapViewer) UpdatePlayerMovement(deltaMs float32) {
+	if !mv.PlayMode || mv.Player == nil || !mv.Player.HasDestination {
+		return
+	}
+
+	player := mv.Player
+
+	// Calculate direction to destination
+	dx := player.DestX - player.WorldX
+	dz := player.DestZ - player.WorldZ
+	dist := float32(gomath.Sqrt(float64(dx*dx + dz*dz)))
+
+	// Check if reached destination
+	if dist < 1.0 {
+		player.HasDestination = false
+		player.IsMoving = false
+		player.CurrentAction = ActionIdle
+		return
+	}
+
+	// Normalize direction
+	dx /= dist
+	dz /= dist
+
+	// Calculate movement amount
+	moveAmount := player.MoveSpeed * deltaMs / 1000.0
+	if moveAmount > dist {
+		moveAmount = dist
+	}
+
+	// Calculate new position
+	newX := player.WorldX + dx*moveAmount
+	newZ := player.WorldZ + dz*moveAmount
+
+	// Check if new position is walkable
+	if mv.IsWalkable(newX, newZ) {
+		player.WorldX = newX
+		player.WorldZ = newZ
+		player.WorldY = mv.GetInterpolatedTerrainHeight(newX, newZ)
+	} else {
+		// Stop if hit obstacle
+		player.HasDestination = false
+		player.IsMoving = false
+		player.CurrentAction = ActionIdle
+		return
+	}
+
+	// Update facing direction
+	player.Direction = calculateDirection(dx, dz)
+	player.IsMoving = true
+	player.CurrentAction = ActionWalk
+}
+
+// HandlePlayModeClick handles mouse click in Play mode for click-to-move.
+// screenX, screenY are mouse coordinates, viewportW, viewportH are viewport dimensions.
+func (mv *MapViewer) HandlePlayModeClick(screenX, screenY, viewportW, viewportH float32) {
+	if !mv.PlayMode || mv.Player == nil {
+		return
+	}
+
+	// Convert screen coordinates to world position using terrain intersection
+	worldX, worldZ, ok := mv.ScreenToWorld(screenX, screenY, viewportW, viewportH)
+	if !ok {
+		return
+	}
+
+	// Set destination
+	mv.Player.DestX = worldX
+	mv.Player.DestZ = worldZ
+	mv.Player.HasDestination = true
+}
+
+// ScreenToWorld converts screen coordinates to world XZ position by intersecting with ground plane.
+// Uses proper matrix unprojection like PickModelAtScreen.
+func (mv *MapViewer) ScreenToWorld(screenX, screenY, viewportW, viewportH float32) (worldX, worldZ float32, ok bool) {
+	// Convert screen coords to normalized device coords (-1 to 1)
+	ndcX := (2.0*screenX/viewportW - 1.0)
+	ndcY := (1.0 - 2.0*screenY/viewportH) // Flip Y
+
+	// Create ray from camera through the click point using inverse view-projection
+	invViewProj := mv.lastViewProj.Inverse()
+
+	nearPoint := math.Vec4{ndcX, ndcY, -1.0, 1.0}
+	farPoint := math.Vec4{ndcX, ndcY, 1.0, 1.0}
+
+	nearWorld := invViewProj.MulVec4(nearPoint)
+	farWorld := invViewProj.MulVec4(farPoint)
+
+	// Perspective divide
+	if nearWorld[3] != 0 {
+		nearWorld[0] /= nearWorld[3]
+		nearWorld[1] /= nearWorld[3]
+		nearWorld[2] /= nearWorld[3]
+	}
+	if farWorld[3] != 0 {
+		farWorld[0] /= farWorld[3]
+		farWorld[1] /= farWorld[3]
+		farWorld[2] /= farWorld[3]
+	}
+
+	rayOrigin := [3]float32{nearWorld[0], nearWorld[1], nearWorld[2]}
+	rayDir := [3]float32{
+		farWorld[0] - nearWorld[0],
+		farWorld[1] - nearWorld[1],
+		farWorld[2] - nearWorld[2],
+	}
+
+	// Normalize ray direction
+	rayLen := float32(gomath.Sqrt(float64(rayDir[0]*rayDir[0] + rayDir[1]*rayDir[1] + rayDir[2]*rayDir[2])))
+	if rayLen > 0 {
+		rayDir[0] /= rayLen
+		rayDir[1] /= rayLen
+		rayDir[2] /= rayLen
+	}
+
+	// Intersect with ground plane (Y = player height or terrain)
+	groundY := float32(0)
+	if mv.Player != nil {
+		groundY = mv.Player.WorldY
+	}
+
+	// Ray: P = rayOrigin + t * rayDir
+	// Plane: Y = groundY
+	// Solve: rayOrigin.Y + t * rayDir.Y = groundY
+	if gomath.Abs(float64(rayDir[1])) < 0.001 {
+		return 0, 0, false // Ray parallel to ground
+	}
+
+	t := (groundY - rayOrigin[1]) / rayDir[1]
+	if t < 0 {
+		return 0, 0, false // Intersection behind camera
+	}
+
+	worldX = rayOrigin[0] + t*rayDir[0]
+	worldZ = rayOrigin[2] + t*rayDir[2]
+
+	fmt.Printf("Click: screen(%.0f,%.0f) -> world(%.1f, %.1f)\n", screenX, screenY, worldX, worldZ)
+
+	return worldX, worldZ, true
+}
+
 // HandleOrbitMovement handles WASD movement in Orbit mode.
 // Pans the camera's focal point (center).
 // forward/right are -1, 0, or 1 based on key presses.
@@ -3767,7 +4252,7 @@ func (mv *MapViewer) LoadPlayerCharacter(texLoader func(string) ([]byte, error))
 		SPR:         spr,
 		ACT:         act,
 		SpriteScale: 0.28, // Scale down sprite pixels to world units
-		MoveSpeed:   80.0, // World units per second // World units per second
+		MoveSpeed:   50.0, // World units per second // World units per second
 		Direction:   DirS,  // Face south (camera) initially
 	}
 
@@ -3868,7 +4353,7 @@ func (mv *MapViewer) LoadPlayerCharacterFromPath(texLoader func(string) ([]byte,
 		SPR:         spr,
 		ACT:         act,
 		SpriteScale: 0.28, // Scale down sprite pixels to world units
-		MoveSpeed:   80.0, // World units per second
+		MoveSpeed:   50.0, // World units per second
 		Direction:   DirS,
 	}
 
@@ -3949,6 +4434,57 @@ func (mv *MapViewer) LoadPlayerCharacterFromPath(texLoader func(string) ([]byte,
 
 			player.HeadTextures[i] = tex
 		}
+
+		// Generate composite textures (head+body merged) for each action/direction/frame
+		// This creates proper head-body alignment using anchor points
+		fmt.Println("Generating composite sprites...")
+		player.CompositeFrames = make(map[int][]CompositeFrame)
+
+		// Generate composites for actions 0 (idle) and 1 (walk)
+		for action := 0; action < 2; action++ {
+			for dir := 0; dir < 8; dir++ {
+				actionDirKey := action*8 + dir
+				actionIdx := action*8 + dir
+				if actionIdx >= len(act.Actions) {
+					continue
+				}
+				actAction := &act.Actions[actionIdx]
+				numFrames := len(actAction.Frames)
+				if numFrames == 0 {
+					continue
+				}
+
+				frames := make([]CompositeFrame, numFrames)
+				for frame := 0; frame < numFrames; frame++ {
+					pixels, w, h, ox, oy := compositeSprites(spr, act, player.HeadSPR, player.HeadACT, action, dir, frame)
+					if pixels == nil || w == 0 || h == 0 {
+						continue
+					}
+
+					// Create GPU texture for composite
+					var tex uint32
+					gl.GenTextures(1, &tex)
+					gl.BindTexture(gl.TEXTURE_2D, tex)
+					gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, int32(w), int32(h), 0,
+						gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(pixels))
+					gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+					gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+					gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+					gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+
+					frames[frame] = CompositeFrame{
+						Texture: tex,
+						Width:   w,
+						Height:  h,
+						OriginX: ox,
+						OriginY: oy,
+					}
+				}
+				player.CompositeFrames[actionDirKey] = frames
+			}
+		}
+		player.UseComposite = true
+		fmt.Printf("Generated %d composite frame sets\n", len(player.CompositeFrames))
 	}
 
 	// Create billboard VAO/VBO
@@ -4099,7 +4635,7 @@ func (mv *MapViewer) createProceduralPlayer() error {
 	// Create player character
 	player := &PlayerCharacter{
 		SpriteScale: 0.4, // Reasonable scale for character size (~13x26 world units)
-		MoveSpeed:   80.0, // World units per second
+		MoveSpeed:   50.0, // World units per second
 		Direction:   DirS,
 	}
 
