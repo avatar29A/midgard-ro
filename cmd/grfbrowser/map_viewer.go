@@ -3202,9 +3202,6 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 				originXNorm := float32(composite.OriginX) / float32(composite.Width)
 				originYNorm := float32(composite.OriginY) / float32(composite.Height)
 
-				// Horizontal offset: shift so origin X is at center
-				offsetX := (0.5 - originXNorm) * spriteWidth
-
 				// Vertical offset: shift DOWN so origin is at player feet
 				// Origin is at (1-originYNorm) from bottom of quad, we want it at 0
 				// Add small lift (10%) to keep feet above ground
@@ -3214,17 +3211,22 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 				mirrorScale := float32(1.0)
 				if visualDir == DirSW || visualDir == DirW || visualDir == DirNW {
 					mirrorScale = -1.0
-					offsetX = -offsetX
+					// When mirrored, origin at originXNorm from left appears at (1-originXNorm)
+					// So use mirrored origin for offset calculation
+					originXNorm = 1.0 - originXNorm
 				}
+
+				// Horizontal offset: shift so origin X is at center
+				offsetX := (0.5 - originXNorm) * spriteWidth
 
 				gl.Enable(gl.BLEND)
 				gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 				gl.UseProgram(mv.spriteProgram)
 
-				// Apply offsets
-				posX := player.WorldX + offsetX*camRight[0]*mirrorScale
+				// Apply offsets along billboard vectors
+				posX := player.WorldX + offsetX*camRight[0]
 				posY := player.WorldY + offsetY
-				posZ := player.WorldZ + offsetX*camRight[2]*mirrorScale
+				posZ := player.WorldZ + offsetX*camRight[2]
 
 				gl.UniformMatrix4fv(mv.locSpriteVP, 1, false, &viewProj[0])
 				gl.Uniform3f(mv.locSpritePos, posX, posY, posZ)
@@ -4454,12 +4456,19 @@ func (mv *MapViewer) LoadPlayerCharacterFromPath(texLoader func(string) ([]byte,
 					continue
 				}
 
+				// First, compute frame 0's reference origin for consistent positioning
+				_, _, _, refOX, refOY := compositeSprites(spr, act, player.HeadSPR, player.HeadACT, action, dir, 0)
+
 				frames := make([]CompositeFrame, numFrames)
 				for frame := 0; frame < numFrames; frame++ {
-					pixels, w, h, ox, oy := compositeSprites(spr, act, player.HeadSPR, player.HeadACT, action, dir, frame)
+					pixels, w, h, _, _ := compositeSprites(spr, act, player.HeadSPR, player.HeadACT, action, dir, frame)
 					if pixels == nil || w == 0 || h == 0 {
 						continue
 					}
+
+					// Use frame 0's origin for ALL frames to prevent position shifting
+					// This keeps the character grounded consistently across all walk frames
+					useOX, useOY := refOX, refOY
 
 					// Create GPU texture for composite
 					var tex uint32
@@ -4476,8 +4485,8 @@ func (mv *MapViewer) LoadPlayerCharacterFromPath(texLoader func(string) ([]byte,
 						Texture: tex,
 						Width:   w,
 						Height:  h,
-						OriginX: ox,
-						OriginY: oy,
+						OriginX: useOX,
+						OriginY: useOY,
 					}
 				}
 				player.CompositeFrames[actionDirKey] = frames
