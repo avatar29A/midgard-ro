@@ -181,6 +181,7 @@ type PlayerCharacter struct {
 	CurrentAction int     // 0=Idle, 1=Walk
 	CurrentFrame  int     // Current frame within action
 	FrameTime     float32 // Accumulated time for frame timing (ms)
+	LastVisualDir int     // Previous visual direction for hysteresis (-1 = none)
 
 	// Sprite data (body)
 	SPR      *formats.SPR
@@ -194,8 +195,10 @@ type PlayerCharacter struct {
 
 	// Composite textures: [action*8+direction][frame] -> CompositeFrame
 	// Pre-composited head+body for each animation frame
-	CompositeFrames map[int][]CompositeFrame
-	UseComposite    bool // Whether to use composite rendering
+	CompositeFrames    map[int][]CompositeFrame
+	UseComposite       bool // Whether to use composite rendering
+	CompositeMaxWidth  int  // Max width across all composites (for consistent sizing)
+	CompositeMaxHeight int  // Max height across all composites (for consistent sizing)
 
 	// Billboard rendering
 	VAO         uint32
@@ -223,6 +226,168 @@ func saveDebugPNG(pixels []byte, width, height int, path string) {
 		return
 	}
 	fmt.Printf("Saved debug composite to %s\n", path)
+}
+
+// saveAllDirectionsSheet saves all 8 direction composites into a single sprite sheet
+func saveAllDirectionsSheet(
+	bodySPR *formats.SPR, bodyACT *formats.ACT,
+	headSPR *formats.SPR, headACT *formats.ACT,
+	path string,
+) {
+	dirNames := []string{"S", "SW", "W", "NW", "N", "NE", "E", "SE"}
+
+	// First pass: generate all composites and find max dimensions
+	type dirComposite struct {
+		pixels        []byte
+		width, height int
+	}
+	composites := make([]dirComposite, 8)
+	maxW, maxH := 0, 0
+
+	for dir := 0; dir < 8; dir++ {
+		pixels, w, h, _, _ := compositeSprites(bodySPR, bodyACT, headSPR, headACT, 0, dir, 0)
+		composites[dir] = dirComposite{pixels, w, h}
+		if w > maxW {
+			maxW = w
+		}
+		if h > maxH {
+			maxH = h
+		}
+	}
+
+	// Create combined image: 4 columns x 2 rows with labels
+	padding := 10
+	labelHeight := 20
+	cellW := maxW + padding*2
+	cellH := maxH + padding*2 + labelHeight
+	sheetW := cellW * 4
+	sheetH := cellH * 2
+
+	// Create RGBA image with gray background
+	sheet := image.NewRGBA(image.Rect(0, 0, sheetW, sheetH))
+	// Fill with dark gray background
+	for y := 0; y < sheetH; y++ {
+		for x := 0; x < sheetW; x++ {
+			idx := (y*sheetW + x) * 4
+			sheet.Pix[idx] = 40   // R
+			sheet.Pix[idx+1] = 40 // G
+			sheet.Pix[idx+2] = 40 // B
+			sheet.Pix[idx+3] = 255 // A
+		}
+	}
+
+	// Layout: directions arranged as they appear when rotating camera
+	// Top row: S(0), SE(7), E(6), NE(5)
+	// Bottom row: SW(1), W(2), NW(3), N(4)
+	layout := [][]int{
+		{0, 7, 6, 5}, // Top row
+		{1, 2, 3, 4}, // Bottom row
+	}
+
+	for row := 0; row < 2; row++ {
+		for col := 0; col < 4; col++ {
+			dir := layout[row][col]
+			comp := composites[dir]
+
+			// Calculate cell position
+			cellX := col * cellW
+			cellY := row * cellH
+
+			// Center sprite in cell (below label area)
+			spriteX := cellX + padding + (maxW-comp.width)/2
+			spriteY := cellY + labelHeight + padding + (maxH-comp.height)/2
+
+			// Copy sprite pixels
+			if comp.pixels != nil {
+				for py := 0; py < comp.height; py++ {
+					for px := 0; px < comp.width; px++ {
+						srcIdx := (py*comp.width + px) * 4
+						dstX := spriteX + px
+						dstY := spriteY + py
+						if dstX >= 0 && dstX < sheetW && dstY >= 0 && dstY < sheetH {
+							dstIdx := (dstY*sheetW + dstX) * 4
+							// Copy with alpha
+							sa := comp.pixels[srcIdx+3]
+							if sa > 0 {
+								sheet.Pix[dstIdx] = comp.pixels[srcIdx]
+								sheet.Pix[dstIdx+1] = comp.pixels[srcIdx+1]
+								sheet.Pix[dstIdx+2] = comp.pixels[srcIdx+2]
+								sheet.Pix[dstIdx+3] = sa
+							}
+						}
+					}
+				}
+			}
+
+			// Draw direction label (simple pixel text)
+			label := fmt.Sprintf("Dir %d (%s)", dir, dirNames[dir])
+			drawSimpleText(sheet, cellX+padding, cellY+5, label)
+		}
+	}
+
+	// Save the sheet
+	f, err := os.Create(path)
+	if err != nil {
+		fmt.Printf("Error creating sprite sheet: %v\n", err)
+		return
+	}
+	defer f.Close()
+	if err := png.Encode(f, sheet); err != nil {
+		fmt.Printf("Error encoding sprite sheet: %v\n", err)
+		return
+	}
+	fmt.Printf("Saved all directions sprite sheet to %s\n", path)
+}
+
+// drawSimpleText draws text using a simple 5x7 pixel font
+func drawSimpleText(img *image.RGBA, x, y int, text string) {
+	// Simple 5x7 bitmap font for basic characters
+	font := map[rune][]string{
+		'D': {"####.", "#...#", "#...#", "#...#", "#...#", "#...#", "####."},
+		'i': {"..#..", ".....", "..#..", "..#..", "..#..", "..#..", "..#.."},
+		'r': {".....", ".....", ".###.", ".#...", ".#...", ".#...", ".#..."},
+		' ': {".....", ".....", ".....", ".....", ".....", ".....", "....."},
+		'0': {".###.", "#...#", "#..##", "#.#.#", "##..#", "#...#", ".###."},
+		'1': {"..#..", ".##..", "..#..", "..#..", "..#..", "..#..", ".###."},
+		'2': {".###.", "#...#", "....#", "..##.", ".#...", "#....", "#####"},
+		'3': {".###.", "#...#", "....#", "..##.", "....#", "#...#", ".###."},
+		'4': {"#...#", "#...#", "#...#", "#####", "....#", "....#", "....#"},
+		'5': {"#####", "#....", "####.", "....#", "....#", "#...#", ".###."},
+		'6': {".###.", "#....", "####.", "#...#", "#...#", "#...#", ".###."},
+		'7': {"#####", "....#", "...#.", "..#..", ".#...", ".#...", ".#..."},
+		'8': {".###.", "#...#", "#...#", ".###.", "#...#", "#...#", ".###."},
+		'9': {".###.", "#...#", "#...#", ".####", "....#", "....#", ".###."},
+		'(': {"..#..", ".#...", "#....", "#....", "#....", ".#...", "..#.."},
+		')': {"..#..", "...#.", "....#", "....#", "....#", "...#.", "..#.."},
+		'S': {".###.", "#....", ".###.", "....#", "....#", "#...#", ".###."},
+		'W': {"#...#", "#...#", "#...#", "#.#.#", "#.#.#", "#.#.#", ".#.#."},
+		'N': {"#...#", "##..#", "#.#.#", "#..##", "#...#", "#...#", "#...#"},
+		'E': {"#####", "#....", "#....", "####.", "#....", "#....", "#####"},
+	}
+
+	curX := x
+	for _, ch := range text {
+		if glyph, ok := font[ch]; ok {
+			for row, line := range glyph {
+				for col, c := range line {
+					if c == '#' {
+						px := curX + col
+						py := y + row
+						if px >= 0 && px < img.Bounds().Dx() && py >= 0 && py < img.Bounds().Dy() {
+							idx := (py*img.Bounds().Dx() + px) * 4
+							img.Pix[idx] = 255   // R
+							img.Pix[idx+1] = 255 // G
+							img.Pix[idx+2] = 255 // B
+							img.Pix[idx+3] = 255 // A
+						}
+					}
+				}
+			}
+			curX += 6 // Character width + spacing
+		} else {
+			curX += 6 // Unknown char, just space
+		}
+	}
 }
 
 // compositeSprites creates a single RGBA image by compositing body and head sprites.
@@ -3192,10 +3357,6 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 
 	// ========== STEP 1: Calculate camera-facing billboard vectors ==========
 	// Y-axis aligned billboard: rotates around Y to face camera, stays upright
-	// This ensures sprite is always fully visible (never edge-on)
-	// The 3D illusion comes from changing which sprite direction is displayed
-
-	// Direction from player to camera (normalized)
 	dirX := mv.camPosX - player.WorldX
 	dirZ := mv.camPosZ - player.WorldZ
 	length := float32(gomath.Sqrt(float64(dirX*dirX + dirZ*dirZ)))
@@ -3208,22 +3369,17 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 	}
 
 	// Camera-facing billboard vectors (Y-axis aligned)
-	// camRight is perpendicular to player-to-camera direction in XZ plane
 	camRight := [3]float32{-dirZ, 0, dirX}
-	camUp := [3]float32{0, 1, 0} // World up keeps sprite upright
+	camUp := [3]float32{0, 1, 0}
 
-	// ========== STEP 2: Calculate visual direction using atan2 algorithm ==========
-	// This is the key to the 3D illusion: sprite frame changes based on camera angle
-
-	// Camera angle: from player to camera (in XZ plane)
+	// ========== STEP 2: Calculate visual direction with hysteresis ==========
+	// Camera angle from player to camera
 	cameraAngle := float32(gomath.Atan2(float64(dirX), float64(dirZ)))
 
-	// Player facing angle: convert direction 0-7 to radians
-	// RO directions: 0=S, 1=SW, 2=W, 3=NW, 4=N, 5=NE, 6=E, 7=SE
-	// S=0 means facing toward default camera (south), which is angle 0
+	// Player facing angle
 	playerAngle := float32(player.Direction) * (gomath.Pi / 4.0)
 
-	// Combine angles: camera angle + player facing
+	// Combine angles
 	combinedAngle := cameraAngle + playerAngle
 
 	// Normalize to 0-2π
@@ -3234,18 +3390,45 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 		combinedAngle -= 2 * gomath.Pi
 	}
 
-	// Map to direction index (0-7) using 45° sectors with 22.5° offset
-	sector := int((combinedAngle + gomath.Pi/8) / (gomath.Pi / 4))
-	if sector >= 8 {
-		sector = 0
+	// Calculate new sector with standard boundaries
+	sectorSize := float32(gomath.Pi / 4)  // 45° per sector
+	sectorOffset := float32(gomath.Pi / 8) // 22.5° offset
+	newSector := int((combinedAngle + sectorOffset) / sectorSize)
+	if newSector >= 8 {
+		newSector = 0
+	}
+
+	// Hysteresis: only change direction if we're past the dead zone
+	// This prevents flickering at sector boundaries
+	hysteresis := float32(gomath.Pi / 16) // ~11° dead zone on each side of boundary
+
+	// Check if we should keep the previous direction (within dead zone)
+	if player.LastVisualDir >= 0 {
+		// Calculate the center angle of the current visual direction's sector
+		currentSectorCenter := float32(player.LastVisualDir) * sectorSize
+
+		// Distance from current sector center
+		angleDiff := combinedAngle - currentSectorCenter
+		// Normalize to -π to π
+		for angleDiff > gomath.Pi {
+			angleDiff -= 2 * gomath.Pi
+		}
+		for angleDiff < -gomath.Pi {
+			angleDiff += 2 * gomath.Pi
+		}
+
+		// If within the extended range (half sector + hysteresis), keep current direction
+		if angleDiff > -(sectorSize/2+hysteresis) && angleDiff < (sectorSize/2+hysteresis) {
+			newSector = player.LastVisualDir
+		}
 	}
 
 	// Map sector to RO direction index
-	// atan2 sectors go counter-clockwise from +Z, but RO directions are ordered differently
-	// Sector 0 = +Z (North) -> RO direction 0 (South, facing camera)
-	// This mapping converts geometric sectors to RO direction conventions
 	directionMap := [8]int{0, 7, 6, 5, 4, 3, 2, 1}
-	visualDir := directionMap[sector]
+	visualDir := directionMap[newSector]
+
+	// Store for next frame's hysteresis check
+	player.LastVisualDir = newSector
 
 	// ========== STEP 3: Use composite sprites if available ==========
 	// Composite sprites have head+body pre-merged for solid appearance
@@ -3261,13 +3444,9 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 			composite := frames[frameIdx]
 
 			if composite.Texture != 0 && composite.Width > 0 && composite.Height > 0 {
-				// Calculate sprite size in world units
+				// All composites are now padded to same dimensions
 				spriteWidth := float32(composite.Width) * player.SpriteScale
 				spriteHeight := float32(composite.Height) * player.SpriteScale
-
-				// Simple positioning: center horizontally, feet at player position
-				// No complex origin calculations - just center the sprite
-				// The quad vertex Y goes from 0 (bottom/feet) to 1 (top/head)
 
 				gl.Enable(gl.BLEND)
 				gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
@@ -4301,11 +4480,12 @@ func (mv *MapViewer) LoadPlayerCharacter(texLoader func(string) ([]byte, error))
 
 	// Create player character
 	player := &PlayerCharacter{
-		SPR:         spr,
-		ACT:         act,
-		SpriteScale: 0.28, // Scale down sprite pixels to world units
-		MoveSpeed:   50.0, // World units per second // World units per second
-		Direction:   DirS,  // Face south (camera) initially
+		SPR:           spr,
+		ACT:           act,
+		SpriteScale:   0.28, // Scale down sprite pixels to world units
+		MoveSpeed:     50.0, // World units per second
+		Direction:     DirS, // Face south (camera) initially
+		LastVisualDir: -1,   // No previous direction (for hysteresis)
 	}
 
 	// Create GPU textures for each sprite image
@@ -4402,11 +4582,12 @@ func (mv *MapViewer) LoadPlayerCharacterFromPath(texLoader func(string) ([]byte,
 
 	// Create player character
 	player := &PlayerCharacter{
-		SPR:         spr,
-		ACT:         act,
-		SpriteScale: 0.28, // Scale down sprite pixels to world units
-		MoveSpeed:   50.0, // World units per second
-		Direction:   DirS,
+		SPR:           spr,
+		ACT:           act,
+		SpriteScale:   0.28, // Scale down sprite pixels to world units
+		MoveSpeed:     50.0, // World units per second
+		Direction:     DirS,
+		LastVisualDir: -1, // No previous direction (for hysteresis)
 	}
 
 	// Load head sprite if path provided
@@ -4514,8 +4695,31 @@ func (mv *MapViewer) LoadPlayerCharacterFromPath(texLoader func(string) ([]byte,
 		}
 
 		player.CompositeFrames = make(map[int][]CompositeFrame)
+		player.CompositeMaxWidth = 0
+		player.CompositeMaxHeight = 0
 
-		// Generate composites for actions 0 (idle) and 1 (walk)
+		// First pass: find max dimensions across all composites
+		for action := 0; action < 2; action++ {
+			for dir := 0; dir < 8; dir++ {
+				actionIdx := action*8 + dir
+				if actionIdx >= len(act.Actions) {
+					continue
+				}
+				actAction := &act.Actions[actionIdx]
+				for frame := 0; frame < len(actAction.Frames); frame++ {
+					_, w, h, _, _ := compositeSprites(spr, act, player.HeadSPR, player.HeadACT, action, dir, frame)
+					if w > player.CompositeMaxWidth {
+						player.CompositeMaxWidth = w
+					}
+					if h > player.CompositeMaxHeight {
+						player.CompositeMaxHeight = h
+					}
+				}
+			}
+		}
+		fmt.Printf("Composite max dimensions: %dx%d\n", player.CompositeMaxWidth, player.CompositeMaxHeight)
+
+		// Second pass: generate composites padded to max dimensions
 		for action := 0; action < 2; action++ {
 			for dir := 0; dir < 8; dir++ {
 				actionDirKey := action*8 + dir
@@ -4529,9 +4733,6 @@ func (mv *MapViewer) LoadPlayerCharacterFromPath(texLoader func(string) ([]byte,
 					continue
 				}
 
-				// First, compute frame 0's reference origin for consistent positioning
-				_, _, _, refOX, refOY := compositeSprites(spr, act, player.HeadSPR, player.HeadACT, action, dir, 0)
-
 				frames := make([]CompositeFrame, numFrames)
 				for frame := 0; frame < numFrames; frame++ {
 					pixels, w, h, _, _ := compositeSprites(spr, act, player.HeadSPR, player.HeadACT, action, dir, frame)
@@ -4539,16 +4740,35 @@ func (mv *MapViewer) LoadPlayerCharacterFromPath(texLoader func(string) ([]byte,
 						continue
 					}
 
-					// Use frame 0's origin for ALL frames to prevent position shifting
-					// This keeps the character grounded consistently across all walk frames
-					useOX, useOY := refOX, refOY
+					// Pad to max dimensions (center horizontally, align bottom for feet)
+					paddedW := player.CompositeMaxWidth
+					paddedH := player.CompositeMaxHeight
+					paddedPixels := make([]byte, paddedW*paddedH*4)
 
-					// Create GPU texture for composite
+					// Calculate offset to center horizontally and align feet at bottom
+					offsetX := (paddedW - w) / 2
+					offsetY := paddedH - h // Align bottom (feet)
+
+					// Copy original pixels to padded canvas
+					for py := 0; py < h; py++ {
+						for px := 0; px < w; px++ {
+							srcIdx := (py*w + px) * 4
+							dstX := offsetX + px
+							dstY := offsetY + py
+							dstIdx := (dstY*paddedW + dstX) * 4
+							paddedPixels[dstIdx] = pixels[srcIdx]
+							paddedPixels[dstIdx+1] = pixels[srcIdx+1]
+							paddedPixels[dstIdx+2] = pixels[srcIdx+2]
+							paddedPixels[dstIdx+3] = pixels[srcIdx+3]
+						}
+					}
+
+					// Create GPU texture for padded composite
 					var tex uint32
 					gl.GenTextures(1, &tex)
 					gl.BindTexture(gl.TEXTURE_2D, tex)
-					gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, int32(w), int32(h), 0,
-						gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(pixels))
+					gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, int32(paddedW), int32(paddedH), 0,
+						gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(paddedPixels))
 					gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
 					gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
 					gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
@@ -4556,10 +4776,10 @@ func (mv *MapViewer) LoadPlayerCharacterFromPath(texLoader func(string) ([]byte,
 
 					frames[frame] = CompositeFrame{
 						Texture: tex,
-						Width:   w,
-						Height:  h,
-						OriginX: useOX,
-						OriginY: useOY,
+						Width:   paddedW,
+						Height:  paddedH,
+						OriginX: offsetX,
+						OriginY: offsetY,
 					}
 				}
 				player.CompositeFrames[actionDirKey] = frames
@@ -4567,6 +4787,9 @@ func (mv *MapViewer) LoadPlayerCharacterFromPath(texLoader func(string) ([]byte,
 		}
 		player.UseComposite = true
 		fmt.Printf("Generated %d composite frame sets\n", len(player.CompositeFrames))
+
+		// Save all directions to a single sprite sheet for debugging
+		saveAllDirectionsSheet(spr, act, player.HeadSPR, player.HeadACT, "/tmp/all_directions.png")
 	}
 
 	// Create billboard VAO/VBO
@@ -4716,9 +4939,10 @@ func (mv *MapViewer) createProceduralPlayer() error {
 
 	// Create player character
 	player := &PlayerCharacter{
-		SpriteScale: 0.4, // Reasonable scale for character size (~13x26 world units)
-		MoveSpeed:   50.0, // World units per second
-		Direction:   DirS,
+		SpriteScale:   0.4,  // Reasonable scale for character size (~13x26 world units)
+		MoveSpeed:     50.0, // World units per second
+		Direction:     DirS,
+		LastVisualDir: -1, // No previous direction (for hysteresis)
 	}
 
 	// Create single texture
