@@ -2978,13 +2978,18 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 	// Render head sprite ONLY if body has anchor points (composite character)
 	// Complete sprites like b_novice already include the head and have no anchors
 	if player.HeadSPR != nil && player.HeadACT != nil && len(player.HeadTextures) > 0 && player.ACT != nil {
-		// Get body's current frame anchor point
+		// Get body's frame anchor point
+		// Use frame 0 when idle to prevent head shaking from anchor point variations
 		bodyActionIdx := player.CurrentAction*8 + player.Direction
 		if bodyActionIdx >= len(player.ACT.Actions) {
 			bodyActionIdx = 0
 		}
 		bodyAction := &player.ACT.Actions[bodyActionIdx]
-		bodyFrameIdx := player.CurrentFrame % len(bodyAction.Frames)
+		bodyFrameIdx := 0 // Use frame 0 for stable anchor
+		if player.CurrentAction == 1 && len(bodyAction.Frames) > 1 {
+			// Walking - sync frames
+			bodyFrameIdx = player.CurrentFrame % len(bodyAction.Frames)
+		}
 		if bodyFrameIdx >= len(bodyAction.Frames) {
 			bodyFrameIdx = 0
 		}
@@ -2992,9 +2997,18 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 
 		// Only render head if body has anchor points
 		if len(bodyFrame.AnchorPoints) > 0 {
-			// Body anchor in pixels
+			// Body anchor in pixels (negative Y is UP in sprite coords)
 			bodyAnchorX := float32(bodyFrame.AnchorPoints[0].X)
 			bodyAnchorY := float32(bodyFrame.AnchorPoints[0].Y)
+
+			// Get body layer offset for head position compensation
+			var bodyLayerY float32
+			for _, bl := range bodyFrame.Layers {
+				if bl.SpriteID >= 0 {
+					bodyLayerY = float32(bl.Y)
+					break
+				}
+			}
 
 			// Head uses same action index as body (direction * 8 + action)
 			headActionIdx := player.CurrentAction*8 + player.Direction
@@ -3055,10 +3069,10 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 					layerX := float32(headLayer.X) * player.SpriteScale
 					layerY := float32(headLayer.Y) * player.SpriteScale
 
-					// Final position: body center + anchor offset + layer offset
-					// Y is inverted (sprite Y down = world Y up)
-					headPosX := player.WorldX + offsetX + layerX
-					headPosY := player.WorldY + spriteHeight*0.5 - offsetY - layerY
+					// Final position using anchor alignment + body layer compensation
+					// Compensate ~35% of body layer offset for proper head-body alignment
+					headPosX := player.WorldX + (offsetX + layerX)
+					headPosY := player.WorldY - (offsetY + layerY) + (bodyLayerY * player.SpriteScale * 0.35)
 
 					gl.Disable(gl.DEPTH_TEST)
 					gl.Uniform3f(mv.locSpritePos, headPosX, headPosY, player.WorldZ)
@@ -3880,12 +3894,15 @@ func (mv *MapViewer) LoadPlayerCharacterFromPath(texLoader func(string) ([]byte,
 						player.HeadSPR = headSpr
 						player.HeadACT = headAct
 						fmt.Printf("Loaded head sprite: %d images, %d actions\n", len(headSpr.Images), len(headAct.Actions))
-						// Debug: check anchor points
+						// Debug: check anchor points and layer positions
 						if len(headAct.Actions) > 0 && len(headAct.Actions[0].Frames) > 0 {
 							frame := &headAct.Actions[0].Frames[0]
 							fmt.Printf("  Head action 0 frame 0: %d layers, %d anchors\n", len(frame.Layers), len(frame.AnchorPoints))
 							for i, ap := range frame.AnchorPoints {
 								fmt.Printf("    Anchor %d: X=%d Y=%d Attr=%d\n", i, ap.X, ap.Y, ap.Attribute)
+							}
+							for i, layer := range frame.Layers {
+								fmt.Printf("    Layer %d: SpriteID=%d X=%d Y=%d\n", i, layer.SpriteID, layer.X, layer.Y)
 							}
 						}
 					}
@@ -3962,12 +3979,15 @@ func (mv *MapViewer) LoadPlayerCharacterFromPath(texLoader func(string) ([]byte,
 	mv.initializePlayerPosition()
 
 	fmt.Printf("Loaded player sprite: %d images, %d actions\n", len(spr.Images), len(act.Actions))
-	// Debug: check body anchor points
+	// Debug: check body anchor points and layer positions
 	if len(act.Actions) > 0 && len(act.Actions[0].Frames) > 0 {
 		frame := &act.Actions[0].Frames[0]
 		fmt.Printf("  Body action 0 frame 0: %d layers, %d anchors\n", len(frame.Layers), len(frame.AnchorPoints))
 		for i, ap := range frame.AnchorPoints {
 			fmt.Printf("    Anchor %d: X=%d Y=%d Attr=%d\n", i, ap.X, ap.Y, ap.Attribute)
+		}
+		for i, layer := range frame.Layers {
+			fmt.Printf("    Layer %d: SpriteID=%d X=%d Y=%d\n", i, layer.SpriteID, layer.X, layer.Y)
 		}
 	}
 	return nil
