@@ -3,7 +3,10 @@ package main
 
 import (
 	"fmt"
+	"image"
+	"image/png"
 	gomath "math"
+	"os"
 	"sort"
 	"unsafe"
 
@@ -205,6 +208,23 @@ type PlayerCharacter struct {
 	ShadowVBO uint32
 }
 
+// saveDebugPNG saves RGBA pixels to a PNG file for debugging
+func saveDebugPNG(pixels []byte, width, height int, path string) {
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	copy(img.Pix, pixels)
+	f, err := os.Create(path)
+	if err != nil {
+		fmt.Printf("Error creating debug PNG: %v\n", err)
+		return
+	}
+	defer f.Close()
+	if err := png.Encode(f, img); err != nil {
+		fmt.Printf("Error encoding debug PNG: %v\n", err)
+		return
+	}
+	fmt.Printf("Saved debug composite to %s\n", path)
+}
+
 // compositeSprites creates a single RGBA image by compositing body and head sprites.
 // It uses anchor points to correctly position the head relative to the body.
 // Returns the composite image pixels, dimensions, and origin offset.
@@ -234,7 +254,8 @@ func compositeSprites(
 	if len(headAction.Frames) == 0 {
 		return nil, 0, 0, 0, 0
 	}
-	headFrame := &headAction.Frames[0] // Always frame 0 for head
+	// Always use frame 0 for head - it has the matching anchor points
+	headFrame := &headAction.Frames[0]
 
 	// Find body layer bounds
 	var bodyMinX, bodyMinY, bodyMaxX, bodyMaxY int
@@ -286,6 +307,7 @@ func compositeSprites(
 	// Calculate head offset: head anchor aligns with body anchor
 	headOffsetX := bodyAnchorX - headAnchorX
 	headOffsetY := bodyAnchorY - headAnchorY
+
 
 	// Find head layer bounds (relative to head origin + offset)
 	var headMinX, headMinY, headMaxX, headMaxY int
@@ -367,6 +389,9 @@ func compositeSprites(
 		cx := int(layer.X) + offsetX + originX
 		cy := int(layer.Y) + offsetY + originY
 
+		// Check if layer should be mirrored (horizontal flip)
+		mirrored := layer.IsMirrored()
+
 		// Blit with alpha blending
 		for py := 0; py < imgH; py++ {
 			for px := 0; px < imgW; px++ {
@@ -376,7 +401,12 @@ func compositeSprites(
 					continue
 				}
 
-				srcIdx := (py*imgW + px) * 4
+				// Source pixel - flip X if mirrored
+				srcX := px
+				if mirrored {
+					srcX = imgW - 1 - px
+				}
+				srcIdx := (py*imgW + srcX) * 4
 				dstIdx := (dy*width + dx) * 4
 
 				// Source pixel
@@ -407,13 +437,44 @@ func compositeSprites(
 	}
 
 	// Draw body layers first (bottom)
+	bodyLayersDrawn := 0
 	for _, layer := range bodyFrame.Layers {
-		blitLayer(bodySPR, &layer, 0, 0)
+		if layer.SpriteID >= 0 {
+			blitLayer(bodySPR, &layer, 0, 0)
+			bodyLayersDrawn++
+		}
 	}
 
 	// Draw head layers on top
+	headLayersDrawn := 0
 	for _, layer := range headFrame.Layers {
-		blitLayer(headSPR, &layer, headOffsetX, headOffsetY)
+		if layer.SpriteID >= 0 {
+			blitLayer(headSPR, &layer, headOffsetX, headOffsetY)
+			headLayersDrawn++
+		}
+	}
+
+	// Debug: save composites for all 8 directions
+	if action == 0 && frame == 0 {
+		// Check if any layers are mirrored
+		bodyMirror := false
+		for _, layer := range bodyFrame.Layers {
+			if layer.IsMirrored() {
+				bodyMirror = true
+				break
+			}
+		}
+		headMirror := false
+		for _, layer := range headFrame.Layers {
+			if layer.IsMirrored() {
+				headMirror = true
+				break
+			}
+		}
+		fname := fmt.Sprintf("/tmp/composite_dir%d.png", direction)
+		fmt.Printf("Composite dir=%d: size=%dx%d, headOffset=(%d,%d), bodyMirror=%v, headMirror=%v\n",
+			direction, width, height, headOffsetX, headOffsetY, bodyMirror, headMirror)
+		saveDebugPNG(pixels, width, height, fname)
 	}
 
 	return pixels, width, height, originX, originY
@@ -3130,7 +3191,11 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 	mv.renderPlayerShadow(viewProj)
 
 	// ========== STEP 1: Calculate camera-facing billboard vectors ==========
-	// Y-axis aligned billboard: rotates horizontally to face camera, stays upright
+	// Y-axis aligned billboard: rotates around Y to face camera, stays upright
+	// This ensures sprite is always fully visible (never edge-on)
+	// The 3D illusion comes from changing which sprite direction is displayed
+
+	// Direction from player to camera (normalized)
 	dirX := mv.camPosX - player.WorldX
 	dirZ := mv.camPosZ - player.WorldZ
 	length := float32(gomath.Sqrt(float64(dirX*dirX + dirZ*dirZ)))
@@ -3141,9 +3206,11 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 		dirX = 0
 		dirZ = 1
 	}
-	// Right vector perpendicular to camera direction in XZ plane
+
+	// Camera-facing billboard vectors (Y-axis aligned)
+	// camRight is perpendicular to player-to-camera direction in XZ plane
 	camRight := [3]float32{-dirZ, 0, dirX}
-	camUp := [3]float32{0, 1, 0} // World up
+	camUp := [3]float32{0, 1, 0} // World up keeps sprite upright
 
 	// ========== STEP 2: Calculate visual direction using atan2 algorithm ==========
 	// This is the key to the 3D illusion: sprite frame changes based on camera angle
@@ -3172,7 +3239,13 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 	if sector >= 8 {
 		sector = 0
 	}
-	visualDir := sector
+
+	// Map sector to RO direction index
+	// atan2 sectors go counter-clockwise from +Z, but RO directions are ordered differently
+	// Sector 0 = +Z (North) -> RO direction 0 (South, facing camera)
+	// This mapping converts geometric sectors to RO direction conventions
+	directionMap := [8]int{0, 7, 6, 5, 4, 3, 2, 1}
+	visualDir := directionMap[sector]
 
 	// ========== STEP 3: Use composite sprites if available ==========
 	// Composite sprites have head+body pre-merged for solid appearance
@@ -3192,45 +3265,22 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 				spriteWidth := float32(composite.Width) * player.SpriteScale
 				spriteHeight := float32(composite.Height) * player.SpriteScale
 
-				// Origin offset: originX/originY is distance from canvas top-left to sprite origin (0,0)
-				// originYNorm = how far down from top the origin is (0-1)
-				// In quad space: Y=0 is bottom, Y=1 is top
-				// UV space: V=0 is top, V=1 is bottom
-				// Origin at originYNorm from top means it's at quad Y = (1 - originYNorm)
-				// We want origin at player feet (Y=0 of quad base at player.WorldY)
-				// So shift DOWN by (1 - originYNorm) * spriteHeight
-				originXNorm := float32(composite.OriginX) / float32(composite.Width)
-				originYNorm := float32(composite.OriginY) / float32(composite.Height)
-
-				// Vertical offset: shift DOWN so origin is at player feet
-				// Origin is at (1-originYNorm) from bottom of quad, we want it at 0
-				// Add small lift (10%) to keep feet above ground
-				offsetY := -(1.0-originYNorm)*spriteHeight + spriteHeight*0.10
-
-				// Mirror for left-facing directions
-				mirrorScale := float32(1.0)
-				if visualDir == DirSW || visualDir == DirW || visualDir == DirNW {
-					mirrorScale = -1.0
-					// When mirrored, origin at originXNorm from left appears at (1-originXNorm)
-					// So use mirrored origin for offset calculation
-					originXNorm = 1.0 - originXNorm
-				}
-
-				// Horizontal offset: shift so origin X is at center
-				offsetX := (0.5 - originXNorm) * spriteWidth
+				// Simple positioning: center horizontally, feet at player position
+				// No complex origin calculations - just center the sprite
+				// The quad vertex Y goes from 0 (bottom/feet) to 1 (top/head)
 
 				gl.Enable(gl.BLEND)
 				gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 				gl.UseProgram(mv.spriteProgram)
 
-				// Apply offsets along billboard vectors
-				posX := player.WorldX + offsetX*camRight[0]
-				posY := player.WorldY + offsetY
-				posZ := player.WorldZ + offsetX*camRight[2]
+				// Position sprite centered on player, slight lift for feet
+				posX := player.WorldX
+				posY := player.WorldY + spriteHeight*0.05
+				posZ := player.WorldZ
 
 				gl.UniformMatrix4fv(mv.locSpriteVP, 1, false, &viewProj[0])
 				gl.Uniform3f(mv.locSpritePos, posX, posY, posZ)
-				gl.Uniform2f(mv.locSpriteSize, spriteWidth*mirrorScale, spriteHeight)
+				gl.Uniform2f(mv.locSpriteSize, spriteWidth, spriteHeight)
 				gl.Uniform4f(mv.locSpriteTint, 1.0, 1.0, 1.0, 1.0)
 				gl.Uniform3f(mv.locSpriteCamRight, camRight[0], camRight[1], camRight[2])
 				gl.Uniform3f(mv.locSpriteCamUp, camUp[0], camUp[1], camUp[2])
@@ -4440,6 +4490,29 @@ func (mv *MapViewer) LoadPlayerCharacterFromPath(texLoader func(string) ([]byte,
 		// Generate composite textures (head+body merged) for each action/direction/frame
 		// This creates proper head-body alignment using anchor points
 		fmt.Println("Generating composite sprites...")
+
+		// Debug: print body and head anchors for each direction
+		fmt.Println("Body anchors per direction (action 0):")
+		for dir := 0; dir < 8 && dir < len(act.Actions); dir++ {
+			ba := &act.Actions[dir]
+			if len(ba.Frames) > 0 {
+				bf := &ba.Frames[0]
+				if len(bf.AnchorPoints) > 0 {
+					fmt.Printf("  Dir %d: body anchor(%d,%d)\n", dir, bf.AnchorPoints[0].X, bf.AnchorPoints[0].Y)
+				}
+			}
+		}
+		fmt.Println("Head anchors per direction:")
+		for dir := 0; dir < 8 && dir < len(player.HeadACT.Actions); dir++ {
+			ha := &player.HeadACT.Actions[dir]
+			if len(ha.Frames) > 0 {
+				hf := &ha.Frames[0]
+				if len(hf.AnchorPoints) > 0 {
+					fmt.Printf("  Dir %d: head anchor(%d,%d)\n", dir, hf.AnchorPoints[0].X, hf.AnchorPoints[0].Y)
+				}
+			}
+		}
+
 		player.CompositeFrames = make(map[int][]CompositeFrame)
 
 		// Generate composites for actions 0 (idle) and 1 (walk)
