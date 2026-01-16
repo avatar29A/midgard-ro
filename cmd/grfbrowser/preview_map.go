@@ -585,6 +585,7 @@ func (app *App) initMap3DView() {
 
 // Track last mouse position for drag delta calculation
 var mapViewerLastMousePos imgui.Vec2
+var mapViewerWasDragging bool // Track if we were dragging camera to prevent click-to-move on release
 
 // renderMap3DView renders the 3D map view filling available space.
 func (app *App) renderMap3DView() {
@@ -641,6 +642,11 @@ func (app *App) renderMap3DView() {
 		app.mapViewer.UpdateModelAnimation(16.0)
 	}
 
+	// Update player movement for click-to-move (in Play mode)
+	if app.mapViewer.PlayMode {
+		app.mapViewer.UpdatePlayerMovement(16.0) // ~60fps delta
+	}
+
 	// Render the map
 	texID := app.mapViewer.Render()
 
@@ -666,6 +672,7 @@ func (app *App) renderMap3DView() {
 			deltaX := mousePos.X - mapViewerLastMousePos.X
 			deltaY := mousePos.Y - mapViewerLastMousePos.Y
 			app.mapViewer.HandleMouseDrag(deltaX, deltaY)
+			mapViewerWasDragging = true // Track that we were dragging
 		}
 		mapViewerLastMousePos = mousePos
 
@@ -689,13 +696,21 @@ func (app *App) renderMap3DView() {
 			}
 		}
 
-		// Single click on empty space to deselect (only if not dragging)
-		if imgui.IsMouseReleased(imgui.MouseButtonLeft) && !imgui.IsMouseDragging(imgui.MouseButtonLeft) {
-			// Only deselect if click didn't hit any model
-			modelIdx := app.mapViewer.PickModelAtScreen(localX, localY, width, height)
-			if modelIdx < 0 {
-				app.mapViewer.SelectedIdx = -1
-				app.showPropertiesPanel = false
+		// Single click handling (only if we weren't dragging)
+		if imgui.IsMouseReleased(imgui.MouseButtonLeft) {
+			if mapViewerWasDragging {
+				// Was dragging camera, don't trigger click action
+				mapViewerWasDragging = false
+			} else if app.mapViewer.PlayMode {
+				// In Play mode: click to move
+				app.mapViewer.HandlePlayModeClick(localX, localY, width, height)
+			} else {
+				// In Orbit mode: deselect if click didn't hit any model
+				modelIdx := app.mapViewer.PickModelAtScreen(localX, localY, width, height)
+				if modelIdx < 0 {
+					app.mapViewer.SelectedIdx = -1
+					app.showPropertiesPanel = false
+				}
 			}
 		}
 	}
@@ -847,6 +862,24 @@ func (app *App) renderMapControlsPanel() {
 			app.mapViewer.TogglePlayMode()
 		}
 	}
+
+	// Character section (only in Play mode)
+	if app.mapViewer.PlayMode && app.mapViewer.Player != nil {
+		imgui.Spacing()
+		imgui.Spacing()
+		imgui.Text("Character")
+		imgui.Separator()
+
+		imgui.Text("Speed:")
+		speed := app.mapViewer.Player.MoveSpeed
+		imgui.SetNextItemWidth(-1)
+		if imgui.SliderFloatV("##CharSpeed", &speed, 10.0, 150.0, "%.0f", imgui.SliderFlagsNone) {
+			app.mapViewer.Player.MoveSpeed = speed
+		}
+	}
+
+	imgui.Spacing()
+	imgui.Spacing()
 
 	if imgui.ButtonV("Reset Camera", imgui.NewVec2(-1, 0)) {
 		app.mapViewer.Reset()
