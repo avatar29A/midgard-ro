@@ -16,6 +16,7 @@ import (
 	"github.com/Faultbox/midgard-ro/internal/engine/camera"
 	"github.com/Faultbox/midgard-ro/internal/engine/character"
 	"github.com/Faultbox/midgard-ro/internal/engine/debug"
+	"github.com/Faultbox/midgard-ro/internal/engine/lighting"
 	rsmmodel "github.com/Faultbox/midgard-ro/internal/engine/model"
 	"github.com/Faultbox/midgard-ro/internal/engine/picking"
 	"github.com/Faultbox/midgard-ro/internal/engine/shader"
@@ -710,7 +711,7 @@ func (mv *MapViewer) LoadMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(
 	// Extract lighting data from RSW (Stage 1: Correct Lighting - ADR-014)
 	if rsw != nil {
 		// Calculate sun direction from spherical coordinates
-		mv.lightDir = calculateSunDirection(rsw.Light.Longitude, rsw.Light.Latitude)
+		mv.lightDir = lighting.SunDirection(rsw.Light.Longitude, rsw.Light.Latitude)
 
 		// Use RSW ambient and diffuse colors
 		// Note: RSW values are often quite low, we apply a minimum floor

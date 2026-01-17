@@ -234,3 +234,45 @@ func (c *ThirdPersonCamera) ForwardDirection() (x, z float32) {
 func (c *ThirdPersonCamera) RightDirection() (x, z float32) {
 	return float32(-gomath.Cos(float64(c.Yaw))), float32(gomath.Sin(float64(c.Yaw)))
 }
+
+// FitResult contains the computed camera parameters for fitting a bounding box.
+type FitResult struct {
+	CenterX, CenterY, CenterZ float32
+	Distance                  float32
+}
+
+// FitBoundsToView calculates camera center and distance to fit a bounding box in view.
+// distanceMultiplier controls how far the camera should be (typically 1.5-3.0).
+// minDistance is the minimum allowed distance.
+func FitBoundsToView(minBounds, maxBounds [3]float32, distanceMultiplier, minDistance float32) FitResult {
+	// Calculate center
+	centerX := (minBounds[0] + maxBounds[0]) / 2
+	centerY := (minBounds[1] + maxBounds[1]) / 2
+	centerZ := (minBounds[2] + maxBounds[2]) / 2
+
+	// Calculate max size across all dimensions
+	sizeX := maxBounds[0] - minBounds[0]
+	sizeY := maxBounds[1] - minBounds[1]
+	sizeZ := maxBounds[2] - minBounds[2]
+
+	maxSize := sizeX
+	if sizeY > maxSize {
+		maxSize = sizeY
+	}
+	if sizeZ > maxSize {
+		maxSize = sizeZ
+	}
+
+	// Calculate distance
+	distance := maxSize * distanceMultiplier
+	if distance < minDistance {
+		distance = minDistance
+	}
+
+	return FitResult{
+		CenterX:  centerX,
+		CenterY:  centerY,
+		CenterZ:  centerZ,
+		Distance: distance,
+	}
+}
