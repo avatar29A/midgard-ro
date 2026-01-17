@@ -305,7 +305,7 @@ func (app *App) renderActionsPanel() {
 	if imgui.BeginChildStrV("ActionList", imgui.NewVec2(0, 0), imgui.ChildFlagsBorders, 0) {
 		for i := 0; i < totalActions; i++ {
 			action := act.Actions[i]
-			name := getActionName(i, totalActions)
+			name := formats.GetActionName(i, totalActions)
 			label := fmt.Sprintf("%d: %s (%d)", i, name, len(action.Frames))
 
 			isSelected := i == app.previewAction
@@ -316,82 +316,6 @@ func (app *App) renderActionsPanel() {
 		}
 	}
 	imgui.EndChild()
-}
-
-// Direction names for 8-direction sprites (standard RO order).
-var directionNames = []string{
-	"S", "SW", "W", "NW", "N", "NE", "E", "SE",
-}
-
-// Monster action type names (typically 5-8 action types with 8 directions each).
-// Monsters have: Idle, Walk, Attack, Damage, Die (and sometimes more attacks).
-var monsterActionNames = []string{
-	"Idle",     // 0
-	"Walk",     // 1
-	"Attack",   // 2
-	"Damage",   // 3
-	"Die",      // 4
-	"Attack 2", // 5 (some monsters)
-	"Attack 3", // 6 (some monsters)
-	"Special",  // 7 (some monsters)
-}
-
-// Player action type names (typically 13+ action types with 8 directions each).
-// Players have more actions including Sit, Pick Up, Standby, multiple attacks, casting.
-var playerActionNames = []string{
-	"Idle",        // 0
-	"Walk",        // 1
-	"Sit",         // 2
-	"Pick Up",     // 3
-	"Standby",     // 4
-	"Attack 1",    // 5
-	"Damage",      // 6
-	"Die",         // 7
-	"Dead",        // 8
-	"Attack 2",    // 9
-	"Attack 3",    // 10
-	"Skill Cast",  // 11
-	"Skill Ready", // 12
-	"Freeze",      // 13
-}
-
-// getActionName returns a standard RO action name for the given index.
-// For sprites with 8 directions per action, shows "ActionType Dir" format.
-// Uses different naming based on total action count to detect monster vs player sprites.
-func getActionName(index, totalActions int) string {
-	// Check if this looks like an 8-direction sprite (multiple of 8 actions)
-	if totalActions >= 8 && totalActions%8 == 0 {
-		actionType := index / 8
-		direction := index % 8
-		dirName := directionNames[direction]
-
-		// Determine sprite type based on action count:
-		// - Monster sprites: typically 40-64 actions (5-8 action types)
-		// - Player sprites: typically 80+ actions (10+ action types)
-		var typeName string
-		actionTypeCount := totalActions / 8
-
-		if actionTypeCount <= 8 {
-			// Likely a monster sprite
-			if actionType < len(monsterActionNames) {
-				typeName = monsterActionNames[actionType]
-			} else {
-				typeName = fmt.Sprintf("Action%d", actionType)
-			}
-		} else {
-			// Likely a player sprite
-			if actionType < len(playerActionNames) {
-				typeName = playerActionNames[actionType]
-			} else {
-				typeName = fmt.Sprintf("Action%d", actionType)
-			}
-		}
-
-		return fmt.Sprintf("%s %s", typeName, dirName)
-	}
-
-	// Non-8-direction sprite (items, effects, etc.) - just show index
-	return fmt.Sprintf("Action %d", index)
 }
 
 // renderACTFrame renders a single ACT frame with all its layers.
