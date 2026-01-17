@@ -3,7 +3,10 @@ package main
 
 import (
 	"fmt"
+	"image"
+	"image/png"
 	gomath "math"
+	"os"
 	"sort"
 	"unsafe"
 
@@ -105,6 +108,542 @@ type modelTexGroup struct {
 	indexCount int32
 }
 
+// Direction constants for 8-directional sprites (RO standard order)
+const (
+	DirS  = 0 // South (facing camera)
+	DirSW = 1
+	DirW  = 2
+	DirNW = 3
+	DirN  = 4 // North (away from camera)
+	DirNE = 5
+	DirE  = 6
+	DirSE = 7
+)
+
+// Action type constants for character animations
+const (
+	ActionIdle = 0
+	ActionWalk = 1
+)
+
+// calculateDirection returns 0-7 direction index from movement vector.
+// RO directions: 0=S, 1=SW, 2=W, 3=NW, 4=N, 5=NE, 6=E, 7=SE
+func calculateDirection(dx, dz float32) int {
+	// Calculate angle in radians (atan2 gives -PI to PI)
+	angle := gomath.Atan2(float64(dx), float64(dz))
+
+	// Convert to 0-2*PI range
+	if angle < 0 {
+		angle += 2 * gomath.Pi
+	}
+
+	// Divide circle into 8 sectors (each 45 degrees = PI/4)
+	// Add PI/8 offset to center each sector
+	sector := int((angle + gomath.Pi/8) / (gomath.Pi / 4))
+	if sector >= 8 {
+		sector = 0
+	}
+
+	// Map sectors to RO direction order
+	// angle=0 is +Z direction (South in RO terms = facing camera)
+	// Clockwise: S(0), SE(7), E(6), NE(5), N(4), NW(3), W(2), SW(1)
+	directionMap := []int{0, 7, 6, 5, 4, 3, 2, 1}
+	return directionMap[sector]
+}
+
+// PlayerCharacter represents the player's character in Play Mode.
+// CompositeFrame holds a pre-composited sprite frame (head + body merged).
+type CompositeFrame struct {
+	Texture uint32 // OpenGL texture ID
+	Width   int    // Texture width in pixels
+	Height  int    // Texture height in pixels
+	OriginX int    // X offset from sprite origin to texture center
+	OriginY int    // Y offset from sprite origin to texture center
+}
+
+type PlayerCharacter struct {
+	// Position in world coordinates
+	WorldX float32
+	WorldY float32 // Altitude (follows terrain)
+	WorldZ float32
+
+	// Movement state
+	IsMoving  bool
+	Direction int     // 0-7: S, SW, W, NW, N, NE, E, SE
+	MoveSpeed float32 // Units per second
+
+	// Click-to-move destination
+	DestX          float32 // Target X position
+	DestZ          float32 // Target Z position
+	HasDestination bool    // Whether moving to a destination
+
+	// Animation state
+	CurrentAction int     // 0=Idle, 1=Walk
+	CurrentFrame  int     // Current frame within action
+	FrameTime     float32 // Accumulated time for frame timing (ms)
+	LastVisualDir int     // Previous visual direction for hysteresis (-1 = none)
+
+	// Sprite data (body)
+	SPR      *formats.SPR
+	ACT      *formats.ACT
+	Textures []uint32 // GPU textures for each SPR image
+
+	// Head sprite data
+	HeadSPR      *formats.SPR
+	HeadACT      *formats.ACT
+	HeadTextures []uint32 // GPU textures for head SPR images
+
+	// Composite textures: [action*8+direction][frame] -> CompositeFrame
+	// Pre-composited head+body for each animation frame
+	CompositeFrames    map[int][]CompositeFrame
+	UseComposite       bool // Whether to use composite rendering
+	CompositeMaxWidth  int  // Max width across all composites (for consistent sizing)
+	CompositeMaxHeight int  // Max height across all composites (for consistent sizing)
+
+	// Billboard rendering
+	VAO         uint32
+	VBO         uint32
+	SpriteScale float32 // Scale factor for sprite (default 1.0)
+
+	// Shadow
+	ShadowTex uint32 // Shadow texture (ellipse)
+	ShadowVAO uint32
+	ShadowVBO uint32
+}
+
+// saveDebugPNG saves RGBA pixels to a PNG file for debugging
+func saveDebugPNG(pixels []byte, width, height int, path string) {
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	copy(img.Pix, pixels)
+	f, err := os.Create(path)
+	if err != nil {
+		fmt.Printf("Error creating debug PNG: %v\n", err)
+		return
+	}
+	defer f.Close()
+	if err := png.Encode(f, img); err != nil {
+		fmt.Printf("Error encoding debug PNG: %v\n", err)
+		return
+	}
+	fmt.Printf("Saved debug composite to %s\n", path)
+}
+
+// saveAllDirectionsSheet saves all 8 direction composites into a single sprite sheet
+func saveAllDirectionsSheet(
+	bodySPR *formats.SPR, bodyACT *formats.ACT,
+	headSPR *formats.SPR, headACT *formats.ACT,
+	path string,
+) {
+	dirNames := []string{"S", "SW", "W", "NW", "N", "NE", "E", "SE"}
+
+	// First pass: generate all composites and find max dimensions
+	type dirComposite struct {
+		pixels        []byte
+		width, height int
+	}
+	composites := make([]dirComposite, 8)
+	maxW, maxH := 0, 0
+
+	for dir := 0; dir < 8; dir++ {
+		pixels, w, h := compositeSprites(bodySPR, bodyACT, headSPR, headACT, 0, dir, 0)
+		composites[dir] = dirComposite{pixels, w, h}
+		if w > maxW {
+			maxW = w
+		}
+		if h > maxH {
+			maxH = h
+		}
+	}
+
+	// Create combined image: 4 columns x 2 rows with labels
+	padding := 10
+	labelHeight := 20
+	cellW := maxW + padding*2
+	cellH := maxH + padding*2 + labelHeight
+	sheetW := cellW * 4
+	sheetH := cellH * 2
+
+	// Create RGBA image with gray background
+	sheet := image.NewRGBA(image.Rect(0, 0, sheetW, sheetH))
+	// Fill with dark gray background
+	for y := 0; y < sheetH; y++ {
+		for x := 0; x < sheetW; x++ {
+			idx := (y*sheetW + x) * 4
+			sheet.Pix[idx] = 40    // R
+			sheet.Pix[idx+1] = 40  // G
+			sheet.Pix[idx+2] = 40  // B
+			sheet.Pix[idx+3] = 255 // A
+		}
+	}
+
+	// Layout: directions arranged as they appear when rotating camera
+	// Top row: S(0), SE(7), E(6), NE(5)
+	// Bottom row: SW(1), W(2), NW(3), N(4)
+	layout := [][]int{
+		{0, 7, 6, 5}, // Top row
+		{1, 2, 3, 4}, // Bottom row
+	}
+
+	for row := 0; row < 2; row++ {
+		for col := 0; col < 4; col++ {
+			dir := layout[row][col]
+			comp := composites[dir]
+
+			// Calculate cell position
+			cellX := col * cellW
+			cellY := row * cellH
+
+			// Center sprite in cell (below label area)
+			spriteX := cellX + padding + (maxW-comp.width)/2
+			spriteY := cellY + labelHeight + padding + (maxH-comp.height)/2
+
+			// Copy sprite pixels
+			if comp.pixels != nil {
+				for py := 0; py < comp.height; py++ {
+					for px := 0; px < comp.width; px++ {
+						srcIdx := (py*comp.width + px) * 4
+						dstX := spriteX + px
+						dstY := spriteY + py
+						if dstX >= 0 && dstX < sheetW && dstY >= 0 && dstY < sheetH {
+							dstIdx := (dstY*sheetW + dstX) * 4
+							// Copy with alpha
+							sa := comp.pixels[srcIdx+3]
+							if sa > 0 {
+								sheet.Pix[dstIdx] = comp.pixels[srcIdx]
+								sheet.Pix[dstIdx+1] = comp.pixels[srcIdx+1]
+								sheet.Pix[dstIdx+2] = comp.pixels[srcIdx+2]
+								sheet.Pix[dstIdx+3] = sa
+							}
+						}
+					}
+				}
+			}
+
+			// Draw direction label (simple pixel text)
+			label := fmt.Sprintf("Dir %d (%s)", dir, dirNames[dir])
+			drawSimpleText(sheet, cellX+padding, cellY+5, label)
+		}
+	}
+
+	// Save the sheet
+	f, err := os.Create(path)
+	if err != nil {
+		fmt.Printf("Error creating sprite sheet: %v\n", err)
+		return
+	}
+	defer f.Close()
+	if err := png.Encode(f, sheet); err != nil {
+		fmt.Printf("Error encoding sprite sheet: %v\n", err)
+		return
+	}
+	fmt.Printf("Saved all directions sprite sheet to %s\n", path)
+}
+
+// drawSimpleText draws text using a simple 5x7 pixel font
+func drawSimpleText(img *image.RGBA, x, y int, text string) {
+	// Simple 5x7 bitmap font for basic characters
+	font := map[rune][]string{
+		'D': {"####.", "#...#", "#...#", "#...#", "#...#", "#...#", "####."},
+		'i': {"..#..", ".....", "..#..", "..#..", "..#..", "..#..", "..#.."},
+		'r': {".....", ".....", ".###.", ".#...", ".#...", ".#...", ".#..."},
+		' ': {".....", ".....", ".....", ".....", ".....", ".....", "....."},
+		'0': {".###.", "#...#", "#..##", "#.#.#", "##..#", "#...#", ".###."},
+		'1': {"..#..", ".##..", "..#..", "..#..", "..#..", "..#..", ".###."},
+		'2': {".###.", "#...#", "....#", "..##.", ".#...", "#....", "#####"},
+		'3': {".###.", "#...#", "....#", "..##.", "....#", "#...#", ".###."},
+		'4': {"#...#", "#...#", "#...#", "#####", "....#", "....#", "....#"},
+		'5': {"#####", "#....", "####.", "....#", "....#", "#...#", ".###."},
+		'6': {".###.", "#....", "####.", "#...#", "#...#", "#...#", ".###."},
+		'7': {"#####", "....#", "...#.", "..#..", ".#...", ".#...", ".#..."},
+		'8': {".###.", "#...#", "#...#", ".###.", "#...#", "#...#", ".###."},
+		'9': {".###.", "#...#", "#...#", ".####", "....#", "....#", ".###."},
+		'(': {"..#..", ".#...", "#....", "#....", "#....", ".#...", "..#.."},
+		')': {"..#..", "...#.", "....#", "....#", "....#", "...#.", "..#.."},
+		'S': {".###.", "#....", ".###.", "....#", "....#", "#...#", ".###."},
+		'W': {"#...#", "#...#", "#...#", "#.#.#", "#.#.#", "#.#.#", ".#.#."},
+		'N': {"#...#", "##..#", "#.#.#", "#..##", "#...#", "#...#", "#...#"},
+		'E': {"#####", "#....", "#....", "####.", "#....", "#....", "#####"},
+	}
+
+	curX := x
+	for _, ch := range text {
+		if glyph, ok := font[ch]; ok {
+			for row, line := range glyph {
+				for col, c := range line {
+					if c == '#' {
+						px := curX + col
+						py := y + row
+						if px >= 0 && px < img.Bounds().Dx() && py >= 0 && py < img.Bounds().Dy() {
+							idx := (py*img.Bounds().Dx() + px) * 4
+							img.Pix[idx] = 255   // R
+							img.Pix[idx+1] = 255 // G
+							img.Pix[idx+2] = 255 // B
+							img.Pix[idx+3] = 255 // A
+						}
+					}
+				}
+			}
+			curX += 6 // Character width + spacing
+		} else {
+			curX += 6 // Unknown char, just space
+		}
+	}
+}
+
+// compositeSprites creates a single RGBA image by compositing body and head sprites.
+// It uses anchor points to correctly position the head relative to the body.
+// Returns the composite image pixels, dimensions, and origin offset.
+func compositeSprites(
+	bodySPR *formats.SPR, bodyACT *formats.ACT,
+	headSPR *formats.SPR, headACT *formats.ACT,
+	action, direction, frame int,
+) (pixels []byte, width, height int) {
+	// Get body action/frame
+	bodyActionIdx := action*8 + direction
+	if bodyActionIdx >= len(bodyACT.Actions) {
+		bodyActionIdx = direction % len(bodyACT.Actions)
+	}
+	bodyAction := &bodyACT.Actions[bodyActionIdx]
+	if len(bodyAction.Frames) == 0 {
+		return nil, 0, 0
+	}
+	bodyFrameIdx := frame % len(bodyAction.Frames)
+	bodyFrame := &bodyAction.Frames[bodyFrameIdx]
+
+	// Get head action/frame (always use frame 0 for stability)
+	headActionIdx := action*8 + direction
+	if headActionIdx >= len(headACT.Actions) {
+		headActionIdx = direction % len(headACT.Actions)
+	}
+	headAction := &headACT.Actions[headActionIdx]
+	if len(headAction.Frames) == 0 {
+		return nil, 0, 0
+	}
+	// Always use frame 0 for head - it has the matching anchor points
+	headFrame := &headAction.Frames[0]
+
+	// Find body layer bounds
+	var bodyMinX, bodyMinY, bodyMaxX, bodyMaxY int
+	bodyMinX, bodyMinY = 10000, 10000
+	bodyMaxX, bodyMaxY = -10000, -10000
+
+	for _, layer := range bodyFrame.Layers {
+		if layer.SpriteID < 0 || int(layer.SpriteID) >= len(bodySPR.Images) {
+			continue
+		}
+		img := &bodySPR.Images[layer.SpriteID]
+		x, y := int(layer.X), int(layer.Y)
+		w, h := int(img.Width), int(img.Height)
+
+		// Layer position is center of sprite
+		left := x - w/2
+		top := y - h/2
+		right := left + w
+		bottom := top + h
+
+		if left < bodyMinX {
+			bodyMinX = left
+		}
+		if top < bodyMinY {
+			bodyMinY = top
+		}
+		if right > bodyMaxX {
+			bodyMaxX = right
+		}
+		if bottom > bodyMaxY {
+			bodyMaxY = bottom
+		}
+	}
+
+	// Get body anchor point (where head attaches)
+	var bodyAnchorX, bodyAnchorY int
+	if len(bodyFrame.AnchorPoints) > 0 {
+		bodyAnchorX = int(bodyFrame.AnchorPoints[0].X)
+		bodyAnchorY = int(bodyFrame.AnchorPoints[0].Y)
+	}
+
+	// Get head anchor point
+	var headAnchorX, headAnchorY int
+	if len(headFrame.AnchorPoints) > 0 {
+		headAnchorX = int(headFrame.AnchorPoints[0].X)
+		headAnchorY = int(headFrame.AnchorPoints[0].Y)
+	}
+
+	// Calculate head offset: head anchor aligns with body anchor
+	headOffsetX := bodyAnchorX - headAnchorX
+	headOffsetY := bodyAnchorY - headAnchorY
+
+	// Find head layer bounds (relative to head origin + offset)
+	var headMinX, headMinY, headMaxX, headMaxY int
+	headMinX, headMinY = 10000, 10000
+	headMaxX, headMaxY = -10000, -10000
+
+	for _, layer := range headFrame.Layers {
+		if layer.SpriteID < 0 || int(layer.SpriteID) >= len(headSPR.Images) {
+			continue
+		}
+		img := &headSPR.Images[layer.SpriteID]
+		x, y := int(layer.X)+headOffsetX, int(layer.Y)+headOffsetY
+		w, h := int(img.Width), int(img.Height)
+
+		left := x - w/2
+		top := y - h/2
+		right := left + w
+		bottom := top + h
+
+		if left < headMinX {
+			headMinX = left
+		}
+		if top < headMinY {
+			headMinY = top
+		}
+		if right > headMaxX {
+			headMaxX = right
+		}
+		if bottom > headMaxY {
+			headMaxY = bottom
+		}
+	}
+
+	// Combine bounds
+	minX := bodyMinX
+	if headMinX < minX {
+		minX = headMinX
+	}
+	minY := bodyMinY
+	if headMinY < minY {
+		minY = headMinY
+	}
+	maxX := bodyMaxX
+	if headMaxX > maxX {
+		maxX = headMaxX
+	}
+	maxY := bodyMaxY
+	if headMaxY > maxY {
+		maxY = headMaxY
+	}
+
+	// Handle empty sprites
+	if minX >= maxX || minY >= maxY {
+		return nil, 0, 0
+	}
+
+	// Create canvas
+	width = maxX - minX
+	height = maxY - minY
+	originX := -minX // Offset from canvas origin to sprite origin
+	originY := -minY
+	pixels = make([]byte, width*height*4)
+
+	// Helper to blit a sprite layer onto canvas
+	blitLayer := func(spr *formats.SPR, layer *formats.Layer, offsetX, offsetY int) {
+		if layer.SpriteID < 0 || int(layer.SpriteID) >= len(spr.Images) {
+			return
+		}
+		img := &spr.Images[layer.SpriteID]
+		imgW, imgH := int(img.Width), int(img.Height)
+
+		// SPR images are already converted to RGBA format
+		rgba := img.Pixels
+		if len(rgba) == 0 {
+			return
+		}
+
+		// Layer center position + offset
+		cx := int(layer.X) + offsetX + originX
+		cy := int(layer.Y) + offsetY + originY
+
+		// Check if layer should be mirrored (horizontal flip)
+		mirrored := layer.IsMirrored()
+
+		// Blit with alpha blending
+		for py := 0; py < imgH; py++ {
+			for px := 0; px < imgW; px++ {
+				dx := cx + px - imgW/2
+				dy := cy + py - imgH/2
+				if dx < 0 || dx >= width || dy < 0 || dy >= height {
+					continue
+				}
+
+				// Source pixel - flip X if mirrored
+				srcX := px
+				if mirrored {
+					srcX = imgW - 1 - px
+				}
+				srcIdx := (py*imgW + srcX) * 4
+				dstIdx := (dy*width + dx) * 4
+
+				// Source pixel
+				sr, sg, sb, sa := rgba[srcIdx], rgba[srcIdx+1], rgba[srcIdx+2], rgba[srcIdx+3]
+				if sa == 0 {
+					continue // Fully transparent
+				}
+
+				// Alpha blend
+				if sa == 255 {
+					pixels[dstIdx] = sr
+					pixels[dstIdx+1] = sg
+					pixels[dstIdx+2] = sb
+					pixels[dstIdx+3] = sa
+				} else {
+					// Simple alpha blend
+					da := pixels[dstIdx+3]
+					outA := sa + da*(255-sa)/255
+					if outA > 0 {
+						pixels[dstIdx] = byte((int(sr)*int(sa) + int(pixels[dstIdx])*int(da)*(255-int(sa))/255) / int(outA))
+						pixels[dstIdx+1] = byte((int(sg)*int(sa) + int(pixels[dstIdx+1])*int(da)*(255-int(sa))/255) / int(outA))
+						pixels[dstIdx+2] = byte((int(sb)*int(sa) + int(pixels[dstIdx+2])*int(da)*(255-int(sa))/255) / int(outA))
+						pixels[dstIdx+3] = outA
+					}
+				}
+			}
+		}
+	}
+
+	// Draw body layers first (bottom)
+	bodyLayersDrawn := 0
+	for _, layer := range bodyFrame.Layers {
+		if layer.SpriteID >= 0 {
+			blitLayer(bodySPR, &layer, 0, 0)
+			bodyLayersDrawn++
+		}
+	}
+
+	// Draw head layers on top
+	headLayersDrawn := 0
+	for _, layer := range headFrame.Layers {
+		if layer.SpriteID >= 0 {
+			blitLayer(headSPR, &layer, headOffsetX, headOffsetY)
+			headLayersDrawn++
+		}
+	}
+
+	// Debug: save composites for all 8 directions
+	if action == 0 && frame == 0 {
+		// Check if any layers are mirrored
+		bodyMirror := false
+		for _, layer := range bodyFrame.Layers {
+			if layer.IsMirrored() {
+				bodyMirror = true
+				break
+			}
+		}
+		headMirror := false
+		for _, layer := range headFrame.Layers {
+			if layer.IsMirrored() {
+				headMirror = true
+				break
+			}
+		}
+		fname := fmt.Sprintf("/tmp/composite_dir%d.png", direction)
+		fmt.Printf("Composite dir=%d: size=%dx%d, headOffset=(%d,%d), bodyMirror=%v, headMirror=%v\n",
+			direction, width, height, headOffsetX, headOffsetY, bodyMirror, headMirror)
+		saveDebugPNG(pixels, width, height, fname)
+	}
+
+	return pixels, width, height
+}
+
 // MapViewer handles 3D rendering of complete RO maps.
 type MapViewer struct {
 	// Framebuffer resources
@@ -175,14 +714,28 @@ type MapViewer struct {
 	centerY   float32
 	centerZ   float32
 
-	// Camera - FPS mode
-	FPSMode   bool
+	// Camera - Play mode (RO-style third-person)
+	PlayMode  bool
 	camPosX   float32
 	camPosY   float32
 	camPosZ   float32
 	camYaw    float32 // Horizontal angle (radians)
 	camPitch  float32 // Vertical angle (radians)
 	MoveSpeed float32
+
+	// Player character (Play mode)
+	Player            *PlayerCharacter
+	spriteProgram     uint32 // Shader for billboard sprites
+	locSpriteVP       int32  // viewProj uniform
+	locSpritePos      int32  // world position uniform
+	locSpriteSize     int32  // sprite size uniform
+	locSpriteCamRight int32  // camera right vector for billboard
+	locSpriteCamUp    int32  // camera up vector for billboard
+	locSpriteTex      int32  // texture uniform
+	locSpriteTint     int32  // color tint uniform
+
+	// GAT data for terrain collision
+	GAT *formats.GAT
 
 	// Lighting from RSW
 	lightDir     [3]float32 // Calculated from longitude/latitude
@@ -537,6 +1090,51 @@ void main() {
 }
 `
 
+// Sprite billboard shader for character rendering
+const spriteVertexShader = `#version 410 core
+layout (location = 0) in vec2 aPosition;
+layout (location = 1) in vec2 aTexCoord;
+
+uniform mat4 uViewProj;
+uniform vec3 uWorldPos;
+uniform vec2 uSpriteSize;
+uniform vec3 uCamRight;  // Camera right vector for billboard
+uniform vec3 uCamUp;     // Camera up vector for billboard
+
+out vec2 vTexCoord;
+
+void main() {
+    // Camera-facing billboard: sprite always faces the camera
+    // This creates the 3D illusion when combined with directional sprite frames
+    vec3 pos = uWorldPos;
+    pos += uCamRight * aPosition.x * uSpriteSize.x;
+    pos += uCamUp * aPosition.y * uSpriteSize.y;
+
+    vTexCoord = aTexCoord;
+    gl_Position = uViewProj * vec4(pos, 1.0);
+}
+`
+
+const spriteFragmentShader = `#version 410 core
+in vec2 vTexCoord;
+
+uniform sampler2D uTexture;
+uniform vec4 uTint;
+
+out vec4 FragColor;
+
+void main() {
+    vec4 texColor = texture(uTexture, vTexCoord);
+
+    // Discard transparent pixels
+    if (texColor.a < 0.1) {
+        discard;
+    }
+
+    FragColor = texColor * uTint;
+}
+`
+
 // NewMapViewer creates a new 3D map viewer.
 func NewMapViewer(width, height int32) (*MapViewer, error) {
 	mv := &MapViewer{
@@ -571,6 +1169,10 @@ func NewMapViewer(width, height int32) (*MapViewer, error) {
 
 	if err := mv.createBboxShader(); err != nil {
 		return nil, fmt.Errorf("creating bbox shader: %w", err)
+	}
+
+	if err := mv.createSpriteShader(); err != nil {
+		return nil, fmt.Errorf("creating sprite shader: %w", err)
 	}
 
 	mv.createFallbackTexture()
@@ -848,6 +1450,71 @@ func (mv *MapViewer) createBboxShader() error {
 	return nil
 }
 
+// createSpriteShader compiles the sprite billboard shader program.
+func (mv *MapViewer) createSpriteShader() error {
+	// Compile vertex shader
+	vertShader := gl.CreateShader(gl.VERTEX_SHADER)
+	csource, free := gl.Strs(spriteVertexShader + "\x00")
+	gl.ShaderSource(vertShader, 1, csource, nil)
+	free()
+	gl.CompileShader(vertShader)
+
+	var status int32
+	gl.GetShaderiv(vertShader, gl.COMPILE_STATUS, &status)
+	if status == gl.FALSE {
+		var logLen int32
+		gl.GetShaderiv(vertShader, gl.INFO_LOG_LENGTH, &logLen)
+		log := make([]byte, logLen)
+		gl.GetShaderInfoLog(vertShader, logLen, nil, &log[0])
+		return fmt.Errorf("sprite vertex shader: %s", string(log))
+	}
+
+	// Compile fragment shader
+	fragShader := gl.CreateShader(gl.FRAGMENT_SHADER)
+	csource, free = gl.Strs(spriteFragmentShader + "\x00")
+	gl.ShaderSource(fragShader, 1, csource, nil)
+	free()
+	gl.CompileShader(fragShader)
+
+	gl.GetShaderiv(fragShader, gl.COMPILE_STATUS, &status)
+	if status == gl.FALSE {
+		var logLen int32
+		gl.GetShaderiv(fragShader, gl.INFO_LOG_LENGTH, &logLen)
+		log := make([]byte, logLen)
+		gl.GetShaderInfoLog(fragShader, logLen, nil, &log[0])
+		return fmt.Errorf("sprite fragment shader: %s", string(log))
+	}
+
+	// Link program
+	mv.spriteProgram = gl.CreateProgram()
+	gl.AttachShader(mv.spriteProgram, vertShader)
+	gl.AttachShader(mv.spriteProgram, fragShader)
+	gl.LinkProgram(mv.spriteProgram)
+
+	gl.GetProgramiv(mv.spriteProgram, gl.LINK_STATUS, &status)
+	if status == gl.FALSE {
+		var logLen int32
+		gl.GetProgramiv(mv.spriteProgram, gl.INFO_LOG_LENGTH, &logLen)
+		log := make([]byte, logLen)
+		gl.GetProgramInfoLog(mv.spriteProgram, logLen, nil, &log[0])
+		return fmt.Errorf("sprite shader link: %s", string(log))
+	}
+
+	gl.DeleteShader(vertShader)
+	gl.DeleteShader(fragShader)
+
+	// Get uniform locations
+	mv.locSpriteVP = gl.GetUniformLocation(mv.spriteProgram, gl.Str("uViewProj\x00"))
+	mv.locSpritePos = gl.GetUniformLocation(mv.spriteProgram, gl.Str("uWorldPos\x00"))
+	mv.locSpriteSize = gl.GetUniformLocation(mv.spriteProgram, gl.Str("uSpriteSize\x00"))
+	mv.locSpriteTex = gl.GetUniformLocation(mv.spriteProgram, gl.Str("uTexture\x00"))
+	mv.locSpriteTint = gl.GetUniformLocation(mv.spriteProgram, gl.Str("uTint\x00"))
+	mv.locSpriteCamRight = gl.GetUniformLocation(mv.spriteProgram, gl.Str("uCamRight\x00"))
+	mv.locSpriteCamUp = gl.GetUniformLocation(mv.spriteProgram, gl.Str("uCamUp\x00"))
+
+	return nil
+}
+
 // createFallbackTexture creates a simple white texture for missing textures.
 func (mv *MapViewer) createFallbackTexture() {
 	gl.GenTextures(1, &mv.fallbackTex)
@@ -973,6 +1640,27 @@ func (mv *MapViewer) LoadMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(
 
 	// Store terrain height data for model positioning (Stage 2 - ADR-014)
 	mv.buildTerrainHeightMap(gnd)
+
+	// Load GAT file for collision data (Play mode)
+	if rsw != nil && rsw.GndFile != "" {
+		// Derive GAT path from GND path (replace .gnd with .gat)
+		// GndFile is like "prontera.gnd", need "data/prontera.gat"
+		gatPath := "data/" + rsw.GndFile
+		if len(gatPath) > 4 {
+			gatPath = gatPath[:len(gatPath)-4] + ".gat"
+		}
+		gatData, err := texLoader(gatPath)
+		if err == nil {
+			gat, err := formats.ParseGAT(gatData)
+			if err == nil {
+				mv.GAT = gat
+			} else {
+				fmt.Printf("Warning: Failed to parse GAT: %v\n", err)
+			}
+		} else {
+			fmt.Printf("Warning: GAT file not found: %s\n", gatPath)
+		}
+	}
 
 	// Extract lighting data from RSW (Stage 1: Correct Lighting - ADR-014)
 	if rsw != nil {
@@ -2522,10 +3210,52 @@ func (mv *MapViewer) Render() uint32 {
 	proj := math.Perspective(45.0, aspect, 1.0, 10000.0)
 
 	var view math.Mat4
-	if mv.FPSMode {
-		// FPS camera - look from position in direction of yaw/pitch
+	if mv.PlayMode && mv.Player != nil {
+		// Play camera - RO-style third-person following player
+		player := mv.Player
+
+		// Camera distance (use Distance directly for more zoom range)
+		camDistance := mv.Distance
+		if camDistance < 100 {
+			camDistance = 100
+		}
+		if camDistance > 800 {
+			camDistance = 800
+		}
+
+		// Vertical angle (RO-style top-down view, ~45-50 degrees from vertical)
+		pitch := float32(0.85) // ~48 degrees - more top-down like RO
+
+		// Calculate camera offset from player using yaw for rotation
+		offsetY := camDistance * float32(gomath.Sin(float64(pitch)))
+		horizDist := camDistance * float32(gomath.Cos(float64(pitch)))
+		offsetX := horizDist * float32(gomath.Sin(float64(mv.camYaw)))
+		offsetZ := horizDist * float32(gomath.Cos(float64(mv.camYaw)))
+
+		// Camera position: behind and above player
+		camPos := math.Vec3{
+			X: player.WorldX - offsetX,
+			Y: player.WorldY + offsetY,
+			Z: player.WorldZ - offsetZ,
+		}
+
+		// Store camera position for sprite direction calculation
+		mv.camPosX = camPos.X
+		mv.camPosY = camPos.Y
+		mv.camPosZ = camPos.Z
+
+		// Look at player position (slightly above feet)
+		target := math.Vec3{
+			X: player.WorldX,
+			Y: player.WorldY + 30, // Look at character center, not feet
+			Z: player.WorldZ,
+		}
+
+		up := math.Vec3{X: 0, Y: 1, Z: 0}
+		view = math.LookAt(camPos, target, up)
+	} else if mv.PlayMode {
+		// Fallback if no player - use FPS-style camera
 		camPos := math.Vec3{X: mv.camPosX, Y: mv.camPosY, Z: mv.camPosZ}
-		// Calculate look direction from yaw and pitch
 		dirX := float32(cosf(mv.camPitch) * sinf(mv.camYaw))
 		dirY := float32(sinf(mv.camPitch))
 		dirZ := float32(cosf(mv.camPitch) * cosf(mv.camYaw))
@@ -2595,6 +3325,13 @@ func (mv *MapViewer) Render() uint32 {
 	// Render placed models
 	mv.renderModels(viewProj)
 
+	// Render player character (in Play mode)
+	if mv.PlayMode && mv.Player != nil {
+		// Update animation (assuming ~60fps = 16ms per frame)
+		mv.UpdatePlayerAnimation(16.0)
+		mv.renderPlayerCharacter(viewProj)
+	}
+
 	// Render water (last, with transparency)
 	mv.renderWater(viewProj)
 
@@ -2604,6 +3341,422 @@ func (mv *MapViewer) Render() uint32 {
 	gl.BindFramebuffer(gl.FRAMEBUFFER, 0)
 
 	return mv.colorTexture
+}
+
+// renderPlayerCharacter renders the player sprite as a billboard in the 3D scene.
+// Uses camera-facing billboard + directional sprite selection for 3D illusion.
+func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
+	player := mv.Player
+	if player == nil || player.VAO == 0 {
+		return
+	}
+
+	// Render shadow first (below character)
+	mv.renderPlayerShadow(viewProj)
+
+	// ========== STEP 1: Calculate camera-facing billboard vectors ==========
+	// Y-axis aligned billboard: rotates around Y to face camera, stays upright
+	dirX := mv.camPosX - player.WorldX
+	dirZ := mv.camPosZ - player.WorldZ
+	length := float32(gomath.Sqrt(float64(dirX*dirX + dirZ*dirZ)))
+	if length > 0.001 {
+		dirX /= length
+		dirZ /= length
+	} else {
+		dirX = 0
+		dirZ = 1
+	}
+
+	// Camera-facing billboard vectors (Y-axis aligned)
+	camRight := [3]float32{-dirZ, 0, dirX}
+	camUp := [3]float32{0, 1, 0}
+
+	// ========== STEP 2: Calculate visual direction with hysteresis ==========
+	// Camera angle from player to camera
+	cameraAngle := float32(gomath.Atan2(float64(dirX), float64(dirZ)))
+
+	// Player facing angle
+	playerAngle := float32(player.Direction) * (gomath.Pi / 4.0)
+
+	// Combine angles
+	combinedAngle := cameraAngle + playerAngle
+
+	// Normalize to 0-2π
+	for combinedAngle < 0 {
+		combinedAngle += 2 * gomath.Pi
+	}
+	for combinedAngle >= 2*gomath.Pi {
+		combinedAngle -= 2 * gomath.Pi
+	}
+
+	// Calculate new sector with standard boundaries
+	sectorSize := float32(gomath.Pi / 4)   // 45° per sector
+	sectorOffset := float32(gomath.Pi / 8) // 22.5° offset
+	newSector := int((combinedAngle + sectorOffset) / sectorSize)
+	if newSector >= 8 {
+		newSector = 0
+	}
+
+	// Hysteresis: only change direction if we're past the dead zone
+	// This prevents flickering at sector boundaries
+	hysteresis := float32(gomath.Pi / 16) // ~11° dead zone on each side of boundary
+
+	// Check if we should keep the previous direction (within dead zone)
+	if player.LastVisualDir >= 0 {
+		// Calculate the center angle of the current visual direction's sector
+		currentSectorCenter := float32(player.LastVisualDir) * sectorSize
+
+		// Distance from current sector center
+		angleDiff := combinedAngle - currentSectorCenter
+		// Normalize to -π to π
+		for angleDiff > gomath.Pi {
+			angleDiff -= 2 * gomath.Pi
+		}
+		for angleDiff < -gomath.Pi {
+			angleDiff += 2 * gomath.Pi
+		}
+
+		// If within the extended range (half sector + hysteresis), keep current direction
+		if angleDiff > -(sectorSize/2+hysteresis) && angleDiff < (sectorSize/2+hysteresis) {
+			newSector = player.LastVisualDir
+		}
+	}
+
+	// Map sector to RO direction index
+	directionMap := [8]int{0, 7, 6, 5, 4, 3, 2, 1}
+	visualDir := directionMap[newSector]
+
+	// Store for next frame's hysteresis check
+	player.LastVisualDir = newSector
+
+	// ========== STEP 3: Use composite sprites if available ==========
+	// Composite sprites have head+body pre-merged for solid appearance
+	if player.UseComposite && player.CompositeFrames != nil {
+		actionDirKey := player.CurrentAction*8 + visualDir
+		if frames, ok := player.CompositeFrames[actionDirKey]; ok && len(frames) > 0 {
+			// For idle action, always use frame 0 to prevent head bobbing
+			// Walking uses animated frames
+			frameIdx := 0
+			if player.CurrentAction == ActionWalk && len(frames) > 1 {
+				frameIdx = player.CurrentFrame % len(frames)
+			}
+			composite := frames[frameIdx]
+
+			if composite.Texture != 0 && composite.Width > 0 && composite.Height > 0 {
+				// All composites are now padded to same dimensions
+				spriteWidth := float32(composite.Width) * player.SpriteScale
+				spriteHeight := float32(composite.Height) * player.SpriteScale
+
+				gl.Enable(gl.BLEND)
+				gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+				gl.UseProgram(mv.spriteProgram)
+
+				// Position sprite centered on player, slight lift for feet
+				posX := player.WorldX
+				posY := player.WorldY + spriteHeight*0.05
+				posZ := player.WorldZ
+
+				gl.UniformMatrix4fv(mv.locSpriteVP, 1, false, &viewProj[0])
+				gl.Uniform3f(mv.locSpritePos, posX, posY, posZ)
+				gl.Uniform2f(mv.locSpriteSize, spriteWidth, spriteHeight)
+				gl.Uniform4f(mv.locSpriteTint, 1.0, 1.0, 1.0, 1.0)
+				gl.Uniform3f(mv.locSpriteCamRight, camRight[0], camRight[1], camRight[2])
+				gl.Uniform3f(mv.locSpriteCamUp, camUp[0], camUp[1], camUp[2])
+
+				gl.ActiveTexture(gl.TEXTURE0)
+				gl.BindTexture(gl.TEXTURE_2D, composite.Texture)
+				gl.Uniform1i(mv.locSpriteTex, 0)
+
+				gl.BindVertexArray(player.VAO)
+				gl.DrawArrays(gl.TRIANGLE_STRIP, 0, 4)
+				gl.BindVertexArray(0)
+
+				gl.Disable(gl.BLEND)
+				return // Done - composite rendered
+			}
+		}
+	}
+
+	// ========== FALLBACK: Render body + head separately ==========
+	if len(player.Textures) == 0 {
+		return
+	}
+
+	var spriteID int
+	var spriteWidth, spriteHeight float32
+	var tint [4]float32
+
+	if player.ACT != nil && player.SPR != nil {
+		// Get animation frame using visualDir for the 3D illusion
+		actionIdx := player.CurrentAction*8 + visualDir
+		if actionIdx >= len(player.ACT.Actions) {
+			actionIdx = 0
+		}
+		action := &player.ACT.Actions[actionIdx]
+		if len(action.Frames) == 0 {
+			return
+		}
+
+		frameIdx := player.CurrentFrame % len(action.Frames)
+		frame := &action.Frames[frameIdx]
+		if len(frame.Layers) == 0 {
+			return
+		}
+
+		// Get the first valid layer
+		var layer *formats.Layer
+		for i := range frame.Layers {
+			if frame.Layers[i].SpriteID >= 0 && int(frame.Layers[i].SpriteID) < len(player.Textures) {
+				layer = &frame.Layers[i]
+				break
+			}
+		}
+		if layer == nil {
+			return
+		}
+
+		spriteID = int(layer.SpriteID)
+		if spriteID >= len(player.Textures) {
+			return
+		}
+
+		// Get sprite dimensions
+		sprImg := &player.SPR.Images[spriteID]
+		layerScaleX := layer.ScaleX
+		layerScaleY := layer.ScaleY
+		if layerScaleX == 0 {
+			layerScaleX = 1.0
+		}
+		if layerScaleY == 0 {
+			layerScaleY = 1.0
+		}
+		spriteWidth = float32(sprImg.Width) * player.SpriteScale * layerScaleX
+		spriteHeight = float32(sprImg.Height) * player.SpriteScale * layerScaleY
+		tint = [4]float32{1.0, 1.0, 1.0, 1.0}
+	} else {
+		spriteID = 0
+		spriteWidth = 32 * player.SpriteScale
+		spriteHeight = 64 * player.SpriteScale
+		tint = [4]float32{1.0, 1.0, 1.0, 1.0}
+	}
+
+	// Mirror for left-facing directions
+	if visualDir == DirSW || visualDir == DirW || visualDir == DirNW {
+		spriteWidth = -spriteWidth
+	}
+
+	gl.Enable(gl.BLEND)
+	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+	gl.UseProgram(mv.spriteProgram)
+
+	gl.UniformMatrix4fv(mv.locSpriteVP, 1, false, &viewProj[0])
+	gl.Uniform3f(mv.locSpritePos, player.WorldX, player.WorldY, player.WorldZ)
+	gl.Uniform2f(mv.locSpriteSize, spriteWidth, spriteHeight)
+	gl.Uniform4f(mv.locSpriteTint, tint[0], tint[1], tint[2], tint[3])
+	gl.Uniform3f(mv.locSpriteCamRight, camRight[0], camRight[1], camRight[2])
+	gl.Uniform3f(mv.locSpriteCamUp, camUp[0], camUp[1], camUp[2])
+
+	gl.ActiveTexture(gl.TEXTURE0)
+	gl.BindTexture(gl.TEXTURE_2D, player.Textures[spriteID])
+	gl.Uniform1i(mv.locSpriteTex, 0)
+
+	gl.BindVertexArray(player.VAO)
+	gl.DrawArrays(gl.TRIANGLE_STRIP, 0, 4)
+	gl.BindVertexArray(0)
+
+	// Render head separately if no composite available
+	if player.HeadSPR != nil && player.HeadACT != nil && len(player.HeadTextures) > 0 && player.ACT != nil {
+		bodyActionIdx := player.CurrentAction*8 + visualDir
+		if bodyActionIdx >= len(player.ACT.Actions) {
+			bodyActionIdx = 0
+		}
+		bodyAction := &player.ACT.Actions[bodyActionIdx]
+		bodyFrameIdx := 0
+		if bodyFrameIdx >= len(bodyAction.Frames) {
+			bodyFrameIdx = 0
+		}
+		bodyFrame := &bodyAction.Frames[bodyFrameIdx]
+
+		if len(bodyFrame.AnchorPoints) > 0 {
+			bodyAnchorX := float32(bodyFrame.AnchorPoints[0].X)
+			bodyAnchorY := float32(bodyFrame.AnchorPoints[0].Y)
+
+			var bodyLayerY float32
+			for _, bl := range bodyFrame.Layers {
+				if bl.SpriteID >= 0 {
+					bodyLayerY = float32(bl.Y)
+					break
+				}
+			}
+
+			headActionIdx := player.CurrentAction*8 + visualDir
+			if headActionIdx >= len(player.HeadACT.Actions) {
+				headActionIdx = visualDir
+			}
+			if headActionIdx >= len(player.HeadACT.Actions) {
+				headActionIdx = 0
+			}
+
+			headAction := &player.HeadACT.Actions[headActionIdx]
+			if len(headAction.Frames) > 0 {
+				headFrameIdx := 0
+				headFrame := &headAction.Frames[headFrameIdx]
+
+				var headAnchorX, headAnchorY float32
+				if len(headFrame.AnchorPoints) > 0 {
+					headAnchorX = float32(headFrame.AnchorPoints[0].X)
+					headAnchorY = float32(headFrame.AnchorPoints[0].Y)
+				}
+
+				offsetX := (bodyAnchorX - headAnchorX) * player.SpriteScale
+				offsetY := (bodyAnchorY - headAnchorY) * player.SpriteScale
+
+				for _, headLayer := range headFrame.Layers {
+					headSpriteID := int(headLayer.SpriteID)
+					if headSpriteID < 0 || headSpriteID >= len(player.HeadTextures) {
+						continue
+					}
+
+					headImg := &player.HeadSPR.Images[headSpriteID]
+					headScaleX := headLayer.ScaleX
+					headScaleY := headLayer.ScaleY
+					if headScaleX == 0 {
+						headScaleX = 1.0
+					}
+					if headScaleY == 0 {
+						headScaleY = 1.0
+					}
+
+					headWidth := float32(headImg.Width) * player.SpriteScale * headScaleX
+					headHeight := float32(headImg.Height) * player.SpriteScale * headScaleY
+
+					if visualDir == DirSW || visualDir == DirW || visualDir == DirNW {
+						headWidth = -headWidth
+					}
+
+					layerX := float32(headLayer.X) * player.SpriteScale
+					layerY := float32(headLayer.Y) * player.SpriteScale
+
+					totalOffsetX := offsetX + layerX
+
+					headPosX := player.WorldX + totalOffsetX*camRight[0]
+					headPosY := player.WorldY - (offsetY + layerY) + (bodyLayerY * player.SpriteScale * 0.35)
+					headPosZ := player.WorldZ + totalOffsetX*camRight[2]
+
+					gl.Disable(gl.DEPTH_TEST)
+					gl.Uniform3f(mv.locSpritePos, headPosX, headPosY, headPosZ)
+					gl.Uniform2f(mv.locSpriteSize, headWidth, headHeight)
+					gl.BindTexture(gl.TEXTURE_2D, player.HeadTextures[headSpriteID])
+					gl.BindVertexArray(player.VAO)
+					gl.DrawArrays(gl.TRIANGLE_STRIP, 0, 4)
+					gl.BindVertexArray(0)
+					gl.Enable(gl.DEPTH_TEST)
+				}
+			}
+		}
+	}
+
+	gl.Disable(gl.BLEND)
+}
+
+// renderPlayerShadow renders the shadow ellipse on the ground under the player.
+func (mv *MapViewer) renderPlayerShadow(viewProj math.Mat4) {
+	player := mv.Player
+	if player == nil || player.ShadowVAO == 0 || player.ShadowTex == 0 {
+		return
+	}
+
+	// Enable blending for semi-transparent shadow
+	gl.Enable(gl.BLEND)
+	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+
+	// Disable depth write so shadow doesn't occlude terrain
+	gl.DepthMask(false)
+
+	// Use sprite shader (reuse for simplicity)
+	gl.UseProgram(mv.spriteProgram)
+
+	// Shadow position slightly above ground to avoid z-fighting
+	shadowY := player.WorldY + 0.5
+
+	// Set uniforms - position the shadow flat on the ground
+	gl.UniformMatrix4fv(mv.locSpriteVP, 1, false, &viewProj[0])
+	gl.Uniform3f(mv.locSpritePos, player.WorldX, shadowY, player.WorldZ)
+	gl.Uniform2f(mv.locSpriteSize, 1.0, 1.0) // Size is baked into VBO
+	gl.Uniform4f(mv.locSpriteTint, 1.0, 1.0, 1.0, 1.0)
+	// Shadow is flat on ground (XZ plane), not camera-facing
+	gl.Uniform3f(mv.locSpriteCamRight, 1.0, 0.0, 0.0) // X axis
+	gl.Uniform3f(mv.locSpriteCamUp, 0.0, 0.0, 1.0)    // Z axis (flat)
+
+	// Bind shadow texture
+	gl.ActiveTexture(gl.TEXTURE0)
+	gl.BindTexture(gl.TEXTURE_2D, player.ShadowTex)
+	gl.Uniform1i(mv.locSpriteTex, 0)
+
+	// Draw shadow quad
+	gl.BindVertexArray(player.ShadowVAO)
+	gl.DrawArrays(gl.TRIANGLE_STRIP, 0, 4)
+	gl.BindVertexArray(0)
+
+	// Restore depth write
+	gl.DepthMask(true)
+}
+
+// UpdatePlayerAnimation advances player animation frame based on time.
+func (mv *MapViewer) UpdatePlayerAnimation(deltaMs float32) {
+	if mv.Player == nil {
+		return
+	}
+
+	player := mv.Player
+
+	// Procedural players don't have animation data
+	if player.ACT == nil {
+		return
+	}
+
+	// Determine action based on movement state
+	newAction := ActionIdle
+	if player.IsMoving {
+		newAction = ActionWalk
+	}
+
+	// Reset frame when action changes
+	if newAction != player.CurrentAction {
+		player.CurrentAction = newAction
+		player.CurrentFrame = 0
+		player.FrameTime = 0
+	}
+
+	// Get current action
+	actionIdx := player.CurrentAction*8 + player.Direction
+	if actionIdx >= len(player.ACT.Actions) {
+		actionIdx = 0
+	}
+	action := &player.ACT.Actions[actionIdx]
+	if len(action.Frames) == 0 {
+		return
+	}
+
+	// Get animation interval from ACT (default 150ms for smoother animation)
+	interval := float32(150.0)
+	if actionIdx < len(player.ACT.Intervals) && player.ACT.Intervals[actionIdx] > 0 {
+		interval = player.ACT.Intervals[actionIdx]
+		// ACT intervals can be very small, enforce minimum
+		if interval < 50 {
+			interval = 50
+		}
+	}
+
+	// Accumulate time
+	player.FrameTime += deltaMs
+	if player.FrameTime >= interval {
+		player.FrameTime -= interval
+		player.CurrentFrame++
+		if player.CurrentFrame >= len(action.Frames) {
+			player.CurrentFrame = 0 // Loop animation
+		}
+	}
 }
 
 // renderWater renders the water plane with transparency.
@@ -3006,18 +4159,10 @@ func (mv *MapViewer) calculateCameraPosition() math.Vec3 {
 func (mv *MapViewer) HandleMouseDrag(deltaX, deltaY float32) {
 	sensitivity := float32(0.005)
 
-	if mv.FPSMode {
-		// FPS mode - adjust yaw and pitch
+	if mv.PlayMode {
+		// Play mode - rotate camera around player (horizontal only)
 		mv.camYaw -= deltaX * sensitivity
-		mv.camPitch -= deltaY * sensitivity
-
-		// Clamp pitch to avoid gimbal lock
-		if mv.camPitch < -1.5 {
-			mv.camPitch = -1.5
-		}
-		if mv.camPitch > 1.5 {
-			mv.camPitch = 1.5
-		}
+		// Note: We don't adjust pitch in Play mode - fixed viewing angle
 	} else {
 		// Orbit mode - rotate around center
 		mv.rotationY -= deltaX * sensitivity
@@ -3035,53 +4180,219 @@ func (mv *MapViewer) HandleMouseDrag(deltaX, deltaY float32) {
 
 // HandleMouseWheel handles mouse scroll for zoom.
 func (mv *MapViewer) HandleMouseWheel(delta float32) {
-	if mv.FPSMode {
-		// In FPS mode, scroll adjusts move speed
-		mv.MoveSpeed += delta * 0.5
-		if mv.MoveSpeed < 1.0 {
-			mv.MoveSpeed = 1.0
-		}
-		if mv.MoveSpeed > 50.0 {
-			mv.MoveSpeed = 50.0
-		}
-	} else {
-		// Orbit mode - zoom in/out
-		mv.Distance -= delta * mv.Distance * 0.1
-		if mv.Distance < 50 {
-			mv.Distance = 50
-		}
-		if mv.Distance > 5000 {
-			mv.Distance = 5000
-		}
+	// Both Play mode and Orbit mode use Distance for zoom
+	mv.Distance -= delta * mv.Distance * 0.1
+	if mv.Distance < 50 {
+		mv.Distance = 50
+	}
+	if mv.Distance > 5000 {
+		mv.Distance = 5000
 	}
 }
 
-// HandleFPSMovement handles WASD movement in FPS mode.
+// HandlePlayMovement handles WASD movement in Play mode.
 // forward/right are -1, 0, or 1 based on key presses.
-func (mv *MapViewer) HandleFPSMovement(forward, right, up float32) {
-	if !mv.FPSMode {
+func (mv *MapViewer) HandlePlayMovement(forward, right, _ float32) {
+	if !mv.PlayMode || mv.Player == nil {
 		return
 	}
 
-	// Calculate forward direction (horizontal only for walking)
-	dirX := float32(sinf(mv.camYaw))
-	dirZ := float32(cosf(mv.camYaw))
+	// Check if any movement input
+	if forward == 0 && right == 0 {
+		mv.Player.IsMoving = false
+		return
+	}
 
-	// Right direction (perpendicular to forward) - negated for correct A/D mapping
-	rightX := float32(-cosf(mv.camYaw))
-	rightZ := float32(sinf(mv.camYaw))
+	mv.Player.IsMoving = true
 
-	// Apply movement
-	mv.camPosX += (dirX*forward + rightX*right) * mv.MoveSpeed
-	mv.camPosZ += (dirZ*forward + rightZ*right) * mv.MoveSpeed
-	mv.camPosY += up * mv.MoveSpeed
+	// Calculate movement direction based on camera yaw
+	// Forward is toward camera direction, right is perpendicular
+	camDirX := float32(sinf(mv.camYaw))
+	camDirZ := float32(cosf(mv.camYaw))
+
+	// Right direction (perpendicular to forward) - negated for correct A/D
+	camRightX := float32(-cosf(mv.camYaw))
+	camRightZ := float32(sinf(mv.camYaw))
+
+	// Combined movement direction
+	moveX := camDirX*forward + camRightX*right
+	moveZ := camDirZ*forward + camRightZ*right
+
+	// Normalize if diagonal
+	length := float32(gomath.Sqrt(float64(moveX*moveX + moveZ*moveZ)))
+	if length > 0 {
+		moveX /= length
+		moveZ /= length
+	}
+
+	// Calculate new position
+	speed := mv.Player.MoveSpeed * 0.016 // ~60fps delta
+	newX := mv.Player.WorldX + moveX*speed
+	newZ := mv.Player.WorldZ + moveZ*speed
+
+	// Check if new position is walkable
+	if mv.IsWalkable(newX, newZ) {
+		mv.Player.WorldX = newX
+		mv.Player.WorldZ = newZ
+		// Update Y to follow terrain
+		mv.Player.WorldY = mv.GetInterpolatedTerrainHeight(newX, newZ)
+	}
+
+	// Calculate 8-direction facing from movement (negate to face movement direction)
+	mv.Player.Direction = calculateDirection(-moveX, -moveZ)
+
+	// Set walk animation
+	mv.Player.CurrentAction = ActionWalk
+}
+
+// UpdatePlayerMovement updates player position for click-to-move navigation.
+// Called each frame to move player toward destination.
+func (mv *MapViewer) UpdatePlayerMovement(deltaMs float32) {
+	if !mv.PlayMode || mv.Player == nil || !mv.Player.HasDestination {
+		return
+	}
+
+	player := mv.Player
+
+	// Calculate direction to destination
+	dx := player.DestX - player.WorldX
+	dz := player.DestZ - player.WorldZ
+	dist := float32(gomath.Sqrt(float64(dx*dx + dz*dz)))
+
+	// Check if reached destination
+	if dist < 1.0 {
+		player.HasDestination = false
+		player.IsMoving = false
+		player.CurrentAction = ActionIdle
+		return
+	}
+
+	// Normalize direction
+	dx /= dist
+	dz /= dist
+
+	// Calculate movement amount
+	moveAmount := player.MoveSpeed * deltaMs / 1000.0
+	if moveAmount > dist {
+		moveAmount = dist
+	}
+
+	// Calculate new position
+	newX := player.WorldX + dx*moveAmount
+	newZ := player.WorldZ + dz*moveAmount
+
+	// Check if new position is walkable
+	if mv.IsWalkable(newX, newZ) {
+		player.WorldX = newX
+		player.WorldZ = newZ
+		player.WorldY = mv.GetInterpolatedTerrainHeight(newX, newZ)
+	} else {
+		// Stop if hit obstacle
+		player.HasDestination = false
+		player.IsMoving = false
+		player.CurrentAction = ActionIdle
+		return
+	}
+
+	// Update facing direction
+	player.Direction = calculateDirection(dx, dz)
+	player.IsMoving = true
+	player.CurrentAction = ActionWalk
+}
+
+// HandlePlayModeClick handles mouse click in Play mode for click-to-move.
+// screenX, screenY are mouse coordinates, viewportW, viewportH are viewport dimensions.
+func (mv *MapViewer) HandlePlayModeClick(screenX, screenY, viewportW, viewportH float32) {
+	if !mv.PlayMode || mv.Player == nil {
+		return
+	}
+
+	// Convert screen coordinates to world position using terrain intersection
+	worldX, worldZ, ok := mv.ScreenToWorld(screenX, screenY, viewportW, viewportH)
+	if !ok {
+		return
+	}
+
+	// Set destination
+	mv.Player.DestX = worldX
+	mv.Player.DestZ = worldZ
+	mv.Player.HasDestination = true
+}
+
+// ScreenToWorld converts screen coordinates to world XZ position by intersecting with ground plane.
+// Uses proper matrix unprojection like PickModelAtScreen.
+func (mv *MapViewer) ScreenToWorld(screenX, screenY, viewportW, viewportH float32) (worldX, worldZ float32, ok bool) {
+	// Convert screen coords to normalized device coords (-1 to 1)
+	ndcX := (2.0*screenX/viewportW - 1.0)
+	ndcY := (1.0 - 2.0*screenY/viewportH) // Flip Y
+
+	// Create ray from camera through the click point using inverse view-projection
+	invViewProj := mv.lastViewProj.Inverse()
+
+	nearPoint := math.Vec4{ndcX, ndcY, -1.0, 1.0}
+	farPoint := math.Vec4{ndcX, ndcY, 1.0, 1.0}
+
+	nearWorld := invViewProj.MulVec4(nearPoint)
+	farWorld := invViewProj.MulVec4(farPoint)
+
+	// Perspective divide
+	if nearWorld[3] != 0 {
+		nearWorld[0] /= nearWorld[3]
+		nearWorld[1] /= nearWorld[3]
+		nearWorld[2] /= nearWorld[3]
+	}
+	if farWorld[3] != 0 {
+		farWorld[0] /= farWorld[3]
+		farWorld[1] /= farWorld[3]
+		farWorld[2] /= farWorld[3]
+	}
+
+	rayOrigin := [3]float32{nearWorld[0], nearWorld[1], nearWorld[2]}
+	rayDir := [3]float32{
+		farWorld[0] - nearWorld[0],
+		farWorld[1] - nearWorld[1],
+		farWorld[2] - nearWorld[2],
+	}
+
+	// Normalize ray direction
+	rayLen := float32(gomath.Sqrt(float64(rayDir[0]*rayDir[0] + rayDir[1]*rayDir[1] + rayDir[2]*rayDir[2])))
+	if rayLen > 0 {
+		rayDir[0] /= rayLen
+		rayDir[1] /= rayLen
+		rayDir[2] /= rayLen
+	}
+
+	// Intersect with ground plane (Y = player height or terrain)
+	groundY := float32(0)
+	if mv.Player != nil {
+		groundY = mv.Player.WorldY
+	}
+
+	// Ray: P = rayOrigin + t * rayDir
+	// Plane: Y = groundY
+	// Solve: rayOrigin.Y + t * rayDir.Y = groundY
+	if gomath.Abs(float64(rayDir[1])) < 0.001 {
+		return 0, 0, false // Ray parallel to ground
+	}
+
+	t := (groundY - rayOrigin[1]) / rayDir[1]
+	if t < 0 {
+		return 0, 0, false // Intersection behind camera
+	}
+
+	worldX = rayOrigin[0] + t*rayDir[0]
+	worldZ = rayOrigin[2] + t*rayDir[2]
+
+	fmt.Printf("Click: screen(%.0f,%.0f) -> world(%.1f, %.1f)\n", screenX, screenY, worldX, worldZ)
+
+	return worldX, worldZ, true
 }
 
 // HandleOrbitMovement handles WASD movement in Orbit mode.
 // Pans the camera's focal point (center).
 // forward/right are -1, 0, or 1 based on key presses.
 func (mv *MapViewer) HandleOrbitMovement(forward, right, up float32) {
-	if mv.FPSMode {
+	if mv.PlayMode {
 		return
 	}
 
@@ -3103,32 +4414,712 @@ func (mv *MapViewer) HandleOrbitMovement(forward, right, up float32) {
 	mv.centerY += up * speed
 }
 
-// ToggleFPSMode toggles between orbit and FPS camera modes.
-func (mv *MapViewer) ToggleFPSMode() {
-	mv.FPSMode = !mv.FPSMode
+// LoadPlayerCharacter loads the Novice sprite for Play Mode.
+func (mv *MapViewer) LoadPlayerCharacter(texLoader func(string) ([]byte, error)) error {
+	if mv.Player != nil {
+		return nil // Already loaded
+	}
 
-	if mv.FPSMode {
-		// Initialize FPS camera at map center, slightly above ground level
-		mv.camPosX = mv.centerX
-		mv.camPosY = mv.centerY + 50 // Slightly above center height
-		mv.camPosZ = mv.centerZ
+	// Try multiple sprite paths (different GRF versions have different paths)
+	// Note: In RO, body and head are separate sprites that can be customized
+	// For simplicity, we use complete character sprites like b_novice or monsters
+	spritePaths := []struct {
+		spr string
+		act string
+	}{
+		// Baby Novice (complete sprite without separate head)
+		{"data/sprite/몬스터/b_novice.spr", "data/sprite/몬스터/b_novice.act"},
+		// Korean Novice male body (would need head separately)
+		{"data/sprite/인간족/몸통/남/초보자_남.spr", "data/sprite/인간족/몸통/남/초보자_남.act"},
+		// English paths
+		{"data/sprite/human/body/male/novice_m.spr", "data/sprite/human/body/male/novice_m.act"},
+		// Poring as fallback (should exist in most GRFs)
+		{"data/sprite/몬스터/poring.spr", "data/sprite/몬스터/poring.act"},
+		{"data/sprite/monster/poring.spr", "data/sprite/monster/poring.act"},
+	}
 
-		// Look forward (towards +Z direction)
+	var sprData, actData []byte
+	var sprPath, actPath string
+	var err error
+
+	// Try each path until one works
+	for _, paths := range spritePaths {
+		sprData, err = texLoader(paths.spr)
+		if err != nil {
+			continue
+		}
+		actData, err = texLoader(paths.act)
+		if err != nil {
+			continue
+		}
+		sprPath = paths.spr
+		actPath = paths.act
+		break
+	}
+
+	if sprData == nil || actData == nil {
+		// Create a simple colored marker as fallback
+		fmt.Println("No sprite found, creating procedural player marker")
+		return mv.createProceduralPlayer()
+	}
+
+	fmt.Printf("Using sprite: %s\n", sprPath)
+
+	// Parse SPR file
+	spr, err := formats.ParseSPR(sprData)
+	if err != nil {
+		return fmt.Errorf("parsing player sprite %s: %w", sprPath, err)
+	}
+
+	// Parse ACT file
+	act, err := formats.ParseACT(actData)
+	if err != nil {
+		return fmt.Errorf("parsing player animation %s: %w", actPath, err)
+	}
+
+	// Create player character
+	player := &PlayerCharacter{
+		SPR:           spr,
+		ACT:           act,
+		SpriteScale:   0.28, // Scale down sprite pixels to world units
+		MoveSpeed:     50.0, // World units per second
+		Direction:     DirS, // Face south (camera) initially
+		LastVisualDir: -1,   // No previous direction (for hysteresis)
+	}
+
+	// Create GPU textures for each sprite image
+	player.Textures = make([]uint32, len(spr.Images))
+	for i, img := range spr.Images {
+		var tex uint32
+		gl.GenTextures(1, &tex)
+		gl.BindTexture(gl.TEXTURE_2D, tex)
+
+		gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8,
+			int32(img.Width), int32(img.Height), 0,
+			gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(img.Pixels))
+
+		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+
+		player.Textures[i] = tex
+	}
+
+	// Create billboard VAO/VBO
+	gl.GenVertexArrays(1, &player.VAO)
+	gl.GenBuffers(1, &player.VBO)
+
+	gl.BindVertexArray(player.VAO)
+	gl.BindBuffer(gl.ARRAY_BUFFER, player.VBO)
+
+	// Billboard quad vertices: position (x,y) + texcoord (u,v)
+	// Positioned at feet, extending upward
+	vertices := []float32{
+		// Position (x, y)  TexCoord (u, v)
+		-0.5, 1.0, 0.0, 0.0, // Top-left (sprite top at Y=1)
+		0.5, 1.0, 1.0, 0.0, // Top-right
+		-0.5, 0.0, 0.0, 1.0, // Bottom-left (sprite bottom at Y=0)
+		0.5, 0.0, 1.0, 1.0, // Bottom-right
+	}
+
+	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*4, gl.Ptr(vertices), gl.STATIC_DRAW)
+
+	// Position attribute (location 0)
+	gl.VertexAttribPointerWithOffset(0, 2, gl.FLOAT, false, 4*4, 0)
+	gl.EnableVertexAttribArray(0)
+
+	// TexCoord attribute (location 1)
+	gl.VertexAttribPointerWithOffset(1, 2, gl.FLOAT, false, 4*4, 2*4)
+	gl.EnableVertexAttribArray(1)
+
+	gl.BindVertexArray(0)
+
+	// Create shadow
+	mv.createPlayerShadow(player)
+
+	mv.Player = player
+
+	// Initialize player position to map center
+	mv.initializePlayerPosition()
+
+	fmt.Printf("Loaded player sprite: %d images, %d actions\n", len(spr.Images), len(act.Actions))
+
+	return nil
+}
+
+// LoadPlayerCharacterFromPath loads a player sprite from specific paths.
+// Used when the sprite path is found by searching the archive.
+func (mv *MapViewer) LoadPlayerCharacterFromPath(texLoader func(string) ([]byte, error), sprPath, actPath, headSprPath, headActPath string) error {
+	if mv.Player != nil {
+		return nil // Already loaded
+	}
+
+	fmt.Printf("Loading sprite from: %s\n", sprPath)
+
+	sprData, err := texLoader(sprPath)
+	if err != nil {
+		return fmt.Errorf("loading sprite %s: %w", sprPath, err)
+	}
+
+	actData, err := texLoader(actPath)
+	if err != nil {
+		return fmt.Errorf("loading animation %s: %w", actPath, err)
+	}
+
+	// Parse SPR file
+	spr, err := formats.ParseSPR(sprData)
+	if err != nil {
+		return fmt.Errorf("parsing sprite %s: %w", sprPath, err)
+	}
+
+	// Parse ACT file
+	act, err := formats.ParseACT(actData)
+	if err != nil {
+		return fmt.Errorf("parsing animation %s: %w", actPath, err)
+	}
+
+	// Create player character
+	player := &PlayerCharacter{
+		SPR:           spr,
+		ACT:           act,
+		SpriteScale:   0.28, // Scale down sprite pixels to world units
+		MoveSpeed:     50.0, // World units per second
+		Direction:     DirS,
+		LastVisualDir: -1, // No previous direction (for hysteresis)
+	}
+
+	// Load head sprite if path provided
+	if headSprPath != "" {
+		fmt.Printf("Loading head sprite from: %s\n", headSprPath)
+		headSprData, err := texLoader(headSprPath)
+		if err != nil {
+			fmt.Printf("Warning: could not load head sprite: %v\n", err)
+		} else {
+			headActData, err := texLoader(headActPath)
+			if err != nil {
+				fmt.Printf("Warning: could not load head animation: %v\n", err)
+			} else {
+				headSpr, err := formats.ParseSPR(headSprData)
+				if err != nil {
+					fmt.Printf("Warning: could not parse head sprite: %v\n", err)
+				} else {
+					headAct, err := formats.ParseACT(headActData)
+					if err != nil {
+						fmt.Printf("Warning: could not parse head animation: %v\n", err)
+					} else {
+						player.HeadSPR = headSpr
+						player.HeadACT = headAct
+						fmt.Printf("Loaded head sprite: %d images, %d actions\n", len(headSpr.Images), len(headAct.Actions))
+						// Debug: check anchor points and layer positions
+						if len(headAct.Actions) > 0 && len(headAct.Actions[0].Frames) > 0 {
+							frame := &headAct.Actions[0].Frames[0]
+							fmt.Printf("  Head action 0 frame 0: %d layers, %d anchors\n", len(frame.Layers), len(frame.AnchorPoints))
+							for i, ap := range frame.AnchorPoints {
+								fmt.Printf("    Anchor %d: X=%d Y=%d Attr=%d\n", i, ap.X, ap.Y, ap.Attribute)
+							}
+							for i, layer := range frame.Layers {
+								fmt.Printf("    Layer %d: SpriteID=%d X=%d Y=%d\n", i, layer.SpriteID, layer.X, layer.Y)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Create GPU textures for each sprite image
+	player.Textures = make([]uint32, len(spr.Images))
+	for i, img := range spr.Images {
+		var tex uint32
+		gl.GenTextures(1, &tex)
+		gl.BindTexture(gl.TEXTURE_2D, tex)
+
+		gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8,
+			int32(img.Width), int32(img.Height), 0,
+			gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(img.Pixels))
+
+		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+
+		player.Textures[i] = tex
+	}
+
+	// Create GPU textures for head sprite images
+	if player.HeadSPR != nil {
+		player.HeadTextures = make([]uint32, len(player.HeadSPR.Images))
+		for i, img := range player.HeadSPR.Images {
+			var tex uint32
+			gl.GenTextures(1, &tex)
+			gl.BindTexture(gl.TEXTURE_2D, tex)
+
+			gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8,
+				int32(img.Width), int32(img.Height), 0,
+				gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(img.Pixels))
+
+			gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+			gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+			gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+			gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+
+			player.HeadTextures[i] = tex
+		}
+
+		// Generate composite textures (head+body merged) for each action/direction/frame
+		// This creates proper head-body alignment using anchor points
+		fmt.Println("Generating composite sprites...")
+
+		// Debug: print body and head anchors for each direction
+		fmt.Println("Body anchors per direction (action 0):")
+		for dir := 0; dir < 8 && dir < len(act.Actions); dir++ {
+			ba := &act.Actions[dir]
+			if len(ba.Frames) > 0 {
+				bf := &ba.Frames[0]
+				if len(bf.AnchorPoints) > 0 {
+					fmt.Printf("  Dir %d: body anchor(%d,%d)\n", dir, bf.AnchorPoints[0].X, bf.AnchorPoints[0].Y)
+				}
+			}
+		}
+		fmt.Println("Head anchors per direction:")
+		for dir := 0; dir < 8 && dir < len(player.HeadACT.Actions); dir++ {
+			ha := &player.HeadACT.Actions[dir]
+			if len(ha.Frames) > 0 {
+				hf := &ha.Frames[0]
+				if len(hf.AnchorPoints) > 0 {
+					fmt.Printf("  Dir %d: head anchor(%d,%d)\n", dir, hf.AnchorPoints[0].X, hf.AnchorPoints[0].Y)
+				}
+			}
+		}
+
+		player.CompositeFrames = make(map[int][]CompositeFrame)
+		player.CompositeMaxWidth = 0
+		player.CompositeMaxHeight = 0
+
+		// First pass: find max dimensions across all composites
+		for action := 0; action < 2; action++ {
+			for dir := 0; dir < 8; dir++ {
+				actionIdx := action*8 + dir
+				if actionIdx >= len(act.Actions) {
+					continue
+				}
+				actAction := &act.Actions[actionIdx]
+				for frame := 0; frame < len(actAction.Frames); frame++ {
+					_, w, h := compositeSprites(spr, act, player.HeadSPR, player.HeadACT, action, dir, frame)
+					if w > player.CompositeMaxWidth {
+						player.CompositeMaxWidth = w
+					}
+					if h > player.CompositeMaxHeight {
+						player.CompositeMaxHeight = h
+					}
+				}
+			}
+		}
+		fmt.Printf("Composite max dimensions: %dx%d\n", player.CompositeMaxWidth, player.CompositeMaxHeight)
+
+		// Second pass: generate composites padded to max dimensions
+		for action := 0; action < 2; action++ {
+			for dir := 0; dir < 8; dir++ {
+				actionDirKey := action*8 + dir
+				actionIdx := action*8 + dir
+				if actionIdx >= len(act.Actions) {
+					continue
+				}
+				actAction := &act.Actions[actionIdx]
+				numFrames := len(actAction.Frames)
+				if numFrames == 0 {
+					continue
+				}
+
+				frames := make([]CompositeFrame, numFrames)
+				for frame := 0; frame < numFrames; frame++ {
+					pixels, w, h := compositeSprites(spr, act, player.HeadSPR, player.HeadACT, action, dir, frame)
+					if pixels == nil || w == 0 || h == 0 {
+						continue
+					}
+
+					// Pad to max dimensions (center horizontally, align bottom for feet)
+					paddedW := player.CompositeMaxWidth
+					paddedH := player.CompositeMaxHeight
+					paddedPixels := make([]byte, paddedW*paddedH*4)
+
+					// Calculate offset to center horizontally and align feet at bottom
+					offsetX := (paddedW - w) / 2
+					offsetY := paddedH - h // Align bottom (feet)
+
+					// Copy original pixels to padded canvas
+					for py := 0; py < h; py++ {
+						for px := 0; px < w; px++ {
+							srcIdx := (py*w + px) * 4
+							dstX := offsetX + px
+							dstY := offsetY + py
+							dstIdx := (dstY*paddedW + dstX) * 4
+							paddedPixels[dstIdx] = pixels[srcIdx]
+							paddedPixels[dstIdx+1] = pixels[srcIdx+1]
+							paddedPixels[dstIdx+2] = pixels[srcIdx+2]
+							paddedPixels[dstIdx+3] = pixels[srcIdx+3]
+						}
+					}
+
+					// Create GPU texture for padded composite
+					var tex uint32
+					gl.GenTextures(1, &tex)
+					gl.BindTexture(gl.TEXTURE_2D, tex)
+					gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, int32(paddedW), int32(paddedH), 0,
+						gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(paddedPixels))
+					gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+					gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+					gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+					gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+
+					frames[frame] = CompositeFrame{
+						Texture: tex,
+						Width:   paddedW,
+						Height:  paddedH,
+						OriginX: offsetX,
+						OriginY: offsetY,
+					}
+				}
+				player.CompositeFrames[actionDirKey] = frames
+			}
+		}
+		player.UseComposite = true
+		fmt.Printf("Generated %d composite frame sets\n", len(player.CompositeFrames))
+
+		// Save all directions to a single sprite sheet for debugging
+		saveAllDirectionsSheet(spr, act, player.HeadSPR, player.HeadACT, "/tmp/all_directions.png")
+	}
+
+	// Create billboard VAO/VBO
+	gl.GenVertexArrays(1, &player.VAO)
+	gl.GenBuffers(1, &player.VBO)
+
+	gl.BindVertexArray(player.VAO)
+	gl.BindBuffer(gl.ARRAY_BUFFER, player.VBO)
+
+	vertices := []float32{
+		-0.5, 1.0, 0.0, 0.0,
+		0.5, 1.0, 1.0, 0.0,
+		-0.5, 0.0, 0.0, 1.0,
+		0.5, 0.0, 1.0, 1.0,
+	}
+
+	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*4, gl.Ptr(vertices), gl.STATIC_DRAW)
+	gl.VertexAttribPointerWithOffset(0, 2, gl.FLOAT, false, 4*4, 0)
+	gl.EnableVertexAttribArray(0)
+	gl.VertexAttribPointerWithOffset(1, 2, gl.FLOAT, false, 4*4, 2*4)
+	gl.EnableVertexAttribArray(1)
+	gl.BindVertexArray(0)
+
+	// Create shadow
+	mv.createPlayerShadow(player)
+
+	mv.Player = player
+	mv.initializePlayerPosition()
+
+	fmt.Printf("Loaded player sprite: %d images, %d actions\n", len(spr.Images), len(act.Actions))
+	// Debug: check body anchor points and layer positions
+	if len(act.Actions) > 0 && len(act.Actions[0].Frames) > 0 {
+		frame := &act.Actions[0].Frames[0]
+		fmt.Printf("  Body action 0 frame 0: %d layers, %d anchors\n", len(frame.Layers), len(frame.AnchorPoints))
+		for i, ap := range frame.AnchorPoints {
+			fmt.Printf("    Anchor %d: X=%d Y=%d Attr=%d\n", i, ap.X, ap.Y, ap.Attribute)
+		}
+		for i, layer := range frame.Layers {
+			fmt.Printf("    Layer %d: SpriteID=%d X=%d Y=%d\n", i, layer.SpriteID, layer.X, layer.Y)
+		}
+	}
+	return nil
+}
+
+// createPlayerShadow creates a shadow ellipse texture and VAO for the player.
+func (mv *MapViewer) createPlayerShadow(player *PlayerCharacter) {
+	// Create circular shadow texture (24x24 pixels)
+	size := 24
+	pixels := make([]byte, size*size*4)
+
+	center := float32(size) / 2
+	radius := float32(size)/2 - 1
+
+	for y := 0; y < size; y++ {
+		for x := 0; x < size; x++ {
+			idx := (y*size + x) * 4
+			// Calculate distance from center (circle equation)
+			dx := (float32(x) - center) / radius
+			dy := (float32(y) - center) / radius
+			dist := dx*dx + dy*dy
+
+			if dist <= 1.0 {
+				// Inside circle - light shadow with soft falloff
+				alpha := (1.0 - dist) * 0.25 // Max 25% opacity, fading to edge
+				pixels[idx+0] = 0            // R
+				pixels[idx+1] = 0            // G
+				pixels[idx+2] = 0            // B
+				pixels[idx+3] = byte(alpha * 255)
+			}
+		}
+	}
+
+	// Create shadow texture
+	gl.GenTextures(1, &player.ShadowTex)
+	gl.BindTexture(gl.TEXTURE_2D, player.ShadowTex)
+	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, int32(size), int32(size), 0,
+		gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(pixels))
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+
+	// Create shadow VAO/VBO (flat on ground)
+	gl.GenVertexArrays(1, &player.ShadowVAO)
+	gl.GenBuffers(1, &player.ShadowVBO)
+
+	gl.BindVertexArray(player.ShadowVAO)
+	gl.BindBuffer(gl.ARRAY_BUFFER, player.ShadowVBO)
+
+	// Shadow quad on XZ plane (Y=0), centered at origin
+	shadowSize := float32(4.0) // Shadow size in world units (smaller, circular)
+	shadowVerts := []float32{
+		// Position (x, z)  TexCoord (u, v)
+		-shadowSize, -shadowSize, 0.0, 0.0,
+		shadowSize, -shadowSize, 1.0, 0.0,
+		-shadowSize, shadowSize, 0.0, 1.0,
+		shadowSize, shadowSize, 1.0, 1.0,
+	}
+
+	gl.BufferData(gl.ARRAY_BUFFER, len(shadowVerts)*4, gl.Ptr(shadowVerts), gl.STATIC_DRAW)
+	gl.VertexAttribPointerWithOffset(0, 2, gl.FLOAT, false, 4*4, 0)
+	gl.EnableVertexAttribArray(0)
+	gl.VertexAttribPointerWithOffset(1, 2, gl.FLOAT, false, 4*4, 2*4)
+	gl.EnableVertexAttribArray(1)
+	gl.BindVertexArray(0)
+}
+
+// createProceduralPlayer creates a simple colored player marker when no sprite is available.
+func (mv *MapViewer) createProceduralPlayer() error {
+	// Create a simple 32x64 colored texture (blue player marker)
+	width, height := 32, 64
+	pixels := make([]byte, width*height*4)
+
+	// Fill with semi-transparent blue color
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			idx := (y*width + x) * 4
+			// Create a simple humanoid shape
+			centerX := width / 2
+			distFromCenter := x - centerX
+			if distFromCenter < 0 {
+				distFromCenter = -distFromCenter
+			}
+
+			// Head (top 1/4)
+			if y < height/4 && distFromCenter < width/4 {
+				pixels[idx+0] = 100 // R
+				pixels[idx+1] = 150 // G
+				pixels[idx+2] = 255 // B
+				pixels[idx+3] = 255 // A
+			} else if y >= height/4 && y < height*3/4 && distFromCenter < width/3 {
+				// Body (middle half)
+				pixels[idx+0] = 50  // R
+				pixels[idx+1] = 100 // G
+				pixels[idx+2] = 200 // B
+				pixels[idx+3] = 255 // A
+			} else if y >= height*3/4 && distFromCenter < width/4 {
+				// Legs (bottom quarter)
+				pixels[idx+0] = 50  // R
+				pixels[idx+1] = 80  // G
+				pixels[idx+2] = 150 // B
+				pixels[idx+3] = 255 // A
+			} else {
+				// Transparent
+				pixels[idx+3] = 0
+			}
+		}
+	}
+
+	// Create player character
+	player := &PlayerCharacter{
+		SpriteScale:   0.4,  // Reasonable scale for character size (~13x26 world units)
+		MoveSpeed:     50.0, // World units per second
+		Direction:     DirS,
+		LastVisualDir: -1, // No previous direction (for hysteresis)
+	}
+
+	// Create single texture
+	player.Textures = make([]uint32, 1)
+	var tex uint32
+	gl.GenTextures(1, &tex)
+	gl.BindTexture(gl.TEXTURE_2D, tex)
+	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, int32(width), int32(height), 0,
+		gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(pixels))
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+	player.Textures[0] = tex
+
+	// Create billboard VAO/VBO
+	gl.GenVertexArrays(1, &player.VAO)
+	gl.GenBuffers(1, &player.VBO)
+
+	gl.BindVertexArray(player.VAO)
+	gl.BindBuffer(gl.ARRAY_BUFFER, player.VBO)
+
+	vertices := []float32{
+		-0.5, 1.0, 0.0, 0.0,
+		0.5, 1.0, 1.0, 0.0,
+		-0.5, 0.0, 0.0, 1.0,
+		0.5, 0.0, 1.0, 1.0,
+	}
+
+	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*4, gl.Ptr(vertices), gl.STATIC_DRAW)
+	gl.VertexAttribPointerWithOffset(0, 2, gl.FLOAT, false, 4*4, 0)
+	gl.EnableVertexAttribArray(0)
+	gl.VertexAttribPointerWithOffset(1, 2, gl.FLOAT, false, 4*4, 2*4)
+	gl.EnableVertexAttribArray(1)
+	gl.BindVertexArray(0)
+
+	mv.Player = player
+
+	// Create shadow for the player
+	mv.createPlayerShadow(player)
+
+	// Initialize player position to map center
+	mv.initializePlayerPosition()
+
+	fmt.Println("Created procedural player marker")
+	return nil
+}
+
+// initializePlayerPosition places the player at the map center.
+func (mv *MapViewer) initializePlayerPosition() {
+	if mv.Player == nil {
+		return
+	}
+
+	// Calculate map center from bounds
+	centerX := (mv.minBounds[0] + mv.maxBounds[0]) / 2
+	centerZ := (mv.minBounds[2] + mv.maxBounds[2]) / 2
+
+	// If bounds aren't set, use center from map dimensions
+	if centerX == 0 && centerZ == 0 && mv.mapWidth > 0 {
+		centerX = mv.mapWidth / 2
+		centerZ = mv.mapHeight / 2
+	}
+
+	// Set player position
+	mv.Player.WorldX = centerX
+	mv.Player.WorldZ = centerZ
+	mv.Player.WorldY = mv.GetInterpolatedTerrainHeight(centerX, centerZ)
+
+	fmt.Printf("Player spawned at (%.0f, %.0f, %.0f)\n", mv.Player.WorldX, mv.Player.WorldY, mv.Player.WorldZ)
+}
+
+// GetInterpolatedTerrainHeight returns the terrain height at a world position.
+// Uses bilinear interpolation between GAT cell corner heights.
+func (mv *MapViewer) GetInterpolatedTerrainHeight(worldX, worldZ float32) float32 {
+	if mv.GAT == nil {
+		return 0
+	}
+
+	// Convert world coordinates to GAT cell coordinates
+	// GAT cells are 5x5 world units (half of GND tile size which is 10)
+	cellSize := float32(5.0)
+	cellFX := worldX / cellSize
+	cellFZ := worldZ / cellSize
+
+	cellX := int(cellFX)
+	cellZ := int(cellFZ)
+
+	// Clamp to valid range
+	if cellX < 0 {
+		cellX = 0
+	}
+	if cellZ < 0 {
+		cellZ = 0
+	}
+	if cellX >= int(mv.GAT.Width)-1 {
+		cellX = int(mv.GAT.Width) - 2
+	}
+	if cellZ >= int(mv.GAT.Height)-1 {
+		cellZ = int(mv.GAT.Height) - 2
+	}
+
+	// Get fractional position within cell (0-1)
+	fracX := cellFX - float32(cellX)
+	fracZ := cellFZ - float32(cellZ)
+	if fracX < 0 {
+		fracX = 0
+	}
+	if fracX > 1 {
+		fracX = 1
+	}
+	if fracZ < 0 {
+		fracZ = 0
+	}
+	if fracZ > 1 {
+		fracZ = 1
+	}
+
+	// Get cell heights (corners: 0=BL, 1=BR, 2=TL, 3=TR)
+	cell := mv.GAT.GetCell(cellX, cellZ)
+	if cell == nil {
+		return 0
+	}
+
+	// Bilinear interpolation
+	// Bottom edge: lerp between bottom-left and bottom-right
+	bottom := cell.Heights[0]*(1-fracX) + cell.Heights[1]*fracX
+	// Top edge: lerp between top-left and top-right
+	top := cell.Heights[2]*(1-fracX) + cell.Heights[3]*fracX
+	// Final: lerp between bottom and top edges
+	height := bottom*(1-fracZ) + top*fracZ
+
+	// GAT heights are typically negative (lower = higher in RO coordinate system)
+	return -height
+}
+
+// IsWalkable checks if a world position is walkable.
+func (mv *MapViewer) IsWalkable(worldX, worldZ float32) bool {
+	if mv.GAT == nil {
+		return true // No GAT data, allow movement
+	}
+
+	// Convert world coordinates to GAT cell coordinates
+	cellSize := float32(5.0)
+	cellX := int(worldX / cellSize)
+	cellZ := int(worldZ / cellSize)
+
+	return mv.GAT.IsWalkable(cellX, cellZ)
+}
+
+// TogglePlayMode toggles between orbit and play camera modes.
+func (mv *MapViewer) TogglePlayMode() {
+	mv.PlayMode = !mv.PlayMode
+
+	if mv.PlayMode {
+		// Set appropriate zoom distance for Play mode (RO-style)
+		mv.Distance = 145 // Good starting distance for third-person
+
+		// Reset camera yaw (rotation around player)
 		mv.camYaw = 0
-		mv.camPitch = 0
+
+		// Player position should already be initialized by LoadPlayerCharacter
+		// If not, initialize now
+		if mv.Player != nil && mv.Player.WorldX == 0 && mv.Player.WorldZ == 0 {
+			mv.initializePlayerPosition()
+		}
 	}
 }
 
 // Reset resets camera to default position.
 func (mv *MapViewer) Reset() {
-	if mv.FPSMode {
-		// Reset FPS camera to map center
-		mv.camPosX = mv.centerX
-		mv.camPosY = mv.centerY + 50
-		mv.camPosZ = mv.centerZ
+	if mv.PlayMode {
+		// Reset play camera
 		mv.camYaw = 0
-		mv.camPitch = 0
-		mv.MoveSpeed = 5.0
+		mv.Distance = 145 // Default Play mode distance
+
+		// Reset player to map center
+		if mv.Player != nil {
+			mv.initializePlayerPosition()
+		}
 	} else {
 		mv.rotationX = 0.6
 		mv.rotationY = 0.0
