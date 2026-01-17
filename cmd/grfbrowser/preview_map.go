@@ -726,12 +726,21 @@ func (app *App) renderMapControlsPanel() {
 	imgui.Text("Camera")
 	imgui.Separator()
 
-	// Zoom slider with label
+	// Zoom slider with label (use FollowCam in play mode, OrbitCam otherwise)
 	imgui.Text("Zoom:")
-	zoom := app.mapViewer.Distance
+	var zoom float32
+	if app.mapViewer.PlayMode {
+		zoom = app.mapViewer.FollowCam.Distance
+	} else {
+		zoom = app.mapViewer.OrbitCam.Distance
+	}
 	imgui.SetNextItemWidth(-1)
 	if imgui.SliderFloatV("##Zoom", &zoom, 50, 2000, "%.0f", imgui.SliderFlagsNone) {
-		app.mapViewer.Distance = zoom
+		if app.mapViewer.PlayMode {
+			app.mapViewer.FollowCam.Distance = zoom
+		} else {
+			app.mapViewer.OrbitCam.Distance = zoom
+		}
 	}
 
 	// Camera mode buttons

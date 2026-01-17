@@ -12,6 +12,9 @@ import (
 
 	"github.com/go-gl/gl/v4.1-core/gl"
 
+	"github.com/Faultbox/midgard-ro/cmd/grfbrowser/shaders"
+	"github.com/Faultbox/midgard-ro/internal/engine/camera"
+	"github.com/Faultbox/midgard-ro/internal/engine/shader"
 	"github.com/Faultbox/midgard-ro/pkg/formats"
 	"github.com/Faultbox/midgard-ro/pkg/math"
 )
@@ -106,49 +109,6 @@ type modelTexGroup struct {
 	texIdx     int
 	startIndex int32
 	indexCount int32
-}
-
-// Direction constants for 8-directional sprites (RO standard order)
-const (
-	DirS  = 0 // South (facing camera)
-	DirSW = 1
-	DirW  = 2
-	DirNW = 3
-	DirN  = 4 // North (away from camera)
-	DirNE = 5
-	DirE  = 6
-	DirSE = 7
-)
-
-// Action type constants for character animations
-const (
-	ActionIdle = 0
-	ActionWalk = 1
-)
-
-// calculateDirection returns 0-7 direction index from movement vector.
-// RO directions: 0=S, 1=SW, 2=W, 3=NW, 4=N, 5=NE, 6=E, 7=SE
-func calculateDirection(dx, dz float32) int {
-	// Calculate angle in radians (atan2 gives -PI to PI)
-	angle := gomath.Atan2(float64(dx), float64(dz))
-
-	// Convert to 0-2*PI range
-	if angle < 0 {
-		angle += 2 * gomath.Pi
-	}
-
-	// Divide circle into 8 sectors (each 45 degrees = PI/4)
-	// Add PI/8 offset to center each sector
-	sector := int((angle + gomath.Pi/8) / (gomath.Pi / 4))
-	if sector >= 8 {
-		sector = 0
-	}
-
-	// Map sectors to RO direction order
-	// angle=0 is +Z direction (South in RO terms = facing camera)
-	// Clockwise: S(0), SE(7), E(6), NE(5), N(4), NW(3), W(2), SW(1)
-	directionMap := []int{0, 7, 6, 5, 4, 3, 2, 1}
-	return directionMap[sector]
 }
 
 // PlayerCharacter represents the player's character in Play Mode.
@@ -706,21 +666,10 @@ type MapViewer struct {
 	// Diagnostics
 	Diagnostics MapDiagnostics
 
-	// Camera - Orbit mode
-	rotationX float32
-	rotationY float32
-	Distance  float32 // Public for zoom control
-	centerX   float32
-	centerY   float32
-	centerZ   float32
-
-	// Camera - Play mode (RO-style third-person)
+	// Cameras
+	OrbitCam  *camera.OrbitCamera       // For orbit/preview mode
+	FollowCam *camera.ThirdPersonCamera // For play mode
 	PlayMode  bool
-	camPosX   float32
-	camPosY   float32
-	camPosZ   float32
-	camYaw    float32 // Horizontal angle (radians)
-	camPitch  float32 // Vertical angle (radians)
 	MoveSpeed float32
 
 	// Player character (Play mode)
@@ -814,105 +763,6 @@ type terrainTextureGroup struct {
 	indexCount int32
 }
 
-const terrainVertexShader = `#version 410 core
-layout (location = 0) in vec3 aPosition;
-layout (location = 1) in vec3 aNormal;
-layout (location = 2) in vec2 aTexCoord;
-layout (location = 3) in vec2 aLightmapUV;
-layout (location = 4) in vec4 aColor;
-
-uniform mat4 uViewProj;
-
-out vec3 vNormal;
-out vec2 vTexCoord;
-out vec2 vLightmapUV;
-out vec4 vColor;
-
-void main() {
-    vNormal = aNormal;
-    vTexCoord = aTexCoord;
-    vLightmapUV = aLightmapUV;
-    vColor = aColor;
-    gl_Position = uViewProj * vec4(aPosition, 1.0);
-}
-`
-
-const terrainFragmentShader = `#version 410 core
-in vec3 vNormal;
-in vec2 vTexCoord;
-in vec2 vLightmapUV;
-in vec4 vColor;
-
-uniform sampler2D uTexture;
-uniform sampler2D uLightmap;
-uniform vec3 uLightDir;
-uniform vec3 uAmbient;
-uniform vec3 uDiffuse;
-uniform float uBrightness;
-uniform float uLightOpacity;
-
-// Fog uniforms (roBrowser style)
-uniform bool uFogUse;
-uniform float uFogNear;
-uniform float uFogFar;
-uniform vec3 uFogColor;
-
-out vec4 FragColor;
-
-void main() {
-    vec4 texColor = texture(uTexture, vTexCoord);
-
-    // Discard transparent pixels (magenta key areas)
-    if (texColor.a < 0.5) {
-        discard;
-    }
-
-    // Lightmap: RGB = color tint, A = shadow intensity (0=shadow, 1=lit)
-    vec4 lightmap = texture(uLightmap, vLightmapUV);
-    float shadowIntensity = lightmap.a;  // 0.0 = full shadow, 1.0 = fully lit
-    vec3 colorTint = lightmap.rgb;  // Color tint (0-255 normalized by GPU)
-
-    // Directional light component (sun)
-    vec3 normal = normalize(vNormal);
-    vec3 lightDir = normalize(uLightDir);
-    float NdotL = max(dot(normal, lightDir), 0.0);
-    vec3 directional = uDiffuse * NdotL;
-
-    // Lighting formula:
-    // Ambient provides base illumination (not fully shadowed)
-    // Directional light (sun) is affected by lightmap shadows
-    // Opacity controls shadow visibility (higher = darker shadows)
-    vec3 ambient = uAmbient;
-
-    // Shadow affects directional light, ambient provides minimum illumination
-    // Mix ambient shadow based on opacity (0 = no shadow effect, 1 = full shadow)
-    float ambientShadow = mix(1.0, shadowIntensity, uLightOpacity);
-    vec3 lighting = ambient * ambientShadow + directional * shadowIntensity;
-
-    // Clamp lighting to [0, 1] range (prevents overbright)
-    lighting = clamp(lighting, vec3(0.0), vec3(1.0));
-
-    // Ensure vertex color doesn't cause black (default to white if black)
-    vec3 vertColor = vColor.rgb;
-    if (vertColor.r + vertColor.g + vertColor.b < 0.1) {
-        vertColor = vec3(1.0);
-    }
-
-    // Final color: (texture * lighting * vertColor * brightness) + colorTint
-    // roBrowser formula: texture * LightColor + ColorMap
-    vec3 finalColor = texColor.rgb * lighting * vertColor * uBrightness + colorTint;
-
-    // Apply fog (roBrowser formula using smoothstep)
-    if (uFogUse) {
-        float depth = gl_FragCoord.z / gl_FragCoord.w;
-        float fogFactor = smoothstep(uFogNear, uFogFar, depth);
-        finalColor = mix(finalColor, uFogColor, fogFactor);
-    }
-
-    FragColor = vec4(finalColor, texColor.a * vColor.a);
-}
-`
-
 // Model vertex type (same as rsmVertex in model_viewer.go)
 type modelVertex struct {
 	Position [3]float32
@@ -920,230 +770,14 @@ type modelVertex struct {
 	TexCoord [2]float32
 }
 
-const modelVertexShader = `#version 410 core
-layout (location = 0) in vec3 aPosition;
-layout (location = 1) in vec3 aNormal;
-layout (location = 2) in vec2 aTexCoord;
-
-uniform mat4 uMVP;
-
-out vec3 vNormal;
-out vec2 vTexCoord;
-
-void main() {
-    vNormal = aNormal;
-    vTexCoord = aTexCoord;
-    gl_Position = uMVP * vec4(aPosition, 1.0);
-}
-`
-
-const modelFragmentShader = `#version 410 core
-in vec3 vNormal;
-in vec2 vTexCoord;
-
-uniform sampler2D uTexture;
-uniform vec3 uLightDir;
-uniform vec3 uAmbient;
-uniform vec3 uDiffuse;
-
-// Fog uniforms (roBrowser style)
-uniform bool uFogUse;
-uniform float uFogNear;
-uniform float uFogFar;
-uniform vec3 uFogColor;
-
-out vec4 FragColor;
-
-void main() {
-    vec4 texColor = texture(uTexture, vTexCoord);
-
-    // Discard transparent pixels (alpha set to 0 for magenta color key during texture load)
-    if (texColor.a < 0.5) {
-        discard;
-    }
-
-    // Simple lighting with shadow lift (roBrowser uses min 0.5 for models)
-    float NdotL = max(dot(normalize(vNormal), normalize(uLightDir)), 0.5);
-    vec3 lighting = uAmbient + uDiffuse * NdotL;
-
-    vec3 color = texColor.rgb * lighting;
-
-    // Apply fog (roBrowser formula using smoothstep)
-    if (uFogUse) {
-        float depth = gl_FragCoord.z / gl_FragCoord.w;
-        float fogFactor = smoothstep(uFogNear, uFogFar, depth);
-        color = mix(color, uFogColor, fogFactor);
-    }
-
-    FragColor = vec4(color, texColor.a);
-}
-`
-
-// Water shader for semi-transparent water plane
-const waterVertexShader = `#version 410 core
-layout (location = 0) in vec3 aPosition;
-
-uniform mat4 uMVP;
-
-out vec3 vWorldPos;
-
-void main() {
-    vWorldPos = aPosition;
-    gl_Position = uMVP * vec4(aPosition, 1.0);
-}
-`
-
-const waterFragmentShader = `#version 410 core
-in vec3 vWorldPos;
-
-uniform vec4 uWaterColor;
-uniform float uTime;
-uniform float uScrollSpeed;
-uniform sampler2D uWaterTex;
-uniform int uUseTexture;
-
-out vec4 FragColor;
-
-// Hash function for pseudo-random noise (fallback)
-float hash(vec2 p) {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
-}
-
-float noise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    float a = hash(i);
-    float b = hash(i + vec2(1.0, 0.0));
-    float c = hash(i + vec2(0.0, 1.0));
-    float d = hash(i + vec2(1.0, 1.0));
-    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-}
-
-float fbm(vec2 p, float time) {
-    float value = 0.0;
-    float amplitude = 0.5;
-    vec2 shift = vec2(time * 0.3, time * 0.2);
-    for (int i = 0; i < 4; i++) {
-        value += amplitude * noise(p + shift);
-        p = p * 2.0 + vec2(1.7, 9.2);
-        shift *= 1.1;
-        amplitude *= 0.5;
-    }
-    return value;
-}
-
-void main() {
-    // Scale world position for texture coordinates - tile the texture
-    // RO tiles water texture approximately every 50-100 world units
-    vec2 uv = vWorldPos.xz * 0.02; // Tiling scale
-
-    if (uUseTexture == 1) {
-        // Use loaded water texture - frame animation creates shimmering effect
-        // No UV scrolling - just tile the texture
-        vec2 tileUV = vWorldPos.xz * 0.004;
-        vec4 texColor = texture(uWaterTex, tileUV);
-        FragColor = vec4(texColor.rgb, 1.0);
-    } else {
-        // Fallback to procedural water
-        vec2 procUV = vWorldPos.xz * 0.05;
-        float pattern1 = fbm(procUV, uTime);
-        float pattern2 = fbm(procUV * 1.5 + vec2(5.0), uTime * 0.8);
-        float pattern = mix(pattern1, pattern2, 0.5);
-
-        vec3 deepColor = vec3(0.12, 0.30, 0.45);
-        vec3 midColor = vec3(0.20, 0.45, 0.55);
-        vec3 lightColor = vec3(0.35, 0.60, 0.70);
-
-        vec3 waterColor;
-        if (pattern < 0.4) {
-            waterColor = mix(deepColor, midColor, pattern / 0.4);
-        } else {
-            waterColor = mix(midColor, lightColor, (pattern - 0.4) / 0.6);
-        }
-        float caustic = pow(pattern, 2.5) * 0.4;
-        waterColor += vec3(caustic * 0.5, caustic * 0.7, caustic);
-
-        FragColor = vec4(waterColor, uWaterColor.a);
-    }
-}
-`
-
-// Bounding box shader - simple wireframe lines
-const bboxVertexShader = `#version 410 core
-layout (location = 0) in vec3 aPosition;
-
-uniform mat4 uMVP;
-
-void main() {
-    gl_Position = uMVP * vec4(aPosition, 1.0);
-}
-`
-
-const bboxFragmentShader = `#version 410 core
-uniform vec4 uColor;
-
-out vec4 FragColor;
-
-void main() {
-    FragColor = uColor;
-}
-`
-
-// Sprite billboard shader for character rendering
-const spriteVertexShader = `#version 410 core
-layout (location = 0) in vec2 aPosition;
-layout (location = 1) in vec2 aTexCoord;
-
-uniform mat4 uViewProj;
-uniform vec3 uWorldPos;
-uniform vec2 uSpriteSize;
-uniform vec3 uCamRight;  // Camera right vector for billboard
-uniform vec3 uCamUp;     // Camera up vector for billboard
-
-out vec2 vTexCoord;
-
-void main() {
-    // Camera-facing billboard: sprite always faces the camera
-    // This creates the 3D illusion when combined with directional sprite frames
-    vec3 pos = uWorldPos;
-    pos += uCamRight * aPosition.x * uSpriteSize.x;
-    pos += uCamUp * aPosition.y * uSpriteSize.y;
-
-    vTexCoord = aTexCoord;
-    gl_Position = uViewProj * vec4(pos, 1.0);
-}
-`
-
-const spriteFragmentShader = `#version 410 core
-in vec2 vTexCoord;
-
-uniform sampler2D uTexture;
-uniform vec4 uTint;
-
-out vec4 FragColor;
-
-void main() {
-    vec4 texColor = texture(uTexture, vTexCoord);
-
-    // Discard transparent pixels
-    if (texColor.a < 0.1) {
-        discard;
-    }
-
-    FragColor = texColor * uTint;
-}
-`
-
 // NewMapViewer creates a new 3D map viewer.
 func NewMapViewer(width, height int32) (*MapViewer, error) {
 	mv := &MapViewer{
 		width:          width,
 		height:         height,
 		groundTextures: make(map[int]uint32),
-		rotationX:      0.5,
-		rotationY:      0.0,
-		Distance:       200.0,
+		OrbitCam:       camera.NewOrbitCamera(),
+		FollowCam:      camera.NewThirdPersonCamera(),
 		MoveSpeed:      5.0,
 		MaxModels:      1500, // Default model limit
 		Brightness:     1.0,  // Default terrain brightness multiplier
@@ -1235,137 +869,47 @@ func (mv *MapViewer) Resize(width, height int32) {
 
 // createTerrainShader compiles the terrain shader program.
 func (mv *MapViewer) createTerrainShader() error {
-	// Compile vertex shader
-	vertShader := gl.CreateShader(gl.VERTEX_SHADER)
-	csource, free := gl.Strs(terrainVertexShader + "\x00")
-	gl.ShaderSource(vertShader, 1, csource, nil)
-	free()
-	gl.CompileShader(vertShader)
-
-	var status int32
-	gl.GetShaderiv(vertShader, gl.COMPILE_STATUS, &status)
-	if status == gl.FALSE {
-		var logLen int32
-		gl.GetShaderiv(vertShader, gl.INFO_LOG_LENGTH, &logLen)
-		log := make([]byte, logLen)
-		gl.GetShaderInfoLog(vertShader, logLen, nil, &log[0])
-		return fmt.Errorf("vertex shader: %s", string(log))
+	program, err := shader.CompileProgram(shaders.TerrainVertexShader, shaders.TerrainFragmentShader)
+	if err != nil {
+		return fmt.Errorf("terrain shader: %w", err)
 	}
-
-	// Compile fragment shader
-	fragShader := gl.CreateShader(gl.FRAGMENT_SHADER)
-	csource, free = gl.Strs(terrainFragmentShader + "\x00")
-	gl.ShaderSource(fragShader, 1, csource, nil)
-	free()
-	gl.CompileShader(fragShader)
-
-	gl.GetShaderiv(fragShader, gl.COMPILE_STATUS, &status)
-	if status == gl.FALSE {
-		var logLen int32
-		gl.GetShaderiv(fragShader, gl.INFO_LOG_LENGTH, &logLen)
-		log := make([]byte, logLen)
-		gl.GetShaderInfoLog(fragShader, logLen, nil, &log[0])
-		return fmt.Errorf("fragment shader: %s", string(log))
-	}
-
-	// Link program
-	mv.terrainProgram = gl.CreateProgram()
-	gl.AttachShader(mv.terrainProgram, vertShader)
-	gl.AttachShader(mv.terrainProgram, fragShader)
-	gl.LinkProgram(mv.terrainProgram)
-
-	gl.GetProgramiv(mv.terrainProgram, gl.LINK_STATUS, &status)
-	if status == gl.FALSE {
-		var logLen int32
-		gl.GetProgramiv(mv.terrainProgram, gl.INFO_LOG_LENGTH, &logLen)
-		log := make([]byte, logLen)
-		gl.GetProgramInfoLog(mv.terrainProgram, logLen, nil, &log[0])
-		return fmt.Errorf("link: %s", string(log))
-	}
-
-	gl.DeleteShader(vertShader)
-	gl.DeleteShader(fragShader)
+	mv.terrainProgram = program
 
 	// Get uniform locations
-	mv.locViewProj = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uViewProj\x00"))
-	mv.locLightDir = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uLightDir\x00"))
-	mv.locAmbient = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uAmbient\x00"))
-	mv.locDiffuse = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uDiffuse\x00"))
-	mv.locTexture = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uTexture\x00"))
-	mv.locLightmap = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uLightmap\x00"))
-	mv.locBrightness = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uBrightness\x00"))
-	mv.locLightOpacity = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uLightOpacity\x00"))
-	mv.locFogUse = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uFogUse\x00"))
-	mv.locFogNear = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uFogNear\x00"))
-	mv.locFogFar = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uFogFar\x00"))
-	mv.locFogColor = gl.GetUniformLocation(mv.terrainProgram, gl.Str("uFogColor\x00"))
+	mv.locViewProj = shader.GetUniform(program, "uViewProj")
+	mv.locLightDir = shader.GetUniform(program, "uLightDir")
+	mv.locAmbient = shader.GetUniform(program, "uAmbient")
+	mv.locDiffuse = shader.GetUniform(program, "uDiffuse")
+	mv.locTexture = shader.GetUniform(program, "uTexture")
+	mv.locLightmap = shader.GetUniform(program, "uLightmap")
+	mv.locBrightness = shader.GetUniform(program, "uBrightness")
+	mv.locLightOpacity = shader.GetUniform(program, "uLightOpacity")
+	mv.locFogUse = shader.GetUniform(program, "uFogUse")
+	mv.locFogNear = shader.GetUniform(program, "uFogNear")
+	mv.locFogFar = shader.GetUniform(program, "uFogFar")
+	mv.locFogColor = shader.GetUniform(program, "uFogColor")
 
 	return nil
 }
 
 // createModelShader compiles the RSM model shader program.
 func (mv *MapViewer) createModelShader() error {
-	// Compile vertex shader
-	vertShader := gl.CreateShader(gl.VERTEX_SHADER)
-	csource, free := gl.Strs(modelVertexShader + "\x00")
-	gl.ShaderSource(vertShader, 1, csource, nil)
-	free()
-	gl.CompileShader(vertShader)
-
-	var status int32
-	gl.GetShaderiv(vertShader, gl.COMPILE_STATUS, &status)
-	if status == gl.FALSE {
-		var logLen int32
-		gl.GetShaderiv(vertShader, gl.INFO_LOG_LENGTH, &logLen)
-		log := make([]byte, logLen)
-		gl.GetShaderInfoLog(vertShader, logLen, nil, &log[0])
-		return fmt.Errorf("model vertex shader: %s", string(log))
+	program, err := shader.CompileProgram(shaders.ModelVertexShader, shaders.ModelFragmentShader)
+	if err != nil {
+		return fmt.Errorf("model shader: %w", err)
 	}
-
-	// Compile fragment shader
-	fragShader := gl.CreateShader(gl.FRAGMENT_SHADER)
-	csource, free = gl.Strs(modelFragmentShader + "\x00")
-	gl.ShaderSource(fragShader, 1, csource, nil)
-	free()
-	gl.CompileShader(fragShader)
-
-	gl.GetShaderiv(fragShader, gl.COMPILE_STATUS, &status)
-	if status == gl.FALSE {
-		var logLen int32
-		gl.GetShaderiv(fragShader, gl.INFO_LOG_LENGTH, &logLen)
-		log := make([]byte, logLen)
-		gl.GetShaderInfoLog(fragShader, logLen, nil, &log[0])
-		return fmt.Errorf("model fragment shader: %s", string(log))
-	}
-
-	// Link program
-	mv.modelProgram = gl.CreateProgram()
-	gl.AttachShader(mv.modelProgram, vertShader)
-	gl.AttachShader(mv.modelProgram, fragShader)
-	gl.LinkProgram(mv.modelProgram)
-
-	gl.GetProgramiv(mv.modelProgram, gl.LINK_STATUS, &status)
-	if status == gl.FALSE {
-		var logLen int32
-		gl.GetProgramiv(mv.modelProgram, gl.INFO_LOG_LENGTH, &logLen)
-		log := make([]byte, logLen)
-		gl.GetProgramInfoLog(mv.modelProgram, logLen, nil, &log[0])
-		return fmt.Errorf("model shader link: %s", string(log))
-	}
-
-	gl.DeleteShader(vertShader)
-	gl.DeleteShader(fragShader)
+	mv.modelProgram = program
 
 	// Get uniform locations
-	mv.locModelMVP = gl.GetUniformLocation(mv.modelProgram, gl.Str("uMVP\x00"))
-	mv.locModelLightDir = gl.GetUniformLocation(mv.modelProgram, gl.Str("uLightDir\x00"))
-	mv.locModelAmbient = gl.GetUniformLocation(mv.modelProgram, gl.Str("uAmbient\x00"))
-	mv.locModelDiffuse = gl.GetUniformLocation(mv.modelProgram, gl.Str("uDiffuse\x00"))
-	mv.locModelTexture = gl.GetUniformLocation(mv.modelProgram, gl.Str("uTexture\x00"))
-	mv.locModelFogUse = gl.GetUniformLocation(mv.modelProgram, gl.Str("uFogUse\x00"))
-	mv.locModelFogNear = gl.GetUniformLocation(mv.modelProgram, gl.Str("uFogNear\x00"))
-	mv.locModelFogFar = gl.GetUniformLocation(mv.modelProgram, gl.Str("uFogFar\x00"))
-	mv.locModelFogColor = gl.GetUniformLocation(mv.modelProgram, gl.Str("uFogColor\x00"))
+	mv.locModelMVP = shader.GetUniform(program, "uMVP")
+	mv.locModelLightDir = shader.GetUniform(program, "uLightDir")
+	mv.locModelAmbient = shader.GetUniform(program, "uAmbient")
+	mv.locModelDiffuse = shader.GetUniform(program, "uDiffuse")
+	mv.locModelTexture = shader.GetUniform(program, "uTexture")
+	mv.locModelFogUse = shader.GetUniform(program, "uFogUse")
+	mv.locModelFogNear = shader.GetUniform(program, "uFogNear")
+	mv.locModelFogFar = shader.GetUniform(program, "uFogFar")
+	mv.locModelFogColor = shader.GetUniform(program, "uFogColor")
 
 	// Compile water shader
 	if err := mv.compileWaterShader(); err != nil {
@@ -1377,60 +921,15 @@ func (mv *MapViewer) createModelShader() error {
 
 // createBboxShader compiles the bounding box wireframe shader.
 func (mv *MapViewer) createBboxShader() error {
-	// Compile vertex shader
-	vertShader := gl.CreateShader(gl.VERTEX_SHADER)
-	csource, free := gl.Strs(bboxVertexShader + "\x00")
-	gl.ShaderSource(vertShader, 1, csource, nil)
-	free()
-	gl.CompileShader(vertShader)
-
-	var status int32
-	gl.GetShaderiv(vertShader, gl.COMPILE_STATUS, &status)
-	if status == gl.FALSE {
-		var logLen int32
-		gl.GetShaderiv(vertShader, gl.INFO_LOG_LENGTH, &logLen)
-		log := make([]byte, logLen)
-		gl.GetShaderInfoLog(vertShader, logLen, nil, &log[0])
-		return fmt.Errorf("bbox vertex shader: %s", string(log))
+	program, err := shader.CompileProgram(shaders.BboxVertexShader, shaders.BboxFragmentShader)
+	if err != nil {
+		return fmt.Errorf("bbox shader: %w", err)
 	}
-
-	// Compile fragment shader
-	fragShader := gl.CreateShader(gl.FRAGMENT_SHADER)
-	csource, free = gl.Strs(bboxFragmentShader + "\x00")
-	gl.ShaderSource(fragShader, 1, csource, nil)
-	free()
-	gl.CompileShader(fragShader)
-
-	gl.GetShaderiv(fragShader, gl.COMPILE_STATUS, &status)
-	if status == gl.FALSE {
-		var logLen int32
-		gl.GetShaderiv(fragShader, gl.INFO_LOG_LENGTH, &logLen)
-		log := make([]byte, logLen)
-		gl.GetShaderInfoLog(fragShader, logLen, nil, &log[0])
-		return fmt.Errorf("bbox fragment shader: %s", string(log))
-	}
-
-	// Link program
-	mv.bboxProgram = gl.CreateProgram()
-	gl.AttachShader(mv.bboxProgram, vertShader)
-	gl.AttachShader(mv.bboxProgram, fragShader)
-	gl.LinkProgram(mv.bboxProgram)
-
-	gl.GetProgramiv(mv.bboxProgram, gl.LINK_STATUS, &status)
-	if status == gl.FALSE {
-		var logLen int32
-		gl.GetProgramiv(mv.bboxProgram, gl.INFO_LOG_LENGTH, &logLen)
-		log := make([]byte, logLen)
-		gl.GetProgramInfoLog(mv.bboxProgram, logLen, nil, &log[0])
-		return fmt.Errorf("bbox shader link: %s", string(log))
-	}
-
-	gl.DeleteShader(vertShader)
-	gl.DeleteShader(fragShader)
+	mv.bboxProgram = program
 
 	// Get uniform locations
-	mv.locBboxMVP = gl.GetUniformLocation(mv.bboxProgram, gl.Str("uMVP\x00"))
-	mv.locBboxColor = gl.GetUniformLocation(mv.bboxProgram, gl.Str("uColor\x00"))
+	mv.locBboxMVP = shader.GetUniform(program, "uMVP")
+	mv.locBboxColor = shader.GetUniform(program, "uColor")
 
 	// Create VAO/VBO for bounding box (12 lines = 24 vertices)
 	gl.GenVertexArrays(1, &mv.bboxVAO)
@@ -1452,65 +951,20 @@ func (mv *MapViewer) createBboxShader() error {
 
 // createSpriteShader compiles the sprite billboard shader program.
 func (mv *MapViewer) createSpriteShader() error {
-	// Compile vertex shader
-	vertShader := gl.CreateShader(gl.VERTEX_SHADER)
-	csource, free := gl.Strs(spriteVertexShader + "\x00")
-	gl.ShaderSource(vertShader, 1, csource, nil)
-	free()
-	gl.CompileShader(vertShader)
-
-	var status int32
-	gl.GetShaderiv(vertShader, gl.COMPILE_STATUS, &status)
-	if status == gl.FALSE {
-		var logLen int32
-		gl.GetShaderiv(vertShader, gl.INFO_LOG_LENGTH, &logLen)
-		log := make([]byte, logLen)
-		gl.GetShaderInfoLog(vertShader, logLen, nil, &log[0])
-		return fmt.Errorf("sprite vertex shader: %s", string(log))
+	program, err := shader.CompileProgram(shaders.SpriteVertexShader, shaders.SpriteFragmentShader)
+	if err != nil {
+		return fmt.Errorf("sprite shader: %w", err)
 	}
-
-	// Compile fragment shader
-	fragShader := gl.CreateShader(gl.FRAGMENT_SHADER)
-	csource, free = gl.Strs(spriteFragmentShader + "\x00")
-	gl.ShaderSource(fragShader, 1, csource, nil)
-	free()
-	gl.CompileShader(fragShader)
-
-	gl.GetShaderiv(fragShader, gl.COMPILE_STATUS, &status)
-	if status == gl.FALSE {
-		var logLen int32
-		gl.GetShaderiv(fragShader, gl.INFO_LOG_LENGTH, &logLen)
-		log := make([]byte, logLen)
-		gl.GetShaderInfoLog(fragShader, logLen, nil, &log[0])
-		return fmt.Errorf("sprite fragment shader: %s", string(log))
-	}
-
-	// Link program
-	mv.spriteProgram = gl.CreateProgram()
-	gl.AttachShader(mv.spriteProgram, vertShader)
-	gl.AttachShader(mv.spriteProgram, fragShader)
-	gl.LinkProgram(mv.spriteProgram)
-
-	gl.GetProgramiv(mv.spriteProgram, gl.LINK_STATUS, &status)
-	if status == gl.FALSE {
-		var logLen int32
-		gl.GetProgramiv(mv.spriteProgram, gl.INFO_LOG_LENGTH, &logLen)
-		log := make([]byte, logLen)
-		gl.GetProgramInfoLog(mv.spriteProgram, logLen, nil, &log[0])
-		return fmt.Errorf("sprite shader link: %s", string(log))
-	}
-
-	gl.DeleteShader(vertShader)
-	gl.DeleteShader(fragShader)
+	mv.spriteProgram = program
 
 	// Get uniform locations
-	mv.locSpriteVP = gl.GetUniformLocation(mv.spriteProgram, gl.Str("uViewProj\x00"))
-	mv.locSpritePos = gl.GetUniformLocation(mv.spriteProgram, gl.Str("uWorldPos\x00"))
-	mv.locSpriteSize = gl.GetUniformLocation(mv.spriteProgram, gl.Str("uSpriteSize\x00"))
-	mv.locSpriteTex = gl.GetUniformLocation(mv.spriteProgram, gl.Str("uTexture\x00"))
-	mv.locSpriteTint = gl.GetUniformLocation(mv.spriteProgram, gl.Str("uTint\x00"))
-	mv.locSpriteCamRight = gl.GetUniformLocation(mv.spriteProgram, gl.Str("uCamRight\x00"))
-	mv.locSpriteCamUp = gl.GetUniformLocation(mv.spriteProgram, gl.Str("uCamUp\x00"))
+	mv.locSpriteVP = shader.GetUniform(program, "uViewProj")
+	mv.locSpritePos = shader.GetUniform(program, "uWorldPos")
+	mv.locSpriteSize = shader.GetUniform(program, "uSpriteSize")
+	mv.locSpriteTex = shader.GetUniform(program, "uTexture")
+	mv.locSpriteTint = shader.GetUniform(program, "uTint")
+	mv.locSpriteCamRight = shader.GetUniform(program, "uCamRight")
+	mv.locSpriteCamUp = shader.GetUniform(program, "uCamUp")
 
 	return nil
 }
@@ -1528,63 +982,17 @@ func (mv *MapViewer) createFallbackTexture() {
 
 // compileWaterShader compiles the water rendering shader.
 func (mv *MapViewer) compileWaterShader() error {
-	var status int32
-
-	// Compile vertex shader
-	vertShader := gl.CreateShader(gl.VERTEX_SHADER)
-	csource, free := gl.Strs(waterVertexShader + "\x00")
-	gl.ShaderSource(vertShader, 1, csource, nil)
-	free()
-	gl.CompileShader(vertShader)
-
-	gl.GetShaderiv(vertShader, gl.COMPILE_STATUS, &status)
-	if status == gl.FALSE {
-		var logLen int32
-		gl.GetShaderiv(vertShader, gl.INFO_LOG_LENGTH, &logLen)
-		log := make([]byte, logLen)
-		gl.GetShaderInfoLog(vertShader, logLen, nil, &log[0])
-		return fmt.Errorf("water vertex shader: %s", string(log))
+	program, err := shader.CompileProgram(shaders.WaterVertexShader, shaders.WaterFragmentShader)
+	if err != nil {
+		return fmt.Errorf("water shader: %w", err)
 	}
-
-	// Compile fragment shader
-	fragShader := gl.CreateShader(gl.FRAGMENT_SHADER)
-	csource, free = gl.Strs(waterFragmentShader + "\x00")
-	gl.ShaderSource(fragShader, 1, csource, nil)
-	free()
-	gl.CompileShader(fragShader)
-
-	gl.GetShaderiv(fragShader, gl.COMPILE_STATUS, &status)
-	if status == gl.FALSE {
-		var logLen int32
-		gl.GetShaderiv(fragShader, gl.INFO_LOG_LENGTH, &logLen)
-		log := make([]byte, logLen)
-		gl.GetShaderInfoLog(fragShader, logLen, nil, &log[0])
-		return fmt.Errorf("water fragment shader: %s", string(log))
-	}
-
-	// Link program
-	mv.waterProgram = gl.CreateProgram()
-	gl.AttachShader(mv.waterProgram, vertShader)
-	gl.AttachShader(mv.waterProgram, fragShader)
-	gl.LinkProgram(mv.waterProgram)
-
-	gl.GetProgramiv(mv.waterProgram, gl.LINK_STATUS, &status)
-	if status == gl.FALSE {
-		var logLen int32
-		gl.GetProgramiv(mv.waterProgram, gl.INFO_LOG_LENGTH, &logLen)
-		log := make([]byte, logLen)
-		gl.GetProgramInfoLog(mv.waterProgram, logLen, nil, &log[0])
-		return fmt.Errorf("water shader link: %s", string(log))
-	}
-
-	gl.DeleteShader(vertShader)
-	gl.DeleteShader(fragShader)
+	mv.waterProgram = program
 
 	// Get uniform locations
-	mv.locWaterMVP = gl.GetUniformLocation(mv.waterProgram, gl.Str("uMVP\x00"))
-	mv.locWaterColor = gl.GetUniformLocation(mv.waterProgram, gl.Str("uWaterColor\x00"))
-	mv.locWaterTime = gl.GetUniformLocation(mv.waterProgram, gl.Str("uTime\x00"))
-	mv.locWaterTex = gl.GetUniformLocation(mv.waterProgram, gl.Str("uWaterTex\x00"))
+	mv.locWaterMVP = shader.GetUniform(program, "uMVP")
+	mv.locWaterColor = shader.GetUniform(program, "uWaterColor")
+	mv.locWaterTime = shader.GetUniform(program, "uTime")
+	mv.locWaterTex = shader.GetUniform(program, "uWaterTex")
 
 	return nil
 }
@@ -1727,7 +1135,7 @@ func (mv *MapViewer) LoadMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(
 	mv.fitCamera()
 
 	// Override with preferred defaults
-	mv.Distance = 340.0
+	mv.OrbitCam.Distance = 340.0
 	mv.modelAnimPlaying = true // Animation tracking enabled (rebuild disabled until fixed)
 
 	return nil
@@ -1959,16 +1367,14 @@ func (mv *MapViewer) FocusOnModel(idx int) {
 	worldZ := model.position[2] + offsetZ
 
 	// Set camera center to model position
-	mv.centerX = worldX
-	mv.centerY = worldY
-	mv.centerZ = worldZ
+	mv.OrbitCam.SetCenter(worldX, worldY, worldZ)
 
 	// Set reasonable zoom distance based on model bounding box
 	bboxSize := gomath.Max(
 		float64(model.bbox[3]-model.bbox[0]),
 		gomath.Max(float64(model.bbox[4]-model.bbox[1]), float64(model.bbox[5]-model.bbox[2])),
 	)
-	mv.Distance = float32(gomath.Max(bboxSize*2, 50))
+	mv.OrbitCam.Distance = float32(gomath.Max(bboxSize*2, 50))
 }
 
 // HasNegativeScale returns true if the model has a negative scale determinant.
@@ -2419,14 +1825,6 @@ func (mv *MapViewer) buildNodeHierarchyMatrix(node *formats.RSMNode, rsm *format
 	}
 
 	return localMatrix
-}
-
-// transformPoint transforms a point by a 4x4 matrix.
-func transformPoint(m math.Mat4, p [3]float32) [3]float32 {
-	x := m[0]*p[0] + m[4]*p[1] + m[8]*p[2] + m[12]
-	y := m[1]*p[0] + m[5]*p[1] + m[9]*p[2] + m[13]
-	z := m[2]*p[0] + m[6]*p[1] + m[10]*p[2] + m[14]
-	return [3]float32{x, y, z}
 }
 
 // --- Animation Interpolation Functions ---
@@ -3164,27 +2562,10 @@ func (mv *MapViewer) uploadTerrainMesh(vertices []terrainVertex, indices []uint3
 
 // fitCamera positions camera to view entire map.
 func (mv *MapViewer) fitCamera() {
-	// Calculate map center
-	mv.centerX = (mv.minBounds[0] + mv.maxBounds[0]) / 2
-	mv.centerY = (mv.minBounds[1] + mv.maxBounds[1]) / 2
-	mv.centerZ = (mv.minBounds[2] + mv.maxBounds[2]) / 2
-
-	// Calculate distance based on map size
-	sizeX := mv.maxBounds[0] - mv.minBounds[0]
-	sizeZ := mv.maxBounds[2] - mv.minBounds[2]
-	maxSize := sizeX
-	if sizeZ > maxSize {
-		maxSize = sizeZ
-	}
-
-	// Default zoom distance (proportional to map size)
-	mv.Distance = maxSize * 0.3
-	if mv.Distance < 200 {
-		mv.Distance = 200
-	}
-
-	mv.rotationX = 0.6 // Look down at ~35 degrees
-	mv.rotationY = 0.0
+	mv.OrbitCam.FitToBounds(
+		mv.minBounds[0], mv.minBounds[1], mv.minBounds[2],
+		mv.maxBounds[0], mv.maxBounds[1], mv.maxBounds[2],
+	)
 }
 
 // Render renders the map to the framebuffer and returns the texture ID.
@@ -3213,61 +2594,13 @@ func (mv *MapViewer) Render() uint32 {
 	if mv.PlayMode && mv.Player != nil {
 		// Play camera - RO-style third-person following player
 		player := mv.Player
-
-		// Camera distance (use Distance directly for more zoom range)
-		camDistance := mv.Distance
-		if camDistance < 100 {
-			camDistance = 100
-		}
-		if camDistance > 800 {
-			camDistance = 800
-		}
-
-		// Vertical angle (RO-style top-down view, ~45-50 degrees from vertical)
-		pitch := float32(0.85) // ~48 degrees - more top-down like RO
-
-		// Calculate camera offset from player using yaw for rotation
-		offsetY := camDistance * float32(gomath.Sin(float64(pitch)))
-		horizDist := camDistance * float32(gomath.Cos(float64(pitch)))
-		offsetX := horizDist * float32(gomath.Sin(float64(mv.camYaw)))
-		offsetZ := horizDist * float32(gomath.Cos(float64(mv.camYaw)))
-
-		// Camera position: behind and above player
-		camPos := math.Vec3{
-			X: player.WorldX - offsetX,
-			Y: player.WorldY + offsetY,
-			Z: player.WorldZ - offsetZ,
-		}
-
-		// Store camera position for sprite direction calculation
-		mv.camPosX = camPos.X
-		mv.camPosY = camPos.Y
-		mv.camPosZ = camPos.Z
-
-		// Look at player position (slightly above feet)
-		target := math.Vec3{
-			X: player.WorldX,
-			Y: player.WorldY + 30, // Look at character center, not feet
-			Z: player.WorldZ,
-		}
-
-		up := math.Vec3{X: 0, Y: 1, Z: 0}
-		view = math.LookAt(camPos, target, up)
+		view = mv.FollowCam.ViewMatrix(player.WorldX, player.WorldY, player.WorldZ)
 	} else if mv.PlayMode {
-		// Fallback if no player - use FPS-style camera
-		camPos := math.Vec3{X: mv.camPosX, Y: mv.camPosY, Z: mv.camPosZ}
-		dirX := float32(cosf(mv.camPitch) * sinf(mv.camYaw))
-		dirY := float32(sinf(mv.camPitch))
-		dirZ := float32(cosf(mv.camPitch) * cosf(mv.camYaw))
-		target := math.Vec3{X: mv.camPosX + dirX, Y: mv.camPosY + dirY, Z: mv.camPosZ + dirZ}
-		up := math.Vec3{X: 0, Y: 1, Z: 0}
-		view = math.LookAt(camPos, target, up)
+		// Fallback if no player - use orbit camera
+		view = mv.OrbitCam.ViewMatrix()
 	} else {
 		// Orbit camera - rotate around center point
-		camPos := mv.calculateCameraPosition()
-		center := math.Vec3{X: mv.centerX, Y: mv.centerY, Z: mv.centerZ}
-		up := math.Vec3{X: 0, Y: 1, Z: 0}
-		view = math.LookAt(camPos, center, up)
+		view = mv.OrbitCam.ViewMatrix()
 	}
 
 	viewProj := proj.Mul(view)
@@ -3356,8 +2689,8 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 
 	// ========== STEP 1: Calculate camera-facing billboard vectors ==========
 	// Y-axis aligned billboard: rotates around Y to face camera, stays upright
-	dirX := mv.camPosX - player.WorldX
-	dirZ := mv.camPosZ - player.WorldZ
+	dirX := mv.FollowCam.PosX - player.WorldX
+	dirZ := mv.FollowCam.PosZ - player.WorldZ
 	length := float32(gomath.Sqrt(float64(dirX*dirX + dirZ*dirZ)))
 	if length > 0.001 {
 		dirX /= length
@@ -4143,50 +3476,26 @@ func (mv *MapViewer) renderModels(viewProj math.Mat4) {
 
 // calculateCameraPosition computes camera position from orbit parameters.
 func (mv *MapViewer) calculateCameraPosition() math.Vec3 {
-	// Spherical to Cartesian
-	x := mv.Distance * float32(cosf(mv.rotationX)*sinf(mv.rotationY))
-	y := mv.Distance * float32(sinf(mv.rotationX))
-	z := mv.Distance * float32(cosf(mv.rotationX)*cosf(mv.rotationY))
-
-	return math.Vec3{
-		X: mv.centerX + x,
-		Y: mv.centerY + y,
-		Z: mv.centerZ + z,
-	}
+	return mv.OrbitCam.Position()
 }
 
 // HandleMouseDrag handles mouse drag for camera rotation.
 func (mv *MapViewer) HandleMouseDrag(deltaX, deltaY float32) {
-	sensitivity := float32(0.005)
-
 	if mv.PlayMode {
 		// Play mode - rotate camera around player (horizontal only)
-		mv.camYaw -= deltaX * sensitivity
-		// Note: We don't adjust pitch in Play mode - fixed viewing angle
+		mv.FollowCam.HandleYaw(deltaX)
 	} else {
 		// Orbit mode - rotate around center
-		mv.rotationY -= deltaX * sensitivity
-		mv.rotationX += deltaY * sensitivity
-
-		// Clamp pitch
-		if mv.rotationX < 0.1 {
-			mv.rotationX = 0.1
-		}
-		if mv.rotationX > 1.5 {
-			mv.rotationX = 1.5
-		}
+		mv.OrbitCam.HandleDrag(deltaX, deltaY)
 	}
 }
 
 // HandleMouseWheel handles mouse scroll for zoom.
 func (mv *MapViewer) HandleMouseWheel(delta float32) {
-	// Both Play mode and Orbit mode use Distance for zoom
-	mv.Distance -= delta * mv.Distance * 0.1
-	if mv.Distance < 50 {
-		mv.Distance = 50
-	}
-	if mv.Distance > 5000 {
-		mv.Distance = 5000
+	if mv.PlayMode {
+		mv.FollowCam.HandleZoom(delta)
+	} else {
+		mv.OrbitCam.HandleZoom(delta)
 	}
 }
 
@@ -4207,12 +3516,8 @@ func (mv *MapViewer) HandlePlayMovement(forward, right, _ float32) {
 
 	// Calculate movement direction based on camera yaw
 	// Forward is toward camera direction, right is perpendicular
-	camDirX := float32(sinf(mv.camYaw))
-	camDirZ := float32(cosf(mv.camYaw))
-
-	// Right direction (perpendicular to forward) - negated for correct A/D
-	camRightX := float32(-cosf(mv.camYaw))
-	camRightZ := float32(sinf(mv.camYaw))
+	camDirX, camDirZ := mv.FollowCam.ForwardDirection()
+	camRightX, camRightZ := mv.FollowCam.RightDirection()
 
 	// Combined movement direction
 	moveX := camDirX*forward + camRightX*right
@@ -4395,23 +3700,7 @@ func (mv *MapViewer) HandleOrbitMovement(forward, right, up float32) {
 	if mv.PlayMode {
 		return
 	}
-
-	// Speed scales with distance for consistent feel
-	speed := mv.Distance * 0.01
-
-	// Calculate movement direction based on current camera rotation
-	// Forward direction in world space (based on rotationY)
-	dirX := float32(sinf(mv.rotationY))
-	dirZ := float32(cosf(mv.rotationY))
-
-	// Right direction (perpendicular to forward)
-	rightX := float32(cosf(mv.rotationY))
-	rightZ := float32(-sinf(mv.rotationY))
-
-	// Apply movement to center point (negate forward so W moves "into" the scene)
-	mv.centerX += (-dirX*forward + rightX*right) * speed
-	mv.centerZ += (-dirZ*forward + rightZ*right) * speed
-	mv.centerY += up * speed
+	mv.OrbitCam.HandleMovement(forward, right, up)
 }
 
 // LoadPlayerCharacter loads the Novice sprite for Play Mode.
@@ -5096,10 +4385,10 @@ func (mv *MapViewer) TogglePlayMode() {
 
 	if mv.PlayMode {
 		// Set appropriate zoom distance for Play mode (RO-style)
-		mv.Distance = 145 // Good starting distance for third-person
+		mv.FollowCam.Distance = 145 // Good starting distance for third-person
 
 		// Reset camera yaw (rotation around player)
-		mv.camYaw = 0
+		mv.FollowCam.Yaw = 0
 
 		// Player position should already be initialized by LoadPlayerCharacter
 		// If not, initialize now
@@ -5113,16 +4402,16 @@ func (mv *MapViewer) TogglePlayMode() {
 func (mv *MapViewer) Reset() {
 	if mv.PlayMode {
 		// Reset play camera
-		mv.camYaw = 0
-		mv.Distance = 145 // Default Play mode distance
+		mv.FollowCam.Yaw = 0
+		mv.FollowCam.Distance = 145 // Default Play mode distance
 
 		// Reset player to map center
 		if mv.Player != nil {
 			mv.initializePlayerPosition()
 		}
 	} else {
-		mv.rotationX = 0.6
-		mv.rotationY = 0.0
+		mv.OrbitCam.RotationX = 0.6
+		mv.OrbitCam.RotationY = 0.0
 	}
 }
 
@@ -5290,43 +4579,6 @@ func (mv *MapViewer) Destroy() {
 	}
 }
 
-// Helper functions
-
-func cross(a, b [3]float32) [3]float32 {
-	return [3]float32{
-		a[1]*b[2] - a[2]*b[1],
-		a[2]*b[0] - a[0]*b[2],
-		a[0]*b[1] - a[1]*b[0],
-	}
-}
-
-func normalize(v [3]float32) [3]float32 {
-	len := sqrtf(v[0]*v[0] + v[1]*v[1] + v[2]*v[2])
-	if len < 0.0001 {
-		return [3]float32{0, 1, 0}
-	}
-	return [3]float32{v[0] / len, v[1] / len, v[2] / len}
-}
-
-func sqrtf(x float32) float32 {
-	return float32(gomath.Sqrt(float64(x)))
-}
-
-func cosf(x float32) float64 {
-	return gomath.Cos(float64(x))
-}
-
-func sinf(x float32) float64 {
-	return gomath.Sin(float64(x))
-}
-
-func absf(x float32) float32 {
-	if x < 0 {
-		return -x
-	}
-	return x
-}
-
 // buildTerrainHeightMap builds a lookup table of terrain heights for model positioning.
 func (mv *MapViewer) buildTerrainHeightMap(gnd *formats.GND) {
 	mv.terrainTilesX = int(gnd.Width)
@@ -5392,26 +4644,6 @@ func (mv *MapViewer) createWaterPlane(_ *formats.GND, waterLevel float32) {
 
 	mv.waterLevel = waterLevel
 	mv.hasWater = true
-}
-
-// calculateSunDirection converts RSW spherical coordinates (longitude, latitude in degrees)
-// to a directional light vector. This matches how the RO client interprets the sun position.
-// Longitude: azimuth angle (0-360), horizontal rotation around Y axis
-// Latitude: elevation angle (0-90), 0 = horizon, 90 = directly overhead
-func calculateSunDirection(longitude, latitude int32) [3]float32 {
-	// Convert degrees to radians
-	lonRad := float64(longitude) * gomath.Pi / 180.0
-	latRad := float64(latitude) * gomath.Pi / 180.0
-
-	// Spherical to Cartesian conversion
-	// The sun direction points FROM the sun TO the surface (towards origin)
-	// Latitude: 0 = horizon, 90 = directly overhead
-	// Longitude: angle around Y axis
-	x := float32(gomath.Cos(latRad) * gomath.Sin(lonRad))
-	y := float32(gomath.Sin(latRad))
-	z := float32(gomath.Cos(latRad) * gomath.Cos(lonRad))
-
-	return [3]float32{x, y, z}
 }
 
 // PrintDiagnostics outputs map loading diagnostics to console.
