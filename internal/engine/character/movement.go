@@ -87,4 +87,4 @@ func ClearDestination(player *Player) {
 const ArrivalThreshold = 1.0
 
 // DefaultMoveSpeed is the default movement speed in world units per second.
-const DefaultMoveSpeed = 150.0
+const DefaultMoveSpeed = 200.0

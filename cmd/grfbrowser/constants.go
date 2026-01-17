@@ -28,9 +28,9 @@ const (
 	DefaultTerrainBrightness = 1.0
 	DefaultFogNear           = 150.0
 	DefaultFogFar            = 1400.0
-	DefaultMoveSpeed         = 50.0
-	DefaultSpriteScale       = 0.28
-	DefaultShadowScale       = 0.4
+	DefaultMoveSpeed         = 120.0 // Faster movement for responsive feel
+	DefaultSpriteScale       = 0.45  // Larger sprite for better visibility
+	DefaultShadowScale       = 0.5   // Larger shadow to match sprite
 )
 
 // Direction calculation constants

@@ -1851,9 +1851,9 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 				gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 				gl.UseProgram(mv.spriteProgram)
 
-				// Position sprite centered on player, slight lift for feet
+				// Position sprite centered on player, lift to align feet with ground
 				posX := player.WorldX
-				posY := player.WorldY + spriteHeight*0.05
+				posY := player.WorldY + spriteHeight*0.12
 				posZ := player.WorldZ
 
 				gl.UniformMatrix4fv(mv.locSpriteVP, 1, false, &viewProj[0])
@@ -2531,7 +2531,7 @@ func (mv *MapViewer) LoadPlayerCharacter(texLoader func(string) ([]byte, error))
 		Character:   char,
 		SPR:         spr,
 		ACT:         act,
-		SpriteScale: 0.28, // Scale down sprite pixels to world units
+		SpriteScale: DefaultSpriteScale,
 	}
 
 	// Create GPU textures for each sprite image
@@ -2633,7 +2633,7 @@ func (mv *MapViewer) LoadPlayerCharacterFromPath(texLoader func(string) ([]byte,
 		Character:   char,
 		SPR:         spr,
 		ACT:         act,
-		SpriteScale: 0.28, // Scale down sprite pixels to world units
+		SpriteScale: DefaultSpriteScale,
 	}
 
 	// Load head sprite if path provided
