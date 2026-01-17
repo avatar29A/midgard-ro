@@ -441,6 +441,8 @@ func NewMapViewer(width, height int32) (*MapViewer, error) {
 		// Shadow mapping defaults
 		ShadowsEnabled:   true,
 		ShadowResolution: shadow.DefaultResolution,
+		// Render quality defaults
+		ForceAllTwoSided: true, // Many RO models have missing back faces
 	}
 
 	if err := mv.createFramebuffer(); err != nil {
