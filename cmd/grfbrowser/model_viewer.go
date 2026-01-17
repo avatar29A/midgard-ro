@@ -5,13 +5,14 @@ import (
 	"bytes"
 	"fmt"
 	"image"
-	"image/color"
 	gomath "math"
 	"strings"
 	"unsafe"
 
 	"github.com/go-gl/gl/v4.1-core/gl"
 
+	"github.com/Faultbox/midgard-ro/internal/engine/camera"
+	"github.com/Faultbox/midgard-ro/internal/engine/texture"
 	"github.com/Faultbox/midgard-ro/pkg/formats"
 	"github.com/Faultbox/midgard-ro/pkg/math"
 )
@@ -712,7 +713,7 @@ func decodeModelTexture(data []byte, path string, magentaKey bool) (*image.RGBA,
 
 	if strings.HasSuffix(lowerPath, ".tga") {
 		// TGA needs special handling
-		img, err = decodeTGA(data)
+		img, err = texture.DecodeTGA(data)
 	} else {
 		// BMP, PNG, JPG - use standard decoder
 		img, _, err = image.Decode(bytes.NewReader(data))
@@ -722,28 +723,8 @@ func decodeModelTexture(data []byte, path string, magentaKey bool) (*image.RGBA,
 		return nil, fmt.Errorf("decode %s: %w", path, err)
 	}
 
-	// Convert to RGBA
-	bounds := img.Bounds()
-	rgba := image.NewRGBA(bounds)
-	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			c := img.At(x, y)
-			r, g, b, a := c.RGBA()
-			// Convert from 16-bit to 8-bit
-			r8, g8, b8, a8 := uint8(r>>8), uint8(g>>8), uint8(b>>8), uint8(a>>8)
-
-			// Apply magenta key transparency (RGB ~255,~0,~255 becomes transparent)
-			// Use tolerance for BMP decoding variations
-			// Also set RGB to black to prevent color bleeding when texture is filtered
-			if magentaKey && r8 >= 250 && g8 <= 10 && b8 >= 250 {
-				r8, g8, b8, a8 = 0, 0, 0, 0
-			}
-
-			rgba.SetRGBA(x, y, color.RGBA{R: r8, G: g8, B: b8, A: a8})
-		}
-	}
-
-	return rgba, nil
+	// Convert to RGBA with optional magenta key transparency
+	return texture.ImageToRGBA(img, magentaKey), nil
 }
 
 func uploadModelTexture(img *image.RGBA) uint32 {
@@ -772,29 +753,12 @@ func uploadModelTexture(img *image.RGBA) uint32 {
 }
 
 func (mv *ModelViewer) fitCamera() {
-	// Calculate model center
-	mv.centerX = (mv.minBounds[0] + mv.maxBounds[0]) / 2
-	mv.centerY = (mv.minBounds[1] + mv.maxBounds[1]) / 2
-	mv.centerZ = (mv.minBounds[2] + mv.maxBounds[2]) / 2
-
-	// Calculate model size
-	sizeX := mv.maxBounds[0] - mv.minBounds[0]
-	sizeY := mv.maxBounds[1] - mv.minBounds[1]
-	sizeZ := mv.maxBounds[2] - mv.minBounds[2]
-
-	maxSize := sizeX
-	if sizeY > maxSize {
-		maxSize = sizeY
-	}
-	if sizeZ > maxSize {
-		maxSize = sizeZ
-	}
-
-	// Set distance to fit model in view
-	mv.distance = maxSize * 2.0
-	if mv.distance < 10 {
-		mv.distance = 10
-	}
+	// Use camera package to calculate fitting parameters
+	fit := camera.FitBoundsToView(mv.minBounds, mv.maxBounds, 2.0, 10.0)
+	mv.centerX = fit.CenterX
+	mv.centerY = fit.CenterY
+	mv.centerZ = fit.CenterZ
+	mv.distance = fit.Distance
 }
 
 // Render draws the model to the framebuffer and returns the texture ID.
