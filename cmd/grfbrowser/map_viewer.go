@@ -398,8 +398,8 @@ type MapViewer struct {
 	// Shadow mapping (Enhanced Graphics)
 	shadowMap                *shadow.Map
 	shadowProgram            uint32
-	ShadowsEnabled           bool    // Public for UI toggle
-	ShadowResolution         int32   // Shadow map resolution (default 2048)
+	ShadowsEnabled           bool  // Public for UI toggle
+	ShadowResolution         int32 // Shadow map resolution (default 2048)
 	lightViewProj            math.Mat4
 	locShadowLightViewProj   int32 // Shadow shader uniform
 	locShadowModel           int32 // Shadow shader model matrix

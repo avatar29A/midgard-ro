@@ -29,7 +29,7 @@ func UpdateAnimation(player *Player, deltaMs float32) {
 	}
 
 	// Update render position interpolation for smooth movement
-	player.Character.UpdateRenderPosition(deltaMs)
+	player.UpdateRenderPosition(deltaMs)
 
 	// Procedural players don't have animation data
 	if player.ACT == nil {
