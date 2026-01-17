@@ -15,7 +15,9 @@ import (
 	"github.com/Faultbox/midgard-ro/cmd/grfbrowser/shaders"
 	"github.com/Faultbox/midgard-ro/internal/engine/camera"
 	"github.com/Faultbox/midgard-ro/internal/engine/character"
+	"github.com/Faultbox/midgard-ro/internal/engine/debug"
 	rsmmodel "github.com/Faultbox/midgard-ro/internal/engine/model"
+	"github.com/Faultbox/midgard-ro/internal/engine/picking"
 	"github.com/Faultbox/midgard-ro/internal/engine/shader"
 	"github.com/Faultbox/midgard-ro/internal/engine/sprite"
 	"github.com/Faultbox/midgard-ro/internal/engine/terrain"
@@ -1681,78 +1683,11 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 	mv.renderPlayerShadow(viewProj)
 
 	// ========== STEP 1: Calculate camera-facing billboard vectors ==========
-	// Y-axis aligned billboard: rotates around Y to face camera, stays upright
-	dirX := mv.FollowCam.PosX - player.WorldX
-	dirZ := mv.FollowCam.PosZ - player.WorldZ
-	length := float32(gomath.Sqrt(float64(dirX*dirX + dirZ*dirZ)))
-	if length > 0.001 {
-		dirX /= length
-		dirZ /= length
-	} else {
-		dirX = 0
-		dirZ = 1
-	}
-
-	// Camera-facing billboard vectors (Y-axis aligned)
-	camRight := [3]float32{-dirZ, 0, dirX}
-	camUp := [3]float32{0, 1, 0}
+	camRight, camUp := character.BillboardVectors(mv.FollowCam.PosX, mv.FollowCam.PosZ, player.WorldX, player.WorldZ)
 
 	// ========== STEP 2: Calculate visual direction with hysteresis ==========
-	// Camera angle from player to camera
-	cameraAngle := float32(gomath.Atan2(float64(dirX), float64(dirZ)))
-
-	// Player facing angle
-	playerAngle := float32(player.Direction) * (gomath.Pi / 4.0)
-
-	// Combine angles
-	combinedAngle := cameraAngle + playerAngle
-
-	// Normalize to 0-2π
-	for combinedAngle < 0 {
-		combinedAngle += 2 * gomath.Pi
-	}
-	for combinedAngle >= 2*gomath.Pi {
-		combinedAngle -= 2 * gomath.Pi
-	}
-
-	// Calculate new sector with standard boundaries
-	sectorSize := float32(gomath.Pi / 4)   // 45° per sector
-	sectorOffset := float32(gomath.Pi / 8) // 22.5° offset
-	newSector := int((combinedAngle + sectorOffset) / sectorSize)
-	if newSector >= 8 {
-		newSector = 0
-	}
-
-	// Hysteresis: only change direction if we're past the dead zone
-	// This prevents flickering at sector boundaries
-	hysteresis := float32(gomath.Pi / 16) // ~11° dead zone on each side of boundary
-
-	// Check if we should keep the previous direction (within dead zone)
-	if player.LastVisualDir >= 0 {
-		// Calculate the center angle of the current visual direction's sector
-		currentSectorCenter := float32(player.LastVisualDir) * sectorSize
-
-		// Distance from current sector center
-		angleDiff := combinedAngle - currentSectorCenter
-		// Normalize to -π to π
-		for angleDiff > gomath.Pi {
-			angleDiff -= 2 * gomath.Pi
-		}
-		for angleDiff < -gomath.Pi {
-			angleDiff += 2 * gomath.Pi
-		}
-
-		// If within the extended range (half sector + hysteresis), keep current direction
-		if angleDiff > -(sectorSize/2+hysteresis) && angleDiff < (sectorSize/2+hysteresis) {
-			newSector = player.LastVisualDir
-		}
-	}
-
-	// Map sector to RO direction index
-	directionMap := [8]int{0, 7, 6, 5, 4, 3, 2, 1}
-	visualDir := directionMap[newSector]
-
-	// Store for next frame's hysteresis check
+	cameraAngle := character.CameraAngleToPlayer(mv.FollowCam.PosX, mv.FollowCam.PosZ, player.WorldX, player.WorldZ)
+	visualDir, newSector := character.CalculateVisualDirection(cameraAngle, player.Direction, player.LastVisualDir)
 	player.LastVisualDir = newSector
 
 	// ========== STEP 3: Use composite sprites if available ==========
@@ -2100,64 +2035,14 @@ func (mv *MapViewer) renderSelectionBbox(viewProj math.Mat4) {
 	// Calculate world position
 	offsetX := mv.mapWidth / 2
 	offsetZ := mv.mapHeight / 2
-	worldX := model.position[0] + offsetX
-	worldY := -model.position[1]
-	worldZ := model.position[2] + offsetZ
-
-	// Get model bounding box (local space, already centered)
-	minX := model.bbox[0] * model.scale[0]
-	minY := model.bbox[1] * model.scale[1]
-	minZ := model.bbox[2] * model.scale[2]
-	maxX := model.bbox[3] * model.scale[0]
-	maxY := model.bbox[4] * model.scale[1]
-	maxZ := model.bbox[5] * model.scale[2]
-
-	// Handle negative scales
-	if minX > maxX {
-		minX, maxX = maxX, minX
-	}
-	if minY > maxY {
-		minY, maxY = maxY, minY
-	}
-	if minZ > maxZ {
-		minZ, maxZ = maxZ, minZ
+	worldPos := [3]float32{
+		model.position[0] + offsetX,
+		-model.position[1],
+		model.position[2] + offsetZ,
 	}
 
-	// Expand box slightly for visibility
-	pad := float32(1.0)
-	minX -= pad
-	minY -= pad
-	minZ -= pad
-	maxX += pad
-	maxY += pad
-	maxZ += pad
-
-	// Transform to world space
-	minX += worldX
-	minY += worldY
-	minZ += worldZ
-	maxX += worldX
-	maxY += worldY
-	maxZ += worldZ
-
-	// Build line vertices for 12 edges of the box
-	vertices := []float32{
-		// Bottom face
-		minX, minY, minZ, maxX, minY, minZ,
-		maxX, minY, minZ, maxX, minY, maxZ,
-		maxX, minY, maxZ, minX, minY, maxZ,
-		minX, minY, maxZ, minX, minY, minZ,
-		// Top face
-		minX, maxY, minZ, maxX, maxY, minZ,
-		maxX, maxY, minZ, maxX, maxY, maxZ,
-		maxX, maxY, maxZ, minX, maxY, maxZ,
-		minX, maxY, maxZ, minX, maxY, minZ,
-		// Vertical edges
-		minX, minY, minZ, minX, maxY, minZ,
-		maxX, minY, minZ, maxX, maxY, minZ,
-		maxX, minY, maxZ, maxX, maxY, maxZ,
-		minX, minY, maxZ, minX, maxY, maxZ,
-	}
+	// Generate wireframe vertices using debug package
+	vertices := debug.GenerateBBoxWireframeFromAABB(model.bbox, worldPos, model.scale, debug.DefaultBBoxPadding)
 
 	// Update VBO
 	gl.BindBuffer(gl.ARRAY_BUFFER, mv.bboxVBO)
@@ -2187,46 +2072,8 @@ func (mv *MapViewer) PickModelAtScreen(screenX, screenY, viewWidth, viewHeight f
 		return -1
 	}
 
-	// Convert screen coords to normalized device coords (-1 to 1)
-	ndcX := (2.0*screenX/viewWidth - 1.0)
-	ndcY := (1.0 - 2.0*screenY/viewHeight) // Flip Y
-
-	// Create ray from camera through the click point
-	// Unproject near and far points
-	invViewProj := mv.lastViewProj.Inverse()
-
-	nearPoint := math.Vec4{ndcX, ndcY, -1.0, 1.0}
-	farPoint := math.Vec4{ndcX, ndcY, 1.0, 1.0}
-
-	nearWorld := invViewProj.MulVec4(nearPoint)
-	farWorld := invViewProj.MulVec4(farPoint)
-
-	// Perspective divide
-	if nearWorld[3] != 0 {
-		nearWorld[0] /= nearWorld[3]
-		nearWorld[1] /= nearWorld[3]
-		nearWorld[2] /= nearWorld[3]
-	}
-	if farWorld[3] != 0 {
-		farWorld[0] /= farWorld[3]
-		farWorld[1] /= farWorld[3]
-		farWorld[2] /= farWorld[3]
-	}
-
-	rayOrigin := [3]float32{nearWorld[0], nearWorld[1], nearWorld[2]}
-	rayDir := [3]float32{
-		farWorld[0] - nearWorld[0],
-		farWorld[1] - nearWorld[1],
-		farWorld[2] - nearWorld[2],
-	}
-
-	// Normalize ray direction
-	rayLen := float32(gomath.Sqrt(float64(rayDir[0]*rayDir[0] + rayDir[1]*rayDir[1] + rayDir[2]*rayDir[2])))
-	if rayLen > 0 {
-		rayDir[0] /= rayLen
-		rayDir[1] /= rayLen
-		rayDir[2] /= rayLen
-	}
+	// Create ray from screen coordinates
+	ray := picking.ScreenToRay(screenX, screenY, viewWidth, viewHeight, mv.lastViewProj.Inverse())
 
 	// Test intersection with each visible model's bounding box
 	offsetX := mv.mapWidth / 2
@@ -2241,89 +2088,15 @@ func (mv *MapViewer) PickModelAtScreen(screenX, screenY, viewWidth, viewHeight f
 		}
 
 		// Calculate world-space bounding box
-		worldX := model.position[0] + offsetX
-		worldY := -model.position[1]
-		worldZ := model.position[2] + offsetZ
-
-		minX := model.bbox[0]*model.scale[0] + worldX
-		minY := model.bbox[1]*model.scale[1] + worldY
-		minZ := model.bbox[2]*model.scale[2] + worldZ
-		maxX := model.bbox[3]*model.scale[0] + worldX
-		maxY := model.bbox[4]*model.scale[1] + worldY
-		maxZ := model.bbox[5]*model.scale[2] + worldZ
-
-		// Handle negative scales
-		if minX > maxX {
-			minX, maxX = maxX, minX
+		worldPos := [3]float32{
+			model.position[0] + offsetX,
+			-model.position[1],
+			model.position[2] + offsetZ,
 		}
-		if minY > maxY {
-			minY, maxY = maxY, minY
-		}
-		if minZ > maxZ {
-			minZ, maxZ = maxZ, minZ
-		}
+		box := picking.TransformAABB(model.bbox, worldPos, model.scale)
 
 		// Ray-AABB intersection test
-		tmin := float32(-gomath.MaxFloat32)
-		tmax := float32(gomath.MaxFloat32)
-
-		// X slab
-		if rayDir[0] != 0 {
-			t1 := (minX - rayOrigin[0]) / rayDir[0]
-			t2 := (maxX - rayOrigin[0]) / rayDir[0]
-			if t1 > t2 {
-				t1, t2 = t2, t1
-			}
-			if t1 > tmin {
-				tmin = t1
-			}
-			if t2 < tmax {
-				tmax = t2
-			}
-		} else if rayOrigin[0] < minX || rayOrigin[0] > maxX {
-			continue
-		}
-
-		// Y slab
-		if rayDir[1] != 0 {
-			t1 := (minY - rayOrigin[1]) / rayDir[1]
-			t2 := (maxY - rayOrigin[1]) / rayDir[1]
-			if t1 > t2 {
-				t1, t2 = t2, t1
-			}
-			if t1 > tmin {
-				tmin = t1
-			}
-			if t2 < tmax {
-				tmax = t2
-			}
-		} else if rayOrigin[1] < minY || rayOrigin[1] > maxY {
-			continue
-		}
-
-		// Z slab
-		if rayDir[2] != 0 {
-			t1 := (minZ - rayOrigin[2]) / rayDir[2]
-			t2 := (maxZ - rayOrigin[2]) / rayDir[2]
-			if t1 > t2 {
-				t1, t2 = t2, t1
-			}
-			if t1 > tmin {
-				tmin = t1
-			}
-			if t2 < tmax {
-				tmax = t2
-			}
-		} else if rayOrigin[2] < minZ || rayOrigin[2] > maxZ {
-			continue
-		}
-
-		// Check if intersection is valid
-		if tmax >= tmin && tmax >= 0 {
-			hitDist := tmin
-			if hitDist < 0 {
-				hitDist = tmax
-			}
+		if hitDist, hit := ray.IntersectAABB(box); hit {
 			if hitDist < bestDist {
 				bestDist = hitDist
 				bestIdx = i
@@ -2511,47 +2284,9 @@ func (mv *MapViewer) HandlePlayModeClick(screenX, screenY, viewportW, viewportH 
 }
 
 // ScreenToWorld converts screen coordinates to world XZ position by intersecting with ground plane.
-// Uses proper matrix unprojection like PickModelAtScreen.
 func (mv *MapViewer) ScreenToWorld(screenX, screenY, viewportW, viewportH float32) (worldX, worldZ float32, ok bool) {
-	// Convert screen coords to normalized device coords (-1 to 1)
-	ndcX := (2.0*screenX/viewportW - 1.0)
-	ndcY := (1.0 - 2.0*screenY/viewportH) // Flip Y
-
-	// Create ray from camera through the click point using inverse view-projection
-	invViewProj := mv.lastViewProj.Inverse()
-
-	nearPoint := math.Vec4{ndcX, ndcY, -1.0, 1.0}
-	farPoint := math.Vec4{ndcX, ndcY, 1.0, 1.0}
-
-	nearWorld := invViewProj.MulVec4(nearPoint)
-	farWorld := invViewProj.MulVec4(farPoint)
-
-	// Perspective divide
-	if nearWorld[3] != 0 {
-		nearWorld[0] /= nearWorld[3]
-		nearWorld[1] /= nearWorld[3]
-		nearWorld[2] /= nearWorld[3]
-	}
-	if farWorld[3] != 0 {
-		farWorld[0] /= farWorld[3]
-		farWorld[1] /= farWorld[3]
-		farWorld[2] /= farWorld[3]
-	}
-
-	rayOrigin := [3]float32{nearWorld[0], nearWorld[1], nearWorld[2]}
-	rayDir := [3]float32{
-		farWorld[0] - nearWorld[0],
-		farWorld[1] - nearWorld[1],
-		farWorld[2] - nearWorld[2],
-	}
-
-	// Normalize ray direction
-	rayLen := float32(gomath.Sqrt(float64(rayDir[0]*rayDir[0] + rayDir[1]*rayDir[1] + rayDir[2]*rayDir[2])))
-	if rayLen > 0 {
-		rayDir[0] /= rayLen
-		rayDir[1] /= rayLen
-		rayDir[2] /= rayLen
-	}
+	// Create ray from screen coordinates
+	ray := picking.ScreenToRay(screenX, screenY, viewportW, viewportH, mv.lastViewProj.Inverse())
 
 	// Intersect with ground plane (Y = player height or terrain)
 	groundY := float32(0)
@@ -2559,24 +2294,11 @@ func (mv *MapViewer) ScreenToWorld(screenX, screenY, viewportW, viewportH float3
 		groundY = mv.Player.WorldY
 	}
 
-	// Ray: P = rayOrigin + t * rayDir
-	// Plane: Y = groundY
-	// Solve: rayOrigin.Y + t * rayDir.Y = groundY
-	if gomath.Abs(float64(rayDir[1])) < 0.001 {
-		return 0, 0, false // Ray parallel to ground
+	worldX, worldZ, ok = ray.IntersectPlaneY(groundY)
+	if ok {
+		fmt.Printf("Click: screen(%.0f,%.0f) -> world(%.1f, %.1f)\n", screenX, screenY, worldX, worldZ)
 	}
-
-	t := (groundY - rayOrigin[1]) / rayDir[1]
-	if t < 0 {
-		return 0, 0, false // Intersection behind camera
-	}
-
-	worldX = rayOrigin[0] + t*rayDir[0]
-	worldZ = rayOrigin[2] + t*rayDir[2]
-
-	fmt.Printf("Click: screen(%.0f,%.0f) -> world(%.1f, %.1f)\n", screenX, screenY, worldX, worldZ)
-
-	return worldX, worldZ, true
+	return worldX, worldZ, ok
 }
 
 // HandleOrbitMovement handles WASD movement in Orbit mode.
@@ -3010,31 +2732,9 @@ func (mv *MapViewer) LoadPlayerCharacterFromPath(texLoader func(string) ([]byte,
 
 // createPlayerShadow creates a shadow ellipse texture and VAO for the player.
 func (mv *MapViewer) createPlayerShadow(player *PlayerCharacter) {
-	// Create circular shadow texture (24x24 pixels)
-	size := 24
-	pixels := make([]byte, size*size*4)
-
-	center := float32(size) / 2
-	radius := float32(size)/2 - 1
-
-	for y := 0; y < size; y++ {
-		for x := 0; x < size; x++ {
-			idx := (y*size + x) * 4
-			// Calculate distance from center (circle equation)
-			dx := (float32(x) - center) / radius
-			dy := (float32(y) - center) / radius
-			dist := dx*dx + dy*dy
-
-			if dist <= 1.0 {
-				// Inside circle - light shadow with soft falloff
-				alpha := (1.0 - dist) * 0.25 // Max 25% opacity, fading to edge
-				pixels[idx+0] = 0            // R
-				pixels[idx+1] = 0            // G
-				pixels[idx+2] = 0            // B
-				pixels[idx+3] = byte(alpha * 255)
-			}
-		}
-	}
+	// Generate circular shadow texture pixels
+	size := sprite.DefaultShadowSize
+	pixels := sprite.GenerateCircularShadow(size, sprite.DefaultShadowOpacity)
 
 	// Create shadow texture
 	gl.GenTextures(1, &player.ShadowTex)
@@ -3052,14 +2752,7 @@ func (mv *MapViewer) createPlayerShadow(player *PlayerCharacter) {
 	gl.BindBuffer(gl.ARRAY_BUFFER, player.ShadowVBO)
 
 	// Shadow quad on XZ plane (Y=0), centered at origin
-	shadowSize := float32(4.0) // Shadow size in world units (smaller, circular)
-	shadowVerts := []float32{
-		// Position (x, z)  TexCoord (u, v)
-		-shadowSize, -shadowSize, 0.0, 0.0,
-		shadowSize, -shadowSize, 1.0, 0.0,
-		-shadowSize, shadowSize, 0.0, 1.0,
-		shadowSize, shadowSize, 1.0, 1.0,
-	}
+	shadowVerts := sprite.GenerateShadowQuadVertices(sprite.DefaultShadowWorldSize)
 
 	gl.BufferData(gl.ARRAY_BUFFER, len(shadowVerts)*4, gl.Ptr(shadowVerts), gl.STATIC_DRAW)
 	gl.VertexAttribPointerWithOffset(0, 2, gl.FLOAT, false, 4*4, 0)
@@ -3071,52 +2764,16 @@ func (mv *MapViewer) createPlayerShadow(player *PlayerCharacter) {
 
 // createProceduralPlayer creates a simple colored player marker when no sprite is available.
 func (mv *MapViewer) createProceduralPlayer() error {
-	// Create a simple 32x64 colored texture (blue player marker)
-	width, height := 32, 64
-	pixels := make([]byte, width*height*4)
-
-	// Fill with semi-transparent blue color
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
-			idx := (y*width + x) * 4
-			// Create a simple humanoid shape
-			centerX := width / 2
-			distFromCenter := x - centerX
-			if distFromCenter < 0 {
-				distFromCenter = -distFromCenter
-			}
-
-			// Head (top 1/4)
-			if y < height/4 && distFromCenter < width/4 {
-				pixels[idx+0] = 100 // R
-				pixels[idx+1] = 150 // G
-				pixels[idx+2] = 255 // B
-				pixels[idx+3] = 255 // A
-			} else if y >= height/4 && y < height*3/4 && distFromCenter < width/3 {
-				// Body (middle half)
-				pixels[idx+0] = 50  // R
-				pixels[idx+1] = 100 // G
-				pixels[idx+2] = 200 // B
-				pixels[idx+3] = 255 // A
-			} else if y >= height*3/4 && distFromCenter < width/4 {
-				// Legs (bottom quarter)
-				pixels[idx+0] = 50  // R
-				pixels[idx+1] = 80  // G
-				pixels[idx+2] = 150 // B
-				pixels[idx+3] = 255 // A
-			} else {
-				// Transparent
-				pixels[idx+3] = 0
-			}
-		}
-	}
+	// Generate procedural player texture
+	width, height := sprite.DefaultProceduralWidth, sprite.DefaultProceduralHeight
+	pixels := sprite.GenerateProceduralPlayer(width, height)
 
 	// Create player character
 	char := entity.NewCharacter(0, 0, 0)
 	char.MoveSpeed = 50.0 // World units per second
 	player := &PlayerCharacter{
 		Character:   char,
-		SpriteScale: 0.4, // Reasonable scale for character size (~13x26 world units)
+		SpriteScale: sprite.DefaultProceduralScale,
 	}
 
 	// Create single texture
@@ -3137,12 +2794,7 @@ func (mv *MapViewer) createProceduralPlayer() error {
 	gl.BindVertexArray(player.VAO)
 	gl.BindBuffer(gl.ARRAY_BUFFER, player.VBO)
 
-	vertices := []float32{
-		-0.5, 1.0, 0.0, 0.0,
-		0.5, 1.0, 1.0, 0.0,
-		-0.5, 0.0, 0.0, 1.0,
-		0.5, 0.0, 1.0, 1.0,
-	}
+	vertices := sprite.GenerateBillboardQuadVertices()
 
 	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*4, gl.Ptr(vertices), gl.STATIC_DRAW)
 	gl.VertexAttribPointerWithOffset(0, 2, gl.FLOAT, false, 4*4, 0)
