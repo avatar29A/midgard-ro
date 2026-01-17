@@ -14,8 +14,11 @@ import (
 
 	"github.com/Faultbox/midgard-ro/cmd/grfbrowser/shaders"
 	"github.com/Faultbox/midgard-ro/internal/engine/camera"
+	rsmmodel "github.com/Faultbox/midgard-ro/internal/engine/model"
 	"github.com/Faultbox/midgard-ro/internal/engine/shader"
 	"github.com/Faultbox/midgard-ro/internal/engine/sprite"
+	"github.com/Faultbox/midgard-ro/internal/engine/terrain"
+	"github.com/Faultbox/midgard-ro/internal/engine/water"
 	"github.com/Faultbox/midgard-ro/internal/game/entity"
 	"github.com/Faultbox/midgard-ro/pkg/formats"
 	"github.com/Faultbox/midgard-ro/pkg/math"
@@ -50,32 +53,13 @@ type MapDiagnostics struct {
 }
 
 // MapModel represents a placed RSM model in the map.
-// NodeDebugInfo stores debug information about an RSM node.
-type NodeDebugInfo struct {
-	Name         string
-	Parent       string
-	Offset       [3]float32
-	Position     [3]float32
-	Scale        [3]float32
-	RotAngle     float32
-	RotAxis      [3]float32
-	Matrix       [9]float32
-	HasRotKeys   bool
-	HasPosKeys   bool
-	HasScaleKeys bool
-	// First rotation keyframe (if any)
-	FirstRotQuat [4]float32
-	RotKeyCount  int
-}
-
-// MapModel represents a placed RSM model in the map.
 type MapModel struct {
 	vao        uint32
 	vbo        uint32
 	ebo        uint32
 	indexCount int32
 	textures   []uint32
-	texGroups  []modelTexGroup
+	texGroups  []rsmmodel.TextureGroup
 	position   [3]float32
 	rotation   [3]float32
 	scale      [3]float32
@@ -91,7 +75,7 @@ type MapModel struct {
 	// Extended debug info
 	rsmVersion string
 	nodeCount  int
-	nodes      []NodeDebugInfo
+	nodes      []rsmmodel.NodeDebugInfo
 	// Animation support
 	isAnimated bool              // Whether this model has keyframe animation
 	rsm        *formats.RSM      // Reference to RSM for animation rebuild
@@ -104,13 +88,6 @@ type ModelGroup struct {
 	RSMName    string // RSM filename (without path)
 	Instances  []int  // Indices into MapViewer.models
 	AllVisible bool   // Quick toggle for all instances
-}
-
-// modelTexGroup groups faces by texture for rendering.
-type modelTexGroup struct {
-	texIdx     int
-	startIndex int32
-	indexCount int32
 }
 
 // CompositeFrame holds a pre-composited sprite frame (head + body merged).
@@ -357,14 +334,13 @@ type MapViewer struct {
 	terrainVAO    uint32
 	terrainVBO    uint32
 	terrainEBO    uint32
-	terrainGroups []terrainTextureGroup
+	terrainGroups []terrain.TextureGroup
 
 	// Ground textures and lightmap
-	groundTextures map[int]uint32
-	fallbackTex    uint32
-	lightmapAtlas  uint32
-	atlasSize      int32 // Atlas dimensions (square)
-	tilesPerRow    int32 // Number of lightmap tiles per row in atlas
+	groundTextures   map[int]uint32
+	fallbackTex      uint32
+	lightmapAtlasTex uint32                 // GPU texture for lightmap atlas
+	lightmapAtlas    *terrain.LightmapAtlas // Lightmap atlas metadata for UV calculation
 
 	// Placed models
 	models      []*MapModel
@@ -458,29 +434,6 @@ type MapViewer struct {
 	lastViewProj math.Mat4
 	lastView     math.Mat4
 	lastProj     math.Mat4
-}
-
-// terrainVertex is the vertex format for terrain mesh.
-type terrainVertex struct {
-	Position   [3]float32
-	Normal     [3]float32
-	TexCoord   [2]float32
-	LightmapUV [2]float32
-	Color      [4]float32
-}
-
-// terrainTextureGroup groups triangles by texture for batched rendering.
-type terrainTextureGroup struct {
-	textureID  int
-	startIndex int32
-	indexCount int32
-}
-
-// Model vertex type (same as rsmVertex in model_viewer.go)
-type modelVertex struct {
-	Position [3]float32
-	Normal   [3]float32
-	TexCoord [2]float32
 }
 
 // NewMapViewer creates a new 3D map viewer.
@@ -760,7 +713,11 @@ func (mv *MapViewer) LoadMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(
 	mv.mapHeight = float32(gnd.Height) * gnd.Zoom
 
 	// Store terrain height data for model positioning (Stage 2 - ADR-014)
-	mv.buildTerrainHeightMap(gnd)
+	hm := terrain.BuildHeightmap(gnd)
+	mv.terrainAltitudes = hm.Altitudes
+	mv.terrainTilesX = hm.TilesX
+	mv.terrainTilesZ = hm.TilesZ
+	mv.terrainTileZoom = hm.TileZoom
 
 	// Load GAT file for collision data (Play mode)
 	if rsw != nil && rsw.GndFile != "" {
@@ -814,14 +771,17 @@ func (mv *MapViewer) LoadMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(
 	mv.loadGroundTextures(gnd, texLoader)
 
 	// Build lightmap atlas (Stage 2)
-	mv.buildLightmapAtlas(gnd)
+	mv.lightmapAtlas = terrain.BuildLightmapAtlas(gnd)
+	mv.uploadLightmapAtlas()
 
 	// Build terrain mesh
-	vertices, indices, groups := mv.buildTerrainMesh(gnd)
-	mv.terrainGroups = groups
+	mesh := terrain.BuildMesh(gnd, mv.lightmapAtlas)
+	mv.terrainGroups = mesh.Groups
+	mv.minBounds = mesh.Bounds.Min
+	mv.maxBounds = mesh.Bounds.Max
 
 	// Upload to GPU
-	mv.uploadTerrainMesh(vertices, indices)
+	mv.uploadTerrainMesh(mesh.Vertices, mesh.Indices)
 
 	// Load RSM models from RSW (Stage 4)
 	if rsw != nil {
@@ -873,10 +833,11 @@ func (mv *MapViewer) clearTerrain() {
 	}
 	mv.groundTextures = make(map[int]uint32)
 	mv.terrainGroups = nil
-	if mv.lightmapAtlas != 0 {
-		gl.DeleteTextures(1, &mv.lightmapAtlas)
-		mv.lightmapAtlas = 0
+	if mv.lightmapAtlasTex != 0 {
+		gl.DeleteTextures(1, &mv.lightmapAtlasTex)
+		mv.lightmapAtlasTex = 0
 	}
+	mv.lightmapAtlas = nil
 
 	// Clear models
 	for _, model := range mv.models {
@@ -1106,7 +1067,7 @@ func (m *MapModel) GetNodeCount() int {
 }
 
 // GetNodes returns the node debug info for this model.
-func (m *MapModel) GetNodes() []NodeDebugInfo {
+func (m *MapModel) GetNodes() []rsmmodel.NodeDebugInfo {
 	return m.nodes
 }
 
@@ -1131,7 +1092,7 @@ func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texL
 	mv.Diagnostics.TotalNodes += len(rsm.Nodes)
 
 	// Build mesh from all RSM nodes
-	var vertices []modelVertex
+	var vertices []rsmmodel.Vertex
 	var indices []uint32
 	texGroups := make(map[int][]uint32)
 
@@ -1176,7 +1137,7 @@ func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texL
 		baseIdx := uint32(len(vertices))
 
 		// Build node transform matrix (with parent hierarchy)
-		nodeMatrix := mv.buildNodeMatrix(node, rsm, 0) // Initial pose (time=0)
+		nodeMatrix := rsmmodel.BuildNodeMatrix(node, rsm, 0) // Initial pose (time=0)
 
 		// Check if we need to reverse winding due to negative scale
 		reverseWinding := ref.Scale[0]*ref.Scale[1]*ref.Scale[2] < 0
@@ -1213,7 +1174,7 @@ func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texL
 			v2 := node.Vertices[face.VertexIDs[2]]
 			e1 := [3]float32{v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]}
 			e2 := [3]float32{v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]}
-			normalVec := cross(e1, e2)
+			normalVec := rsmmodel.Cross(e1, e2)
 
 			// Degenerate triangle detection - skip if normal is too small
 			normalMag := float32(gomath.Sqrt(float64(normalVec[0]*normalVec[0] + normalVec[1]*normalVec[1] + normalVec[2]*normalVec[2])))
@@ -1248,7 +1209,7 @@ func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texL
 					v := node.Vertices[vid]
 
 					// Transform vertex position by node matrix
-					pos := transformPoint(nodeMatrix, v)
+					pos := rsmmodel.TransformPoint(nodeMatrix, v)
 
 					// Flip Y for RO coordinate system
 					pos[1] = -pos[1]
@@ -1280,7 +1241,7 @@ func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texL
 						uv = [2]float32{tc.U, tc.V}
 					}
 
-					vertices = append(vertices, modelVertex{
+					vertices = append(vertices, rsmmodel.Vertex{
 						Position: pos,
 						Normal:   faceNormal,
 						TexCoord: uv,
@@ -1352,21 +1313,21 @@ func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texL
 	}
 
 	// Build texture groups
-	var groups []modelTexGroup
+	var groups []rsmmodel.TextureGroup
 	for texIdx, idxs := range texGroups {
 		if len(idxs) == 0 {
 			continue
 		}
-		groups = append(groups, modelTexGroup{
-			texIdx:     texIdx,
-			startIndex: int32(len(indices)),
-			indexCount: int32(len(idxs)),
+		groups = append(groups, rsmmodel.TextureGroup{
+			TextureIdx: texIdx,
+			StartIndex: int32(len(indices)),
+			IndexCount: int32(len(idxs)),
 		})
 		indices = append(indices, idxs...)
 	}
 
 	// Smooth normals for models (reduces faceted appearance)
-	smoothModelNormals(vertices)
+	rsmmodel.SmoothNormals(vertices)
 
 	// Count total and two-sided faces for this model
 	modelTotalFaces := 0
@@ -1381,40 +1342,10 @@ func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texL
 	}
 
 	// Build node debug info
-	nodeDebugInfo := make([]NodeDebugInfo, len(rsm.Nodes))
-	for i, node := range rsm.Nodes {
-		info := NodeDebugInfo{
-			Name:         node.Name,
-			Parent:       node.Parent,
-			Offset:       node.Offset,
-			Position:     node.Position,
-			Scale:        node.Scale,
-			RotAngle:     node.RotAngle,
-			RotAxis:      node.RotAxis,
-			Matrix:       node.Matrix,
-			HasRotKeys:   len(node.RotKeys) > 0,
-			HasPosKeys:   len(node.PosKeys) > 0,
-			HasScaleKeys: len(node.ScaleKeys) > 0,
-			RotKeyCount:  len(node.RotKeys),
-		}
-		if len(node.RotKeys) > 0 {
-			info.FirstRotQuat = node.RotKeys[0].Quaternion
-		}
-		nodeDebugInfo[i] = info
-	}
+	nodeDebugInfo := rsmmodel.BuildNodeDebugInfo(rsm)
 
-	// Check if model has animation (any node with >1 keyframes AND animLength > 0)
-	// Models with only 1 keyframe are static poses, not animations
-	hasAnimation := false
-	if rsm.AnimLength > 0 {
-		for i := range rsm.Nodes {
-			node := &rsm.Nodes[i]
-			if len(node.RotKeys) > 1 || len(node.PosKeys) > 1 || len(node.ScaleKeys) > 1 {
-				hasAnimation = true
-				break
-			}
-		}
-	}
+	// Check if model has animation
+	hasAnimation := rsmmodel.HasAnimation(rsm)
 
 	// Create GPU resources
 	model := &MapModel{
@@ -1448,7 +1379,7 @@ func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texL
 
 	gl.GenBuffers(1, &model.vbo)
 	gl.BindBuffer(gl.ARRAY_BUFFER, model.vbo)
-	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*int(unsafe.Sizeof(modelVertex{})), gl.Ptr(vertices), gl.STATIC_DRAW)
+	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*int(unsafe.Sizeof(rsmmodel.Vertex{})), gl.Ptr(vertices), gl.STATIC_DRAW)
 
 	gl.GenBuffers(1, &model.ebo)
 	gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, model.ebo)
@@ -1457,7 +1388,7 @@ func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texL
 	model.indexCount = int32(len(indices))
 
 	// Set vertex attributes (Position, Normal, TexCoord)
-	stride := int32(unsafe.Sizeof(modelVertex{}))
+	stride := int32(unsafe.Sizeof(rsmmodel.Vertex{}))
 	gl.EnableVertexAttribArray(0)
 	gl.VertexAttribPointerWithOffset(0, 3, gl.FLOAT, false, stride, 0)
 	gl.EnableVertexAttribArray(1)
@@ -1470,159 +1401,9 @@ func (mv *MapViewer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, texL
 	return model
 }
 
-// buildNodeMatrix builds the transformation matrix for an RSM node.
-// Following roBrowser's approach: hierarchy matrix (inherited) + vertex transform (not inherited).
-func (mv *MapViewer) buildNodeMatrix(node *formats.RSMNode, rsm *formats.RSM, animTimeMs float32) math.Mat4 {
-	// Get hierarchy matrix (parent * Position * Rotation * Scale)
-	visited := make(map[string]bool)
-	hierarchyMatrix := mv.buildNodeHierarchyMatrix(node, rsm, animTimeMs, visited)
-
-	// Add Offset and Mat3 for vertex transformation (NOT inherited by children)
-	result := hierarchyMatrix
-	result = result.Mul(math.Translate(node.Offset[0], node.Offset[1], node.Offset[2]))
-	result = result.Mul(math.FromMat3x3(node.Matrix))
-
-	return result
-}
-
-// buildNodeHierarchyMatrix returns the matrix that children inherit.
-// This is: parent_hierarchy * Position * Rotation * Scale
-// It does NOT include Offset or Mat3 (those are vertex-only transforms).
-func (mv *MapViewer) buildNodeHierarchyMatrix(node *formats.RSMNode, rsm *formats.RSM, animTimeMs float32, visited map[string]bool) math.Mat4 {
-	// Prevent infinite recursion
-	if visited[node.Name] {
-		return math.Identity()
-	}
-	visited[node.Name] = true
-
-	// Check if node has rotation keyframes
-	hasRotKeyframes := len(node.RotKeys) > 0
-
-	// Build local hierarchy matrix: Position * Rotation * Scale
-	localMatrix := math.Translate(node.Position[0], node.Position[1], node.Position[2])
-
-	// Apply rotation (axis-angle OR keyframe, not both)
-	if !hasRotKeyframes && node.RotAngle != 0 {
-		axisLen := float32(gomath.Sqrt(float64(
-			node.RotAxis[0]*node.RotAxis[0] +
-				node.RotAxis[1]*node.RotAxis[1] +
-				node.RotAxis[2]*node.RotAxis[2])))
-		if axisLen > 1e-6 {
-			normalizedAxis := [3]float32{
-				node.RotAxis[0] / axisLen,
-				node.RotAxis[1] / axisLen,
-				node.RotAxis[2] / axisLen,
-			}
-			localMatrix = localMatrix.Mul(math.RotateAxis(normalizedAxis, node.RotAngle))
-		}
-	} else if hasRotKeyframes {
-		rotQuat := mv.interpolateRotKeys(node.RotKeys, animTimeMs)
-		localMatrix = localMatrix.Mul(rotQuat.ToMat4())
-	}
-
-	localMatrix = localMatrix.Mul(math.Scale(node.Scale[0], node.Scale[1], node.Scale[2]))
-
-	// Apply animation scale if present
-	if len(node.ScaleKeys) > 0 {
-		scale := mv.interpolateScaleKeys(node.ScaleKeys, animTimeMs)
-		localMatrix = localMatrix.Mul(math.Scale(scale[0], scale[1], scale[2]))
-	}
-
-	// If node has parent, get parent's hierarchy matrix first
-	if node.Parent != "" && node.Parent != node.Name {
-		parentNode := rsm.GetNodeByName(node.Parent)
-		if parentNode != nil {
-			parentHierarchy := mv.buildNodeHierarchyMatrix(parentNode, rsm, animTimeMs, visited)
-			return parentHierarchy.Mul(localMatrix)
-		}
-	}
-
-	return localMatrix
-}
-
-// --- Animation Interpolation Functions ---
-
-// interpolateRotKeys interpolates rotation keyframes at the given time.
-func (mv *MapViewer) interpolateRotKeys(keys []formats.RSMRotKeyframe, timeMs float32) math.Quat {
-	if len(keys) == 0 {
-		return math.QuatIdentity()
-	}
-	if len(keys) == 1 {
-		k := keys[0]
-		return math.Quat{X: k.Quaternion[0], Y: k.Quaternion[1], Z: k.Quaternion[2], W: k.Quaternion[3]}
-	}
-
-	// Find surrounding keyframes (assuming keys are sorted by frame)
-	// RSM frame numbers need to be converted to time
-	var prev, next int
-	for i := range keys {
-		if float32(keys[i].Frame) > timeMs {
-			next = i
-			break
-		}
-		prev = i
-		next = i
-	}
-
-	// If at or past last frame, return last frame's rotation
-	if prev == next {
-		k := keys[prev]
-		return math.Quat{X: k.Quaternion[0], Y: k.Quaternion[1], Z: k.Quaternion[2], W: k.Quaternion[3]}
-	}
-
-	// Interpolate between prev and next
-	k0 := keys[prev]
-	k1 := keys[next]
-	t := float32(0)
-	if k1.Frame != k0.Frame {
-		t = (timeMs - float32(k0.Frame)) / float32(k1.Frame-k0.Frame)
-	}
-
-	q0 := math.Quat{X: k0.Quaternion[0], Y: k0.Quaternion[1], Z: k0.Quaternion[2], W: k0.Quaternion[3]}
-	q1 := math.Quat{X: k1.Quaternion[0], Y: k1.Quaternion[1], Z: k1.Quaternion[2], W: k1.Quaternion[3]}
-	return q0.Slerp(q1, t)
-}
-
-// interpolateScaleKeys interpolates scale keyframes at the given time.
-func (mv *MapViewer) interpolateScaleKeys(keys []formats.RSMScaleKeyframe, timeMs float32) [3]float32 {
-	if len(keys) == 0 {
-		return [3]float32{1, 1, 1}
-	}
-	if len(keys) == 1 {
-		return keys[0].Scale
-	}
-
-	var prev, next int
-	for i := range keys {
-		if float32(keys[i].Frame) > timeMs {
-			next = i
-			break
-		}
-		prev = i
-		next = i
-	}
-
-	if prev == next {
-		return keys[prev].Scale
-	}
-
-	k0 := keys[prev]
-	k1 := keys[next]
-	t := float32(0)
-	if k1.Frame != k0.Frame {
-		t = (timeMs - float32(k0.Frame)) / float32(k1.Frame-k0.Frame)
-	}
-
-	return [3]float32{
-		k0.Scale[0] + t*(k1.Scale[0]-k0.Scale[0]),
-		k0.Scale[1] + t*(k1.Scale[1]-k0.Scale[1]),
-		k0.Scale[2] + t*(k1.Scale[2]-k0.Scale[2]),
-	}
-}
-
 // buildAnimatedModelMesh builds vertices and indices for an animated model at a given time.
-func (mv *MapViewer) buildAnimatedModelMesh(rsm *formats.RSM, ref *formats.RSWModel, animTimeMs float32) ([]modelVertex, []uint32, []modelTexGroup) {
-	var vertices []modelVertex
+func (mv *MapViewer) buildAnimatedModelMesh(rsm *formats.RSM, ref *formats.RSWModel, animTimeMs float32) ([]rsmmodel.Vertex, []uint32, []rsmmodel.TextureGroup) {
+	var vertices []rsmmodel.Vertex
 	var indices []uint32
 	texGroups := make(map[int][]uint32)
 
@@ -1631,7 +1412,7 @@ func (mv *MapViewer) buildAnimatedModelMesh(rsm *formats.RSM, ref *formats.RSWMo
 		node := &rsm.Nodes[i]
 
 		// Build node transform with animation time
-		nodeMatrix := mv.buildNodeMatrix(node, rsm, animTimeMs)
+		nodeMatrix := rsmmodel.BuildNodeMatrix(node, rsm, animTimeMs)
 
 		// Check if we need to reverse winding
 		reverseWinding := ref.Scale[0]*ref.Scale[1]*ref.Scale[2] < 0
@@ -1660,7 +1441,7 @@ func (mv *MapViewer) buildAnimatedModelMesh(rsm *formats.RSM, ref *formats.RSWMo
 			v2 := node.Vertices[face.VertexIDs[2]]
 			e1 := [3]float32{v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]}
 			e2 := [3]float32{v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]}
-			normalVec := cross(e1, e2)
+			normalVec := rsmmodel.Cross(e1, e2)
 			normalMag := float32(gomath.Sqrt(float64(normalVec[0]*normalVec[0] + normalVec[1]*normalVec[1] + normalVec[2]*normalVec[2])))
 			if normalMag < 1e-5 {
 				continue
@@ -1687,7 +1468,7 @@ func (mv *MapViewer) buildAnimatedModelMesh(rsm *formats.RSM, ref *formats.RSWMo
 
 				for j := 0; j < 3; j++ {
 					pos := node.Vertices[vertIDs[j]]
-					transformedPos := transformPoint(nodeMatrix, pos)
+					transformedPos := rsmmodel.TransformPoint(nodeMatrix, pos)
 					// Flip Y for RO coordinate system
 					transformedPos[1] = -transformedPos[1]
 
@@ -1697,7 +1478,7 @@ func (mv *MapViewer) buildAnimatedModelMesh(rsm *formats.RSM, ref *formats.RSWMo
 						uv = [2]float32{tc.U, tc.V}
 					}
 
-					vertices = append(vertices, modelVertex{
+					vertices = append(vertices, rsmmodel.Vertex{
 						Position: transformedPos,
 						Normal:   faceNormal,
 						TexCoord: uv,
@@ -1727,507 +1508,22 @@ func (mv *MapViewer) buildAnimatedModelMesh(rsm *formats.RSM, ref *formats.RSWMo
 	}
 
 	// Build indices and groups
-	var groups []modelTexGroup
+	var groups []rsmmodel.TextureGroup
 	for texIdx, idxs := range texGroups {
 		startIdx := int32(len(indices))
 		indices = append(indices, idxs...)
-		groups = append(groups, modelTexGroup{
-			texIdx:     texIdx,
-			startIndex: startIdx,
-			indexCount: int32(len(idxs)),
+		groups = append(groups, rsmmodel.TextureGroup{
+			TextureIdx: texIdx,
+			StartIndex: startIdx,
+			IndexCount: int32(len(idxs)),
 		})
 	}
-
-	return vertices, indices, groups
-}
-
-// buildLightmapAtlas creates a texture atlas from GND lightmaps.
-func (mv *MapViewer) buildLightmapAtlas(gnd *formats.GND) {
-	if len(gnd.Lightmaps) == 0 {
-		// Create a simple white lightmap if none exist
-		mv.atlasSize = 8
-		mv.tilesPerRow = 1
-		gl.GenTextures(1, &mv.lightmapAtlas)
-		gl.BindTexture(gl.TEXTURE_2D, mv.lightmapAtlas)
-		white := make([]uint8, 64*3) // 8x8 RGB
-		for i := range white {
-			white[i] = 255
-		}
-		gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGB, 8, 8, 0, gl.RGB, gl.UNSIGNED_BYTE, gl.Ptr(white))
-		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
-		gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-		return
-	}
-
-	// Calculate atlas size (square, power of 2)
-	lmWidth := int(gnd.LightmapWidth)
-	lmHeight := int(gnd.LightmapHeight)
-	if lmWidth == 0 {
-		lmWidth = 8
-	}
-	if lmHeight == 0 {
-		lmHeight = 8
-	}
-
-	// Calculate how many lightmaps fit per row
-	numLightmaps := len(gnd.Lightmaps)
-	tilesPerRow := 1
-	for tilesPerRow*tilesPerRow < numLightmaps {
-		tilesPerRow *= 2
-	}
-
-	atlasSize := tilesPerRow * lmWidth
-	// Round up to next power of 2
-	pow2 := 64
-	for pow2 < atlasSize {
-		pow2 *= 2
-	}
-	atlasSize = pow2
-	if atlasSize > 4096 {
-		atlasSize = 4096
-	}
-
-	mv.atlasSize = int32(atlasSize)
-	mv.tilesPerRow = int32(atlasSize / lmWidth)
-
-	// Create RGBA atlas (4 bytes per pixel)
-	atlasData := make([]byte, atlasSize*atlasSize*4)
-
-	// Fill with default (white color, full brightness)
-	for i := 0; i < len(atlasData); i += 4 {
-		atlasData[i] = 255   // R
-		atlasData[i+1] = 255 // G
-		atlasData[i+2] = 255 // B
-		atlasData[i+3] = 255 // A (brightness/shadow)
-	}
-
-	// Copy each lightmap into the atlas
-	// GND lightmap format:
-	// - Brightness: shadow/intensity (0=dark shadow, 255=fully lit)
-	// - ColorRGB: color tint to add
-	for i, lm := range gnd.Lightmaps {
-		tileX := i % int(mv.tilesPerRow)
-		tileY := i / int(mv.tilesPerRow)
-
-		baseX := tileX * lmWidth
-		baseY := tileY * lmHeight
-
-		// Copy lightmap pixels directly (no Y flip - testing)
-		for y := 0; y < lmHeight; y++ {
-			for x := 0; x < lmWidth; x++ {
-				srcIdx := y*lmWidth + x
-				dstX := baseX + x
-				dstY := baseY + y
-
-				if dstX >= atlasSize || dstY >= atlasSize {
-					continue
-				}
-
-				dstIdx := (dstY*atlasSize + dstX) * 4
-
-				// Get brightness (shadow intensity) for alpha channel
-				var brightness uint8 = 255
-				if srcIdx < len(lm.Brightness) {
-					brightness = lm.Brightness[srcIdx]
-				}
-
-				// Get RGB color tint
-				var r, g, b uint8 = 0, 0, 0
-				if srcIdx*3+2 < len(lm.ColorRGB) {
-					r = lm.ColorRGB[srcIdx*3]
-					g = lm.ColorRGB[srcIdx*3+1]
-					b = lm.ColorRGB[srcIdx*3+2]
-				}
-
-				// Store: RGB = color tint, A = shadow intensity
-				atlasData[dstIdx] = r
-				atlasData[dstIdx+1] = g
-				atlasData[dstIdx+2] = b
-				atlasData[dstIdx+3] = brightness
-			}
-		}
-	}
-
-	// Upload RGBA atlas to GPU
-	gl.GenTextures(1, &mv.lightmapAtlas)
-	gl.BindTexture(gl.TEXTURE_2D, mv.lightmapAtlas)
-	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA, int32(atlasSize), int32(atlasSize), 0, gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(atlasData))
-
-	// Generate mipmaps for smooth lightmap at distance
-	gl.GenerateMipmap(gl.TEXTURE_2D)
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR)
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-}
-
-// calculateLightmapUV returns UV coordinates for a lightmap in the atlas.
-// cornerIdx: 0=BL, 1=BR, 2=TL, 3=TR
-//
-// Uses 0.125/0.875 offsets (1/8 and 7/8 of tile size) to center UV sampling
-// within the inner 75% of each lightmap tile, avoiding boundary bleeding
-// that causes the chess board pattern. This matches roBrowser's approach.
-func (mv *MapViewer) calculateLightmapUV(lightmapID int16, cornerIdx int, gnd *formats.GND) [2]float32 {
-	if lightmapID < 0 || mv.tilesPerRow == 0 {
-		return [2]float32{0.5, 0.5} // Center of first tile as fallback
-	}
-
-	lmWidth := int(gnd.LightmapWidth)
-	lmHeight := int(gnd.LightmapHeight)
-	if lmWidth == 0 {
-		lmWidth = 8
-	}
-	if lmHeight == 0 {
-		lmHeight = 8
-	}
-
-	// Position of lightmap tile in atlas
-	tileX := int(lightmapID) % int(mv.tilesPerRow)
-	tileY := int(lightmapID) / int(mv.tilesPerRow)
-
-	// Calculate UV with 1/8 inset on each side to avoid edge bleeding
-	// roBrowser uses 0.125 (1/8) and 0.875 (7/8) within each tile
-	atlasSize := float32(mv.atlasSize)
-	tileW := float32(lmWidth) / atlasSize
-	tileH := float32(lmHeight) / atlasSize
-
-	baseU := float32(tileX*lmWidth) / atlasSize
-	baseV := float32(tileY*lmHeight) / atlasSize
-
-	// Use full tile range with half-pixel inset to avoid edge bleeding
-	halfPixelU := 0.5 / float32(mv.atlasSize)
-	halfPixelV := 0.5 / float32(mv.atlasSize)
-	innerU1 := baseU + halfPixelU
-	innerU2 := baseU + tileW - halfPixelU
-	innerV1 := baseV + halfPixelV
-	innerV2 := baseV + tileH - halfPixelV
-
-	// Corner UVs within the tile
-	// GND UV order: [0]=BL, [1]=BR, [2]=TL, [3]=TR
-	switch cornerIdx {
-	case 0: // Bottom-left
-		return [2]float32{innerU1, innerV2}
-	case 1: // Bottom-right
-		return [2]float32{innerU2, innerV2}
-	case 2: // Top-left
-		return [2]float32{innerU1, innerV1}
-	case 3: // Top-right
-		return [2]float32{innerU2, innerV1}
-	}
-	return [2]float32{0.5, 0.5}
-}
-
-// smoothModelNormals averages normals at shared vertex positions for models.
-// This reduces faceted appearance on models (buildings, trees, etc).
-func smoothModelNormals(vertices []modelVertex) {
-	const epsilon float32 = 0.001
-
-	// Group vertices by quantized position for O(n) lookup
-	posMap := make(map[[3]int32][]int)
-	for i := range vertices {
-		key := [3]int32{
-			int32(vertices[i].Position[0] / epsilon),
-			int32(vertices[i].Position[1] / epsilon),
-			int32(vertices[i].Position[2] / epsilon),
-		}
-		posMap[key] = append(posMap[key], i)
-	}
-
-	// Average normals for vertices at same position
-	for _, indices := range posMap {
-		if len(indices) < 2 {
-			continue
-		}
-
-		var sum [3]float32
-		for _, idx := range indices {
-			sum[0] += vertices[idx].Normal[0]
-			sum[1] += vertices[idx].Normal[1]
-			sum[2] += vertices[idx].Normal[2]
-		}
-
-		avg := normalize(sum)
-
-		for _, idx := range indices {
-			vertices[idx].Normal = avg
-		}
-	}
-}
-
-// smoothTerrainNormals averages normals at shared vertex positions.
-// This removes the visible "grid" lighting pattern between tiles by
-// making lighting transition smoothly across tile boundaries.
-func smoothTerrainNormals(vertices []terrainVertex) {
-	const epsilon float32 = 0.001
-
-	// Group vertices by quantized position for O(n) lookup
-	posMap := make(map[[3]int32][]int)
-	for i := range vertices {
-		// Quantize position to grid for fast grouping
-		key := [3]int32{
-			int32(vertices[i].Position[0] / epsilon),
-			int32(vertices[i].Position[1] / epsilon),
-			int32(vertices[i].Position[2] / epsilon),
-		}
-		posMap[key] = append(posMap[key], i)
-	}
-
-	// Average normals for vertices at same position
-	for _, indices := range posMap {
-		if len(indices) < 2 {
-			continue // No smoothing needed for isolated vertices
-		}
-
-		// Sum all normals at this position
-		var sum [3]float32
-		for _, idx := range indices {
-			sum[0] += vertices[idx].Normal[0]
-			sum[1] += vertices[idx].Normal[1]
-			sum[2] += vertices[idx].Normal[2]
-		}
-
-		// Normalize the average
-		avg := normalize(sum)
-
-		// Apply averaged normal to all vertices at this position
-		for _, idx := range indices {
-			vertices[idx].Normal = avg
-		}
-	}
-}
-
-// buildTerrainMesh generates the terrain mesh from GND data.
-func (mv *MapViewer) buildTerrainMesh(gnd *formats.GND) ([]terrainVertex, []uint32, []terrainTextureGroup) {
-	var vertices []terrainVertex
-	var indices []uint32
-
-	// Map from texture ID to indices
-	textureIndices := make(map[int][]uint32)
-
-	tileSize := gnd.Zoom
-	width := int(gnd.Width)
-	height := int(gnd.Height)
-
-	// Reset bounds
-	mv.minBounds = [3]float32{1e10, 1e10, 1e10}
-	mv.maxBounds = [3]float32{-1e10, -1e10, -1e10}
-
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
-			tile := gnd.GetTile(x, y)
-			if tile == nil {
-				continue
-			}
-
-			// Calculate world positions for tile corners
-			// RO coordinate system: X=east, Y=up (negative=higher), Z=south
-			baseX := float32(x) * tileSize
-			baseZ := float32(y) * tileSize
-
-			// Corner positions (in RO, altitude is negated for world Y)
-			// GND corners: [0]=BL, [1]=BR, [2]=TL, [3]=TR
-			corners := [4][3]float32{
-				{baseX, -tile.Altitude[0], baseZ + tileSize},            // Bottom-left
-				{baseX + tileSize, -tile.Altitude[1], baseZ + tileSize}, // Bottom-right
-				{baseX, -tile.Altitude[2], baseZ},                       // Top-left
-				{baseX + tileSize, -tile.Altitude[3], baseZ},            // Top-right
-			}
-
-			// Update bounds
-			for _, c := range corners {
-				mv.updateBounds(c)
-			}
-
-			// Top surface (horizontal quad)
-			if tile.TopSurface >= 0 && int(tile.TopSurface) < len(gnd.Surfaces) {
-				surface := &gnd.Surfaces[tile.TopSurface]
-				texID := int(surface.TextureID)
-
-				// Calculate normal (cross product of edges)
-				edge1 := [3]float32{
-					corners[1][0] - corners[0][0],
-					corners[1][1] - corners[0][1],
-					corners[1][2] - corners[0][2],
-				}
-				edge2 := [3]float32{
-					corners[2][0] - corners[0][0],
-					corners[2][1] - corners[0][1],
-					corners[2][2] - corners[0][2],
-				}
-				normal := normalize(cross(edge1, edge2))
-
-				// Vertex color from surface
-				color := [4]float32{
-					float32(surface.Color[2]) / 255.0, // R (stored as BGR)
-					float32(surface.Color[1]) / 255.0, // G
-					float32(surface.Color[0]) / 255.0, // B
-					float32(surface.Color[3]) / 255.0, // A
-				}
-
-				// Calculate lightmap UVs
-				lmUV0 := mv.calculateLightmapUV(surface.LightmapID, 0, gnd)
-				lmUV1 := mv.calculateLightmapUV(surface.LightmapID, 1, gnd)
-				lmUV2 := mv.calculateLightmapUV(surface.LightmapID, 2, gnd)
-				lmUV3 := mv.calculateLightmapUV(surface.LightmapID, 3, gnd)
-
-				// Create vertices for quad
-				// Try swapped UV mapping: our corners are BL,BR,TL,TR but UV might be TL,TR,BL,BR
-				baseIdx := uint32(len(vertices))
-				vertices = append(vertices,
-					terrainVertex{Position: corners[0], Normal: normal, TexCoord: [2]float32{surface.U[2], surface.V[2]}, LightmapUV: lmUV0, Color: color},
-					terrainVertex{Position: corners[1], Normal: normal, TexCoord: [2]float32{surface.U[3], surface.V[3]}, LightmapUV: lmUV1, Color: color},
-					terrainVertex{Position: corners[2], Normal: normal, TexCoord: [2]float32{surface.U[0], surface.V[0]}, LightmapUV: lmUV2, Color: color},
-					terrainVertex{Position: corners[3], Normal: normal, TexCoord: [2]float32{surface.U[1], surface.V[1]}, LightmapUV: lmUV3, Color: color},
-				)
-
-				// Two triangles for quad (diagonal from BL to TR per RO spec)
-				textureIndices[texID] = append(textureIndices[texID],
-					baseIdx, baseIdx+1, baseIdx+2,
-					baseIdx+2, baseIdx+1, baseIdx+3,
-				)
-			}
-
-			// Front surface (vertical wall facing -Z) - fill gaps between tiles
-			nextTile := gnd.GetTile(x, y+1)
-			if nextTile != nil {
-				heightDiff0 := absf(tile.Altitude[0] - nextTile.Altitude[2])
-				heightDiff1 := absf(tile.Altitude[1] - nextTile.Altitude[3])
-				if heightDiff0 > 0.001 || heightDiff1 > 0.001 {
-					// Wall corners
-					wallCorners := [4][3]float32{
-						corners[0], // Top-left
-						corners[1], // Top-right
-						{baseX, -nextTile.Altitude[2], baseZ + tileSize},            // Bottom-left
-						{baseX + tileSize, -nextTile.Altitude[3], baseZ + tileSize}, // Bottom-right
-					}
-
-					normal := [3]float32{0, 0, -1} // Facing -Z
-					color := [4]float32{1.0, 1.0, 1.0, 1.0}
-					var texID int
-					var texU, texV [4]float32
-					var lmID int16
-
-					// Use front surface if available, otherwise use top surface
-					if tile.FrontSurface >= 0 && int(tile.FrontSurface) < len(gnd.Surfaces) {
-						surface := &gnd.Surfaces[tile.FrontSurface]
-						texID = int(surface.TextureID)
-						texU = surface.U
-						texV = surface.V
-						lmID = surface.LightmapID
-					} else if tile.TopSurface >= 0 && int(tile.TopSurface) < len(gnd.Surfaces) {
-						// Fallback to top surface texture for gap filling
-						surface := &gnd.Surfaces[tile.TopSurface]
-						texID = int(surface.TextureID)
-						texU = [4]float32{0, 1, 0, 1}
-						texV = [4]float32{0, 0, 1, 1}
-						lmID = surface.LightmapID
-					} else {
-						continue
-					}
-
-					wlmUV0 := mv.calculateLightmapUV(lmID, 0, gnd)
-					wlmUV1 := mv.calculateLightmapUV(lmID, 1, gnd)
-					wlmUV2 := mv.calculateLightmapUV(lmID, 2, gnd)
-					wlmUV3 := mv.calculateLightmapUV(lmID, 3, gnd)
-
-					baseIdx := uint32(len(vertices))
-					vertices = append(vertices,
-						terrainVertex{Position: wallCorners[0], Normal: normal, TexCoord: [2]float32{texU[0], texV[0]}, LightmapUV: wlmUV0, Color: color},
-						terrainVertex{Position: wallCorners[1], Normal: normal, TexCoord: [2]float32{texU[1], texV[1]}, LightmapUV: wlmUV1, Color: color},
-						terrainVertex{Position: wallCorners[2], Normal: normal, TexCoord: [2]float32{texU[2], texV[2]}, LightmapUV: wlmUV2, Color: color},
-						terrainVertex{Position: wallCorners[3], Normal: normal, TexCoord: [2]float32{texU[3], texV[3]}, LightmapUV: wlmUV3, Color: color},
-					)
-
-					textureIndices[texID] = append(textureIndices[texID],
-						baseIdx, baseIdx+2, baseIdx+1,
-						baseIdx+1, baseIdx+2, baseIdx+3,
-					)
-				}
-			}
-
-			// Right surface (vertical wall facing +X) - fill gaps between tiles
-			rightNextTile := gnd.GetTile(x+1, y)
-			if rightNextTile != nil {
-				heightDiff0 := absf(tile.Altitude[1] - rightNextTile.Altitude[0])
-				heightDiff1 := absf(tile.Altitude[3] - rightNextTile.Altitude[2])
-				if heightDiff0 > 0.001 || heightDiff1 > 0.001 {
-					// Wall corners
-					wallCorners := [4][3]float32{
-						corners[3], // Top-back
-						corners[1], // Top-front
-						{baseX + tileSize, -rightNextTile.Altitude[2], baseZ},            // Bottom-back
-						{baseX + tileSize, -rightNextTile.Altitude[0], baseZ + tileSize}, // Bottom-front
-					}
-
-					normal := [3]float32{1, 0, 0} // Facing +X
-					color := [4]float32{1.0, 1.0, 1.0, 1.0}
-					var texID int
-					var texU, texV [4]float32
-					var lmID int16
-
-					// Use right surface if available, otherwise use top surface
-					if tile.RightSurface >= 0 && int(tile.RightSurface) < len(gnd.Surfaces) {
-						surface := &gnd.Surfaces[tile.RightSurface]
-						texID = int(surface.TextureID)
-						texU = surface.U
-						texV = surface.V
-						lmID = surface.LightmapID
-					} else if tile.TopSurface >= 0 && int(tile.TopSurface) < len(gnd.Surfaces) {
-						// Fallback to top surface texture for gap filling
-						surface := &gnd.Surfaces[tile.TopSurface]
-						texID = int(surface.TextureID)
-						texU = [4]float32{0, 1, 0, 1}
-						texV = [4]float32{0, 0, 1, 1}
-						lmID = surface.LightmapID
-					} else {
-						continue
-					}
-
-					// Calculate lightmap UVs for wall
-					wlmUV0 := mv.calculateLightmapUV(lmID, 0, gnd)
-					wlmUV1 := mv.calculateLightmapUV(lmID, 1, gnd)
-					wlmUV2 := mv.calculateLightmapUV(lmID, 2, gnd)
-					wlmUV3 := mv.calculateLightmapUV(lmID, 3, gnd)
-
-					baseIdx := uint32(len(vertices))
-					vertices = append(vertices,
-						terrainVertex{Position: wallCorners[0], Normal: normal, TexCoord: [2]float32{texU[0], texV[0]}, LightmapUV: wlmUV0, Color: color},
-						terrainVertex{Position: wallCorners[1], Normal: normal, TexCoord: [2]float32{texU[1], texV[1]}, LightmapUV: wlmUV1, Color: color},
-						terrainVertex{Position: wallCorners[2], Normal: normal, TexCoord: [2]float32{texU[2], texV[2]}, LightmapUV: wlmUV2, Color: color},
-						terrainVertex{Position: wallCorners[3], Normal: normal, TexCoord: [2]float32{texU[3], texV[3]}, LightmapUV: wlmUV3, Color: color},
-					)
-
-					textureIndices[texID] = append(textureIndices[texID],
-						baseIdx, baseIdx+2, baseIdx+1,
-						baseIdx+1, baseIdx+2, baseIdx+3,
-					)
-				}
-			}
-		}
-	}
-
-	// Build texture groups and final index buffer
-	var groups []terrainTextureGroup
-	for texID, texIndices := range textureIndices {
-		if len(texIndices) == 0 {
-			continue
-		}
-		groups = append(groups, terrainTextureGroup{
-			textureID:  texID,
-			startIndex: int32(len(indices)),
-			indexCount: int32(len(texIndices)),
-		})
-		indices = append(indices, texIndices...)
-	}
-
-	// Smooth normals to eliminate hard edges between tiles
-	smoothTerrainNormals(vertices)
 
 	return vertices, indices, groups
 }
 
 // uploadTerrainMesh uploads mesh data to GPU.
-func (mv *MapViewer) uploadTerrainMesh(vertices []terrainVertex, indices []uint32) {
+func (mv *MapViewer) uploadTerrainMesh(vertices []terrain.Vertex, indices []uint32) {
 	if len(vertices) == 0 {
 		return
 	}
@@ -2239,7 +1535,7 @@ func (mv *MapViewer) uploadTerrainMesh(vertices []terrainVertex, indices []uint3
 	// Create VBO
 	gl.GenBuffers(1, &mv.terrainVBO)
 	gl.BindBuffer(gl.ARRAY_BUFFER, mv.terrainVBO)
-	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*int(unsafe.Sizeof(terrainVertex{})), gl.Ptr(vertices), gl.STATIC_DRAW)
+	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*int(unsafe.Sizeof(terrain.Vertex{})), gl.Ptr(vertices), gl.STATIC_DRAW)
 
 	// Create EBO
 	gl.GenBuffers(1, &mv.terrainEBO)
@@ -2247,8 +1543,8 @@ func (mv *MapViewer) uploadTerrainMesh(vertices []terrainVertex, indices []uint3
 	gl.BufferData(gl.ELEMENT_ARRAY_BUFFER, len(indices)*4, gl.Ptr(indices), gl.STATIC_DRAW)
 
 	// Set vertex attributes
-	// terrainVertex: Position(12) + Normal(12) + TexCoord(8) + LightmapUV(8) + Color(16) = 56 bytes
-	stride := int32(unsafe.Sizeof(terrainVertex{}))
+	// terrain.Vertex: Position(12) + Normal(12) + TexCoord(8) + LightmapUV(8) + Color(16) = 56 bytes
+	stride := int32(unsafe.Sizeof(terrain.Vertex{}))
 
 	// Position (location 0) - offset 0
 	gl.EnableVertexAttribArray(0)
@@ -2271,6 +1567,25 @@ func (mv *MapViewer) uploadTerrainMesh(vertices []terrainVertex, indices []uint3
 	gl.VertexAttribPointerWithOffset(4, 4, gl.FLOAT, false, stride, 40)
 
 	gl.BindVertexArray(0)
+}
+
+// uploadLightmapAtlas uploads the lightmap atlas texture to GPU.
+func (mv *MapViewer) uploadLightmapAtlas() {
+	if mv.lightmapAtlas == nil {
+		return
+	}
+
+	gl.GenTextures(1, &mv.lightmapAtlasTex)
+	gl.BindTexture(gl.TEXTURE_2D, mv.lightmapAtlasTex)
+	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA, mv.lightmapAtlas.Size, mv.lightmapAtlas.Size, 0,
+		gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(mv.lightmapAtlas.Data))
+
+	// Generate mipmaps for smooth lightmap at distance
+	gl.GenerateMipmap(gl.TEXTURE_2D)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
 }
 
 // fitCamera positions camera to view entire map.
@@ -2346,8 +1661,8 @@ func (mv *MapViewer) Render() uint32 {
 
 	// Bind lightmap atlas to texture unit 1
 	gl.ActiveTexture(gl.TEXTURE1)
-	if mv.lightmapAtlas != 0 {
-		gl.BindTexture(gl.TEXTURE_2D, mv.lightmapAtlas)
+	if mv.lightmapAtlasTex != 0 {
+		gl.BindTexture(gl.TEXTURE_2D, mv.lightmapAtlasTex)
 	} else {
 		gl.BindTexture(gl.TEXTURE_2D, mv.fallbackTex)
 	}
@@ -2358,12 +1673,12 @@ func (mv *MapViewer) Render() uint32 {
 	// Render each texture group
 	gl.ActiveTexture(gl.TEXTURE0)
 	for _, group := range mv.terrainGroups {
-		tex, ok := mv.groundTextures[group.textureID]
+		tex, ok := mv.groundTextures[group.TextureID]
 		if !ok {
 			tex = mv.fallbackTex
 		}
 		gl.BindTexture(gl.TEXTURE_2D, tex)
-		gl.DrawElementsWithOffset(gl.TRIANGLES, group.indexCount, gl.UNSIGNED_INT, uintptr(group.startIndex*4))
+		gl.DrawElementsWithOffset(gl.TRIANGLES, group.IndexCount, gl.UNSIGNED_INT, uintptr(group.StartIndex*4))
 	}
 
 	gl.BindVertexArray(0)
@@ -2833,9 +2148,7 @@ func (mv *MapViewer) renderWater(viewProj math.Mat4) {
 	// Set up texture if we have water textures loaded
 	if mv.useWaterTex && len(mv.waterTextures) > 0 {
 		// Update animation frame based on time and speed
-		// At speed 10, cycle through 32 frames in ~3 seconds
-		frameTime := mv.waterTime * mv.waterAnimSpeed * 0.5
-		mv.waterFrame = int(frameTime) % len(mv.waterTextures)
+		mv.waterFrame = water.CalculateAnimFrame(mv.waterTime, mv.waterAnimSpeed, len(mv.waterTextures))
 
 		// Bind water texture
 		gl.ActiveTexture(gl.TEXTURE0)
@@ -3176,11 +2489,11 @@ func (mv *MapViewer) renderModels(viewProj math.Mat4) {
 		// Render each texture group
 		for _, group := range model.texGroups {
 			tex := mv.fallbackTex
-			if group.texIdx >= 0 && group.texIdx < len(model.textures) {
-				tex = model.textures[group.texIdx]
+			if group.TextureIdx >= 0 && group.TextureIdx < len(model.textures) {
+				tex = model.textures[group.TextureIdx]
 			}
 			gl.BindTexture(gl.TEXTURE_2D, tex)
-			gl.DrawElementsWithOffset(gl.TRIANGLES, group.indexCount, gl.UNSIGNED_INT, uintptr(group.startIndex*4))
+			gl.DrawElementsWithOffset(gl.TRIANGLES, group.IndexCount, gl.UNSIGNED_INT, uintptr(group.StartIndex*4))
 		}
 	}
 
@@ -4010,81 +3323,15 @@ func (mv *MapViewer) initializePlayerPosition() {
 }
 
 // GetInterpolatedTerrainHeight returns the terrain height at a world position.
-// Uses bilinear interpolation between GAT cell corner heights.
+// Delegates to terrain package for bilinear interpolation between GAT cell heights.
 func (mv *MapViewer) GetInterpolatedTerrainHeight(worldX, worldZ float32) float32 {
-	if mv.GAT == nil {
-		return 0
-	}
-
-	// Convert world coordinates to GAT cell coordinates
-	// GAT cells are 5x5 world units (half of GND tile size which is 10)
-	cellSize := float32(5.0)
-	cellFX := worldX / cellSize
-	cellFZ := worldZ / cellSize
-
-	cellX := int(cellFX)
-	cellZ := int(cellFZ)
-
-	// Clamp to valid range
-	if cellX < 0 {
-		cellX = 0
-	}
-	if cellZ < 0 {
-		cellZ = 0
-	}
-	if cellX >= int(mv.GAT.Width)-1 {
-		cellX = int(mv.GAT.Width) - 2
-	}
-	if cellZ >= int(mv.GAT.Height)-1 {
-		cellZ = int(mv.GAT.Height) - 2
-	}
-
-	// Get fractional position within cell (0-1)
-	fracX := cellFX - float32(cellX)
-	fracZ := cellFZ - float32(cellZ)
-	if fracX < 0 {
-		fracX = 0
-	}
-	if fracX > 1 {
-		fracX = 1
-	}
-	if fracZ < 0 {
-		fracZ = 0
-	}
-	if fracZ > 1 {
-		fracZ = 1
-	}
-
-	// Get cell heights (corners: 0=BL, 1=BR, 2=TL, 3=TR)
-	cell := mv.GAT.GetCell(cellX, cellZ)
-	if cell == nil {
-		return 0
-	}
-
-	// Bilinear interpolation
-	// Bottom edge: lerp between bottom-left and bottom-right
-	bottom := cell.Heights[0]*(1-fracX) + cell.Heights[1]*fracX
-	// Top edge: lerp between top-left and top-right
-	top := cell.Heights[2]*(1-fracX) + cell.Heights[3]*fracX
-	// Final: lerp between bottom and top edges
-	height := bottom*(1-fracZ) + top*fracZ
-
-	// GAT heights are typically negative (lower = higher in RO coordinate system)
-	return -height
+	return terrain.GetInterpolatedHeight(mv.GAT, worldX, worldZ)
 }
 
 // IsWalkable checks if a world position is walkable.
+// Delegates to terrain package for GAT-based walkability check.
 func (mv *MapViewer) IsWalkable(worldX, worldZ float32) bool {
-	if mv.GAT == nil {
-		return true // No GAT data, allow movement
-	}
-
-	// Convert world coordinates to GAT cell coordinates
-	cellSize := float32(5.0)
-	cellX := int(worldX / cellSize)
-	cellZ := int(worldZ / cellSize)
-
-	return mv.GAT.IsWalkable(cellX, cellZ)
+	return terrain.IsWalkable(mv.GAT, worldX, worldZ)
 }
 
 // TogglePlayMode toggles between orbit and play camera modes.
@@ -4120,18 +3367,6 @@ func (mv *MapViewer) Reset() {
 	} else {
 		mv.OrbitCam.RotationX = 0.6
 		mv.OrbitCam.RotationY = 0.0
-	}
-}
-
-// updateBounds expands bounds to include point.
-func (mv *MapViewer) updateBounds(p [3]float32) {
-	for i := 0; i < 3; i++ {
-		if p[i] < mv.minBounds[i] {
-			mv.minBounds[i] = p[i]
-		}
-		if p[i] > mv.maxBounds[i] {
-			mv.maxBounds[i] = p[i]
-		}
 	}
 }
 
@@ -4198,7 +3433,7 @@ func (mv *MapViewer) rebuildAnimatedModel(model *MapModel, animTimeMs float32) {
 	gl.BindVertexArray(model.vao)
 
 	gl.BindBuffer(gl.ARRAY_BUFFER, model.vbo)
-	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*int(unsafe.Sizeof(modelVertex{})), gl.Ptr(vertices), gl.DYNAMIC_DRAW)
+	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*int(unsafe.Sizeof(rsmmodel.Vertex{})), gl.Ptr(vertices), gl.DYNAMIC_DRAW)
 
 	gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, model.ebo)
 	gl.BufferData(gl.ELEMENT_ARRAY_BUFFER, len(indices)*4, gl.Ptr(indices), gl.DYNAMIC_DRAW)
@@ -4287,27 +3522,6 @@ func (mv *MapViewer) Destroy() {
 	}
 }
 
-// buildTerrainHeightMap builds a lookup table of terrain heights for model positioning.
-func (mv *MapViewer) buildTerrainHeightMap(gnd *formats.GND) {
-	mv.terrainTilesX = int(gnd.Width)
-	mv.terrainTilesZ = int(gnd.Height)
-	mv.terrainTileZoom = gnd.Zoom
-
-	// Allocate 2D array for terrain heights
-	mv.terrainAltitudes = make([][]float32, mv.terrainTilesX)
-	for x := 0; x < mv.terrainTilesX; x++ {
-		mv.terrainAltitudes[x] = make([]float32, mv.terrainTilesZ)
-		for z := 0; z < mv.terrainTilesZ; z++ {
-			tile := gnd.GetTile(x, z)
-			if tile != nil {
-				// Average of 4 corners
-				avgAlt := (tile.Altitude[0] + tile.Altitude[1] + tile.Altitude[2] + tile.Altitude[3]) / 4.0
-				mv.terrainAltitudes[x][z] = avgAlt
-			}
-		}
-	}
-}
-
 // createWaterPlane creates a water surface plane at the specified height.
 func (mv *MapViewer) createWaterPlane(_ *formats.GND, waterLevel float32) {
 	// Delete old water if exists
@@ -4316,25 +3530,12 @@ func (mv *MapViewer) createWaterPlane(_ *formats.GND, waterLevel float32) {
 		gl.DeleteBuffers(1, &mv.waterVBO)
 	}
 
-	// Water level in RSW is typically positive for below ground level
-	// Convert to our Y-up coordinate system
-	waterY := -waterLevel
-
-	// Create a large water plane covering the map
-	// Extend slightly beyond map bounds
-	padding := float32(50.0)
-	minX := mv.minBounds[0] - padding
-	maxX := mv.maxBounds[0] + padding
-	minZ := mv.minBounds[2] - padding
-	maxZ := mv.maxBounds[2] + padding
-
-	// Simple quad vertices (position only)
-	vertices := []float32{
-		minX, waterY, minZ,
-		maxX, waterY, minZ,
-		maxX, waterY, maxZ,
-		minX, waterY, maxZ,
-	}
+	// Build water plane geometry using water package
+	plane := water.BuildPlaneWithPadding(
+		mv.minBounds[0], mv.maxBounds[0],
+		mv.minBounds[2], mv.maxBounds[2],
+		waterLevel, water.DefaultPadding,
+	)
 
 	// Create VAO/VBO
 	gl.GenVertexArrays(1, &mv.waterVAO)
@@ -4342,7 +3543,7 @@ func (mv *MapViewer) createWaterPlane(_ *formats.GND, waterLevel float32) {
 
 	gl.BindVertexArray(mv.waterVAO)
 	gl.BindBuffer(gl.ARRAY_BUFFER, mv.waterVBO)
-	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*4, gl.Ptr(vertices), gl.STATIC_DRAW)
+	gl.BufferData(gl.ARRAY_BUFFER, len(plane.Vertices)*4, gl.Ptr(plane.Vertices), gl.STATIC_DRAW)
 
 	// Position attribute
 	gl.EnableVertexAttribArray(0)
