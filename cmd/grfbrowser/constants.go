@@ -58,9 +58,9 @@ const (
 // Korangar uses: factor = delay * 50.0 for idle, factor = speed * 100/150/5 for walk
 // Frame = time_ms / factor
 const (
-	KorangarAnimFactorBase = 50.0  // Multiplier for ACT delay values
-	KorangarWalkFactorDiv  = 7.5   // 150.0 / 100.0 * 5.0 = 7.5 (inverse of speed factor)
-	MinAnimInterval        = 40.0  // minimum interval to prevent too fast animation
+	KorangarAnimFactorBase = 50.0 // Multiplier for ACT delay values
+	KorangarWalkFactorDiv  = 7.5  // 150.0 / 100.0 * 5.0 = 7.5 (inverse of speed factor)
+	MinAnimInterval        = 40.0 // minimum interval to prevent too fast animation
 )
 
 // Billboard vertex offsets (normalized quad)
