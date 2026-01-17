@@ -935,6 +935,17 @@ func (app *App) renderMapControlsPanel() {
 		app.mapViewer.Brightness = brightness
 	}
 
+	// Real-time shadows toggle
+	shadowsEnabled := app.mapViewer.ShadowsEnabled
+	if imgui.Checkbox("Real-time Shadows", &shadowsEnabled) {
+		app.mapViewer.ShadowsEnabled = shadowsEnabled
+	}
+	imgui.SameLineV(0, 5)
+	imgui.TextDisabled("(?)")
+	if imgui.IsItemHovered() {
+		imgui.SetTooltip("Enable real-time shadow mapping (PCF soft shadows)")
+	}
+
 	imgui.Spacing()
 	imgui.Spacing()
 
