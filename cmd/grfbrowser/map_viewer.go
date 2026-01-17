@@ -14,6 +14,7 @@ import (
 
 	"github.com/Faultbox/midgard-ro/cmd/grfbrowser/shaders"
 	"github.com/Faultbox/midgard-ro/internal/engine/camera"
+	"github.com/Faultbox/midgard-ro/internal/engine/character"
 	rsmmodel "github.com/Faultbox/midgard-ro/internal/engine/model"
 	"github.com/Faultbox/midgard-ro/internal/engine/shader"
 	"github.com/Faultbox/midgard-ro/internal/engine/sprite"
@@ -90,47 +91,11 @@ type ModelGroup struct {
 	AllVisible bool   // Quick toggle for all instances
 }
 
-// CompositeFrame holds a pre-composited sprite frame (head + body merged).
-type CompositeFrame struct {
-	Texture uint32 // OpenGL texture ID
-	Width   int    // Texture width in pixels
-	Height  int    // Texture height in pixels
-	OriginX int    // X offset from sprite origin to texture center
-	OriginY int    // Y offset from sprite origin to texture center
-}
+// CompositeFrame is an alias for character.CompositeFrame.
+type CompositeFrame = character.CompositeFrame
 
-// PlayerCharacter represents the player's character in Play Mode.
-// It embeds entity.Character for core game logic and adds rendering resources.
-type PlayerCharacter struct {
-	*entity.Character // Embedded character state (position, movement, animation)
-
-	// Sprite data (body)
-	SPR      *formats.SPR
-	ACT      *formats.ACT
-	Textures []uint32 // GPU textures for each SPR image
-
-	// Head sprite data
-	HeadSPR      *formats.SPR
-	HeadACT      *formats.ACT
-	HeadTextures []uint32 // GPU textures for head SPR images
-
-	// Composite textures: [action*8+direction][frame] -> CompositeFrame
-	// Pre-composited head+body for each animation frame
-	CompositeFrames    map[int][]CompositeFrame
-	UseComposite       bool // Whether to use composite rendering
-	CompositeMaxWidth  int  // Max width across all composites (for consistent sizing)
-	CompositeMaxHeight int  // Max height across all composites (for consistent sizing)
-
-	// Billboard rendering
-	VAO         uint32
-	VBO         uint32
-	SpriteScale float32 // Scale factor for sprite (default 1.0)
-
-	// Shadow
-	ShadowTex uint32 // Shadow texture (ellipse)
-	ShadowVAO uint32
-	ShadowVBO uint32
-}
+// PlayerCharacter is an alias for character.Player.
+type PlayerCharacter = character.Player
 
 // saveAllDirectionsSheet saves all 8 direction composites into a single sprite sheet
 func saveAllDirectionsSheet(
@@ -2065,59 +2030,7 @@ func (mv *MapViewer) renderPlayerShadow(viewProj math.Mat4) {
 
 // UpdatePlayerAnimation advances player animation frame based on time.
 func (mv *MapViewer) UpdatePlayerAnimation(deltaMs float32) {
-	if mv.Player == nil {
-		return
-	}
-
-	player := mv.Player
-
-	// Procedural players don't have animation data
-	if player.ACT == nil {
-		return
-	}
-
-	// Determine action based on movement state
-	newAction := entity.ActionIdle
-	if player.IsMoving {
-		newAction = entity.ActionWalk
-	}
-
-	// Reset frame when action changes
-	if newAction != player.CurrentAction {
-		player.CurrentAction = newAction
-		player.CurrentFrame = 0
-		player.FrameTime = 0
-	}
-
-	// Get current action
-	actionIdx := player.CurrentAction*8 + player.Direction
-	if actionIdx >= len(player.ACT.Actions) {
-		actionIdx = 0
-	}
-	action := &player.ACT.Actions[actionIdx]
-	if len(action.Frames) == 0 {
-		return
-	}
-
-	// Get animation interval from ACT (default 150ms for smoother animation)
-	interval := float32(150.0)
-	if actionIdx < len(player.ACT.Intervals) && player.ACT.Intervals[actionIdx] > 0 {
-		interval = player.ACT.Intervals[actionIdx]
-		// ACT intervals can be very small, enforce minimum
-		if interval < 50 {
-			interval = 50
-		}
-	}
-
-	// Accumulate time
-	player.FrameTime += deltaMs
-	if player.FrameTime >= interval {
-		player.FrameTime -= interval
-		player.CurrentFrame++
-		if player.CurrentFrame >= len(action.Frames) {
-			player.CurrentFrame = 0 // Loop animation
-		}
-	}
+	character.UpdateAnimation(mv.Player, deltaMs)
 }
 
 // renderWater renders the water plane with transparency.
@@ -2574,56 +2487,10 @@ func (mv *MapViewer) HandlePlayMovement(forward, right, _ float32) {
 // UpdatePlayerMovement updates player position for click-to-move navigation.
 // Called each frame to move player toward destination.
 func (mv *MapViewer) UpdatePlayerMovement(deltaMs float32) {
-	if !mv.PlayMode || mv.Player == nil || !mv.Player.HasDestination {
+	if !mv.PlayMode {
 		return
 	}
-
-	player := mv.Player
-
-	// Calculate direction to destination
-	dx := player.DestX - player.WorldX
-	dz := player.DestZ - player.WorldZ
-	dist := float32(gomath.Sqrt(float64(dx*dx + dz*dz)))
-
-	// Check if reached destination
-	if dist < 1.0 {
-		player.HasDestination = false
-		player.IsMoving = false
-		player.CurrentAction = entity.ActionIdle
-		return
-	}
-
-	// Normalize direction
-	dx /= dist
-	dz /= dist
-
-	// Calculate movement amount
-	moveAmount := player.MoveSpeed * deltaMs / 1000.0
-	if moveAmount > dist {
-		moveAmount = dist
-	}
-
-	// Calculate new position
-	newX := player.WorldX + dx*moveAmount
-	newZ := player.WorldZ + dz*moveAmount
-
-	// Check if new position is walkable
-	if mv.IsWalkable(newX, newZ) {
-		player.WorldX = newX
-		player.WorldZ = newZ
-		player.WorldY = mv.GetInterpolatedTerrainHeight(newX, newZ)
-	} else {
-		// Stop if hit obstacle
-		player.HasDestination = false
-		player.IsMoving = false
-		player.CurrentAction = entity.ActionIdle
-		return
-	}
-
-	// Update facing direction
-	player.Direction = entity.CalculateDirection(dx, dz)
-	player.IsMoving = true
-	player.CurrentAction = entity.ActionWalk
+	character.UpdateMovement(mv.Player, deltaMs, mv)
 }
 
 // HandlePlayModeClick handles mouse click in Play mode for click-to-move.
@@ -2639,10 +2506,8 @@ func (mv *MapViewer) HandlePlayModeClick(screenX, screenY, viewportW, viewportH 
 		return
 	}
 
-	// Set destination
-	mv.Player.DestX = worldX
-	mv.Player.DestZ = worldZ
-	mv.Player.HasDestination = true
+	// Set destination using character package
+	character.SetDestination(mv.Player, worldX, worldZ)
 }
 
 // ScreenToWorld converts screen coordinates to world XZ position by intersecting with ground plane.
@@ -3328,8 +3193,15 @@ func (mv *MapViewer) GetInterpolatedTerrainHeight(worldX, worldZ float32) float3
 	return terrain.GetInterpolatedHeight(mv.GAT, worldX, worldZ)
 }
 
+// GetHeight implements character.TerrainQuery interface.
+// Returns the terrain height at a world position.
+func (mv *MapViewer) GetHeight(worldX, worldZ float32) float32 {
+	return terrain.GetInterpolatedHeight(mv.GAT, worldX, worldZ)
+}
+
 // IsWalkable checks if a world position is walkable.
 // Delegates to terrain package for GAT-based walkability check.
+// Also implements character.TerrainQuery interface.
 func (mv *MapViewer) IsWalkable(worldX, worldZ float32) bool {
 	return terrain.IsWalkable(mv.GAT, worldX, worldZ)
 }
