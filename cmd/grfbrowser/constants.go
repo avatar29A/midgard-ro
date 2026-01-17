@@ -28,9 +28,17 @@ const (
 	DefaultTerrainBrightness = 1.0
 	DefaultFogNear           = 150.0
 	DefaultFogFar            = 1400.0
-	DefaultMoveSpeed         = 120.0 // Faster movement for responsive feel
-	DefaultSpriteScale       = 0.45  // Larger sprite for better visibility
-	DefaultShadowScale       = 0.5   // Larger shadow to match sprite
+	DefaultMoveSpeed         = 150.0 // Korangar default movement speed
+	DefaultSpriteScale       = 0.25  // Character sprite scale
+	DefaultShadowScale       = 0.30  // Shadow to match sprite
+)
+
+// Korangar-style constants
+const (
+	KorangarSpriteScale     = 1.4  // From Korangar animation/mod.rs
+	KorangarTileSize        = 10.0 // From Korangar animation/mod.rs
+	KorangarGATTileSize     = 5.0  // From Korangar loaders/map/mod.rs
+	DiagonalSpeedMultiplier = 1.4  // Korangar diagonal movement multiplier
 )
 
 // Direction calculation constants
@@ -46,10 +54,13 @@ const (
 	BoundsMin = -100000
 )
 
-// Animation timing
+// Animation timing (Korangar-style)
+// Korangar uses: factor = delay * 50.0 for idle, factor = speed * 100/150/5 for walk
+// Frame = time_ms / factor
 const (
-	DefaultAnimInterval = 150.0 // milliseconds per frame
-	MinAnimInterval     = 50.0  // minimum interval to prevent too fast animation
+	KorangarAnimFactorBase = 50.0  // Multiplier for ACT delay values
+	KorangarWalkFactorDiv  = 7.5   // 150.0 / 100.0 * 5.0 = 7.5 (inverse of speed factor)
+	MinAnimInterval        = 40.0  // minimum interval to prevent too fast animation
 )
 
 // Billboard vertex offsets (normalized quad)

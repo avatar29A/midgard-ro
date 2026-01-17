@@ -11,6 +11,7 @@ import (
 	"github.com/AllenDang/cimgui-go/backend"
 	"github.com/AllenDang/cimgui-go/imgui"
 
+	"github.com/Faultbox/midgard-ro/internal/engine/character"
 	"github.com/Faultbox/midgard-ro/pkg/formats"
 )
 
@@ -755,37 +756,35 @@ func (app *App) renderMapControlsPanel() {
 				var spritePath string
 				var headPath string
 
-				// Search for Novice body sprite (midgarts approach)
-				// Path: data/sprite/인간족/몸통/남/초보자_남.spr
-				// EUC-KR bytes from midgarts:
+				// Search for Assassin body sprite
+				// Path: data/sprite/인간족/몸통/남/어세신_남.spr
+				// EUC-KR bytes:
 				// 인간족 = {0xC0, 0xCE, 0xB0, 0xA3, 0xC1, 0xB7}
 				// 몸통 = {0xB8, 0xF6, 0xC5, 0xEB}
-				// 초보자 = {0xC3, 0xCA, 0xBA, 0xB8, 0xC0, 0xDA}
+				// 어세신 = {0xBE, 0xEE, 0xBC, 0xBC, 0xBD, 0xC5}
 				// 남 = {0xB3, 0xB2}
-				fmt.Println("Searching for Novice body sprite...")
+				fmt.Println("Searching for Assassin body sprite...")
 				humanFolderBytes := []byte{0xC0, 0xCE, 0xB0, 0xA3, 0xC1, 0xB7} // 인간족
 				bodyFolderBytes := []byte{0xB8, 0xF6, 0xC5, 0xEB}              // 몸통
-				noviceBytes := []byte{0xC3, 0xCA, 0xBA, 0xB8, 0xC0, 0xDA}      // 초보자
+				assassinBytes := []byte{0xBE, 0xEE, 0xBC, 0xBC, 0xBD, 0xC5}    // 어세신
 				maleBytes := []byte{0xB3, 0xB2}                                // 남
 
-				// First: look for Novice specifically in 인간족/몸통/남 folder (NOT costume subfolder)
-				// Base sprite path: data/sprite/인간족/몸통/남/초보자_남.spr (6 parts)
-				// Costume path: data/sprite/인간족/몸통/남/costume_1/초보자_남_1.spr (7 parts)
+				// First: look for Assassin specifically in 인간족/몸통/남 folder (NOT costume subfolder)
 				for _, f := range app.flatFiles {
 					if strings.HasSuffix(f, ".spr") && strings.HasPrefix(f, "data/sprite/") {
 						// Skip costume variants
 						if strings.Contains(f, "costume") {
 							continue
 						}
-						// MUST have 인간족 folder AND 몸통 folder AND 초보자 name
+						// MUST have 인간족 folder AND 몸통 folder AND 어세신 name
 						if strings.Contains(f, string(humanFolderBytes)) &&
 							strings.Contains(f, string(bodyFolderBytes)) &&
-							strings.Contains(f, string(noviceBytes)) {
+							strings.Contains(f, string(assassinBytes)) {
 							// Check path depth: base sprite has exactly 6 parts
 							parts := strings.Split(f, "/")
 							if len(parts) == 6 {
 								spritePath = f
-								fmt.Printf("  Found Novice body: %s\n", f)
+								fmt.Printf("  Found Assassin body: %s\n", f)
 								break
 							}
 						}
@@ -794,7 +793,7 @@ func (app *App) renderMapControlsPanel() {
 
 				// Fallback: any body sprite in 인간족/몸통/남 folder
 				if spritePath == "" {
-					fmt.Println("  Novice not found, searching for any body in human folder...")
+					fmt.Println("  Assassin not found, searching for any body in human folder...")
 					for _, f := range app.flatFiles {
 						if strings.HasSuffix(f, ".spr") &&
 							strings.HasPrefix(f, "data/sprite/") &&
@@ -882,8 +881,29 @@ func (app *App) renderMapControlsPanel() {
 		imgui.Text("Speed:")
 		speed := app.mapViewer.Player.MoveSpeed
 		imgui.SetNextItemWidth(-1)
-		if imgui.SliderFloatV("##CharSpeed", &speed, 10.0, 150.0, "%.0f", imgui.SliderFlagsNone) {
+		if imgui.SliderFloatV("##CharSpeed", &speed, 10.0, 500.0, "%.0f", imgui.SliderFlagsNone) {
 			app.mapViewer.Player.MoveSpeed = speed
+		}
+
+		imgui.Text("Sprite Scale:")
+		spriteScale := app.mapViewer.Player.SpriteScale
+		imgui.SetNextItemWidth(-1)
+		if imgui.SliderFloatV("##SpriteScale", &spriteScale, 0.05, 1.0, "%.2f", imgui.SliderFlagsNone) {
+			app.mapViewer.Player.SpriteScale = spriteScale
+		}
+
+		imgui.Text("Walk Anim (ms):")
+		walkAnim := character.WalkAnimInterval
+		imgui.SetNextItemWidth(-1)
+		if imgui.SliderFloatV("##WalkAnim", &walkAnim, 50.0, 500.0, "%.0f", imgui.SliderFlagsNone) {
+			character.WalkAnimInterval = walkAnim
+		}
+
+		imgui.Text("Idle Anim (ms):")
+		idleAnim := character.IdleAnimInterval
+		imgui.SetNextItemWidth(-1)
+		if imgui.SliderFloatV("##IdleAnim", &idleAnim, 50.0, 500.0, "%.0f", imgui.SliderFlagsNone) {
+			character.IdleAnimInterval = idleAnim
 		}
 	}
 
@@ -933,6 +953,13 @@ func (app *App) renderMapControlsPanel() {
 	if imgui.SliderFloatV("##Brightness", &brightness, 0.5, 3.0, "%.2f", imgui.SliderFlagsNone) {
 		app.terrainBrightness = brightness
 		app.mapViewer.Brightness = brightness
+	}
+
+	imgui.Text("Model Scale:")
+	modelScale := app.mapViewer.ModelScale
+	imgui.SetNextItemWidth(-1)
+	if imgui.SliderFloatV("##ModelScale", &modelScale, 0.5, 2.0, "%.2f", imgui.SliderFlagsNone) {
+		app.mapViewer.ModelScale = modelScale
 	}
 
 	// Real-time shadows toggle
