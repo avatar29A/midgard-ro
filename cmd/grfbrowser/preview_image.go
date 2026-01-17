@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"fmt"
 	"image"
-	"image/color"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,145 +13,13 @@ import (
 	"github.com/AllenDang/cimgui-go/imgui"
 	"golang.org/x/text/encoding/korean"
 	"golang.org/x/text/transform"
+
+	"github.com/Faultbox/midgard-ro/internal/engine/texture"
 )
 
-// decodeTGA decodes a TGA image file.
-// Supports uncompressed true-color (type 2) and RLE compressed (type 10) TGA files,
-// which are the formats commonly used in Ragnarok Online.
+// decodeTGA decodes a TGA image file using the texture package.
 func decodeTGA(data []byte) (image.Image, error) {
-	if len(data) < 18 {
-		return nil, fmt.Errorf("TGA data too short")
-	}
-
-	// TGA header
-	idLength := int(data[0])
-	colorMapType := data[1]
-	imageType := data[2]
-	// colorMapSpec: bytes 3-7 (skip for now)
-	// imageSpec: bytes 8-17
-	xOrigin := int(data[8]) | int(data[9])<<8
-	yOrigin := int(data[10]) | int(data[11])<<8
-	width := int(data[12]) | int(data[13])<<8
-	height := int(data[14]) | int(data[15])<<8
-	bpp := int(data[16])
-	descriptor := data[17]
-
-	_ = xOrigin
-	_ = yOrigin
-
-	// Check supported formats
-	if colorMapType != 0 {
-		return nil, fmt.Errorf("color-mapped TGA not supported")
-	}
-	if imageType != 2 && imageType != 10 {
-		return nil, fmt.Errorf("unsupported TGA type %d (only uncompressed/RLE true-color supported)", imageType)
-	}
-	if bpp != 24 && bpp != 32 {
-		return nil, fmt.Errorf("unsupported TGA bit depth %d (only 24/32 supported)", bpp)
-	}
-
-	// Skip ID field
-	offset := 18 + idLength
-	if offset > len(data) {
-		return nil, fmt.Errorf("TGA data truncated")
-	}
-	pixelData := data[offset:]
-
-	// Create image
-	img := image.NewRGBA(image.Rect(0, 0, width, height))
-	bytesPerPixel := bpp / 8
-
-	// Check if image is flipped (bit 5 of descriptor = top-to-bottom)
-	topToBottom := (descriptor & 0x20) != 0
-
-	if imageType == 2 {
-		// Uncompressed
-		expectedSize := width * height * bytesPerPixel
-		if len(pixelData) < expectedSize {
-			return nil, fmt.Errorf("TGA pixel data truncated")
-		}
-
-		for y := 0; y < height; y++ {
-			destY := y
-			if !topToBottom {
-				destY = height - 1 - y
-			}
-			for x := 0; x < width; x++ {
-				i := (y*width + x) * bytesPerPixel
-				b := pixelData[i]
-				g := pixelData[i+1]
-				r := pixelData[i+2]
-				a := uint8(255)
-				if bytesPerPixel == 4 {
-					a = pixelData[i+3]
-				}
-				img.SetRGBA(x, destY, color.RGBA{R: r, G: g, B: b, A: a})
-			}
-		}
-	} else {
-		// RLE compressed (type 10)
-		pixelCount := width * height
-		pixelIdx := 0
-		dataIdx := 0
-
-		for pixelIdx < pixelCount && dataIdx < len(pixelData) {
-			packet := pixelData[dataIdx]
-			dataIdx++
-			count := int(packet&0x7F) + 1
-
-			if packet&0x80 != 0 {
-				// RLE packet - repeat single pixel
-				if dataIdx+bytesPerPixel > len(pixelData) {
-					break
-				}
-				b := pixelData[dataIdx]
-				g := pixelData[dataIdx+1]
-				r := pixelData[dataIdx+2]
-				a := uint8(255)
-				if bytesPerPixel == 4 {
-					a = pixelData[dataIdx+3]
-				}
-				dataIdx += bytesPerPixel
-
-				for i := 0; i < count && pixelIdx < pixelCount; i++ {
-					x := pixelIdx % width
-					y := pixelIdx / width
-					destY := y
-					if !topToBottom {
-						destY = height - 1 - y
-					}
-					img.SetRGBA(x, destY, color.RGBA{R: r, G: g, B: b, A: a})
-					pixelIdx++
-				}
-			} else {
-				// Raw packet - read count pixels
-				for i := 0; i < count && pixelIdx < pixelCount; i++ {
-					if dataIdx+bytesPerPixel > len(pixelData) {
-						break
-					}
-					b := pixelData[dataIdx]
-					g := pixelData[dataIdx+1]
-					r := pixelData[dataIdx+2]
-					a := uint8(255)
-					if bytesPerPixel == 4 {
-						a = pixelData[dataIdx+3]
-					}
-					dataIdx += bytesPerPixel
-
-					x := pixelIdx % width
-					y := pixelIdx / width
-					destY := y
-					if !topToBottom {
-						destY = height - 1 - y
-					}
-					img.SetRGBA(x, destY, color.RGBA{R: r, G: g, B: b, A: a})
-					pixelIdx++
-				}
-			}
-		}
-	}
-
-	return img, nil
+	return texture.DecodeTGA(data)
 }
 
 // loadImagePreview loads an image file (BMP, TGA, JPG, PNG) for preview.
