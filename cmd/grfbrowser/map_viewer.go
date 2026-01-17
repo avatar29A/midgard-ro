@@ -321,6 +321,9 @@ type MapViewer struct {
 	// Debug options
 	ForceAllTwoSided bool // Force all faces to render as two-sided (debug)
 
+	// Global scale multiplier for RSM models (buildings, props)
+	ModelScale float32 // Multiplier applied to all model scales (default 1.0)
+
 	// Diagnostics
 	Diagnostics MapDiagnostics
 
@@ -432,6 +435,7 @@ func NewMapViewer(width, height int32) (*MapViewer, error) {
 		MoveSpeed:      5.0,
 		MaxModels:      1500, // Default model limit
 		Brightness:     1.0,  // Default terrain brightness multiplier
+		ModelScale:     1.0,  // Default model scale (1.0 = original size)
 		SelectedIdx:    -1,   // No model selected initially
 		// Default lighting (will be overwritten by RSW data)
 		lightDir:     [3]float32{0.5, 0.866, 0.0}, // 60 degrees elevation
@@ -1656,7 +1660,12 @@ func (mv *MapViewer) renderShadowPass() {
 		modelMatrix = modelMatrix.Mul(math.RotateY(model.rotation[1] * gomath.Pi / 180))
 		modelMatrix = modelMatrix.Mul(math.RotateX(model.rotation[0] * gomath.Pi / 180))
 		modelMatrix = modelMatrix.Mul(math.RotateZ(model.rotation[2] * gomath.Pi / 180))
-		modelMatrix = modelMatrix.Mul(math.Scale(model.scale[0], model.scale[1], model.scale[2]))
+		// Apply per-model scale multiplied by global ModelScale
+		modelMatrix = modelMatrix.Mul(math.Scale(
+			model.scale[0]*mv.ModelScale,
+			model.scale[1]*mv.ModelScale,
+			model.scale[2]*mv.ModelScale,
+		))
 
 		gl.UniformMatrix4fv(mv.locShadowModel, 1, false, &modelMatrix[0])
 
@@ -1822,10 +1831,11 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 	mv.renderPlayerShadow(viewProj)
 
 	// ========== STEP 1: Calculate camera-facing billboard vectors ==========
-	camRight, camUp := character.BillboardVectors(mv.FollowCam.PosX, mv.FollowCam.PosZ, player.WorldX, player.WorldZ)
+	// Use render position for smooth visual appearance
+	camRight, camUp := character.BillboardVectors(mv.FollowCam.PosX, mv.FollowCam.PosZ, player.RenderX, player.RenderZ)
 
 	// ========== STEP 2: Calculate visual direction with hysteresis ==========
-	cameraAngle := character.CameraAngleToPlayer(mv.FollowCam.PosX, mv.FollowCam.PosZ, player.WorldX, player.WorldZ)
+	cameraAngle := character.CameraAngleToPlayer(mv.FollowCam.PosX, mv.FollowCam.PosZ, player.RenderX, player.RenderZ)
 	visualDir, newSector := character.CalculateVisualDirection(cameraAngle, player.Direction, player.LastVisualDir)
 	player.LastVisualDir = newSector
 
@@ -1852,9 +1862,10 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 				gl.UseProgram(mv.spriteProgram)
 
 				// Position sprite centered on player, lift to align feet with ground
-				posX := player.WorldX
-				posY := player.WorldY + spriteHeight*0.12
-				posZ := player.WorldZ
+				// Use render position for smooth interpolated movement
+				posX := player.RenderX
+				posY := player.RenderY + spriteHeight*0.12
+				posZ := player.RenderZ
 
 				gl.UniformMatrix4fv(mv.locSpriteVP, 1, false, &viewProj[0])
 				gl.Uniform3f(mv.locSpritePos, posX, posY, posZ)
@@ -1950,7 +1961,8 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 	gl.UseProgram(mv.spriteProgram)
 
 	gl.UniformMatrix4fv(mv.locSpriteVP, 1, false, &viewProj[0])
-	gl.Uniform3f(mv.locSpritePos, player.WorldX, player.WorldY, player.WorldZ)
+	// Use render position for smooth interpolated movement
+	gl.Uniform3f(mv.locSpritePos, player.RenderX, player.RenderY, player.RenderZ)
 	gl.Uniform2f(mv.locSpriteSize, spriteWidth, spriteHeight)
 	gl.Uniform4f(mv.locSpriteTint, tint[0], tint[1], tint[2], tint[3])
 	gl.Uniform3f(mv.locSpriteCamRight, camRight[0], camRight[1], camRight[2])
@@ -2039,9 +2051,10 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 
 					totalOffsetX := offsetX + layerX
 
-					headPosX := player.WorldX + totalOffsetX*camRight[0]
-					headPosY := player.WorldY - (offsetY + layerY) + (bodyLayerY * player.SpriteScale * 0.35)
-					headPosZ := player.WorldZ + totalOffsetX*camRight[2]
+					// Use render position for smooth interpolated movement
+					headPosX := player.RenderX + totalOffsetX*camRight[0]
+					headPosY := player.RenderY - (offsetY + layerY) + (bodyLayerY * player.SpriteScale * 0.35)
+					headPosZ := player.RenderZ + totalOffsetX*camRight[2]
 
 					gl.Disable(gl.DEPTH_TEST)
 					gl.Uniform3f(mv.locSpritePos, headPosX, headPosY, headPosZ)
@@ -2077,11 +2090,12 @@ func (mv *MapViewer) renderPlayerShadow(viewProj math.Mat4) {
 	gl.UseProgram(mv.spriteProgram)
 
 	// Shadow position slightly above ground to avoid z-fighting
-	shadowY := player.WorldY + 0.5
+	// Use render position for smooth interpolated movement
+	shadowY := player.RenderY + 0.5
 
 	// Set uniforms - position the shadow flat on the ground
 	gl.UniformMatrix4fv(mv.locSpriteVP, 1, false, &viewProj[0])
-	gl.Uniform3f(mv.locSpritePos, player.WorldX, shadowY, player.WorldZ)
+	gl.Uniform3f(mv.locSpritePos, player.RenderX, shadowY, player.RenderZ)
 	gl.Uniform2f(mv.locSpriteSize, 1.0, 1.0) // Size is baked into VBO
 	gl.Uniform4f(mv.locSpriteTint, 1.0, 1.0, 1.0, 1.0)
 	// Shadow is flat on ground (XZ plane), not camera-facing
@@ -2312,8 +2326,12 @@ func (mv *MapViewer) renderModels(viewProj math.Mat4) {
 		modelMatrix = modelMatrix.Mul(math.RotateX(model.rotation[0] * gomath.Pi / 180))
 		modelMatrix = modelMatrix.Mul(math.RotateZ(model.rotation[2] * gomath.Pi / 180))
 
-		// Apply scale
-		modelMatrix = modelMatrix.Mul(math.Scale(model.scale[0], model.scale[1], model.scale[2]))
+		// Apply per-model scale multiplied by global ModelScale
+		modelMatrix = modelMatrix.Mul(math.Scale(
+			model.scale[0]*mv.ModelScale,
+			model.scale[1]*mv.ModelScale,
+			model.scale[2]*mv.ModelScale,
+		))
 
 		// Combine with view-projection
 		mvp := viewProj.Mul(modelMatrix)
@@ -2981,10 +2999,14 @@ func (mv *MapViewer) initializePlayerPosition() {
 		centerZ = mv.mapHeight / 2
 	}
 
-	// Set player position
+	// Set player position (both world and render to prevent lerp on spawn)
 	mv.Player.WorldX = centerX
 	mv.Player.WorldZ = centerZ
 	mv.Player.WorldY = mv.GetInterpolatedTerrainHeight(centerX, centerZ)
+	// Sync render position to avoid sprite interpolating from origin
+	mv.Player.RenderX = mv.Player.WorldX
+	mv.Player.RenderY = mv.Player.WorldY
+	mv.Player.RenderZ = mv.Player.WorldZ
 
 	fmt.Printf("Player spawned at (%.0f, %.0f, %.0f)\n", mv.Player.WorldX, mv.Player.WorldY, mv.Player.WorldZ)
 }

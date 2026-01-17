@@ -63,8 +63,9 @@ void main() {
         discard;
     }
 
-    // Real-time shadow from shadow map
+    // Real-time shadow from shadow map (softened to 50% intensity)
     float shadowFactor = calculateShadow();
+    shadowFactor = mix(1.0, shadowFactor, 0.5);  // Softer shadows
 
     // Lighting with shadow (roBrowser uses min 0.5 for models)
     vec3 normal = normalize(vNormal);
@@ -81,6 +82,10 @@ void main() {
     lighting = max(lighting, vec3(0.5));
 
     vec3 color = texColor.rgb * lighting;
+
+    // Apply warm color tint (Korangar-style golden hour atmosphere)
+    vec3 warmTint = vec3(1.08, 1.02, 0.92);  // Stronger warm/golden shift
+    color = color * warmTint;
 
     // Apply fog (roBrowser formula using smoothstep)
     if (uFogUse) {

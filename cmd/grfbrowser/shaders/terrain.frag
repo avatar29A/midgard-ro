@@ -73,8 +73,9 @@ void main() {
     float bakedShadow = lightmap.a;  // 0.0 = full shadow, 1.0 = fully lit (baked)
     vec3 colorTint = lightmap.rgb;   // Color tint (0-255 normalized by GPU)
 
-    // Real-time shadow from shadow map
+    // Real-time shadow from shadow map (softened to 50% intensity)
     float realtimeShadow = calculateShadow();
+    realtimeShadow = mix(1.0, realtimeShadow, 0.5);  // Softer shadows
 
     // Combine baked and real-time shadows (multiply for darkest)
     float combinedShadow = bakedShadow * realtimeShadow;
@@ -108,6 +109,10 @@ void main() {
     // Final color: (texture * lighting * vertColor * brightness) + colorTint
     // roBrowser formula: texture * LightColor + ColorMap
     vec3 finalColor = texColor.rgb * lighting * vertColor * uBrightness + colorTint;
+
+    // Apply warm color tint (Korangar-style golden hour atmosphere)
+    vec3 warmTint = vec3(1.08, 1.02, 0.92);  // Stronger warm/golden shift
+    finalColor = finalColor * warmTint;
 
     // Apply fog (roBrowser formula using smoothstep)
     if (uFogUse) {

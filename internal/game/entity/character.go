@@ -30,6 +30,11 @@ type Character struct {
 	WorldY float32 // Altitude (follows terrain)
 	WorldZ float32
 
+	// Render position (smoothly interpolated for visual display)
+	RenderX float32
+	RenderY float32
+	RenderZ float32
+
 	// Movement state
 	IsMoving  bool
 	Direction int     // 0-7: S, SW, W, NW, N, NE, E, SE
@@ -53,6 +58,9 @@ func NewCharacter(x, y, z float32) *Character {
 		WorldX:        x,
 		WorldY:        y,
 		WorldZ:        z,
+		RenderX:       x, // Initialize render position to match world position
+		RenderY:       y,
+		RenderZ:       z,
 		Direction:     DirS,
 		MoveSpeed:     150.0, // Default movement speed
 		LastVisualDir: -1,    // No previous direction
@@ -60,10 +68,15 @@ func NewCharacter(x, y, z float32) *Character {
 }
 
 // SetPosition sets the character's world position.
+// Also updates render position to prevent interpolation lag on teleport.
 func (c *Character) SetPosition(x, y, z float32) {
 	c.WorldX = x
 	c.WorldY = y
 	c.WorldZ = z
+	// Sync render position to prevent interpolation lag on teleport
+	c.RenderX = x
+	c.RenderY = y
+	c.RenderZ = z
 }
 
 // Position returns the character's world position.
@@ -204,4 +217,49 @@ func (c *Character) GetVisualDirection() int {
 // sqrtf32 computes the square root of a float32.
 func sqrtf32(x float32) float32 {
 	return float32(gomath.Sqrt(float64(x)))
+}
+
+// RenderLerpSpeed controls how fast render position catches up to world position.
+// This is units per second - higher = snappier, lower = smoother.
+// Korangar uses linear interpolation based on movement timestamps.
+// We use a fixed catch-up speed for smooth keyboard movement.
+const RenderLerpSpeed = 500.0
+
+// UpdateRenderPosition smoothly interpolates render position toward world position.
+// Uses linear interpolation with fixed speed (Korangar-style).
+// deltaMs is the time since last update in milliseconds.
+func (c *Character) UpdateRenderPosition(deltaMs float32) {
+	// Calculate distance to target
+	dx := c.WorldX - c.RenderX
+	dy := c.WorldY - c.RenderY
+	dz := c.WorldZ - c.RenderZ
+	dist := sqrtf32(dx*dx + dy*dy + dz*dz)
+
+	if dist < 0.01 {
+		// Close enough, snap to target
+		c.RenderX = c.WorldX
+		c.RenderY = c.WorldY
+		c.RenderZ = c.WorldZ
+		return
+	}
+
+	// Linear interpolation with fixed speed (Korangar-style)
+	maxMove := RenderLerpSpeed * deltaMs / 1000.0
+	if maxMove >= dist {
+		// Can reach target this frame
+		c.RenderX = c.WorldX
+		c.RenderY = c.WorldY
+		c.RenderZ = c.WorldZ
+	} else {
+		// Move towards target at fixed speed
+		t := maxMove / dist
+		c.RenderX += dx * t
+		c.RenderY += dy * t
+		c.RenderZ += dz * t
+	}
+}
+
+// RenderPosition returns the smoothly interpolated render position.
+func (c *Character) RenderPosition() (x, y, z float32) {
+	return c.RenderX, c.RenderY, c.RenderZ
 }
