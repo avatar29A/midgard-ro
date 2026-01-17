@@ -245,7 +245,7 @@ func saveAllDirectionsSheet(
 	maxW, maxH := 0, 0
 
 	for dir := 0; dir < 8; dir++ {
-		pixels, w, h, _, _ := compositeSprites(bodySPR, bodyACT, headSPR, headACT, 0, dir, 0)
+		pixels, w, h := compositeSprites(bodySPR, bodyACT, headSPR, headACT, 0, dir, 0)
 		composites[dir] = dirComposite{pixels, w, h}
 		if w > maxW {
 			maxW = w
@@ -269,9 +269,9 @@ func saveAllDirectionsSheet(
 	for y := 0; y < sheetH; y++ {
 		for x := 0; x < sheetW; x++ {
 			idx := (y*sheetW + x) * 4
-			sheet.Pix[idx] = 40   // R
-			sheet.Pix[idx+1] = 40 // G
-			sheet.Pix[idx+2] = 40 // B
+			sheet.Pix[idx] = 40    // R
+			sheet.Pix[idx+1] = 40  // G
+			sheet.Pix[idx+2] = 40  // B
 			sheet.Pix[idx+3] = 255 // A
 		}
 	}
@@ -397,7 +397,7 @@ func compositeSprites(
 	bodySPR *formats.SPR, bodyACT *formats.ACT,
 	headSPR *formats.SPR, headACT *formats.ACT,
 	action, direction, frame int,
-) (pixels []byte, width, height, originX, originY int) {
+) (pixels []byte, width, height int) {
 	// Get body action/frame
 	bodyActionIdx := action*8 + direction
 	if bodyActionIdx >= len(bodyACT.Actions) {
@@ -405,7 +405,7 @@ func compositeSprites(
 	}
 	bodyAction := &bodyACT.Actions[bodyActionIdx]
 	if len(bodyAction.Frames) == 0 {
-		return nil, 0, 0, 0, 0
+		return nil, 0, 0
 	}
 	bodyFrameIdx := frame % len(bodyAction.Frames)
 	bodyFrame := &bodyAction.Frames[bodyFrameIdx]
@@ -417,7 +417,7 @@ func compositeSprites(
 	}
 	headAction := &headACT.Actions[headActionIdx]
 	if len(headAction.Frames) == 0 {
-		return nil, 0, 0, 0, 0
+		return nil, 0, 0
 	}
 	// Always use frame 0 for head - it has the matching anchor points
 	headFrame := &headAction.Frames[0]
@@ -473,7 +473,6 @@ func compositeSprites(
 	headOffsetX := bodyAnchorX - headAnchorX
 	headOffsetY := bodyAnchorY - headAnchorY
 
-
 	// Find head layer bounds (relative to head origin + offset)
 	var headMinX, headMinY, headMaxX, headMaxY int
 	headMinX, headMinY = 10000, 10000
@@ -526,14 +525,14 @@ func compositeSprites(
 
 	// Handle empty sprites
 	if minX >= maxX || minY >= maxY {
-		return nil, 0, 0, 0, 0
+		return nil, 0, 0
 	}
 
 	// Create canvas
 	width = maxX - minX
 	height = maxY - minY
-	originX = -minX // Offset from canvas origin to sprite origin
-	originY = -minY
+	originX := -minX // Offset from canvas origin to sprite origin
+	originY := -minY
 	pixels = make([]byte, width*height*4)
 
 	// Helper to blit a sprite layer onto canvas
@@ -546,7 +545,7 @@ func compositeSprites(
 
 		// SPR images are already converted to RGBA format
 		rgba := img.Pixels
-		if rgba == nil || len(rgba) == 0 {
+		if len(rgba) == 0 {
 			return
 		}
 
@@ -642,7 +641,7 @@ func compositeSprites(
 		saveDebugPNG(pixels, width, height, fname)
 	}
 
-	return pixels, width, height, originX, originY
+	return pixels, width, height
 }
 
 // MapViewer handles 3D rendering of complete RO maps.
@@ -725,15 +724,15 @@ type MapViewer struct {
 	MoveSpeed float32
 
 	// Player character (Play mode)
-	Player        *PlayerCharacter
-	spriteProgram    uint32 // Shader for billboard sprites
-	locSpriteVP      int32  // viewProj uniform
-	locSpritePos     int32  // world position uniform
-	locSpriteSize    int32  // sprite size uniform
-	locSpriteCamRight int32 // camera right vector for billboard
-	locSpriteCamUp    int32 // camera up vector for billboard
-	locSpriteTex  int32  // texture uniform
-	locSpriteTint int32  // color tint uniform
+	Player            *PlayerCharacter
+	spriteProgram     uint32 // Shader for billboard sprites
+	locSpriteVP       int32  // viewProj uniform
+	locSpritePos      int32  // world position uniform
+	locSpriteSize     int32  // sprite size uniform
+	locSpriteCamRight int32  // camera right vector for billboard
+	locSpriteCamUp    int32  // camera up vector for billboard
+	locSpriteTex      int32  // texture uniform
+	locSpriteTint     int32  // color tint uniform
 
 	// GAT data for terrain collision
 	GAT *formats.GAT
@@ -3391,7 +3390,7 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 	}
 
 	// Calculate new sector with standard boundaries
-	sectorSize := float32(gomath.Pi / 4)  // 45° per sector
+	sectorSize := float32(gomath.Pi / 4)   // 45° per sector
 	sectorOffset := float32(gomath.Pi / 8) // 22.5° offset
 	newSector := int((combinedAngle + sectorOffset) / sectorSize)
 	if newSector >= 8 {
@@ -4193,7 +4192,7 @@ func (mv *MapViewer) HandleMouseWheel(delta float32) {
 
 // HandlePlayMovement handles WASD movement in Play mode.
 // forward/right are -1, 0, or 1 based on key presses.
-func (mv *MapViewer) HandlePlayMovement(forward, right, up float32) {
+func (mv *MapViewer) HandlePlayMovement(forward, right, _ float32) {
 	if !mv.PlayMode || mv.Player == nil {
 		return
 	}
@@ -4707,7 +4706,7 @@ func (mv *MapViewer) LoadPlayerCharacterFromPath(texLoader func(string) ([]byte,
 				}
 				actAction := &act.Actions[actionIdx]
 				for frame := 0; frame < len(actAction.Frames); frame++ {
-					_, w, h, _, _ := compositeSprites(spr, act, player.HeadSPR, player.HeadACT, action, dir, frame)
+					_, w, h := compositeSprites(spr, act, player.HeadSPR, player.HeadACT, action, dir, frame)
 					if w > player.CompositeMaxWidth {
 						player.CompositeMaxWidth = w
 					}
@@ -4735,7 +4734,7 @@ func (mv *MapViewer) LoadPlayerCharacterFromPath(texLoader func(string) ([]byte,
 
 				frames := make([]CompositeFrame, numFrames)
 				for frame := 0; frame < numFrames; frame++ {
-					pixels, w, h, _, _ := compositeSprites(spr, act, player.HeadSPR, player.HeadACT, action, dir, frame)
+					pixels, w, h := compositeSprites(spr, act, player.HeadSPR, player.HeadACT, action, dir, frame)
 					if pixels == nil || w == 0 || h == 0 {
 						continue
 					}
@@ -4914,16 +4913,16 @@ func (mv *MapViewer) createProceduralPlayer() error {
 
 			// Head (top 1/4)
 			if y < height/4 && distFromCenter < width/4 {
-				pixels[idx+0] = 100  // R
-				pixels[idx+1] = 150  // G
-				pixels[idx+2] = 255  // B
-				pixels[idx+3] = 255  // A
+				pixels[idx+0] = 100 // R
+				pixels[idx+1] = 150 // G
+				pixels[idx+2] = 255 // B
+				pixels[idx+3] = 255 // A
 			} else if y >= height/4 && y < height*3/4 && distFromCenter < width/3 {
 				// Body (middle half)
-				pixels[idx+0] = 50   // R
-				pixels[idx+1] = 100  // G
-				pixels[idx+2] = 200  // B
-				pixels[idx+3] = 255  // A
+				pixels[idx+0] = 50  // R
+				pixels[idx+1] = 100 // G
+				pixels[idx+2] = 200 // B
+				pixels[idx+3] = 255 // A
 			} else if y >= height*3/4 && distFromCenter < width/4 {
 				// Legs (bottom quarter)
 				pixels[idx+0] = 50  // R
