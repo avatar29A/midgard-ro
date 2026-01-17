@@ -63,30 +63,6 @@ func calculateSunDirection(longitude, latitude int32) [3]float32 {
 	return [3]float32{x, y, z}
 }
 
-// calculateDirection converts a movement delta to an RO direction index.
-func calculateDirection(dx, dz float32) int {
-	// Calculate angle in radians (atan2 gives -PI to PI)
-	angle := gomath.Atan2(float64(dx), float64(dz))
-
-	// Convert to 0-2*PI range
-	if angle < 0 {
-		angle += 2 * gomath.Pi
-	}
-
-	// Divide circle into 8 sectors (each 45 degrees = PI/4)
-	// Add PI/8 offset to center each sector
-	sector := int((angle + gomath.Pi/8) / (gomath.Pi / 4))
-	if sector >= 8 {
-		sector = 0
-	}
-
-	// Map sectors to RO direction order
-	// angle=0 is +Z direction (South in RO terms = facing camera)
-	// Clockwise: S(0), SE(7), E(6), NE(5), N(4), NW(3), W(2), SW(1)
-	directionMap := []int{0, 7, 6, 5, 4, 3, 2, 1}
-	return directionMap[sector]
-}
-
 // transformPoint applies a 4x4 matrix transformation to a 3D point.
 func transformPoint(m math.Mat4, p [3]float32) [3]float32 {
 	x := m[0]*p[0] + m[4]*p[1] + m[8]*p[2] + m[12]

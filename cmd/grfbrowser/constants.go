@@ -3,24 +3,11 @@ package main
 
 import "math"
 
-// Direction indices (RO convention: 0=S, clockwise)
-const (
-	DirS  = 0 // South (facing camera)
-	DirSW = 1 // Southwest
-	DirW  = 2 // West
-	DirNW = 3 // Northwest
-	DirN  = 4 // North (away from camera)
-	DirNE = 5 // Northeast
-	DirE  = 6 // East
-	DirSE = 7 // Southeast
+// Number of directions for character sprites
+const NumDirections = 8
 
-	NumDirections = 8
-)
-
-// Action types for character animations
+// Extended action types (entity package has ActionIdle and ActionWalk)
 const (
-	ActionIdle   = 0
-	ActionWalk   = 1
 	ActionSit    = 2
 	ActionPickUp = 3
 )
