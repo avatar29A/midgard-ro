@@ -15,9 +15,9 @@ var (
 
 // UI background colors
 var (
-	BackgroundColor    = [4]float32{0.1, 0.1, 0.12, 1.0}
-	PreviewBackground  = [4]float32{0.15, 0.15, 0.15, 1.0}
-	DebugTextColor     = color.RGBA{R: 255, G: 255, B: 255, A: 255}
+	BackgroundColor   = [4]float32{0.1, 0.1, 0.12, 1.0}
+	PreviewBackground = [4]float32{0.15, 0.15, 0.15, 1.0}
+	DebugTextColor    = color.RGBA{R: 255, G: 255, B: 255, A: 255}
 )
 
 // Model viewer colors

@@ -3,7 +3,7 @@ package main
 
 import "math"
 
-// Number of directions for character sprites
+// NumDirections is the number of directions for character sprites.
 const NumDirections = 8
 
 // Extended action types (entity package has ActionIdle and ActionWalk)
@@ -62,11 +62,11 @@ const (
 
 // Preview list limits
 const (
-	MaxPreviewListItems   = 100
-	MaxEffectListItems    = 50
-	MaxSoundListItems     = 50
-	MaxLightListItems     = 50
-	MaxModelListItems     = 100
+	MaxPreviewListItems = 100
+	MaxEffectListItems  = 50
+	MaxSoundListItems   = 50
+	MaxLightListItems   = 50
+	MaxModelListItems   = 100
 )
 
 // Water rendering
