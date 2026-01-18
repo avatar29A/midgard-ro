@@ -20,6 +20,7 @@ import (
 	rsmmodel "github.com/Faultbox/midgard-ro/internal/engine/model"
 	"github.com/Faultbox/midgard-ro/internal/engine/picking"
 	"github.com/Faultbox/midgard-ro/internal/engine/shader"
+	"github.com/Faultbox/midgard-ro/internal/engine/shadow"
 	"github.com/Faultbox/midgard-ro/internal/engine/sprite"
 	"github.com/Faultbox/midgard-ro/internal/engine/terrain"
 	"github.com/Faultbox/midgard-ro/internal/engine/water"
@@ -320,6 +321,9 @@ type MapViewer struct {
 	// Debug options
 	ForceAllTwoSided bool // Force all faces to render as two-sided (debug)
 
+	// Global scale multiplier for RSM models (buildings, props)
+	ModelScale float32 // Multiplier applied to all model scales (default 1.0)
+
 	// Diagnostics
 	Diagnostics MapDiagnostics
 
@@ -391,6 +395,22 @@ type MapViewer struct {
 	FogFar     float32
 	FogColor   [3]float32
 
+	// Shadow mapping (Enhanced Graphics)
+	shadowMap                *shadow.Map
+	shadowProgram            uint32
+	ShadowsEnabled           bool  // Public for UI toggle
+	ShadowResolution         int32 // Shadow map resolution (default 2048)
+	lightViewProj            math.Mat4
+	locShadowLightViewProj   int32 // Shadow shader uniform
+	locShadowModel           int32 // Shadow shader model matrix
+	locTerrainLightViewProj  int32 // Terrain shader shadow uniform
+	locTerrainShadowMap      int32 // Terrain shader shadow map texture
+	locTerrainShadowsEnabled int32 // Terrain shader shadow toggle
+	locModelLightViewProj    int32 // Model shader shadow uniform
+	locModelModel            int32 // Model shader model matrix
+	locModelShadowMap        int32 // Model shader shadow map texture
+	locModelShadowsEnabled   int32 // Model shader shadow toggle
+
 	// Selection bounding box rendering
 	bboxProgram  uint32
 	bboxVAO      uint32
@@ -415,12 +435,18 @@ func NewMapViewer(width, height int32) (*MapViewer, error) {
 		MoveSpeed:      5.0,
 		MaxModels:      1500, // Default model limit
 		Brightness:     1.0,  // Default terrain brightness multiplier
+		ModelScale:     1.0,  // Default model scale (1.0 = original size)
 		SelectedIdx:    -1,   // No model selected initially
 		// Default lighting (will be overwritten by RSW data)
 		lightDir:     [3]float32{0.5, 0.866, 0.0}, // 60 degrees elevation
 		ambientColor: [3]float32{0.3, 0.3, 0.3},
 		diffuseColor: [3]float32{1.0, 1.0, 1.0},
 		lightOpacity: 1.0, // Default shadow opacity
+		// Shadow mapping defaults
+		ShadowsEnabled:   true,
+		ShadowResolution: shadow.DefaultResolution,
+		// Render quality defaults
+		ForceAllTwoSided: true, // Many RO models have missing back faces
 	}
 
 	if err := mv.createFramebuffer(); err != nil {
@@ -441,6 +467,17 @@ func NewMapViewer(width, height int32) (*MapViewer, error) {
 
 	if err := mv.createSpriteShader(); err != nil {
 		return nil, fmt.Errorf("creating sprite shader: %w", err)
+	}
+
+	if err := mv.createShadowShader(); err != nil {
+		return nil, fmt.Errorf("creating shadow shader: %w", err)
+	}
+
+	// Initialize shadow map
+	mv.shadowMap = shadow.NewMap(mv.ShadowResolution)
+	if mv.shadowMap == nil {
+		// Shadow mapping not critical - continue without it
+		mv.ShadowsEnabled = false
 	}
 
 	mv.createFallbackTexture()
@@ -523,6 +560,11 @@ func (mv *MapViewer) createTerrainShader() error {
 	mv.locFogFar = shader.GetUniform(program, "uFogFar")
 	mv.locFogColor = shader.GetUniform(program, "uFogColor")
 
+	// Shadow mapping uniforms
+	mv.locTerrainLightViewProj = shader.GetUniform(program, "uLightViewProj")
+	mv.locTerrainShadowMap = shader.GetUniform(program, "uShadowMap")
+	mv.locTerrainShadowsEnabled = shader.GetUniform(program, "uShadowsEnabled")
+
 	return nil
 }
 
@@ -545,10 +587,31 @@ func (mv *MapViewer) createModelShader() error {
 	mv.locModelFogFar = shader.GetUniform(program, "uFogFar")
 	mv.locModelFogColor = shader.GetUniform(program, "uFogColor")
 
+	// Shadow mapping uniforms
+	mv.locModelLightViewProj = shader.GetUniform(program, "uLightViewProj")
+	mv.locModelModel = shader.GetUniform(program, "uModel")
+	mv.locModelShadowMap = shader.GetUniform(program, "uShadowMap")
+	mv.locModelShadowsEnabled = shader.GetUniform(program, "uShadowsEnabled")
+
 	// Compile water shader
 	if err := mv.compileWaterShader(); err != nil {
 		return fmt.Errorf("water shader: %w", err)
 	}
+
+	return nil
+}
+
+// createShadowShader compiles the shadow pass shader program.
+func (mv *MapViewer) createShadowShader() error {
+	program, err := shader.CompileProgram(shaders.ShadowVertexShader, shaders.ShadowFragmentShader)
+	if err != nil {
+		return fmt.Errorf("shadow shader: %w", err)
+	}
+	mv.shadowProgram = program
+
+	// Get uniform locations
+	mv.locShadowLightViewProj = shader.GetUniform(program, "uLightViewProj")
+	mv.locShadowModel = shader.GetUniform(program, "uModel")
 
 	return nil
 }
@@ -1556,6 +1619,67 @@ func (mv *MapViewer) uploadLightmapAtlas() {
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
 }
 
+// renderShadowPass renders the scene to the shadow map for shadow calculations.
+func (mv *MapViewer) renderShadowPass() {
+	if mv.shadowMap == nil || !mv.shadowMap.IsValid() {
+		return
+	}
+
+	// Bind shadow map framebuffer
+	mv.shadowMap.Bind()
+
+	// Use shadow shader
+	gl.UseProgram(mv.shadowProgram)
+	gl.UniformMatrix4fv(mv.locShadowLightViewProj, 1, false, &mv.lightViewProj[0])
+
+	// Render terrain to shadow map (terrain is at origin, identity model matrix)
+	identityMatrix := math.Identity()
+	gl.UniformMatrix4fv(mv.locShadowModel, 1, false, &identityMatrix[0])
+
+	gl.BindVertexArray(mv.terrainVAO)
+	for _, group := range mv.terrainGroups {
+		gl.DrawElementsWithOffset(gl.TRIANGLES, group.IndexCount, gl.UNSIGNED_INT, uintptr(group.StartIndex*4))
+	}
+
+	// Render models to shadow map
+	offsetX := mv.mapWidth / 2
+	offsetZ := mv.mapHeight / 2
+
+	for _, model := range mv.models {
+		if model.vao == 0 || model.indexCount == 0 || !model.Visible {
+			continue
+		}
+
+		// Build model matrix (same as in renderModels)
+		worldX := model.position[0] + offsetX
+		worldY := -model.position[1]
+		worldZ := model.position[2] + offsetZ
+
+		modelMatrix := math.Identity()
+		modelMatrix = modelMatrix.Mul(math.Translate(worldX, worldY, worldZ))
+		modelMatrix = modelMatrix.Mul(math.RotateY(model.rotation[1] * gomath.Pi / 180))
+		modelMatrix = modelMatrix.Mul(math.RotateX(model.rotation[0] * gomath.Pi / 180))
+		modelMatrix = modelMatrix.Mul(math.RotateZ(model.rotation[2] * gomath.Pi / 180))
+		// Apply per-model scale multiplied by global ModelScale
+		modelMatrix = modelMatrix.Mul(math.Scale(
+			model.scale[0]*mv.ModelScale,
+			model.scale[1]*mv.ModelScale,
+			model.scale[2]*mv.ModelScale,
+		))
+
+		gl.UniformMatrix4fv(mv.locShadowModel, 1, false, &modelMatrix[0])
+
+		gl.BindVertexArray(model.vao)
+		for _, group := range model.texGroups {
+			gl.DrawElementsWithOffset(gl.TRIANGLES, group.IndexCount, gl.UNSIGNED_INT, uintptr(group.StartIndex*4))
+		}
+	}
+
+	// Unbind shadow map framebuffer
+	mv.shadowMap.Unbind()
+	gl.BindVertexArray(0)
+}
+
 // fitCamera positions camera to view entire map.
 func (mv *MapViewer) fitCamera() {
 	mv.OrbitCam.FitToBounds(
@@ -1570,7 +1694,40 @@ func (mv *MapViewer) Render() uint32 {
 		return mv.colorTexture
 	}
 
-	// Bind framebuffer
+	// Calculate view-projection matrix first (needed for shadow pass too)
+	aspect := float32(mv.width) / float32(mv.height)
+	proj := math.Perspective(45.0, aspect, 1.0, 10000.0)
+
+	var view math.Mat4
+	if mv.PlayMode && mv.Player != nil {
+		player := mv.Player
+		view = mv.FollowCam.ViewMatrix(player.WorldX, player.WorldY, player.WorldZ)
+	} else if mv.PlayMode {
+		view = mv.OrbitCam.ViewMatrix()
+	} else {
+		view = mv.OrbitCam.ViewMatrix()
+	}
+
+	viewProj := proj.Mul(view)
+
+	// Cache matrices for picking
+	mv.lastView = view
+	mv.lastProj = proj
+	mv.lastViewProj = viewProj
+
+	// Calculate light view-projection for shadow mapping
+	if mv.ShadowsEnabled && mv.shadowMap != nil && mv.shadowMap.IsValid() {
+		sceneBounds := shadow.AABB{
+			Min: mv.minBounds,
+			Max: mv.maxBounds,
+		}
+		mv.lightViewProj = shadow.CalculateDirectionalLightMatrix(mv.lightDir, sceneBounds)
+
+		// Render shadow pass
+		mv.renderShadowPass()
+	}
+
+	// Bind main framebuffer
 	gl.BindFramebuffer(gl.FRAMEBUFFER, mv.fbo)
 	gl.Viewport(0, 0, mv.width, mv.height)
 
@@ -1582,30 +1739,6 @@ func (mv *MapViewer) Render() uint32 {
 	gl.Enable(gl.DEPTH_TEST)
 	gl.DepthFunc(gl.LESS)
 
-	// Calculate view-projection matrix
-	aspect := float32(mv.width) / float32(mv.height)
-	proj := math.Perspective(45.0, aspect, 1.0, 10000.0)
-
-	var view math.Mat4
-	if mv.PlayMode && mv.Player != nil {
-		// Play camera - RO-style third-person following player
-		player := mv.Player
-		view = mv.FollowCam.ViewMatrix(player.WorldX, player.WorldY, player.WorldZ)
-	} else if mv.PlayMode {
-		// Fallback if no player - use orbit camera
-		view = mv.OrbitCam.ViewMatrix()
-	} else {
-		// Orbit camera - rotate around center point
-		view = mv.OrbitCam.ViewMatrix()
-	}
-
-	viewProj := proj.Mul(view)
-
-	// Cache matrices for picking
-	mv.lastView = view
-	mv.lastProj = proj
-	mv.lastViewProj = viewProj
-
 	// Use terrain shader with RSW lighting data
 	gl.UseProgram(mv.terrainProgram)
 	gl.UniformMatrix4fv(mv.locViewProj, 1, false, &viewProj[0])
@@ -1616,6 +1749,15 @@ func (mv *MapViewer) Render() uint32 {
 	gl.Uniform1i(mv.locLightmap, 1)
 	gl.Uniform1f(mv.locBrightness, mv.Brightness)
 	gl.Uniform1f(mv.locLightOpacity, mv.lightOpacity)
+
+	// Shadow mapping uniforms for terrain
+	gl.UniformMatrix4fv(mv.locTerrainLightViewProj, 1, false, &mv.lightViewProj[0])
+	gl.Uniform1i(mv.locTerrainShadowMap, 2) // Shadow map on texture unit 2
+	if mv.ShadowsEnabled && mv.shadowMap != nil && mv.shadowMap.IsValid() {
+		gl.Uniform1i(mv.locTerrainShadowsEnabled, 1)
+	} else {
+		gl.Uniform1i(mv.locTerrainShadowsEnabled, 0)
+	}
 
 	// Fog uniforms
 	if mv.FogEnabled {
@@ -1633,6 +1775,11 @@ func (mv *MapViewer) Render() uint32 {
 		gl.BindTexture(gl.TEXTURE_2D, mv.lightmapAtlasTex)
 	} else {
 		gl.BindTexture(gl.TEXTURE_2D, mv.fallbackTex)
+	}
+
+	// Bind shadow map to texture unit 2
+	if mv.shadowMap != nil && mv.shadowMap.IsValid() {
+		mv.shadowMap.BindTexture(gl.TEXTURE2)
 	}
 
 	// Bind terrain VAO
@@ -1684,10 +1831,11 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 	mv.renderPlayerShadow(viewProj)
 
 	// ========== STEP 1: Calculate camera-facing billboard vectors ==========
-	camRight, camUp := character.BillboardVectors(mv.FollowCam.PosX, mv.FollowCam.PosZ, player.WorldX, player.WorldZ)
+	// Use render position for smooth visual appearance
+	camRight, camUp := character.BillboardVectors(mv.FollowCam.PosX, mv.FollowCam.PosZ, player.RenderX, player.RenderZ)
 
 	// ========== STEP 2: Calculate visual direction with hysteresis ==========
-	cameraAngle := character.CameraAngleToPlayer(mv.FollowCam.PosX, mv.FollowCam.PosZ, player.WorldX, player.WorldZ)
+	cameraAngle := character.CameraAngleToPlayer(mv.FollowCam.PosX, mv.FollowCam.PosZ, player.RenderX, player.RenderZ)
 	visualDir, newSector := character.CalculateVisualDirection(cameraAngle, player.Direction, player.LastVisualDir)
 	player.LastVisualDir = newSector
 
@@ -1713,10 +1861,11 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 				gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 				gl.UseProgram(mv.spriteProgram)
 
-				// Position sprite centered on player, slight lift for feet
-				posX := player.WorldX
-				posY := player.WorldY + spriteHeight*0.05
-				posZ := player.WorldZ
+				// Position sprite centered on player, lift to align feet with ground
+				// Use render position for smooth interpolated movement
+				posX := player.RenderX
+				posY := player.RenderY + spriteHeight*0.12
+				posZ := player.RenderZ
 
 				gl.UniformMatrix4fv(mv.locSpriteVP, 1, false, &viewProj[0])
 				gl.Uniform3f(mv.locSpritePos, posX, posY, posZ)
@@ -1812,7 +1961,8 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 	gl.UseProgram(mv.spriteProgram)
 
 	gl.UniformMatrix4fv(mv.locSpriteVP, 1, false, &viewProj[0])
-	gl.Uniform3f(mv.locSpritePos, player.WorldX, player.WorldY, player.WorldZ)
+	// Use render position for smooth interpolated movement
+	gl.Uniform3f(mv.locSpritePos, player.RenderX, player.RenderY, player.RenderZ)
 	gl.Uniform2f(mv.locSpriteSize, spriteWidth, spriteHeight)
 	gl.Uniform4f(mv.locSpriteTint, tint[0], tint[1], tint[2], tint[3])
 	gl.Uniform3f(mv.locSpriteCamRight, camRight[0], camRight[1], camRight[2])
@@ -1901,9 +2051,10 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 
 					totalOffsetX := offsetX + layerX
 
-					headPosX := player.WorldX + totalOffsetX*camRight[0]
-					headPosY := player.WorldY - (offsetY + layerY) + (bodyLayerY * player.SpriteScale * 0.35)
-					headPosZ := player.WorldZ + totalOffsetX*camRight[2]
+					// Use render position for smooth interpolated movement
+					headPosX := player.RenderX + totalOffsetX*camRight[0]
+					headPosY := player.RenderY - (offsetY + layerY) + (bodyLayerY * player.SpriteScale * 0.35)
+					headPosZ := player.RenderZ + totalOffsetX*camRight[2]
 
 					gl.Disable(gl.DEPTH_TEST)
 					gl.Uniform3f(mv.locSpritePos, headPosX, headPosY, headPosZ)
@@ -1939,11 +2090,12 @@ func (mv *MapViewer) renderPlayerShadow(viewProj math.Mat4) {
 	gl.UseProgram(mv.spriteProgram)
 
 	// Shadow position slightly above ground to avoid z-fighting
-	shadowY := player.WorldY + 0.5
+	// Use render position for smooth interpolated movement
+	shadowY := player.RenderY + 0.5
 
 	// Set uniforms - position the shadow flat on the ground
 	gl.UniformMatrix4fv(mv.locSpriteVP, 1, false, &viewProj[0])
-	gl.Uniform3f(mv.locSpritePos, player.WorldX, shadowY, player.WorldZ)
+	gl.Uniform3f(mv.locSpritePos, player.RenderX, shadowY, player.RenderZ)
 	gl.Uniform2f(mv.locSpriteSize, 1.0, 1.0) // Size is baked into VBO
 	gl.Uniform4f(mv.locSpriteTint, 1.0, 1.0, 1.0, 1.0)
 	// Shadow is flat on ground (XZ plane), not camera-facing
@@ -2120,6 +2272,16 @@ func (mv *MapViewer) renderModels(viewProj math.Mat4) {
 	gl.Uniform3f(mv.locModelDiffuse, mv.diffuseColor[0], mv.diffuseColor[1], mv.diffuseColor[2])
 	gl.Uniform1i(mv.locModelTexture, 0)
 
+	// Shadow mapping uniforms for models
+	gl.UniformMatrix4fv(mv.locModelLightViewProj, 1, false, &mv.lightViewProj[0])
+	gl.Uniform1i(mv.locModelShadowMap, 2) // Shadow map on texture unit 2
+	if mv.ShadowsEnabled && mv.shadowMap != nil && mv.shadowMap.IsValid() {
+		gl.Uniform1i(mv.locModelShadowsEnabled, 1)
+		mv.shadowMap.BindTexture(gl.TEXTURE2)
+	} else {
+		gl.Uniform1i(mv.locModelShadowsEnabled, 0)
+	}
+
 	// Fog uniforms for models
 	if mv.FogEnabled {
 		gl.Uniform1i(mv.locModelFogUse, 1)
@@ -2164,12 +2326,17 @@ func (mv *MapViewer) renderModels(viewProj math.Mat4) {
 		modelMatrix = modelMatrix.Mul(math.RotateX(model.rotation[0] * gomath.Pi / 180))
 		modelMatrix = modelMatrix.Mul(math.RotateZ(model.rotation[2] * gomath.Pi / 180))
 
-		// Apply scale
-		modelMatrix = modelMatrix.Mul(math.Scale(model.scale[0], model.scale[1], model.scale[2]))
+		// Apply per-model scale multiplied by global ModelScale
+		modelMatrix = modelMatrix.Mul(math.Scale(
+			model.scale[0]*mv.ModelScale,
+			model.scale[1]*mv.ModelScale,
+			model.scale[2]*mv.ModelScale,
+		))
 
 		// Combine with view-projection
 		mvp := viewProj.Mul(modelMatrix)
 		gl.UniformMatrix4fv(mv.locModelMVP, 1, false, &mvp[0])
+		gl.UniformMatrix4fv(mv.locModelModel, 1, false, &modelMatrix[0])
 
 		gl.BindVertexArray(model.vao)
 
@@ -2382,7 +2549,7 @@ func (mv *MapViewer) LoadPlayerCharacter(texLoader func(string) ([]byte, error))
 		Character:   char,
 		SPR:         spr,
 		ACT:         act,
-		SpriteScale: 0.28, // Scale down sprite pixels to world units
+		SpriteScale: DefaultSpriteScale,
 	}
 
 	// Create GPU textures for each sprite image
@@ -2484,7 +2651,7 @@ func (mv *MapViewer) LoadPlayerCharacterFromPath(texLoader func(string) ([]byte,
 		Character:   char,
 		SPR:         spr,
 		ACT:         act,
-		SpriteScale: 0.28, // Scale down sprite pixels to world units
+		SpriteScale: DefaultSpriteScale,
 	}
 
 	// Load head sprite if path provided
@@ -2832,10 +2999,14 @@ func (mv *MapViewer) initializePlayerPosition() {
 		centerZ = mv.mapHeight / 2
 	}
 
-	// Set player position
+	// Set player position (both world and render to prevent lerp on spawn)
 	mv.Player.WorldX = centerX
 	mv.Player.WorldZ = centerZ
 	mv.Player.WorldY = mv.GetInterpolatedTerrainHeight(centerX, centerZ)
+	// Sync render position to avoid sprite interpolating from origin
+	mv.Player.RenderX = mv.Player.WorldX
+	mv.Player.RenderY = mv.Player.WorldY
+	mv.Player.RenderZ = mv.Player.WorldZ
 
 	fmt.Printf("Player spawned at (%.0f, %.0f, %.0f)\n", mv.Player.WorldX, mv.Player.WorldY, mv.Player.WorldZ)
 }
