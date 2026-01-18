@@ -445,21 +445,19 @@ func getNeighborColor(gnd *formats.GND, nx, ny int, fallback *formats.GNDSurface
 	return surfaceColor(&gnd.Surfaces[neighborTile.TopSurface])
 }
 
-// BuildTileGrid creates a tile grid mesh from GAT data for debug visualization.
+// BuildTileGrid creates a tile grid mesh from GAT and GND data for debug visualization.
 // The grid shows walkability with color-coded tiles (Korangar-style debug feature).
-// Heights are negated to match the terrain coordinate system.
+// Uses GND heights for accurate terrain alignment, GAT for walkability colors.
 // tileOffset is a small Y offset to render the grid slightly above the terrain.
-func BuildTileGrid(gat *formats.GAT, tileZoom float32, tileOffset float32) *TileGrid {
-	if gat == nil {
+func BuildTileGrid(gat *formats.GAT, gnd *formats.GND, tileOffset float32) *TileGrid {
+	if gat == nil || gnd == nil {
 		return nil
 	}
 
-	width := int(gat.Width)
-	height := int(gat.Height)
-
-	// GAT tiles are half the size of GND tiles (2 GAT cells per GND tile)
-	// In RO, GAT_TILE_SIZE = GROUND_TILE_SIZE / 2
-	gatTileSize := tileZoom / 2.0
+	// Use GND dimensions and tile size
+	width := int(gnd.Width)
+	height := int(gnd.Height)
+	tileSize := gnd.Zoom
 
 	// Pre-allocate
 	vertices := make([]TileGridVertex, 0, width*height*4)
@@ -467,26 +465,37 @@ func BuildTileGrid(gat *formats.GAT, tileZoom float32, tileOffset float32) *Tile
 
 	for y := range height {
 		for x := range width {
-			cell := gat.GetCell(x, y)
-			if cell == nil {
+			// Get GND tile for height data
+			tile := gnd.GetTile(x, y)
+			if tile == nil {
 				continue
 			}
 
+			// Get GAT cell for walkability color
+			// GAT may have same or different dimensions - map accordingly
+			gatX := x * int(gat.Width) / width
+			gatY := y * int(gat.Height) / height
+			cell := gat.GetCell(gatX, gatY)
+
 			// Determine color based on cell type
-			color := tileColor(cell.Type)
+			var color [4]float32
+			if cell != nil {
+				color = tileColor(cell.Type)
+			} else {
+				color = [4]float32{0.5, 0.5, 0.5, 0.5} // Gray for missing
+			}
 
-			// Calculate corner positions
-			offsetX := float32(x) * gatTileSize
-			offsetZ := float32(y) * gatTileSize
+			// Calculate corner positions using GND coordinates and heights
+			baseX := float32(x) * tileSize
+			baseZ := float32(y) * tileSize
 
-			// Heights are negated (like in Korangar) and offset slightly above terrain
+			// Use GND heights (negated) with offset above terrain
 			// Z coordinate: Z + tileSize = south (bottom), Z = north (top)
-			// This matches the GND coordinate system
 			corners := [4][3]float32{
-				{offsetX, -cell.Heights[0] + tileOffset, offsetZ + gatTileSize},                             // SW (bottom-left)
-				{offsetX + gatTileSize, -cell.Heights[1] + tileOffset, offsetZ + gatTileSize},               // SE (bottom-right)
-				{offsetX, -cell.Heights[2] + tileOffset, offsetZ},                                           // NW (top-left)
-				{offsetX + gatTileSize, -cell.Heights[3] + tileOffset, offsetZ},                             // NE (top-right)
+				{baseX, -tile.Altitude[0] + tileOffset, baseZ + tileSize},            // SW (bottom-left)
+				{baseX + tileSize, -tile.Altitude[1] + tileOffset, baseZ + tileSize}, // SE (bottom-right)
+				{baseX, -tile.Altitude[2] + tileOffset, baseZ},                       // NW (top-left)
+				{baseX + tileSize, -tile.Altitude[3] + tileOffset, baseZ},            // NE (top-right)
 			}
 
 			baseIdx := uint32(len(vertices))
