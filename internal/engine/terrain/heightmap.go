@@ -66,19 +66,19 @@ func GetInterpolatedHeight(gat *formats.GAT, worldX, worldZ float32) float32 {
 	fracX = clampf(fracX, 0, 1)
 	fracZ = clampf(fracZ, 0, 1)
 
-	// Get cell heights (corners: 0=BL, 1=BR, 2=TL, 3=TR)
+	// Get cell heights (corners: 0=SW, 1=SE, 2=NW, 3=NE)
 	cell := gat.GetCell(cellX, cellZ)
 	if cell == nil {
 		return 0
 	}
 
-	// Bilinear interpolation
-	// Bottom edge: lerp between bottom-left and bottom-right
-	bottom := cell.Heights[0]*(1-fracX) + cell.Heights[1]*fracX
-	// Top edge: lerp between top-left and top-right
-	top := cell.Heights[2]*(1-fracX) + cell.Heights[3]*fracX
-	// Final: lerp between bottom and top edges
-	height := bottom*(1-fracZ) + top*fracZ
+	// Bilinear interpolation (Korangar style)
+	// South edge (lower Z): lerp between SW and SE
+	south := cell.Heights[0]*(1-fracX) + cell.Heights[1]*fracX
+	// North edge (higher Z): lerp between NW and NE
+	north := cell.Heights[2]*(1-fracX) + cell.Heights[3]*fracX
+	// Final: lerp between south and north edges based on Z position
+	height := south*(1-fracZ) + north*fracZ
 
 	// GAT heights are typically negative (lower = higher in RO coordinate system)
 	return -height

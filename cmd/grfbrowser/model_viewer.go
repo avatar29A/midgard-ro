@@ -746,6 +746,10 @@ func uploadModelTexture(img *image.RGBA) uint32 {
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT)
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT)
 
+	// Limit max mipmap level to reduce texture bleeding at lowest LODs
+	// For 256x256 textures, level 4 is 16x16 which is good enough
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAX_LEVEL, 4)
+
 	// Enable anisotropic filtering for better quality at oblique angles (8x)
 	gl.TexParameterf(gl.TEXTURE_2D, gl.TEXTURE_MAX_ANISOTROPY, 8.0)
 
