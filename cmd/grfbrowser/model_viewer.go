@@ -746,6 +746,86 @@ func uploadModelTexture(img *image.RGBA) uint32 {
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT)
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT)
 
+	// Limit max mipmap level to reduce texture bleeding at lowest LODs
+	// For 256x256 textures, level 4 is 16x16 which is good enough
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAX_LEVEL, 4)
+
+	// Enable anisotropic filtering for better quality at oblique angles (8x)
+	gl.TexParameterf(gl.TEXTURE_2D, gl.TEXTURE_MAX_ANISOTROPY, 8.0)
+
+	return texID
+}
+
+// uploadTerrainTexture uploads a texture with 1-pixel padding to prevent
+// texture bleeding at mipmap boundaries (roBrowser atlas style).
+// This creates a 258x258 texture from a 256x256 source, with edge pixels
+// duplicated into the padding region.
+func uploadTerrainTexture(img *image.RGBA) uint32 {
+	srcBounds := img.Bounds()
+	srcW := srcBounds.Dx()
+	srcH := srcBounds.Dy()
+
+	// Create padded image (1 pixel padding on each side)
+	paddedW := srcW + 2
+	paddedH := srcH + 2
+	padded := image.NewRGBA(image.Rect(0, 0, paddedW, paddedH))
+
+	// Copy source image to center (offset by 1,1)
+	for y := 0; y < srcH; y++ {
+		for x := 0; x < srcW; x++ {
+			c := img.RGBAAt(srcBounds.Min.X+x, srcBounds.Min.Y+y)
+			padded.SetRGBA(x+1, y+1, c)
+		}
+	}
+
+	// Duplicate edges into padding region
+
+	// Top and bottom edges
+	for x := 0; x < srcW; x++ {
+		// Top edge (y=0 in padded = copy from y=0 in source)
+		c := img.RGBAAt(srcBounds.Min.X+x, srcBounds.Min.Y)
+		padded.SetRGBA(x+1, 0, c)
+
+		// Bottom edge (y=paddedH-1 in padded = copy from y=srcH-1 in source)
+		c = img.RGBAAt(srcBounds.Min.X+x, srcBounds.Min.Y+srcH-1)
+		padded.SetRGBA(x+1, paddedH-1, c)
+	}
+
+	// Left and right edges
+	for y := 0; y < srcH; y++ {
+		// Left edge (x=0 in padded = copy from x=0 in source)
+		c := img.RGBAAt(srcBounds.Min.X, srcBounds.Min.Y+y)
+		padded.SetRGBA(0, y+1, c)
+
+		// Right edge (x=paddedW-1 in padded = copy from x=srcW-1 in source)
+		c = img.RGBAAt(srcBounds.Min.X+srcW-1, srcBounds.Min.Y+y)
+		padded.SetRGBA(paddedW-1, y+1, c)
+	}
+
+	// Corners
+	padded.SetRGBA(0, 0, img.RGBAAt(srcBounds.Min.X, srcBounds.Min.Y))                       // Top-left
+	padded.SetRGBA(paddedW-1, 0, img.RGBAAt(srcBounds.Min.X+srcW-1, srcBounds.Min.Y))        // Top-right
+	padded.SetRGBA(0, paddedH-1, img.RGBAAt(srcBounds.Min.X, srcBounds.Min.Y+srcH-1))        // Bottom-left
+	padded.SetRGBA(paddedW-1, paddedH-1, img.RGBAAt(srcBounds.Min.X+srcW-1, srcBounds.Min.Y+srcH-1)) // Bottom-right
+
+	// Upload padded texture to GPU
+	var texID uint32
+	gl.GenTextures(1, &texID)
+	gl.BindTexture(gl.TEXTURE_2D, texID)
+
+	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA,
+		int32(paddedW), int32(paddedH),
+		0, gl.RGBA, gl.UNSIGNED_BYTE, unsafe.Pointer(&padded.Pix[0]))
+
+	// Generate mipmaps for smooth rendering at distance
+	gl.GenerateMipmap(gl.TEXTURE_2D)
+
+	// Use trilinear filtering for smooth appearance
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+
 	// Enable anisotropic filtering for better quality at oblique angles (8x)
 	gl.TexParameterf(gl.TEXTURE_2D, gl.TEXTURE_MAX_ANISOTROPY, 8.0)
 

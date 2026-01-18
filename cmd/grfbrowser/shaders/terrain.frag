@@ -22,9 +22,57 @@ uniform float uFogNear;
 uniform float uFogFar;
 uniform vec3 uFogColor;
 
+// Point lights (RSW light sources)
+const int MAX_POINT_LIGHTS = 32;
+uniform vec3 uPointLightPositions[MAX_POINT_LIGHTS];
+uniform vec3 uPointLightColors[MAX_POINT_LIGHTS];
+uniform float uPointLightRanges[MAX_POINT_LIGHTS];
+uniform float uPointLightIntensities[MAX_POINT_LIGHTS];
+uniform int uPointLightCount;
+uniform bool uPointLightsEnabled;
+
 out vec4 FragColor;
 
 // PCF shadow sampling with 3x3 kernel for soft edges
+// Calculate point light contribution using quadratic attenuation
+vec3 calculatePointLights(vec3 worldPos, vec3 normal) {
+    if (!uPointLightsEnabled || uPointLightCount <= 0) {
+        return vec3(0.0);
+    }
+
+    vec3 totalLight = vec3(0.0);
+
+    for (int i = 0; i < uPointLightCount && i < MAX_POINT_LIGHTS; i++) {
+        vec3 lightPos = uPointLightPositions[i];
+        vec3 lightColor = uPointLightColors[i];
+        float lightRange = uPointLightRanges[i];
+        float lightIntensity = uPointLightIntensities[i];
+
+        // Direction from fragment to light
+        vec3 lightDir = lightPos - worldPos;
+        float distance = length(lightDir);
+
+        // Skip if outside light range
+        if (distance > lightRange) {
+            continue;
+        }
+
+        lightDir = normalize(lightDir);
+
+        // Quadratic attenuation with smooth falloff at range boundary
+        float attenuation = 1.0 - (distance / lightRange);
+        attenuation = attenuation * attenuation;  // Quadratic falloff
+
+        // Simple diffuse lighting (half-lambert for softer shadows)
+        float NdotL = dot(normal, lightDir) * 0.5 + 0.5;
+
+        // Accumulate light contribution
+        totalLight += lightColor * lightIntensity * NdotL * attenuation;
+    }
+
+    return totalLight;
+}
+
 float calculateShadow() {
     if (!uShadowsEnabled) {
         return 1.0;  // Fully lit if shadows disabled
@@ -68,22 +116,28 @@ void main() {
         discard;
     }
 
-    // Lightmap: RGB = color tint, A = shadow intensity (0=shadow, 1=lit)
+    // DEBUG: Output just texture color to test if stripes come from lighting
+    // FragColor = texColor;
+    // return;
+
+    // Lightmap: RGB = color tint (Korangar style: baked shadows are in vertex colors, not lightmap alpha)
     vec4 lightmap = texture(uLightmap, vLightmapUV);
-    float bakedShadow = lightmap.a;  // 0.0 = full shadow, 1.0 = fully lit (baked)
-    vec3 colorTint = lightmap.rgb;   // Color tint (0-255 normalized by GPU)
+    vec3 colorTint = lightmap.rgb;   // Color tint only
 
     // Real-time shadow from shadow map (softened to 50% intensity)
     float realtimeShadow = calculateShadow();
     realtimeShadow = mix(1.0, realtimeShadow, 0.5);  // Softer shadows
 
-    // Combine baked and real-time shadows (multiply for darkest)
-    float combinedShadow = bakedShadow * realtimeShadow;
+    // Baked shadows are now in vertex colors (vColor), not lightmap alpha
+    // This gives smooth interpolation across tile boundaries (Korangar approach)
+    float combinedShadow = realtimeShadow;
 
     // Directional light component (sun)
+    // Use half-lambert for softer lighting that reduces visible triangle seams
     vec3 normal = normalize(vNormal);
     vec3 lightDir = normalize(uLightDir);
-    float NdotL = max(dot(normal, lightDir), 0.0);
+    float NdotL = dot(normal, lightDir) * 0.5 + 0.5;  // Half-lambert wrap
+    NdotL = NdotL * NdotL;  // Square for slightly sharper falloff
     vec3 directional = uDiffuse * NdotL;
 
     // Lighting formula:
@@ -96,6 +150,10 @@ void main() {
     // Mix ambient shadow based on opacity (0 = no shadow effect, 1 = full shadow)
     float ambientShadow = mix(1.0, combinedShadow, uLightOpacity);
     vec3 lighting = ambient * ambientShadow + directional * combinedShadow;
+
+    // Add point light contributions (RSW light sources)
+    vec3 pointLightContrib = calculatePointLights(vWorldPos, normal);
+    lighting += pointLightContrib;
 
     // Clamp lighting to [0, 1] range (prevents overbright)
     lighting = clamp(lighting, vec3(0.0), vec3(1.0));

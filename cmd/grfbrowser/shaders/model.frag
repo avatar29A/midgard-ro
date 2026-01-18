@@ -17,7 +17,55 @@ uniform float uFogNear;
 uniform float uFogFar;
 uniform vec3 uFogColor;
 
+// Point lights (RSW light sources)
+const int MAX_POINT_LIGHTS = 32;
+uniform vec3 uPointLightPositions[MAX_POINT_LIGHTS];
+uniform vec3 uPointLightColors[MAX_POINT_LIGHTS];
+uniform float uPointLightRanges[MAX_POINT_LIGHTS];
+uniform float uPointLightIntensities[MAX_POINT_LIGHTS];
+uniform int uPointLightCount;
+uniform bool uPointLightsEnabled;
+
 out vec4 FragColor;
+
+// Calculate point light contribution using quadratic attenuation
+vec3 calculatePointLights(vec3 worldPos, vec3 normal) {
+    if (!uPointLightsEnabled || uPointLightCount <= 0) {
+        return vec3(0.0);
+    }
+
+    vec3 totalLight = vec3(0.0);
+
+    for (int i = 0; i < uPointLightCount && i < MAX_POINT_LIGHTS; i++) {
+        vec3 lightPos = uPointLightPositions[i];
+        vec3 lightColor = uPointLightColors[i];
+        float lightRange = uPointLightRanges[i];
+        float lightIntensity = uPointLightIntensities[i];
+
+        // Direction from fragment to light
+        vec3 lightDir = lightPos - worldPos;
+        float distance = length(lightDir);
+
+        // Skip if outside light range
+        if (distance > lightRange) {
+            continue;
+        }
+
+        lightDir = normalize(lightDir);
+
+        // Quadratic attenuation with smooth falloff at range boundary
+        float attenuation = 1.0 - (distance / lightRange);
+        attenuation = attenuation * attenuation;  // Quadratic falloff
+
+        // Simple diffuse lighting (half-lambert for softer shadows)
+        float NdotL = dot(normal, lightDir) * 0.5 + 0.5;
+
+        // Accumulate light contribution
+        totalLight += lightColor * lightIntensity * NdotL * attenuation;
+    }
+
+    return totalLight;
+}
 
 // PCF shadow sampling with 3x3 kernel for soft edges
 float calculateShadow() {
@@ -79,6 +127,11 @@ void main() {
 
     // roBrowser style: models have a minimum brightness of 0.5
     vec3 lighting = ambient + diffuse;
+
+    // Add point light contributions (RSW light sources)
+    vec3 pointLightContrib = calculatePointLights(vWorldPos, normal);
+    lighting += pointLightContrib;
+
     lighting = max(lighting, vec3(0.5));
 
     vec3 color = texColor.rgb * lighting;
