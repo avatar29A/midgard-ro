@@ -52,3 +52,13 @@ var SpriteVertexShader string
 //
 //go:embed sprite.frag
 var SpriteFragmentShader string
+
+// ShadowVertexShader is the vertex shader for shadow map rendering.
+//
+//go:embed shadow.vert
+var ShadowVertexShader string
+
+// ShadowFragmentShader is the fragment shader for shadow map rendering.
+//
+//go:embed shadow.frag
+var ShadowFragmentShader string

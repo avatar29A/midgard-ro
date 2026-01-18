@@ -87,4 +87,9 @@ func ClearDestination(player *Player) {
 const ArrivalThreshold = 1.0
 
 // DefaultMoveSpeed is the default movement speed in world units per second.
+// Korangar uses 150 as base movement speed.
 const DefaultMoveSpeed = 150.0
+
+// DiagonalSpeedMultiplier is applied to diagonal movement (sqrt(2) ≈ 1.414).
+// Korangar uses 1.4 for diagonal path segments.
+const DiagonalSpeedMultiplier = 1.4

@@ -4,12 +4,32 @@ import (
 	"github.com/Faultbox/midgard-ro/internal/game/entity"
 )
 
+// Animation timing defaults (independent of movement speed)
+const (
+	// DefaultIdleAnimInterval is the default interval for idle animation in milliseconds
+	DefaultIdleAnimInterval = 250.0
+	// DefaultWalkAnimInterval is the default interval for walk animation in milliseconds
+	DefaultWalkAnimInterval = 70.0
+)
+
+// Configurable animation intervals (can be modified at runtime)
+var (
+	// IdleAnimInterval is the current interval for idle animation in milliseconds
+	IdleAnimInterval float32 = DefaultIdleAnimInterval
+	// WalkAnimInterval is the current interval for walk animation in milliseconds
+	WalkAnimInterval float32 = DefaultWalkAnimInterval
+)
+
 // UpdateAnimation advances player animation frame based on elapsed time.
+// Animation timing is independent of movement speed.
 // deltaMs is the time since last update in milliseconds.
 func UpdateAnimation(player *Player, deltaMs float32) {
 	if player == nil || player.Character == nil {
 		return
 	}
+
+	// Update render position interpolation for smooth movement
+	player.UpdateRenderPosition(deltaMs)
 
 	// Procedural players don't have animation data
 	if player.ACT == nil {
@@ -22,7 +42,7 @@ func UpdateAnimation(player *Player, deltaMs float32) {
 		newAction = entity.ActionWalk
 	}
 
-	// Reset frame when action changes
+	// Reset animation time when action changes
 	if newAction != player.CurrentAction {
 		player.CurrentAction = newAction
 		player.CurrentFrame = 0
@@ -39,14 +59,12 @@ func UpdateAnimation(player *Player, deltaMs float32) {
 		return
 	}
 
-	// Get animation interval from ACT (default 150ms for smoother animation)
-	interval := float32(150.0)
-	if actionIdx < len(player.ACT.Intervals) && player.ACT.Intervals[actionIdx] > 0 {
-		interval = player.ACT.Intervals[actionIdx]
-		// ACT intervals can be very small, enforce minimum
-		if interval < 50 {
-			interval = 50
-		}
+	// Get animation interval - use configurable values (ignore ACT intervals for consistency)
+	var interval float32
+	if player.CurrentAction == entity.ActionWalk {
+		interval = WalkAnimInterval
+	} else {
+		interval = IdleAnimInterval
 	}
 
 	// Accumulate time and advance frames
@@ -80,9 +98,3 @@ func GetFrameCount(player *Player) int {
 	}
 	return len(player.ACT.Actions[actionIdx].Frames)
 }
-
-// DefaultAnimInterval is the default animation interval in milliseconds.
-const DefaultAnimInterval = 150.0
-
-// MinAnimInterval is the minimum animation interval in milliseconds.
-const MinAnimInterval = 50.0

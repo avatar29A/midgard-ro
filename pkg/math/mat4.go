@@ -34,6 +34,22 @@ func Perspective(fovY, aspect, near, far float32) Mat4 {
 	}
 }
 
+// Ortho returns an orthographic projection matrix.
+// left, right, bottom, top define the view frustum boundaries.
+// near and far define the depth range.
+func Ortho(left, right, bottom, top, near, far float32) Mat4 {
+	rl := 1.0 / (right - left)
+	tb := 1.0 / (top - bottom)
+	fn := 1.0 / (far - near)
+
+	return Mat4{
+		2 * rl, 0, 0, 0,
+		0, 2 * tb, 0, 0,
+		0, 0, -2 * fn, 0,
+		-(right + left) * rl, -(top + bottom) * tb, -(far + near) * fn, 1,
+	}
+}
+
 // LookAt returns a view matrix looking from eye to center with up direction.
 func LookAt(eye, center, up Vec3) Mat4 {
 	f := center.Sub(eye).Normalize()
