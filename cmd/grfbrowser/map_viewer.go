@@ -1006,8 +1006,8 @@ func (mv *MapViewer) LoadMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(
 	// Build tile grid from GAT (debug visualization - Korangar style)
 	if mv.GAT != nil {
 		// Offset slightly above terrain to prevent z-fighting
-		const tileOffset float32 = 0.9
-		mv.tileGrid = terrain.BuildTileGrid(mv.GAT, gnd.Zoom, tileOffset)
+		const tileOffset float32 = 1.0
+		mv.tileGrid = terrain.BuildTileGrid(mv.GAT, gnd, tileOffset)
 		mv.uploadTileGrid()
 	}
 
