@@ -47,3 +47,16 @@ type Heightmap struct {
 	TilesZ    int         // Number of tiles in Z direction
 	TileZoom  float32     // Size of each tile in world units
 }
+
+// TileGridVertex represents a vertex for tile grid debug visualization.
+// Uses position and color (no texture coordinates).
+type TileGridVertex struct {
+	Position [3]float32
+	Color    [4]float32
+}
+
+// TileGrid holds tile grid mesh data for debug visualization.
+type TileGrid struct {
+	Vertices []TileGridVertex
+	Indices  []uint32
+}

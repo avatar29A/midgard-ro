@@ -62,3 +62,13 @@ var ShadowVertexShader string
 //
 //go:embed shadow.frag
 var ShadowFragmentShader string
+
+// TileGridVertexShader is the vertex shader for tile grid debug visualization.
+//
+//go:embed tilegrid.vert
+var TileGridVertexShader string
+
+// TileGridFragmentShader is the fragment shader for tile grid debug visualization.
+//
+//go:embed tilegrid.frag
+var TileGridFragmentShader string
