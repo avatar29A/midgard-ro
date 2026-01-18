@@ -342,8 +342,6 @@ func SmoothNormals(vertices []Vertex) {
 	}
 
 	// Use full 3D position for grouping with high precision (Korangar style)
-	const gridSnap float32 = 1e6 // 1/gridSnap = 1e-6 precision
-
 	posKey := func(p [3]float32) [3]int64 {
 		return [3]int64{
 			int64((p[0] / epsilon) + 0.5),
