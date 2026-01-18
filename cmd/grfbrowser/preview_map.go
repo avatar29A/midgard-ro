@@ -973,6 +973,38 @@ func (app *App) renderMapControlsPanel() {
 		imgui.SetTooltip("Enable real-time shadow mapping (PCF soft shadows)")
 	}
 
+	// Point lights toggle
+	pointLightsEnabled := app.mapViewer.PointLightsEnabled
+	if imgui.Checkbox("Point Lights", &pointLightsEnabled) {
+		app.mapViewer.PointLightsEnabled = pointLightsEnabled
+	}
+	imgui.SameLineV(0, 5)
+	imgui.TextDisabled("(?)")
+	if imgui.IsItemHovered() {
+		imgui.SetTooltip("Enable point lights from RSW (torches, lamps, etc.)")
+	}
+
+	// Point light intensity slider
+	if app.mapViewer.PointLightsEnabled {
+		imgui.Text("Light Intensity:")
+		intensity := app.mapViewer.PointLightIntensity
+		imgui.SetNextItemWidth(-1)
+		if imgui.SliderFloatV("##PointLightIntensity", &intensity, 0.0, 5.0, "%.1f", imgui.SliderFlagsNone) {
+			app.mapViewer.PointLightIntensity = intensity
+		}
+	}
+
+	// Tile Grid debug visualization toggle
+	tileGridEnabled := app.mapViewer.TileGridEnabled
+	if imgui.Checkbox("Show Tile Grid", &tileGridEnabled) {
+		app.mapViewer.TileGridEnabled = tileGridEnabled
+	}
+	imgui.SameLineV(0, 5)
+	imgui.TextDisabled("(?)")
+	if imgui.IsItemHovered() {
+		imgui.SetTooltip("Show GAT tile grid (Korangar-style debug)\nGreen=Walkable, Red=Blocked, Blue=Water")
+	}
+
 	imgui.Spacing()
 	imgui.Spacing()
 

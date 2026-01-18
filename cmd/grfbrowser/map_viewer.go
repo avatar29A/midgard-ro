@@ -29,6 +29,14 @@ import (
 	"github.com/Faultbox/midgard-ro/pkg/math"
 )
 
+// pointLightData stores extracted point light info for GPU upload.
+type pointLightData struct {
+	Position  [3]float32
+	Color     [3]float32
+	Range     float32
+	Intensity float32
+}
+
 // MapDiagnostics tracks loading statistics for debugging.
 type MapDiagnostics struct {
 	// RSW model stats
@@ -411,6 +419,27 @@ type MapViewer struct {
 	locModelShadowMap        int32 // Model shader shadow map texture
 	locModelShadowsEnabled   int32 // Model shader shadow toggle
 
+	// Point lights from RSW (Enhanced Graphics Phase 3)
+	pointLights         []pointLightData // Extracted from RSW
+	PointLightsEnabled  bool             // Public for UI toggle
+	PointLightIntensity float32          // Global intensity multiplier
+
+	// Terrain shader point light uniforms
+	locTerrainPointLightPositions   int32
+	locTerrainPointLightColors      int32
+	locTerrainPointLightRanges      int32
+	locTerrainPointLightIntensities int32
+	locTerrainPointLightCount       int32
+	locTerrainPointLightsEnabled    int32
+
+	// Model shader point light uniforms
+	locModelPointLightPositions   int32
+	locModelPointLightColors      int32
+	locModelPointLightRanges      int32
+	locModelPointLightIntensities int32
+	locModelPointLightCount       int32
+	locModelPointLightsEnabled    int32
+
 	// Selection bounding box rendering
 	bboxProgram  uint32
 	bboxVAO      uint32
@@ -422,6 +451,16 @@ type MapViewer struct {
 	lastViewProj math.Mat4
 	lastView     math.Mat4
 	lastProj     math.Mat4
+
+	// Tile grid debug visualization
+	tileGridProgram uint32
+	tileGridVAO     uint32
+	tileGridVBO     uint32
+	tileGridEBO     uint32
+	tileGridCount   int32 // Number of indices
+	locTileGridMVP  int32 // MVP uniform location
+	TileGridEnabled bool  // Public for UI toggle
+	tileGrid        *terrain.TileGrid
 }
 
 // NewMapViewer creates a new 3D map viewer.
@@ -445,6 +484,9 @@ func NewMapViewer(width, height int32) (*MapViewer, error) {
 		// Shadow mapping defaults
 		ShadowsEnabled:   true,
 		ShadowResolution: shadow.DefaultResolution,
+		// Point light defaults
+		PointLightsEnabled:  true,
+		PointLightIntensity: 1.0,
 		// Render quality defaults
 		ForceAllTwoSided: true, // Many RO models have missing back faces
 	}
@@ -471,6 +513,10 @@ func NewMapViewer(width, height int32) (*MapViewer, error) {
 
 	if err := mv.createShadowShader(); err != nil {
 		return nil, fmt.Errorf("creating shadow shader: %w", err)
+	}
+
+	if err := mv.createTileGridShader(); err != nil {
+		return nil, fmt.Errorf("creating tile grid shader: %w", err)
 	}
 
 	// Initialize shadow map
@@ -565,6 +611,14 @@ func (mv *MapViewer) createTerrainShader() error {
 	mv.locTerrainShadowMap = shader.GetUniform(program, "uShadowMap")
 	mv.locTerrainShadowsEnabled = shader.GetUniform(program, "uShadowsEnabled")
 
+	// Point light uniforms
+	mv.locTerrainPointLightPositions = shader.GetUniform(program, "uPointLightPositions")
+	mv.locTerrainPointLightColors = shader.GetUniform(program, "uPointLightColors")
+	mv.locTerrainPointLightRanges = shader.GetUniform(program, "uPointLightRanges")
+	mv.locTerrainPointLightIntensities = shader.GetUniform(program, "uPointLightIntensities")
+	mv.locTerrainPointLightCount = shader.GetUniform(program, "uPointLightCount")
+	mv.locTerrainPointLightsEnabled = shader.GetUniform(program, "uPointLightsEnabled")
+
 	return nil
 }
 
@@ -592,6 +646,14 @@ func (mv *MapViewer) createModelShader() error {
 	mv.locModelModel = shader.GetUniform(program, "uModel")
 	mv.locModelShadowMap = shader.GetUniform(program, "uShadowMap")
 	mv.locModelShadowsEnabled = shader.GetUniform(program, "uShadowsEnabled")
+
+	// Point light uniforms
+	mv.locModelPointLightPositions = shader.GetUniform(program, "uPointLightPositions")
+	mv.locModelPointLightColors = shader.GetUniform(program, "uPointLightColors")
+	mv.locModelPointLightRanges = shader.GetUniform(program, "uPointLightRanges")
+	mv.locModelPointLightIntensities = shader.GetUniform(program, "uPointLightIntensities")
+	mv.locModelPointLightCount = shader.GetUniform(program, "uPointLightCount")
+	mv.locModelPointLightsEnabled = shader.GetUniform(program, "uPointLightsEnabled")
 
 	// Compile water shader
 	if err := mv.compileWaterShader(); err != nil {
@@ -644,6 +706,123 @@ func (mv *MapViewer) createBboxShader() error {
 	gl.BindVertexArray(0)
 
 	return nil
+}
+
+// createTileGridShader compiles the tile grid debug visualization shader.
+func (mv *MapViewer) createTileGridShader() error {
+	program, err := shader.CompileProgram(shaders.TileGridVertexShader, shaders.TileGridFragmentShader)
+	if err != nil {
+		return fmt.Errorf("tile grid shader: %w", err)
+	}
+	mv.tileGridProgram = program
+
+	// Get uniform locations
+	mv.locTileGridMVP = shader.GetUniform(program, "uMVP")
+
+	return nil
+}
+
+// uploadTileGrid uploads the tile grid mesh to the GPU.
+func (mv *MapViewer) uploadTileGrid() {
+	if mv.tileGrid == nil || len(mv.tileGrid.Vertices) == 0 {
+		return
+	}
+
+	// Clean up old resources
+	if mv.tileGridVAO != 0 {
+		gl.DeleteVertexArrays(1, &mv.tileGridVAO)
+		gl.DeleteBuffers(1, &mv.tileGridVBO)
+		gl.DeleteBuffers(1, &mv.tileGridEBO)
+	}
+
+	// Create VAO
+	gl.GenVertexArrays(1, &mv.tileGridVAO)
+	gl.GenBuffers(1, &mv.tileGridVBO)
+	gl.GenBuffers(1, &mv.tileGridEBO)
+
+	gl.BindVertexArray(mv.tileGridVAO)
+
+	// Upload vertex data
+	// TileGridVertex: Position [3]float32, Color [4]float32 = 28 bytes
+	gl.BindBuffer(gl.ARRAY_BUFFER, mv.tileGridVBO)
+	vertexSize := int(unsafe.Sizeof(terrain.TileGridVertex{}))
+	gl.BufferData(gl.ARRAY_BUFFER, len(mv.tileGrid.Vertices)*vertexSize,
+		unsafe.Pointer(&mv.tileGrid.Vertices[0]), gl.STATIC_DRAW)
+
+	// Position attribute (location 0)
+	gl.VertexAttribPointerWithOffset(0, 3, gl.FLOAT, false, int32(vertexSize), 0)
+	gl.EnableVertexAttribArray(0)
+
+	// Color attribute (location 1)
+	gl.VertexAttribPointerWithOffset(1, 4, gl.FLOAT, false, int32(vertexSize), 3*4)
+	gl.EnableVertexAttribArray(1)
+
+	// Upload index data
+	gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, mv.tileGridEBO)
+	gl.BufferData(gl.ELEMENT_ARRAY_BUFFER, len(mv.tileGrid.Indices)*4,
+		unsafe.Pointer(&mv.tileGrid.Indices[0]), gl.STATIC_DRAW)
+
+	mv.tileGridCount = int32(len(mv.tileGrid.Indices))
+
+	gl.BindVertexArray(0)
+}
+
+// renderTileGrid renders the tile grid debug overlay.
+// Uses robust GL state management to ensure grid is always visible on terrain.
+func (mv *MapViewer) renderTileGrid(viewProj math.Mat4) {
+	if mv.tileGridVAO == 0 || mv.tileGridCount == 0 {
+		return
+	}
+
+	// Save current GL state
+	var prevDepthFunc int32
+	var cullFaceEnabled bool
+	gl.GetIntegerv(gl.DEPTH_FUNC, &prevDepthFunc)
+	cullFaceEnabled = gl.IsEnabled(gl.CULL_FACE)
+
+	// Set up state for grid rendering:
+	// 1. LEQUAL depth test - grid at same depth wins over terrain
+	// 2. Disable backface culling - ensures grid visible from all angles
+	// 3. Polygon offset - additional depth bias for reliability
+	gl.DepthFunc(gl.LEQUAL)
+	gl.Disable(gl.CULL_FACE)
+	gl.Enable(gl.BLEND)
+	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+	gl.Enable(gl.POLYGON_OFFSET_FILL)
+	gl.PolygonOffset(-2.0, -2.0) // Negative values bring closer to camera
+
+	// Use tile grid shader
+	gl.UseProgram(mv.tileGridProgram)
+	gl.UniformMatrix4fv(mv.locTileGridMVP, 1, false, &viewProj[0])
+
+	// Draw filled tiles
+	gl.BindVertexArray(mv.tileGridVAO)
+	gl.DrawElements(gl.TRIANGLES, mv.tileGridCount, gl.UNSIGNED_INT, nil)
+
+	// Draw black grid lines (wireframe)
+	gl.Disable(gl.POLYGON_OFFSET_FILL)
+	gl.Enable(gl.POLYGON_OFFSET_LINE)
+	gl.PolygonOffset(-4.0, -4.0) // Push lines even closer to camera
+
+	// Use bbox shader for solid black lines
+	gl.UseProgram(mv.bboxProgram)
+	gl.UniformMatrix4fv(mv.locBboxMVP, 1, false, &viewProj[0])
+	gl.Uniform4f(mv.locBboxColor, 0.0, 0.0, 0.0, 0.9) // Black with slight transparency
+
+	gl.PolygonMode(gl.FRONT_AND_BACK, gl.LINE)
+	gl.LineWidth(1.0)
+	gl.DrawElements(gl.TRIANGLES, mv.tileGridCount, gl.UNSIGNED_INT, nil)
+	gl.PolygonMode(gl.FRONT_AND_BACK, gl.FILL)
+
+	gl.BindVertexArray(0)
+
+	// Restore all GL state
+	gl.Disable(gl.POLYGON_OFFSET_LINE)
+	gl.Disable(gl.BLEND)
+	gl.DepthFunc(uint32(prevDepthFunc))
+	if cullFaceEnabled {
+		gl.Enable(gl.CULL_FACE)
+	}
 }
 
 // createSpriteShader compiles the sprite billboard shader program.
@@ -796,6 +975,9 @@ func (mv *MapViewer) LoadMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(
 				mv.ambientColor[i] = minAmbient
 			}
 		}
+
+		// Extract point lights from RSW (Enhanced Graphics Phase 3)
+		mv.extractPointLights(rsw)
 	}
 
 	// Load ground textures
@@ -835,6 +1017,14 @@ func (mv *MapViewer) LoadMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(
 	mv.FogFar = 1400.0
 	mv.FogColor = [3]float32{0.95, 0.90, 0.85} // Very subtle warm tint (barely visible)
 
+	// Build tile grid from GAT (debug visualization - Korangar style)
+	if mv.GAT != nil {
+		// Grid at exact terrain position - LEQUAL depth test handles z-fighting
+		const tileOffset float32 = 0.0
+		mv.tileGrid = terrain.BuildTileGrid(mv.GAT, gnd, tileOffset)
+		mv.uploadTileGrid()
+	}
+
 	// Fit camera to map
 	mv.fitCamera()
 
@@ -843,6 +1033,115 @@ func (mv *MapViewer) LoadMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(
 	mv.modelAnimPlaying = true // Animation tracking enabled (rebuild disabled until fixed)
 
 	return nil
+}
+
+// extractPointLights extracts point lights from RSW for GPU upload.
+func (mv *MapViewer) extractPointLights(rsw *formats.RSW) {
+	mv.pointLights = nil
+	if rsw == nil {
+		return
+	}
+
+	rswLights := rsw.GetLights()
+	if len(rswLights) == 0 {
+		return
+	}
+
+	// Limit to max supported lights
+	count := len(rswLights)
+	if count > lighting.MaxPointLights {
+		count = lighting.MaxPointLights
+	}
+
+	mv.pointLights = make([]pointLightData, count)
+	for i := 0; i < count; i++ {
+		rswLight := rswLights[i]
+
+		// RSW positions are centered; same coordinate system as terrain
+		mv.pointLights[i] = pointLightData{
+			Position: [3]float32{
+				rswLight.Position[0],
+				rswLight.Position[1],
+				rswLight.Position[2],
+			},
+			Color: [3]float32{
+				clampf(rswLight.Color[0], 0, 1),
+				clampf(rswLight.Color[1], 0, 1),
+				clampf(rswLight.Color[2], 0, 1),
+			},
+			Range:     rswLight.Range,
+			Intensity: mv.PointLightIntensity,
+		}
+
+		// Ensure range is positive
+		if mv.pointLights[i].Range <= 0 {
+			mv.pointLights[i].Range = 100.0
+		}
+	}
+
+	fmt.Printf("Extracted %d point lights from RSW\n", len(mv.pointLights))
+}
+
+// clampf clamps a float32 to [min, max].
+func clampf(v, min, max float32) float32 {
+	if v < min {
+		return min
+	}
+	if v > max {
+		return max
+	}
+	return v
+}
+
+// uploadPointLightsToShader uploads point light data to the currently bound shader.
+func (mv *MapViewer) uploadPointLightsToShader(
+	locPositions, locColors, locRanges, locIntensities, locCount, locEnabled int32,
+) {
+	// Set enabled flag
+	if mv.PointLightsEnabled && len(mv.pointLights) > 0 {
+		gl.Uniform1i(locEnabled, 1)
+	} else {
+		gl.Uniform1i(locEnabled, 0)
+		gl.Uniform1i(locCount, 0)
+		return
+	}
+
+	// Set light count
+	count := int32(len(mv.pointLights))
+	gl.Uniform1i(locCount, count)
+
+	// Upload light arrays
+	// Positions: vec3 array
+	positions := make([]float32, lighting.MaxPointLights*3)
+	for i, light := range mv.pointLights {
+		positions[i*3+0] = light.Position[0]
+		positions[i*3+1] = light.Position[1]
+		positions[i*3+2] = light.Position[2]
+	}
+	gl.Uniform3fv(locPositions, lighting.MaxPointLights, &positions[0])
+
+	// Colors: vec3 array
+	colors := make([]float32, lighting.MaxPointLights*3)
+	for i, light := range mv.pointLights {
+		colors[i*3+0] = light.Color[0]
+		colors[i*3+1] = light.Color[1]
+		colors[i*3+2] = light.Color[2]
+	}
+	gl.Uniform3fv(locColors, lighting.MaxPointLights, &colors[0])
+
+	// Ranges: float array
+	ranges := make([]float32, lighting.MaxPointLights)
+	for i, light := range mv.pointLights {
+		ranges[i] = light.Range
+	}
+	gl.Uniform1fv(locRanges, lighting.MaxPointLights, &ranges[0])
+
+	// Intensities: float array (apply global intensity multiplier)
+	intensities := make([]float32, lighting.MaxPointLights)
+	for i, light := range mv.pointLights {
+		intensities[i] = light.Intensity * mv.PointLightIntensity
+	}
+	gl.Uniform1fv(locIntensities, lighting.MaxPointLights, &intensities[0])
 }
 
 // clearTerrain frees terrain GPU resources.
@@ -1769,6 +2068,16 @@ func (mv *MapViewer) Render() uint32 {
 	gl.Uniform1f(mv.locFogFar, mv.FogFar)
 	gl.Uniform3f(mv.locFogColor, mv.FogColor[0], mv.FogColor[1], mv.FogColor[2])
 
+	// Point light uniforms (terrain shader)
+	mv.uploadPointLightsToShader(
+		mv.locTerrainPointLightPositions,
+		mv.locTerrainPointLightColors,
+		mv.locTerrainPointLightRanges,
+		mv.locTerrainPointLightIntensities,
+		mv.locTerrainPointLightCount,
+		mv.locTerrainPointLightsEnabled,
+	)
+
 	// Bind lightmap atlas to texture unit 1
 	gl.ActiveTexture(gl.TEXTURE1)
 	if mv.lightmapAtlasTex != 0 {
@@ -1781,6 +2090,9 @@ func (mv *MapViewer) Render() uint32 {
 	if mv.shadowMap != nil && mv.shadowMap.IsValid() {
 		mv.shadowMap.BindTexture(gl.TEXTURE2)
 	}
+
+	// Disable face culling for terrain (test for winding issues)
+	gl.Disable(gl.CULL_FACE)
 
 	// Bind terrain VAO
 	gl.BindVertexArray(mv.terrainVAO)
@@ -1797,6 +2109,11 @@ func (mv *MapViewer) Render() uint32 {
 	}
 
 	gl.BindVertexArray(0)
+
+	// Render tile grid (debug visualization)
+	if mv.TileGridEnabled && mv.tileGridVAO != 0 {
+		mv.renderTileGrid(viewProj)
+	}
 
 	// Render placed models
 	mv.renderModels(viewProj)
@@ -1861,10 +2178,10 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 				gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 				gl.UseProgram(mv.spriteProgram)
 
-				// Position sprite centered on player, lift to align feet with ground
-				// Use render position for smooth interpolated movement
+				// Position sprite at player location
+				// Billboard quad is foot-anchored (Y: 0 to 1), so no offset needed
 				posX := player.RenderX
-				posY := player.RenderY + spriteHeight*0.12
+				posY := player.RenderY
 				posZ := player.RenderZ
 
 				gl.UniformMatrix4fv(mv.locSpriteVP, 1, false, &viewProj[0])
@@ -2091,7 +2408,7 @@ func (mv *MapViewer) renderPlayerShadow(viewProj math.Mat4) {
 
 	// Shadow position slightly above ground to avoid z-fighting
 	// Use render position for smooth interpolated movement
-	shadowY := player.RenderY + 0.5
+	shadowY := player.RenderY + 0.1
 
 	// Set uniforms - position the shadow flat on the ground
 	gl.UniformMatrix4fv(mv.locSpriteVP, 1, false, &viewProj[0])
@@ -2291,6 +2608,16 @@ func (mv *MapViewer) renderModels(viewProj math.Mat4) {
 	gl.Uniform1f(mv.locModelFogNear, mv.FogNear)
 	gl.Uniform1f(mv.locModelFogFar, mv.FogFar)
 	gl.Uniform3f(mv.locModelFogColor, mv.FogColor[0], mv.FogColor[1], mv.FogColor[2])
+
+	// Point light uniforms (model shader)
+	mv.uploadPointLightsToShader(
+		mv.locModelPointLightPositions,
+		mv.locModelPointLightColors,
+		mv.locModelPointLightRanges,
+		mv.locModelPointLightIntensities,
+		mv.locModelPointLightCount,
+		mv.locModelPointLightsEnabled,
+	)
 
 	gl.ActiveTexture(gl.TEXTURE0)
 
