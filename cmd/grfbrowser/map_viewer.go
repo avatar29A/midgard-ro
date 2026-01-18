@@ -2091,6 +2091,9 @@ func (mv *MapViewer) Render() uint32 {
 		mv.shadowMap.BindTexture(gl.TEXTURE2)
 	}
 
+	// Disable face culling for terrain (test for winding issues)
+	gl.Disable(gl.CULL_FACE)
+
 	// Bind terrain VAO
 	gl.BindVertexArray(mv.terrainVAO)
 
@@ -2175,10 +2178,10 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 				gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 				gl.UseProgram(mv.spriteProgram)
 
-				// Position sprite centered on player, lift to align feet with ground
-				// Use render position for smooth interpolated movement
+				// Position sprite at player location
+				// Billboard quad is foot-anchored (Y: 0 to 1), so no offset needed
 				posX := player.RenderX
-				posY := player.RenderY + spriteHeight*0.12
+				posY := player.RenderY
 				posZ := player.RenderZ
 
 				gl.UniformMatrix4fv(mv.locSpriteVP, 1, false, &viewProj[0])
@@ -2405,7 +2408,7 @@ func (mv *MapViewer) renderPlayerShadow(viewProj math.Mat4) {
 
 	// Shadow position slightly above ground to avoid z-fighting
 	// Use render position for smooth interpolated movement
-	shadowY := player.RenderY + 0.5
+	shadowY := player.RenderY + 0.1
 
 	// Set uniforms - position the shadow flat on the ground
 	gl.UniformMatrix4fv(mv.locSpriteVP, 1, false, &viewProj[0])
