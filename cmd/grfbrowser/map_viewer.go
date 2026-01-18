@@ -457,9 +457,9 @@ type MapViewer struct {
 	tileGridVAO     uint32
 	tileGridVBO     uint32
 	tileGridEBO     uint32
-	tileGridCount   int32          // Number of indices
-	locTileGridMVP  int32          // MVP uniform location
-	TileGridEnabled bool           // Public for UI toggle
+	tileGridCount   int32 // Number of indices
+	locTileGridMVP  int32 // MVP uniform location
+	TileGridEnabled bool  // Public for UI toggle
 	tileGrid        *terrain.TileGrid
 }
 
