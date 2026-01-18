@@ -803,9 +803,9 @@ func uploadTerrainTexture(img *image.RGBA) uint32 {
 	}
 
 	// Corners
-	padded.SetRGBA(0, 0, img.RGBAAt(srcBounds.Min.X, srcBounds.Min.Y))                       // Top-left
-	padded.SetRGBA(paddedW-1, 0, img.RGBAAt(srcBounds.Min.X+srcW-1, srcBounds.Min.Y))        // Top-right
-	padded.SetRGBA(0, paddedH-1, img.RGBAAt(srcBounds.Min.X, srcBounds.Min.Y+srcH-1))        // Bottom-left
+	padded.SetRGBA(0, 0, img.RGBAAt(srcBounds.Min.X, srcBounds.Min.Y))                               // Top-left
+	padded.SetRGBA(paddedW-1, 0, img.RGBAAt(srcBounds.Min.X+srcW-1, srcBounds.Min.Y))                // Top-right
+	padded.SetRGBA(0, paddedH-1, img.RGBAAt(srcBounds.Min.X, srcBounds.Min.Y+srcH-1))                // Bottom-left
 	padded.SetRGBA(paddedW-1, paddedH-1, img.RGBAAt(srcBounds.Min.X+srcW-1, srcBounds.Min.Y+srcH-1)) // Bottom-right
 
 	// Upload padded texture to GPU
