@@ -768,18 +768,28 @@ func (mv *MapViewer) uploadTileGrid() {
 }
 
 // renderTileGrid renders the tile grid debug overlay.
+// Uses robust GL state management to ensure grid is always visible on terrain.
 func (mv *MapViewer) renderTileGrid(viewProj math.Mat4) {
 	if mv.tileGridVAO == 0 || mv.tileGridCount == 0 {
 		return
 	}
 
-	// Enable blending for semi-transparent tiles
+	// Save current GL state
+	var prevDepthFunc int32
+	var cullFaceEnabled bool
+	gl.GetIntegerv(gl.DEPTH_FUNC, &prevDepthFunc)
+	cullFaceEnabled = gl.IsEnabled(gl.CULL_FACE)
+
+	// Set up state for grid rendering:
+	// 1. LEQUAL depth test - grid at same depth wins over terrain
+	// 2. Disable backface culling - ensures grid visible from all angles
+	// 3. Polygon offset - additional depth bias for reliability
+	gl.DepthFunc(gl.LEQUAL)
+	gl.Disable(gl.CULL_FACE)
 	gl.Enable(gl.BLEND)
 	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-
-	// Use polygon offset to push grid slightly in front of terrain
 	gl.Enable(gl.POLYGON_OFFSET_FILL)
-	gl.PolygonOffset(-1.0, -1.0) // Negative values bring closer to camera
+	gl.PolygonOffset(-2.0, -2.0) // Negative values bring closer to camera
 
 	// Use tile grid shader
 	gl.UseProgram(mv.tileGridProgram)
@@ -792,12 +802,12 @@ func (mv *MapViewer) renderTileGrid(viewProj math.Mat4) {
 	// Draw black grid lines (wireframe)
 	gl.Disable(gl.POLYGON_OFFSET_FILL)
 	gl.Enable(gl.POLYGON_OFFSET_LINE)
-	gl.PolygonOffset(-2.0, -2.0) // Push lines even closer to camera
+	gl.PolygonOffset(-4.0, -4.0) // Push lines even closer to camera
 
 	// Use bbox shader for solid black lines
 	gl.UseProgram(mv.bboxProgram)
 	gl.UniformMatrix4fv(mv.locBboxMVP, 1, false, &viewProj[0])
-	gl.Uniform4f(mv.locBboxColor, 0.0, 0.0, 0.0, 0.8) // Black with some transparency
+	gl.Uniform4f(mv.locBboxColor, 0.0, 0.0, 0.0, 0.9) // Black with slight transparency
 
 	gl.PolygonMode(gl.FRONT_AND_BACK, gl.LINE)
 	gl.LineWidth(1.0)
@@ -806,9 +816,13 @@ func (mv *MapViewer) renderTileGrid(viewProj math.Mat4) {
 
 	gl.BindVertexArray(0)
 
-	// Restore state
+	// Restore all GL state
 	gl.Disable(gl.POLYGON_OFFSET_LINE)
 	gl.Disable(gl.BLEND)
+	gl.DepthFunc(uint32(prevDepthFunc))
+	if cullFaceEnabled {
+		gl.Enable(gl.CULL_FACE)
+	}
 }
 
 // createSpriteShader compiles the sprite billboard shader program.
@@ -1005,8 +1019,8 @@ func (mv *MapViewer) LoadMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(
 
 	// Build tile grid from GAT (debug visualization - Korangar style)
 	if mv.GAT != nil {
-		// Offset slightly above terrain to prevent z-fighting
-		const tileOffset float32 = 1.0
+		// Grid at exact terrain position - LEQUAL depth test handles z-fighting
+		const tileOffset float32 = 0.0
 		mv.tileGrid = terrain.BuildTileGrid(mv.GAT, gnd, tileOffset)
 		mv.uploadTileGrid()
 	}
