@@ -406,7 +406,8 @@ func (s *Scene) GetTerrainHeight(worldX, worldZ float32) float32 {
 		return 0
 	}
 
-	return s.terrainAltitudes[tileX][tileZ]
+	// Negate because GND altitudes are negative (lower = higher in RO coordinate system)
+	return -s.terrainAltitudes[tileX][tileZ]
 }
 
 // IsWalkable returns whether the given tile coordinates are walkable.

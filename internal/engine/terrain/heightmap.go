@@ -16,9 +16,8 @@ func BuildHeightmap(gnd *formats.GND) *Heightmap {
 			tile := gnd.GetTile(x, z)
 			if tile != nil {
 				// Average of 4 corners
-				// Negate because GND altitudes are negative (lower = higher in RO coordinate system)
 				avgAlt := (tile.Altitude[0] + tile.Altitude[1] + tile.Altitude[2] + tile.Altitude[3]) / 4.0
-				altitudes[x][z] = -avgAlt
+				altitudes[x][z] = avgAlt
 			}
 		}
 	}
