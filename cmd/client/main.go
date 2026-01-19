@@ -3,9 +3,12 @@ package main
 
 import (
 	"fmt"
+	_ "image/jpeg" // JPEG decoder registration
+	_ "image/png"  // PNG decoder registration
 	"os"
 
 	"go.uber.org/zap"
+	_ "golang.org/x/image/bmp" // BMP decoder registration
 
 	"github.com/Faultbox/midgard-ro/internal/config"
 	"github.com/Faultbox/midgard-ro/internal/game"
