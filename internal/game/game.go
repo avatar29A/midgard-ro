@@ -67,6 +67,10 @@ type Game struct {
 	screenshotRequested bool
 	screenshotMsg       string
 	screenshotMsgTime   time.Time
+
+	// Input tracking
+	lastMouseX float32
+	lastMouseY float32
 }
 
 // New creates a new game instance.
@@ -232,6 +236,11 @@ func (g *Game) frame() {
 	// Handle F12 for screenshot (will capture at start of NEXT frame)
 	if imgui.IsKeyChordPressed(imgui.KeyChord(imgui.KeyF12)) {
 		g.screenshotRequested = true
+	}
+
+	// Handle camera controls when in InGameState
+	if inGameState, ok := g.stateManager.Current().(*states.InGameState); ok {
+		g.handleInGameInput(inGameState)
 	}
 
 	// Update state machine
@@ -425,6 +434,39 @@ func (g *Game) captureScreenshot() {
 	g.screenshotMsg = fmt.Sprintf("Saved: %s", filename)
 	g.screenshotMsgTime = time.Now()
 	logger.Info("screenshot saved", zap.String("path", savePath))
+}
+
+// handleInGameInput handles camera and movement input when in game.
+func (g *Game) handleInGameInput(state *states.InGameState) {
+	camera := state.GetCamera()
+	if camera == nil {
+		return
+	}
+
+	io := imgui.CurrentIO()
+
+	// Scroll wheel for zoom
+	scroll := io.MouseWheel()
+	if scroll != 0 {
+		camera.HandleZoom(scroll * 50)
+	}
+
+	// Get current mouse position
+	mousePos := imgui.MousePos()
+	mouseX := mousePos.X
+	mouseY := mousePos.Y
+
+	// Right mouse button drag for camera rotation
+	if imgui.IsMouseDragging(imgui.MouseButtonRight) {
+		deltaX := mouseX - g.lastMouseX
+		camera.HandleYaw(deltaX)
+	}
+
+	// Update last mouse position
+	g.lastMouseX = mouseX
+	g.lastMouseY = mouseY
+
+	// TODO: Left click for movement (needs world-space ray casting)
 }
 
 // LoadAsset loads an asset from GRF archives.
