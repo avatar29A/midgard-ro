@@ -78,22 +78,22 @@ func (b *UI2DBackend) RenderLoginUI(state LoginUIState, width, height float32) {
 	}
 
 	// Center the login window
-	windowWidth := float32(350)
-	windowHeight := float32(280)
+	windowWidth := float32(400)
+	windowHeight := float32(340)
 	windowX := (width - windowWidth) / 2
 	windowY := (height - windowHeight) / 2
 
 	if b.ctx.BeginWindow("login", windowX, windowY, windowWidth, windowHeight, "Login to Ragnarok Online") {
-		b.ctx.Spacer(8)
+		b.ctx.Spacer(12)
 		b.ctx.LabelCentered("Welcome to Midgard")
-		b.ctx.Spacer(8)
+		b.ctx.Spacer(12)
 		b.ctx.Separator()
-		b.ctx.Spacer(8)
+		b.ctx.Spacer(12)
 
 		// Username
-		b.ctx.Row(18)
+		b.ctx.Row(20)
 		b.ctx.Label("Username:")
-		b.ctx.Row(28)
+		b.ctx.Row(32)
 		newUsername, changed, _ := b.ctx.TextInput("username", 0, b.loginUsername)
 		if changed {
 			b.loginUsername = newUsername
@@ -101,12 +101,12 @@ func (b *UI2DBackend) RenderLoginUI(state LoginUIState, width, height float32) {
 				state.OnUsernameChange(newUsername)
 			}
 		}
-		b.ctx.Spacer(8)
+		b.ctx.Spacer(12)
 
 		// Password
-		b.ctx.Row(18)
+		b.ctx.Row(20)
 		b.ctx.Label("Password:")
-		b.ctx.Row(28)
+		b.ctx.Row(32)
 		newPassword, changed, submitted := b.ctx.PasswordInput("password", 0, b.loginPassword)
 		if changed {
 			b.loginPassword = newPassword
@@ -114,7 +114,7 @@ func (b *UI2DBackend) RenderLoginUI(state LoginUIState, width, height float32) {
 				state.OnPasswordChange(newPassword)
 			}
 		}
-		b.ctx.Spacer(8)
+		b.ctx.Spacer(16)
 
 		// Error message
 		if state.ErrorMessage != "" {
@@ -122,12 +122,13 @@ func (b *UI2DBackend) RenderLoginUI(state LoginUIState, width, height float32) {
 			b.ctx.Spacer(8)
 		}
 
-		// Login button
-		b.ctx.Row(30)
+		// Login button - larger for easier clicking
+		b.ctx.Row(40)
 		if state.IsLoading {
 			b.ctx.ButtonDisabled("login", 0, "Login")
 		} else {
-			if b.ctx.Button("login", 0, "Login") || submitted {
+			btnClicked := b.ctx.Button("login", 0, "Login")
+			if btnClicked || submitted {
 				if state.OnLogin != nil {
 					state.OnLogin()
 				}
@@ -139,9 +140,9 @@ func (b *UI2DBackend) RenderLoginUI(state LoginUIState, width, height float32) {
 			b.ctx.LabelCentered("Connecting...")
 		}
 
-		b.ctx.Spacer(8)
+		b.ctx.Spacer(12)
 		b.ctx.Separator()
-		b.ctx.Spacer(4)
+		b.ctx.Spacer(8)
 		b.ctx.LabelColored("Server: "+state.ServerName, ui2d.ColorTextDim)
 
 		b.ctx.EndWindow()
@@ -202,10 +203,19 @@ func (b *UI2DBackend) RenderCharSelectUI(state CharSelectUIState, width, height 
 			b.ctx.Spacer(8)
 			b.ctx.LabelCentered("Create a new character on the server.")
 		} else {
+			// Auto-select first character if none selected
+			if b.charSelectIdx < 0 && len(state.Characters) > 0 {
+				b.charSelectIdx = 0
+				if state.OnSelectIndex != nil {
+					state.OnSelectIndex(0)
+				}
+			}
+
 			// Character list
+			b.ctx.Row(20)
 			b.ctx.Label("Characters:")
-			b.ctx.Spacer(4)
-			b.ctx.BeginListBox("charlist", 0, 200)
+			b.ctx.Spacer(8)
+			b.ctx.BeginListBox("charlist", 0, 150)
 
 			for i, char := range state.Characters {
 				label := fmt.Sprintf("%s (Lv %d)", char.GetName(), char.BaseLevel)
@@ -223,8 +233,9 @@ func (b *UI2DBackend) RenderCharSelectUI(state CharSelectUIState, width, height 
 			// Show selected character details
 			if b.charSelectIdx >= 0 && b.charSelectIdx < len(state.Characters) {
 				char := state.Characters[b.charSelectIdx]
-				b.ctx.Label(fmt.Sprintf("HP: %d/%d  SP: %d/%d", char.HP, char.MaxHP, char.SP, char.MaxSP))
-				b.ctx.Spacer(4)
+				b.ctx.Row(20)
+				b.ctx.Label(fmt.Sprintf("HP: %d/%d   SP: %d/%d", char.HP, char.MaxHP, char.SP, char.MaxSP))
+				b.ctx.Row(20)
 				b.ctx.Label(fmt.Sprintf("Map: %s", char.GetMapName()))
 			}
 
@@ -233,11 +244,12 @@ func (b *UI2DBackend) RenderCharSelectUI(state CharSelectUIState, width, height 
 			b.ctx.Spacer(8)
 
 			// Action buttons
-			b.ctx.Row(30)
+			b.ctx.Row(40)
 			if state.IsLoading || b.charSelectIdx < 0 {
-				b.ctx.ButtonDisabled("enter", 150, "Enter Game")
+				b.ctx.ButtonDisabled("enter", 0, "Enter Game")
 			} else {
-				if b.ctx.Button("enter", 150, "Enter Game") {
+				btnClicked := b.ctx.Button("enter", 0, "Enter Game")
+				if btnClicked {
 					if state.OnSelect != nil {
 						state.OnSelect(b.charSelectIdx)
 					}

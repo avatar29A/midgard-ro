@@ -17,6 +17,9 @@ type Context struct {
 	// Current window being drawn
 	currentWindow *WindowState
 
+	// Current listbox being drawn (nil if not in a listbox)
+	currentListBox *ListBoxState
+
 	// Layout state
 	cursorX float32
 	cursorY float32
@@ -95,6 +98,12 @@ func (c *Context) BeginWindow(id string, x, y, w, h float32, title string) bool 
 			Open: true,
 		}
 		c.windows[id] = ws
+	} else if !ws.Moving {
+		// Update position from parameters (allows centering on resize)
+		ws.X = x
+		ws.Y = y
+		ws.W = w
+		ws.H = h
 	}
 
 	if !ws.Open {
@@ -178,21 +187,23 @@ func (c *Context) Button(id string, width float32, label string) bool {
 	fullID := c.currentWindow.ID + "_" + id
 	rect := Rect{x, y, width, h}
 
-	// Check interaction
+	// Check interaction - click on press for better responsiveness
 	hovered := rect.Contains(c.input.MouseX, c.input.MouseY)
 	clicked := false
 
 	if hovered {
 		c.hotWidget = fullID
-		if c.input.MouseLeftPressed {
+		// Use both edge detection AND event-based click for reliability
+		if c.input.MouseLeftPressed || c.input.MouseLeftClicked {
 			c.activeWidget = fullID
+			clicked = true // Click immediately on press
+			// Consume the click event so only one button gets it
+			c.input.MouseLeftClicked = false
 		}
 	}
 
+	// Clear active state on release
 	if c.activeWidget == fullID && c.input.MouseLeftReleased {
-		if hovered {
-			clicked = true
-		}
 		c.activeWidget = ""
 	}
 
@@ -276,14 +287,14 @@ func (c *Context) TextInput(id string, width float32, value string) (string, boo
 			value += c.input.TextInput
 			changed = true
 		}
-		if c.input.KeyBackspace && len(value) > 0 {
+		if c.input.KeyBackspacePressed && len(value) > 0 {
 			value = value[:len(value)-1]
 			changed = true
 		}
-		if c.input.KeyEnter {
+		if c.input.KeyEnterPressed {
 			submitted = true
 		}
-		if c.input.KeyEscape {
+		if c.input.KeyEscapePressed {
 			c.activeWidget = ""
 		}
 	}
@@ -421,14 +432,14 @@ func (c *Context) PasswordInput(id string, width float32, value string) (string,
 			value += c.input.TextInput
 			changed = true
 		}
-		if c.input.KeyBackspace && len(value) > 0 {
+		if c.input.KeyBackspacePressed && len(value) > 0 {
 			value = value[:len(value)-1]
 			changed = true
 		}
-		if c.input.KeyEnter {
+		if c.input.KeyEnterPressed {
 			submitted = true
 		}
-		if c.input.KeyEscape {
+		if c.input.KeyEscapePressed {
 			c.activeWidget = ""
 		}
 	}
@@ -475,12 +486,19 @@ func (c *Context) Selectable(id string, label string, selected bool) bool {
 	if h == 0 {
 		h = 24
 	}
-	width := c.currentWindow.W - 16
+
+	// Use listbox width if inside a listbox, otherwise window width
+	var width float32
+	if c.currentListBox != nil {
+		width = c.currentListBox.W - 8 // Account for padding
+	} else {
+		width = c.currentWindow.W - 16
+	}
 
 	fullID := c.currentWindow.ID + "_" + id
 	rect := Rect{x, y, width, h}
 
-	// Check interaction
+	// Check interaction - click on press for better responsiveness
 	hovered := rect.Contains(c.input.MouseX, c.input.MouseY)
 	clicked := false
 
@@ -488,13 +506,12 @@ func (c *Context) Selectable(id string, label string, selected bool) bool {
 		c.hotWidget = fullID
 		if c.input.MouseLeftPressed {
 			c.activeWidget = fullID
+			clicked = true // Click immediately on press
 		}
 	}
 
+	// Clear active state on release
 	if c.activeWidget == fullID && c.input.MouseLeftReleased {
-		if hovered {
-			clicked = true
-		}
 		c.activeWidget = ""
 	}
 
@@ -521,7 +538,11 @@ func (c *Context) Selectable(id string, label string, selected bool) bool {
 	c.renderer.DrawText(x+4, textY, label, scale, ColorText)
 
 	// Advance cursor to next row
-	c.cursorX = c.currentWindow.X + 8
+	if c.currentListBox != nil {
+		c.cursorX = c.currentListBox.X + 4
+	} else {
+		c.cursorX = c.currentWindow.X + 8
+	}
 	c.cursorY += h
 
 	return clicked
@@ -530,6 +551,9 @@ func (c *Context) Selectable(id string, label string, selected bool) bool {
 // ListBoxState holds state for a list box widget.
 type ListBoxState struct {
 	ScrollY float32
+	X, Y    float32
+	W, H    float32
+	Active  bool
 }
 
 // BeginListBox starts a list box region.
@@ -538,6 +562,10 @@ func (c *Context) BeginListBox(id string, width, height float32) {
 		return
 	}
 
+	// Start on a new row (reset X to window left edge)
+	x := c.currentWindow.X + 8
+	y := c.cursorY
+
 	if width == 0 {
 		width = c.currentWindow.W - 16
 	}
@@ -545,17 +573,22 @@ func (c *Context) BeginListBox(id string, width, height float32) {
 		height = 200
 	}
 
-	x := c.cursorX
-	y := c.cursorY
-
 	// Draw list box background
 	c.renderer.DrawRect(x, y, width, height, ColorInputBg)
 	c.renderer.DrawRectOutline(x, y, width, height, 1, ColorPanelBorder)
 
-	// Store listbox bounds for content clipping (simplified - no actual clipping)
-	// For now, just indent the content area
-	c.cursorX = x + 2
-	c.cursorY = y + 2
+	// Store listbox bounds
+	c.currentListBox = &ListBoxState{
+		X:      x,
+		Y:      y,
+		W:      width,
+		H:      height,
+		Active: true,
+	}
+
+	// Position cursor inside listbox
+	c.cursorX = x + 4
+	c.cursorY = y + 4
 	c.rowH = 24
 }
 
@@ -564,9 +597,12 @@ func (c *Context) EndListBox() {
 	if c.currentWindow == nil {
 		return
 	}
-	// Reset cursor
-	c.cursorX = c.currentWindow.X + 8
-	c.cursorY += 8
+	// Position cursor after the listbox
+	if c.currentListBox != nil {
+		c.cursorX = c.currentWindow.X + 8
+		c.cursorY = c.currentListBox.Y + c.currentListBox.H + 4
+		c.currentListBox = nil
+	}
 }
 
 // ButtonDisabled draws a disabled button (no interaction).

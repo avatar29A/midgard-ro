@@ -13,10 +13,14 @@ type InputState struct {
 	MouseRightDown  bool
 	MouseMiddleDown bool
 
-	// Mouse buttons (pressed this frame)
+	// Mouse buttons (pressed this frame - edge detected)
 	MouseLeftPressed   bool
 	MouseRightPressed  bool
 	MouseMiddlePressed bool
+
+	// Mouse click events (set by SDL event handler, cleared after UI processes)
+	MouseLeftClicked  bool
+	MouseRightClicked bool
 
 	// Mouse buttons (released this frame)
 	MouseLeftReleased   bool
@@ -57,6 +61,18 @@ type InputState struct {
 	prevMouseMiddle bool
 	prevMouseX      float32
 	prevMouseY      float32
+
+	// Key edge detection
+	prevKeyBackspace bool
+	prevKeyDelete    bool
+	prevKeyEnter     bool
+	prevKeyEscape    bool
+
+	// Key pressed this frame (edge detected)
+	KeyBackspacePressed bool
+	KeyDeletePressed    bool
+	KeyEnterPressed     bool
+	KeyEscapePressed    bool
 }
 
 // Update prepares input state for a new frame.
@@ -66,7 +82,7 @@ func (i *InputState) Update() {
 	i.MouseDeltaX = i.MouseX - i.prevMouseX
 	i.MouseDeltaY = i.MouseY - i.prevMouseY
 
-	// Detect press/release edges
+	// Detect mouse press/release edges
 	i.MouseLeftPressed = i.MouseLeftDown && !i.prevMouseLeft
 	i.MouseRightPressed = i.MouseRightDown && !i.prevMouseRight
 	i.MouseMiddlePressed = i.MouseMiddleDown && !i.prevMouseMiddle
@@ -75,12 +91,22 @@ func (i *InputState) Update() {
 	i.MouseRightReleased = !i.MouseRightDown && i.prevMouseRight
 	i.MouseMiddleReleased = !i.MouseMiddleDown && i.prevMouseMiddle
 
+	// Detect key press edges
+	i.KeyBackspacePressed = i.KeyBackspace && !i.prevKeyBackspace
+	i.KeyDeletePressed = i.KeyDelete && !i.prevKeyDelete
+	i.KeyEnterPressed = i.KeyEnter && !i.prevKeyEnter
+	i.KeyEscapePressed = i.KeyEscape && !i.prevKeyEscape
+
 	// Store current state for next frame
 	i.prevMouseLeft = i.MouseLeftDown
 	i.prevMouseRight = i.MouseRightDown
 	i.prevMouseMiddle = i.MouseMiddleDown
 	i.prevMouseX = i.MouseX
 	i.prevMouseY = i.MouseY
+	i.prevKeyBackspace = i.KeyBackspace
+	i.prevKeyDelete = i.KeyDelete
+	i.prevKeyEnter = i.KeyEnter
+	i.prevKeyEscape = i.KeyEscape
 }
 
 // EndFrame clears per-frame input state.
@@ -94,6 +120,9 @@ func (i *InputState) EndFrame() {
 	i.KeyPaste = false
 	i.KeyCut = false
 	i.KeyUndo = false
+	// Clear click events (they persist until consumed by UI)
+	i.MouseLeftClicked = false
+	i.MouseRightClicked = false
 }
 
 // IsMouseInRect checks if the mouse is within a rectangle.

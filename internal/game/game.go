@@ -67,6 +67,9 @@ type Game struct {
 	// Input tracking
 	lastMouseX float32
 	lastMouseY float32
+
+	// Deferred actions (execute next frame for visual feedback)
+	pendingAction func()
 }
 
 // New creates a new game instance with ImGui windowing (backward compatible).
@@ -338,7 +341,9 @@ func (g *Game) renderUI() {
 				state.SetPassword(s)
 			},
 			OnLogin: func() {
-				state.AttemptLogin()
+				g.pendingAction = func() {
+					state.AttemptLogin()
+				}
 			},
 		}, viewportWidth, viewportHeight)
 
@@ -357,7 +362,9 @@ func (g *Game) renderUI() {
 			IsLoading:     state.IsLoadingState(),
 			IsReady:       state.IsCharListReady(),
 			OnSelect: func(index int) {
-				state.SelectCharacter(index)
+				g.pendingAction = func() {
+					state.SelectCharacter(index)
+				}
 			},
 		}, viewportWidth, viewportHeight)
 
@@ -587,6 +594,13 @@ func (g *Game) DeltaTime() float64 {
 // Update processes a single frame update.
 // This can be called externally when using a custom event loop.
 func (g *Game) Update() error {
+	// Execute any pending action from previous frame (deferred for visual feedback)
+	if g.pendingAction != nil {
+		action := g.pendingAction
+		g.pendingAction = nil
+		action()
+	}
+
 	// Calculate delta time
 	now := time.Now()
 	g.dt = now.Sub(g.lastTime).Seconds()
