@@ -139,6 +139,11 @@ func (tr *TerrainRenderer) loadGroundTextures(gnd *formats.GND, texLoader func(s
 
 		data, err := texLoader(fullPath)
 		if err != nil {
+			// Try with backslash path format (GRF files use Windows paths)
+			fullPath = "data\\texture\\" + texPath
+			data, err = texLoader(fullPath)
+		}
+		if err != nil {
 			tr.groundTextures[i] = fallbackTex
 			continue
 		}

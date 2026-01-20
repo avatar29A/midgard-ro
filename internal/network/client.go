@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -141,7 +142,19 @@ func (c *Client) Send(data []byte) error {
 
 // Process reads and processes incoming packets.
 // Should be called regularly in the game loop.
-func (c *Client) Process() error {
+func (c *Client) Process() (err error) {
+	// Recover from any panics in packet processing to prevent crashes
+	defer func() {
+		if r := recover(); r != nil {
+			stack := string(debug.Stack())
+			logger.Error("panic in network processing",
+				zap.Any("panic", r),
+				zap.Int("readOffset", c.readOffset),
+				zap.String("stack", stack))
+			err = fmt.Errorf("panic in network processing: %v", r)
+		}
+	}()
+
 	c.mu.Lock()
 	if !c.connected || c.conn == nil {
 		c.mu.Unlock()
