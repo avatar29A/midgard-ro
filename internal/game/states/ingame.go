@@ -259,6 +259,14 @@ func (s *InGameState) GetCamera() *camera.ThirdPersonCamera {
 	return s.camera
 }
 
+// ResizeScene resizes the scene framebuffer to match the window size.
+func (s *InGameState) ResizeScene(width, height int32) {
+	if s.scene != nil {
+		logger.Debug("ResizeScene called", zap.Int32("width", width), zap.Int32("height", height))
+		s.scene.Resize(width, height)
+	}
+}
+
 // IsSceneReady returns whether the scene is ready for rendering.
 func (s *InGameState) IsSceneReady() bool {
 	return s.SceneReady

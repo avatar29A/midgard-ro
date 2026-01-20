@@ -38,8 +38,11 @@ type Game struct {
 	config  *config.Config
 	running bool
 
-	// ImGui backend
-	backend backend.Backend[sdlbackend.SDLWindowFlags]
+	// ImGui backend (for windowing and OpenGL context)
+	imguiBackend backend.Backend[sdlbackend.SDLWindowFlags]
+
+	// UI backend abstraction (for rendering UI)
+	uiBackend ui.UIBackend
 
 	// State management
 	stateManager *states.Manager
@@ -47,13 +50,6 @@ type Game struct {
 
 	// Assets
 	assetManager *assets.Manager
-
-	// UI components
-	loginUI      *ui.LoginUI
-	charSelectUI *ui.CharSelectUI
-	connectingUI *ui.ConnectingUI
-	loadingUI    *ui.LoadingUI
-	inGameUI     *ui.InGameUI
 
 	// Timing
 	lastTime   time.Time
@@ -73,7 +69,8 @@ type Game struct {
 	lastMouseY float32
 }
 
-// New creates a new game instance.
+// New creates a new game instance with ImGui windowing (backward compatible).
+// For external windowing (e.g., SDL2), use NewHeadless() instead.
 func New(cfg *config.Config) (*Game, error) {
 	runtime.LockOSThread()
 
@@ -101,20 +98,26 @@ func New(cfg *config.Config) (*Game, error) {
 		}
 	}
 
-	// Create ImGui backend
+	// Create ImGui backend (for windowing)
 	var err error
-	g.backend, err = backend.CreateBackend(sdlbackend.NewSDLBackend())
+	g.imguiBackend, err = backend.CreateBackend(sdlbackend.NewSDLBackend())
 	if err != nil {
 		return nil, fmt.Errorf("create backend: %w", err)
 	}
 
 	// Set up font loading hook before creating window
-	g.backend.SetAfterCreateContextHook(func() {
+	g.imguiBackend.SetAfterCreateContextHook(func() {
+		// CRITICAL: Disable viewports to prevent separate OS windows
+		io := imgui.CurrentIO()
+		flags := io.ConfigFlags()
+		flags &^= imgui.ConfigFlagsViewportsEnable // Clear viewport flag
+		io.SetConfigFlags(flags)
+
 		g.loadKoreanFont()
 	})
 
-	g.backend.SetBgColor(imgui.NewVec4(0.05, 0.05, 0.08, 1.0))
-	g.backend.CreateWindow("Midgard RO", cfg.Graphics.Width, cfg.Graphics.Height)
+	g.imguiBackend.SetBgColor(imgui.NewVec4(0.05, 0.05, 0.08, 1.0))
+	g.imguiBackend.CreateWindow("Midgard RO", cfg.Graphics.Width, cfg.Graphics.Height)
 
 	// Initialize OpenGL
 	if err := gl.Init(); err != nil {
@@ -128,6 +131,59 @@ func New(cfg *config.Config) (*Game, error) {
 		zap.String("renderer", renderer),
 	)
 
+	// Initialize game state
+	if err := g.initGameState(cfg); err != nil {
+		return nil, err
+	}
+
+	// Create UI backend (ImGui by default for backward compatibility)
+	g.uiBackend = ui.NewImGuiBackend()
+
+	logger.Info("game initialized successfully")
+	return g, nil
+}
+
+// NewHeadless creates a new game instance without creating a window.
+// The caller is responsible for:
+// - Creating the OpenGL context (via SDL2 or other)
+// - Calling SetUIBackend() to set the UI renderer
+// - Calling InitTiming() before the main loop
+// - Calling Update() and RenderUI() each frame
+func NewHeadless(cfg *config.Config) (*Game, error) {
+	logger.Info("initializing headless game",
+		zap.Int("width", cfg.Graphics.Width),
+		zap.Int("height", cfg.Graphics.Height),
+	)
+
+	g := &Game{
+		config:        cfg,
+		running:       false,
+		stateManager:  states.NewManager(),
+		client:        network.New(),
+		assetManager:  assets.NewManager(),
+		screenshotDir: "data/Screenshots",
+	}
+
+	// Load GRF archives
+	for _, grfPath := range cfg.Data.GRFPaths {
+		if err := g.assetManager.AddArchive(grfPath); err != nil {
+			logger.Warn("failed to load GRF archive", zap.String("path", grfPath), zap.Error(err))
+		} else {
+			logger.Info("loaded GRF archive", zap.String("path", grfPath))
+		}
+	}
+
+	// Initialize game state
+	if err := g.initGameState(cfg); err != nil {
+		return nil, err
+	}
+
+	logger.Info("headless game initialized successfully")
+	return g, nil
+}
+
+// initGameState initializes the game state machine with login state.
+func (g *Game) initGameState(cfg *config.Config) error {
 	// Initialize with login state
 	loginCfg := states.LoginStateConfig{
 		ServerHost:    cfg.Network.LoginServer,
@@ -149,11 +205,7 @@ func New(cfg *config.Config) (*Game, error) {
 	loginState := states.NewLoginState(loginCfg, g.client, g.stateManager)
 	g.stateManager.Change(loginState)
 
-	// Create UI components
-	g.loginUI = ui.NewLoginUI(loginState)
-
-	logger.Info("game initialized successfully")
-	return g, nil
+	return nil
 }
 
 // loadKoreanFont loads a font with Korean glyph support.
@@ -201,7 +253,7 @@ func (g *Game) Run() error {
 	logger.Info("starting game loop")
 
 	// Run with ImGui backend
-	g.backend.Run(func() {
+	g.imguiBackend.Run(func() {
 		g.frame()
 	})
 
@@ -230,7 +282,7 @@ func (g *Game) frame() {
 	// Handle ESC to quit
 	if imgui.IsKeyPressedBoolV(imgui.KeyEscape, false) {
 		g.running = false
-		g.backend.SetShouldClose(true)
+		g.imguiBackend.SetShouldClose(true)
 	}
 
 	// Handle F12 for screenshot (will capture at start of NEXT frame)
@@ -265,46 +317,88 @@ func (g *Game) frame() {
 
 // renderUI renders the appropriate UI for the current state.
 func (g *Game) renderUI() {
-	viewport := imgui.MainViewport()
-	workSize := viewport.WorkSize()
-	viewportWidth := workSize.X
-	viewportHeight := workSize.Y
+	viewportWidth, viewportHeight := g.uiBackend.GetScreenSize()
+
+	// Begin UI frame
+	g.uiBackend.Begin()
 
 	// Render based on current state type
 	switch state := g.stateManager.Current().(type) {
 	case *states.LoginState:
-		if g.loginUI == nil {
-			g.loginUI = ui.NewLoginUI(state)
-		}
-		g.loginUI.Render(viewportWidth, viewportHeight)
+		g.uiBackend.RenderLoginUI(ui.LoginUIState{
+			Username:     state.GetUsername(),
+			Password:     state.GetPassword(),
+			ErrorMessage: state.GetErrorMessage(),
+			IsLoading:    state.IsLoadingState(),
+			ServerName:   g.config.Network.LoginServer,
+			OnUsernameChange: func(s string) {
+				state.SetUsername(s)
+			},
+			OnPasswordChange: func(s string) {
+				state.SetPassword(s)
+			},
+			OnLogin: func() {
+				state.AttemptLogin()
+			},
+		}, viewportWidth, viewportHeight)
 
 	case *states.ConnectingState:
-		if g.connectingUI == nil {
-			g.connectingUI = ui.NewConnectingUI(state)
-		}
-		g.connectingUI.Render(viewportWidth, viewportHeight)
+		g.uiBackend.RenderConnectingUI(ui.ConnectingUIState{
+			StatusMessage: state.GetStatusMessage(),
+			ErrorMessage:  state.GetErrorMessage(),
+		}, viewportWidth, viewportHeight)
 
 	case *states.CharSelectState:
-		if g.charSelectUI == nil {
-			g.charSelectUI = ui.NewCharSelectUI(state)
-		}
-		g.charSelectUI.Render(viewportWidth, viewportHeight)
+		g.uiBackend.RenderCharSelectUI(ui.CharSelectUIState{
+			Characters:    state.GetCharacters(),
+			SelectedIndex: -1, // Managed by the backend
+			StatusMessage: state.GetStatusMessage(),
+			ErrorMessage:  state.GetErrorMessage(),
+			IsLoading:     state.IsLoadingState(),
+			IsReady:       state.IsCharListReady(),
+			OnSelect: func(index int) {
+				state.SelectCharacter(index)
+			},
+		}, viewportWidth, viewportHeight)
 
 	case *states.LoadingState:
-		if g.loadingUI == nil {
-			g.loadingUI = ui.NewLoadingUI(state)
-		}
-		g.loadingUI.Render(viewportWidth, viewportHeight)
+		g.uiBackend.RenderLoadingUI(ui.LoadingUIState{
+			MapName:       state.GetMapName(),
+			StatusMessage: state.GetStatusMessage(),
+			ErrorMessage:  state.GetErrorMessage(),
+			Progress:      state.GetProgress(),
+			Phase:         state.GetLoadingPhase(),
+		}, viewportWidth, viewportHeight)
 
 	case *states.InGameState:
-		if g.inGameUI == nil {
-			g.inGameUI = ui.NewInGameUI(state)
+		var playerX, playerY, playerZ float32
+		var playerTileX, playerTileY int
+		var playerDirection uint8
+
+		if player := state.GetPlayer(); player != nil {
+			playerX, playerY, playerZ = player.RenderPosition()
+			playerDirection = uint8(player.Direction)
 		}
-		g.inGameUI.Update(g.dt * 1000) // Convert to ms
-		g.inGameUI.Render(viewportWidth, viewportHeight)
+		playerTileX, playerTileY = state.GetPlayerTilePosition()
+
+		g.uiBackend.RenderInGameUI(ui.InGameUIState{
+			MapName:         state.GetMapName(),
+			PlayerX:         playerX,
+			PlayerY:         playerY,
+			PlayerZ:         playerZ,
+			PlayerTileX:     playerTileX,
+			PlayerTileY:     playerTileY,
+			PlayerDirection: playerDirection,
+			SceneReady:      state.IsSceneReady(),
+			SceneTexture:    state.GetSceneTexture(),
+			StatusMessage:   state.GetStatusMessage(),
+			ErrorMessage:    state.GetErrorMessage(),
+			ShowDebugInfo:   true,
+			FPS:             g.fps,
+		}, g.dt, viewportWidth, viewportHeight)
 
 	default:
-		// Show placeholder for unknown state
+		// Show placeholder for unknown state (using ImGui directly for simplicity)
 		imgui.SetNextWindowPos(imgui.NewVec2(viewportWidth/2-100, viewportHeight/2-20))
 		if imgui.BeginV("##Loading", nil, imgui.WindowFlagsNoTitleBar|imgui.WindowFlagsNoResize|imgui.WindowFlagsAlwaysAutoResize) {
 			imgui.Text("Loading...")
@@ -314,36 +408,25 @@ func (g *Game) renderUI() {
 
 	// Debug: Show FPS overlay
 	if g.config.Game.ShowFPS {
-		imgui.SetNextWindowPos(imgui.NewVec2(viewportWidth-100, 5))
-		imgui.SetNextWindowBgAlpha(0.5)
-		flags := imgui.WindowFlagsNoTitleBar | imgui.WindowFlagsNoResize |
-			imgui.WindowFlagsNoMove | imgui.WindowFlagsNoInputs |
-			imgui.WindowFlagsAlwaysAutoResize
-		if imgui.BeginV("##FPS", nil, flags) {
-			imgui.Text(fmt.Sprintf("FPS: %.0f", g.fps))
-		}
-		imgui.End()
+		g.uiBackend.RenderFPSOverlay(g.fps, viewportWidth, viewportHeight)
 	}
 
 	// Screenshot notification (show for 3 seconds)
 	if g.screenshotMsg != "" && time.Since(g.screenshotMsgTime) < 3*time.Second {
-		msgWidth := float32(300)
-		imgui.SetNextWindowPos(imgui.NewVec2((viewportWidth-msgWidth)/2, viewportHeight-60))
-		imgui.SetNextWindowSize(imgui.NewVec2(msgWidth, 0))
-		imgui.SetNextWindowBgAlpha(0.8)
-		flags := imgui.WindowFlagsNoTitleBar | imgui.WindowFlagsNoResize |
-			imgui.WindowFlagsNoMove | imgui.WindowFlagsNoInputs |
-			imgui.WindowFlagsAlwaysAutoResize
-		if imgui.BeginV("##Screenshot", nil, flags) {
-			imgui.TextColored(imgui.NewVec4(0.2, 1.0, 0.2, 1.0), g.screenshotMsg)
-		}
-		imgui.End()
+		g.uiBackend.RenderScreenshotMessage(g.screenshotMsg, viewportWidth, viewportHeight)
 	}
+
+	// End UI frame
+	g.uiBackend.End()
 }
 
 // Close cleans up game resources.
 func (g *Game) Close() {
 	logger.Info("closing game")
+
+	if g.uiBackend != nil {
+		g.uiBackend.Close()
+	}
 
 	if g.client != nil {
 		g.client.Disconnect()
@@ -359,42 +442,29 @@ func (g *Game) captureScreenshot() {
 	var pixels []byte
 	var width, height int
 
-	// Try to capture from scene framebuffer if in InGameState
-	if inGameState, ok := g.stateManager.Current().(*states.InGameState); ok {
-		scenePixels, w, h := inGameState.CaptureScene()
-		if scenePixels != nil {
-			pixels = scenePixels
-			width = int(w)
-			height = int(h)
-		}
+	// Get actual viewport size from OpenGL (handles HiDPI correctly)
+	var viewport [4]int32
+	gl.GetIntegerv(gl.VIEWPORT, &viewport[0])
+	width = int(viewport[2])
+	height = int(viewport[3])
+
+	if width <= 0 || height <= 0 {
+		logger.Warn("screenshot failed: invalid viewport")
+		return
 	}
 
-	// Fallback to reading from default framebuffer
-	if pixels == nil {
-		io := imgui.CurrentIO()
-		displaySize := io.DisplaySize()
-		fbScale := io.DisplayFramebufferScale()
-		width = int(displaySize.X * fbScale.X)
-		height = int(displaySize.Y * fbScale.Y)
+	pixels = make([]byte, width*height*4)
+	gl.ReadPixels(0, 0, int32(width), int32(height), gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(pixels))
 
-		if width <= 0 || height <= 0 {
-			logger.Warn("screenshot failed: invalid viewport")
-			return
-		}
-
-		pixels = make([]byte, width*height*4)
-		gl.ReadPixels(0, 0, int32(width), int32(height), gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(pixels))
-
-		// Flip vertically for default framebuffer
-		rowSize := width * 4
-		flipped := make([]byte, len(pixels))
-		for y := 0; y < height; y++ {
-			srcRow := (height - 1 - y) * rowSize
-			dstRow := y * rowSize
-			copy(flipped[dstRow:dstRow+rowSize], pixels[srcRow:srcRow+rowSize])
-		}
-		pixels = flipped
+	// Flip vertically for default framebuffer
+	rowSize := width * 4
+	flipped := make([]byte, len(pixels))
+	for y := 0; y < height; y++ {
+		srcRow := (height - 1 - y) * rowSize
+		dstRow := y * rowSize
+		copy(flipped[dstRow:dstRow+rowSize], pixels[srcRow:srcRow+rowSize])
 	}
+	pixels = flipped
 
 	// Create screenshot directory if needed
 	if err := os.MkdirAll(g.screenshotDir, 0755); err != nil {
@@ -445,10 +515,11 @@ func (g *Game) handleInGameInput(state *states.InGameState) {
 
 	io := imgui.CurrentIO()
 
-	// Scroll wheel for zoom
+	// Scroll wheel for zoom - use small multiplier for smooth zooming
+	// Each scroll tick changes distance by ~20% (sensitivity 0.1 * delta 2 = 20%)
 	scroll := io.MouseWheel()
 	if scroll != 0 {
-		camera.HandleZoom(scroll * 50)
+		camera.HandleZoom(scroll * 2)
 	}
 
 	// Get current mouse position
@@ -472,6 +543,124 @@ func (g *Game) handleInGameInput(state *states.InGameState) {
 // LoadAsset loads an asset from GRF archives.
 func (g *Game) LoadAsset(path string) ([]byte, error) {
 	return g.assetManager.Load(path)
+}
+
+// SetUIBackend allows setting a custom UI backend.
+// This must be called before Run().
+func (g *Game) SetUIBackend(backend ui.UIBackend) {
+	if g.uiBackend != nil {
+		g.uiBackend.Close()
+	}
+	g.uiBackend = backend
+}
+
+// StateManager returns the state manager.
+func (g *Game) StateManager() *states.Manager {
+	return g.stateManager
+}
+
+// NetworkClient returns the network client.
+func (g *Game) NetworkClient() *network.Client {
+	return g.client
+}
+
+// AssetManager returns the asset manager.
+func (g *Game) AssetManager() *assets.Manager {
+	return g.assetManager
+}
+
+// UIBackend returns the current UI backend.
+func (g *Game) UIBackend() ui.UIBackend {
+	return g.uiBackend
+}
+
+// FPS returns the current frames per second.
+func (g *Game) FPS() float64 {
+	return g.fps
+}
+
+// DeltaTime returns the time since the last frame in seconds.
+func (g *Game) DeltaTime() float64 {
+	return g.dt
+}
+
+// Update processes a single frame update.
+// This can be called externally when using a custom event loop.
+func (g *Game) Update() error {
+	// Calculate delta time
+	now := time.Now()
+	g.dt = now.Sub(g.lastTime).Seconds()
+	g.lastTime = now
+
+	// Update FPS counter
+	g.frameCount++
+	if time.Since(g.fpsTimer) >= time.Second {
+		g.fps = float64(g.frameCount)
+		g.frameCount = 0
+		g.fpsTimer = time.Now()
+	}
+
+	// Update state machine
+	if err := g.stateManager.Update(g.dt); err != nil {
+		logger.Error("state update error", zap.Error(err))
+		return err
+	}
+
+	// Render 3D scene (if applicable)
+	if err := g.stateManager.Render(); err != nil {
+		logger.Error("state render error", zap.Error(err))
+		return err
+	}
+
+	return nil
+}
+
+// RenderUI renders the UI for the current state.
+// This can be called externally when using a custom event loop.
+func (g *Game) RenderUI() {
+	g.renderUI()
+}
+
+// HandleScreenshot requests a screenshot capture.
+func (g *Game) HandleScreenshot() {
+	g.screenshotRequested = true
+}
+
+// ProcessScreenshot processes any pending screenshot request.
+func (g *Game) ProcessScreenshot() {
+	if g.screenshotRequested {
+		g.screenshotRequested = false
+		g.captureScreenshot()
+	}
+}
+
+// HandleInGameCameraInput handles camera controls when in InGameState.
+func (g *Game) HandleInGameCameraInput(scrollDelta float32, mouseDeltaX float32, rightButtonDown bool) {
+	inGameState, ok := g.stateManager.Current().(*states.InGameState)
+	if !ok {
+		return
+	}
+
+	camera := inGameState.GetCamera()
+	if camera == nil {
+		return
+	}
+
+	// Scroll wheel for zoom
+	if scrollDelta != 0 {
+		camera.HandleZoom(scrollDelta * 2)
+	}
+
+	// Right mouse button drag for camera rotation
+	if rightButtonDown && mouseDeltaX != 0 {
+		camera.HandleYaw(mouseDeltaX)
+	}
+}
+
+// InitTiming initializes timing for the game loop.
+func (g *Game) InitTiming() {
+	g.lastTime = time.Now()
+	g.fpsTimer = time.Now()
 }
 
 // parseHostPort extracts host and port from "host:port" string.

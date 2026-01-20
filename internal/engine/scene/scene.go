@@ -207,6 +207,10 @@ func (s *Scene) LoadMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(strin
 	s.MapWidth = float32(gnd.Width) * gnd.Zoom
 	s.MapHeight = float32(gnd.Height) * gnd.Zoom
 
+	fmt.Printf("=== Scene LoadMap ===\n")
+	fmt.Printf("GND: %dx%d tiles, zoom=%.1f\n", gnd.Width, gnd.Height, gnd.Zoom)
+	fmt.Printf("Map size: %.0fx%.0f world units\n", s.MapWidth, s.MapHeight)
+
 	// Build heightmap for terrain height queries
 	hm := terrain.BuildHeightmap(gnd)
 	s.terrainAltitudes = hm.Altitudes
@@ -235,6 +239,11 @@ func (s *Scene) LoadMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(strin
 		if s.LightOpacity <= 0 {
 			s.LightOpacity = 1.0
 		}
+		fmt.Printf("Lighting: LightDir(%.2f,%.2f,%.2f) Ambient(%.2f,%.2f,%.2f) Diffuse(%.2f,%.2f,%.2f) Opacity=%.2f\n",
+			s.LightDir[0], s.LightDir[1], s.LightDir[2],
+			s.AmbientColor[0], s.AmbientColor[1], s.AmbientColor[2],
+			s.DiffuseColor[0], s.DiffuseColor[1], s.DiffuseColor[2],
+			s.LightOpacity)
 
 		// Ensure minimum ambient
 		minAmbient := float32(0.3)
@@ -256,12 +265,19 @@ func (s *Scene) LoadMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(strin
 	// Get bounds from terrain
 	s.MinBounds = s.terrainRenderer.MinBounds
 	s.MaxBounds = s.terrainRenderer.MaxBounds
+	fmt.Printf("Terrain bounds: Min(%.0f,%.0f,%.0f) Max(%.0f,%.0f,%.0f)\n",
+		s.MinBounds[0], s.MinBounds[1], s.MinBounds[2],
+		s.MaxBounds[0], s.MaxBounds[1], s.MaxBounds[2])
+	fmt.Printf("Terrain groups: %d\n", len(s.terrainRenderer.groups))
 
 	// Load models
 	if rsw != nil {
+		models := rsw.GetModels()
+		fmt.Printf("RSW has %d models\n", len(models))
 		if err := s.modelRenderer.LoadModels(rsw, texLoader, s.fallbackTex, s.MapWidth, s.MapHeight, s.terrainAltitudes, s.terrainTileZoom, s.terrainTilesX, s.terrainTilesZ); err != nil {
 			return fmt.Errorf("loading models: %w", err)
 		}
+		fmt.Printf("Loaded %d models\n", len(s.modelRenderer.models))
 	}
 
 	// Load water
@@ -324,8 +340,8 @@ func (s *Scene) RenderWithView(view math.Mat4) uint32 {
 	restore := s.framebuffer.BindWithViewport()
 	defer restore()
 
-	// Clear
-	s.framebuffer.Clear(0.15, 0.15, 0.2, 1.0)
+	// Clear with sky blue (matches grfbrowser)
+	s.framebuffer.Clear(0.4, 0.6, 0.9, 1.0)
 
 	// Enable depth testing
 	gl.Enable(gl.DEPTH_TEST)
@@ -334,6 +350,9 @@ func (s *Scene) RenderWithView(view math.Mat4) uint32 {
 	// Enable alpha blending
 	gl.Enable(gl.BLEND)
 	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+
+	// Disable face culling for terrain (winding order varies)
+	gl.Disable(gl.CULL_FACE)
 
 	// Render terrain
 	s.terrainRenderer.Render(viewProj, s.LightDir, s.AmbientColor, s.DiffuseColor, s.Brightness, s.LightOpacity,
