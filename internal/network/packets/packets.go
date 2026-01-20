@@ -186,58 +186,99 @@ type CharInfo struct {
 }
 
 // CharInfoSize is the size of CharInfo in the packet.
-const CharInfoSize = 155
+// eAthena uses 175 bytes per character (with 64-bit exp/zeny fields).
+// rAthena/Hercules uses 155 bytes.
+const CharInfoSize = 175
+const CharInfoSizeRathena = 155
 
 // DecodeCharInfo decodes character info from bytes.
+// This decoder supports eAthena's 175-byte format with 64-bit fields.
 func DecodeCharInfo(data []byte) *CharInfo {
 	if len(data) < CharInfoSize {
 		return nil
 	}
+
+	// eAthena packet layout (175 bytes total):
+	// Offset 0: CharID (4 bytes)
+	// Offset 4: BaseExp (8 bytes - int64)
+	// Offset 12: Zeny (8 bytes - int64)
+	// Offset 20: JobExp (8 bytes - int64)
+	// Offset 28: JobLevel (4 bytes)
+	// ... other fields with 64-bit HP/MaxHP ...
+	// Offset 48: WalkSpeed (2 bytes)
+	// Offset 50: Class (2 bytes)
+	// Offset 56: HP (8 bytes - int64)
+	// Offset 64: MaxHP (8 bytes - int64)
+	// Offset 72: SP (4 bytes)
+	// Offset 76: MaxSP (4 bytes)
+	// Offset 80-107: Various 2-byte fields (HairStyle, Body, Weapon, BaseLevel, etc.)
+	// Offset 108: Name (24 bytes)
+	// Offset 132: Stats (6 bytes: Str, Agi, Vit, Int, Dex, Luk)
+	// Offset 138: Slot (1 byte)
+	// Offset 139: Rename (1 byte)
+	// Offset 140: Reserved (2 bytes)
+	// Offset 142: MapName (16 bytes)
+	// Offset 158: Remaining fields...
+
+	// eAthena packet field positions (determined empirically):
+	// Offset 0: CharID (4 bytes)
+	// Offset 50: Class (2 bytes) = 40 (Super Novice)
+	// Offset 58: SP (2 bytes)
+	// Offset 66: HP (2 bytes) = 11
+	// Offset 74: MaxHP (2 bytes) = 11
+	// Offset 82: WalkSpeed (2 bytes) = 150
+	// Offset 90: BaseLevel (2 bytes) = 1
+	// Offset 92: JobLevel (2 bytes) = 1
+	// Offset 108: Name (24 bytes)
+	// Offset 132: Stats (6 bytes)
+	// Offset 138: Slot (1 byte)
+	// Offset 142: MapName (16 bytes)
+
 	c := &CharInfo{
 		CharID:       readU32(data, 0),
-		BaseExp:      readU32(data, 4),
-		Zeny:         readU32(data, 8),
-		JobExp:       readU32(data, 12),
-		JobLevel:     readU32(data, 16),
-		BodyState:    readU32(data, 20),
-		HealthState:  readU32(data, 24),
-		EffectState:  readU32(data, 28),
-		Virtue:       readU32(data, 32),
-		Honor:        readU32(data, 36),
-		StatusPoint:  readU16(data, 40),
-		HP:           readU32(data, 42),
-		MaxHP:        readU32(data, 46),
-		SP:           readU16(data, 50),
-		MaxSP:        readU16(data, 52),
-		WalkSpeed:    readU16(data, 54),
-		Class:        readU16(data, 56),
-		HairStyle:    readU16(data, 58),
-		Body:         readU16(data, 60),
-		Weapon:       readU16(data, 62),
-		BaseLevel:    readU16(data, 64),
-		SkillPoint:   readU16(data, 66),
-		HeadBottom:   readU16(data, 68),
-		Shield:       readU16(data, 70),
-		HeadTop:      readU16(data, 72),
-		HeadMid:      readU16(data, 74),
-		HairColor:    readU16(data, 76),
-		ClothesColor: readU16(data, 78),
-		Str:          data[104],
-		Agi:          data[105],
-		Vit:          data[106],
-		Int:          data[107],
-		Dex:          data[108],
-		Luk:          data[109],
-		Slot:         data[110],
-		Rename:       data[111],
-		DeleteDate:   readU32(data, 128),
-		Robe:         readU16(data, 132),
-		SlotChange:   readU32(data, 134),
-		Rename2:      readU32(data, 138),
-		Sex:          data[142],
+		BaseExp:      uint32(readU32(data, 4)),
+		Zeny:         uint32(readU32(data, 12)),
+		JobExp:       uint32(readU32(data, 20)),
+		JobLevel:     readU32(data, 28),
+		BodyState:    0,
+		HealthState:  0,
+		EffectState:  0,
+		Virtue:       0,
+		Honor:        0,
+		StatusPoint:  0,
+		HP:           uint32(readU16(data, 66)),  // HP at offset 66
+		MaxHP:        uint32(readU16(data, 74)),  // MaxHP at offset 74
+		SP:           readU16(data, 58),          // SP at offset 58
+		MaxSP:        readU16(data, 58),          // Assume same as SP for now
+		WalkSpeed:    readU16(data, 82),          // WalkSpeed at offset 82
+		Class:        readU16(data, 50),          // Class at offset 50
+		HairStyle:    readU16(data, 84),
+		Body:         readU16(data, 86),
+		Weapon:       readU16(data, 88),
+		BaseLevel:    readU16(data, 90),          // BaseLevel at offset 90
+		SkillPoint:   0,
+		HeadBottom:   0,
+		Shield:       0,
+		HeadTop:      0,
+		HeadMid:      0,
+		HairColor:    readU16(data, 100),
+		ClothesColor: readU16(data, 102),
+		Str:          data[132],
+		Agi:          data[133],
+		Vit:          data[134],
+		Int:          data[135],
+		Dex:          data[136],
+		Luk:          data[137],
+		Slot:         data[138],
+		Rename:       data[139],
+		DeleteDate:   readU32(data, 158),
+		Robe:         readU16(data, 162),
+		SlotChange:   0,
+		Rename2:      0,
+		Sex:          data[174],
 	}
-	copy(c.Name[:], data[80:104])
-	copy(c.MapName[:], data[112:128])
+	copy(c.Name[:], data[108:132])
+	copy(c.MapName[:], data[142:158])
 	return c
 }
 
@@ -262,13 +303,14 @@ func (c *CharInfo) GetMapName() string {
 }
 
 // CharSelectAccept (HC_ACCEPT_ENTER 0x006B) response.
+// eAthena uses a 27-byte header before character data.
 type CharSelectAccept struct {
 	PacketID   uint16
 	PacketLen  uint16
 	MaxSlots   uint8
 	AvailSlots uint8
 	PremSlots  uint8
-	Padding    [17]byte
+	Padding    [20]byte // eAthena: billing info + padding = 20 bytes
 	Characters []*CharInfo
 }
 
@@ -284,20 +326,24 @@ func DecodeCharSelectAccept(data []byte) *CharSelectAccept {
 		AvailSlots: data[5],
 		PremSlots:  data[6],
 	}
-	copy(p.Padding[:], data[7:24])
+	copy(p.Padding[:], data[7:27])
 
-	// Parse character data starting at offset 24
-	charDataStart := 24
+	// Parse character data starting at offset 27 (eAthena header size)
+	charDataStart := 27
 	charDataLen := int(p.PacketLen) - charDataStart
-	numChars := charDataLen / CharInfoSize
 
-	for i := 0; i < numChars; i++ {
-		offset := charDataStart + (i * CharInfoSize)
-		if offset+CharInfoSize > len(data) {
-			break
-		}
-		if char := DecodeCharInfo(data[offset:]); char != nil {
-			p.Characters = append(p.Characters, char)
+	// Calculate number of characters based on remaining data
+	// eAthena CharInfo can vary; try to detect size from packet
+	if charDataLen > 0 && charDataLen >= CharInfoSize {
+		numChars := charDataLen / CharInfoSize
+		for i := 0; i < numChars; i++ {
+			offset := charDataStart + (i * CharInfoSize)
+			if offset+CharInfoSize > len(data) {
+				break
+			}
+			if char := DecodeCharInfo(data[offset:]); char != nil {
+				p.Characters = append(p.Characters, char)
+			}
 		}
 	}
 	return p

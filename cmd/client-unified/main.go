@@ -189,9 +189,15 @@ func main() {
 				switch e.Button {
 				case sdl.BUTTON_LEFT:
 					input.MouseLeftDown = pressed
+					if pressed {
+						input.MouseLeftClicked = true // Event-based click detection
+					}
 				case sdl.BUTTON_RIGHT:
 					input.MouseRightDown = pressed
 					rightMouseDown = pressed
+					if pressed {
+						input.MouseRightClicked = true
+					}
 				case sdl.BUTTON_MIDDLE:
 					input.MouseMiddleDown = pressed
 				}
