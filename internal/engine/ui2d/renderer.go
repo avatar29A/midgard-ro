@@ -566,12 +566,7 @@ func (r *Renderer) createSceneShader() (uint32, error) {
 
 		void main() {
 			vec4 color = texture(uTexture, vTexCoord);
-			// Gamma correction (sRGB output)
-			color.rgb = pow(color.rgb, vec3(1.0 / 2.2));
-			// Warm tint (Korangar-style)
-			color.rgb *= vec3(1.08, 1.02, 0.92);
-			// Clamp to valid range
-			color.rgb = clamp(color.rgb, 0.0, 1.0);
+			// RO textures are already in sRGB, pass through directly
 			FragColor = color;
 		}
 	` + "\x00"
