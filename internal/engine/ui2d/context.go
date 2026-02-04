@@ -98,12 +98,14 @@ func (c *Context) BeginWindow(id string, x, y, w, h float32, title string) bool 
 			Open: true,
 		}
 		c.windows[id] = ws
-	} else if !ws.Moving {
-		// Update position from parameters (allows centering on resize)
-		ws.X = x
-		ws.Y = y
+	} else {
+		// Always update size from parameters (position only when not moving)
 		ws.W = w
 		ws.H = h
+		if !ws.Moving {
+			ws.X = x
+			ws.Y = y
+		}
 	}
 
 	if !ws.Open {

@@ -18,7 +18,7 @@ var (
 	ColorBlue  = Color{0, 0, 1, 1}
 
 	// UI theme colors (RO-inspired)
-	ColorPanelBg      = Color{0.08, 0.08, 0.12, 0.95}
+	ColorPanelBg      = Color{0.08, 0.08, 0.12, 0.75}
 	ColorPanelBorder  = Color{0.3, 0.3, 0.4, 1}
 	ColorButtonNormal = Color{0.15, 0.15, 0.2, 1}
 	ColorButtonHover  = Color{0.25, 0.25, 0.35, 1}

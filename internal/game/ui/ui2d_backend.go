@@ -302,18 +302,16 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 
 	// Debug overlay (top-left)
 	if state.ShowDebugInfo {
-		if b.ctx.BeginWindow("debug", 10, 10, 220, 180, "Debug") {
+		if b.ctx.BeginWindow("debug", 10, 10, 320, 105, "Debug") {
+			b.ctx.Row(16)
 			b.ctx.Label(fmt.Sprintf("Map: %s", state.MapName))
-			b.ctx.Spacer(4)
+			b.ctx.Row(16)
 			b.ctx.Label(fmt.Sprintf("Tile: (%d, %d)", state.PlayerTileX, state.PlayerTileY))
-			b.ctx.Spacer(4)
-			b.ctx.Label(fmt.Sprintf("World: (%.1f, %.1f, %.1f)", state.PlayerX, state.PlayerY, state.PlayerZ))
-			b.ctx.Spacer(4)
-			b.ctx.Label(fmt.Sprintf("Dir: %d", state.PlayerDirection))
+			b.ctx.Row(16)
+			b.ctx.Label(fmt.Sprintf("Pos: (%.0f, %.0f, %.0f)", state.PlayerX, state.PlayerY, state.PlayerZ))
 			b.ctx.Separator()
-			b.ctx.Label(fmt.Sprintf("Entities: %d", state.EntityCount))
-			b.ctx.Spacer(4)
-			b.ctx.Label(fmt.Sprintf("FPS: %.0f", state.FPS))
+			b.ctx.Row(16)
+			b.ctx.Label(fmt.Sprintf("Dir: %d  Entities: %d", state.PlayerDirection, state.EntityCount))
 			b.ctx.EndWindow()
 		}
 	}
