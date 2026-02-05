@@ -11,6 +11,14 @@ import (
 type UI2DBackend struct {
 	ctx *ui2d.Context
 
+	// Texture cache for GRF-based UI textures
+	texCache *TextureCache
+
+	// Login screen textures (lazy-loaded)
+	loginBgTex    *TextureInfo
+	logoTex       *TextureInfo
+	loginTexTried bool // avoid repeated load attempts
+
 	// Cached widget states
 	loginUsername string
 	loginPassword string
@@ -40,8 +48,23 @@ func (b *UI2DBackend) End() {
 	b.ctx.End()
 }
 
+// SetAssetLoader wires the GRF asset loader into the UI backend.
+// This enables loading RO textures for window skins and login screen.
+func (b *UI2DBackend) SetAssetLoader(loadFunc func(string) ([]byte, error)) {
+	b.texCache = NewTextureCache(b.ctx.Renderer(), loadFunc)
+
+	// Try to load window skin
+	skin, err := LoadWindowSkin(b.texCache)
+	if err == nil && skin.Frame != nil {
+		b.ctx.SetDefaultWindowSkin(skin.Frame)
+	}
+}
+
 // Close releases backend resources.
 func (b *UI2DBackend) Close() {
+	if b.texCache != nil {
+		b.texCache.Close()
+	}
 	if b.ctx != nil {
 		b.ctx.Close()
 	}
@@ -67,8 +90,37 @@ func (b *UI2DBackend) DrawSceneTexture(x, y, w, h float32, textureID uint32) {
 	b.ctx.Renderer().DrawSceneTexture(x, y, w, h, textureID)
 }
 
+// loginTexBasePath is the GRF path for login screen textures.
+const loginTexBasePath = `data\texture\유저인터페이스\login_interface\`
+
+// loadLoginTextures lazy-loads the login background and logo.
+func (b *UI2DBackend) loadLoginTextures() {
+	if b.loginTexTried || b.texCache == nil {
+		return
+	}
+	b.loginTexTried = true
+
+	bg, err := b.texCache.Load(loginTexBasePath + `login_bg.bmp`)
+	if err == nil {
+		b.loginBgTex = bg
+	}
+
+	logo, err := b.texCache.Load(loginTexBasePath + `login_logo.bmp`)
+	if err == nil {
+		b.logoTex = logo
+	}
+}
+
 // RenderLoginUI renders the login screen.
 func (b *UI2DBackend) RenderLoginUI(state LoginUIState, width, height float32) {
+	// Lazy-load login textures on first render
+	b.loadLoginTextures()
+
+	// Draw login background fullscreen
+	if b.loginBgTex != nil {
+		b.ctx.Renderer().DrawImage(b.loginBgTex.ID, 0, 0, width, height, ui2d.ColorWhite)
+	}
+
 	// Sync state to local cache
 	if b.loginUsername == "" && state.Username != "" {
 		b.loginUsername = state.Username
@@ -82,6 +134,18 @@ func (b *UI2DBackend) RenderLoginUI(state LoginUIState, width, height float32) {
 	windowHeight := float32(340)
 	windowX := (width - windowWidth) / 2
 	windowY := (height - windowHeight) / 2
+
+	// Draw logo centered above the login window
+	if b.logoTex != nil {
+		logoW := float32(b.logoTex.Width)
+		logoH := float32(b.logoTex.Height)
+		logoX := (width - logoW) / 2
+		logoY := windowY - logoH - 16
+		if logoY < 0 {
+			logoY = 0
+		}
+		b.ctx.Renderer().DrawImage(b.logoTex.ID, logoX, logoY, logoW, logoH, ui2d.ColorWhite)
+	}
 
 	if b.ctx.BeginWindow("login", windowX, windowY, windowWidth, windowHeight, "Login to Ragnarok Online") {
 		b.ctx.Spacer(12)

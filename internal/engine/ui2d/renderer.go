@@ -10,6 +10,13 @@ import (
 	"github.com/go-gl/gl/v4.1-core/gl"
 )
 
+// imageDrawCall represents a batched image draw call.
+type imageDrawCall struct {
+	textureID  uint32
+	vertStart  int
+	vertCount  int
+}
+
 // Renderer handles 2D UI rendering with OpenGL.
 type Renderer struct {
 	screenWidth  int
@@ -24,6 +31,9 @@ type Renderer struct {
 	// Shader program for scene texture (full RGBA)
 	sceneShader uint32
 
+	// Shader program for image quads (full RGBA with tint)
+	imageShader uint32
+
 	// VAO/VBO for solid quad rendering
 	solidVAO uint32
 	solidVBO uint32
@@ -36,9 +46,17 @@ type Renderer struct {
 	sceneVAO uint32
 	sceneVBO uint32
 
+	// VAO/VBO for image rendering
+	imageVAO uint32
+	imageVBO uint32
+
 	// Current draw lists
 	solidVertices []float32
 	textVertices  []float32
+	imageVertices []float32
+
+	// Batched image draw calls (grouped by texture)
+	imageDrawCalls []imageDrawCall
 
 	// Font for text rendering
 	font *Font
@@ -54,6 +72,7 @@ func New(width, height int) (*Renderer, error) {
 		screenHeight:  height,
 		solidVertices: make([]float32, 0, 4096),
 		textVertices:  make([]float32, 0, 4096),
+		imageVertices: make([]float32, 0, 4096),
 	}
 
 	// Create solid color shader
@@ -90,6 +109,17 @@ func New(width, height int) (*Renderer, error) {
 		return nil, fmt.Errorf("create scene buffers: %w", err)
 	}
 
+	// Create image shader (full RGBA sampling with tint for UI textures)
+	r.imageShader, err = r.createImageShader()
+	if err != nil {
+		return nil, fmt.Errorf("create image shader: %w", err)
+	}
+
+	// Create VAO/VBO for image rendering
+	if err := r.createImageBuffers(); err != nil {
+		return nil, fmt.Errorf("create image buffers: %w", err)
+	}
+
 	// Create font
 	r.font = NewFont()
 
@@ -111,6 +141,8 @@ func (r *Renderer) GetScreenSize() (int, int) {
 func (r *Renderer) Begin() {
 	r.solidVertices = r.solidVertices[:0]
 	r.textVertices = r.textVertices[:0]
+	r.imageVertices = r.imageVertices[:0]
+	r.imageDrawCalls = r.imageDrawCalls[:0]
 }
 
 // End finishes the UI frame and renders all queued elements.
@@ -141,6 +173,26 @@ func (r *Renderer) End() {
 		gl.BindBuffer(gl.ARRAY_BUFFER, r.solidVBO)
 		gl.BufferData(gl.ARRAY_BUFFER, len(r.solidVertices)*4, unsafe.Pointer(&r.solidVertices[0]), gl.STREAM_DRAW)
 		gl.DrawArrays(gl.TRIANGLES, 0, int32(len(r.solidVertices)/7)) // 7 floats per vertex
+	}
+
+	// Render image quads (UI textures) between solid and text
+	if len(r.imageDrawCalls) > 0 {
+		gl.UseProgram(r.imageShader)
+		projLoc := gl.GetUniformLocation(r.imageShader, gl.Str("uProjection\x00"))
+		gl.UniformMatrix4fv(projLoc, 1, false, &proj[0])
+
+		texLoc := gl.GetUniformLocation(r.imageShader, gl.Str("uTexture\x00"))
+		gl.Uniform1i(texLoc, 0)
+
+		gl.ActiveTexture(gl.TEXTURE0)
+		gl.BindVertexArray(r.imageVAO)
+		gl.BindBuffer(gl.ARRAY_BUFFER, r.imageVBO)
+		gl.BufferData(gl.ARRAY_BUFFER, len(r.imageVertices)*4, unsafe.Pointer(&r.imageVertices[0]), gl.STREAM_DRAW)
+
+		for _, dc := range r.imageDrawCalls {
+			gl.BindTexture(gl.TEXTURE_2D, dc.textureID)
+			gl.DrawArrays(gl.TRIANGLES, int32(dc.vertStart), int32(dc.vertCount))
+		}
 	}
 
 	// Render textured quads (text) on top
@@ -200,6 +252,12 @@ func (r *Renderer) Close() {
 	if r.sceneVBO != 0 {
 		gl.DeleteBuffers(1, &r.sceneVBO)
 	}
+	if r.imageVAO != 0 {
+		gl.DeleteVertexArrays(1, &r.imageVAO)
+	}
+	if r.imageVBO != 0 {
+		gl.DeleteBuffers(1, &r.imageVBO)
+	}
 	if r.solidShader != 0 {
 		gl.DeleteProgram(r.solidShader)
 	}
@@ -208,6 +266,9 @@ func (r *Renderer) Close() {
 	}
 	if r.sceneShader != 0 {
 		gl.DeleteProgram(r.sceneShader)
+	}
+	if r.imageShader != 0 {
+		gl.DeleteProgram(r.imageShader)
 	}
 }
 
@@ -592,6 +653,142 @@ func (r *Renderer) createSceneBuffers() error {
 	// TexCoord attribute (location = 1): 2 floats
 	gl.VertexAttribPointerWithOffset(1, 2, gl.FLOAT, false, stride, 3*4)
 	gl.EnableVertexAttribArray(1)
+
+	gl.BindVertexArray(0)
+	gl.BindBuffer(gl.ARRAY_BUFFER, 0)
+
+	return nil
+}
+
+// CreateTexture uploads RGBA pixel data to the GPU and returns a texture ID.
+func (r *Renderer) CreateTexture(width, height int, pixels []byte) uint32 {
+	var texID uint32
+	gl.GenTextures(1, &texID)
+	gl.BindTexture(gl.TEXTURE_2D, texID)
+
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+
+	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA, int32(width), int32(height), 0,
+		gl.RGBA, gl.UNSIGNED_BYTE, unsafe.Pointer(&pixels[0]))
+
+	gl.BindTexture(gl.TEXTURE_2D, 0)
+	return texID
+}
+
+// DeleteTexture releases a GPU texture.
+func (r *Renderer) DeleteTexture(texID uint32) {
+	if texID != 0 {
+		gl.DeleteTextures(1, &texID)
+	}
+}
+
+// DrawImage draws a textured quad with full UV range (0,0)→(1,1).
+func (r *Renderer) DrawImage(texID uint32, x, y, w, h float32, tint Color) {
+	r.DrawImageUV(texID, x, y, w, h, 0, 0, 1, 1, tint)
+}
+
+// DrawImageUV draws a textured quad with custom UV coordinates.
+func (r *Renderer) DrawImageUV(texID uint32, x, y, w, h, u0, v0, u1, v1 float32, tint Color) {
+	if texID == 0 {
+		return
+	}
+
+	// Check if we can merge with the last draw call (same texture)
+	vertStart := len(r.imageVertices) / 9 // 9 floats per vertex
+	if len(r.imageDrawCalls) > 0 {
+		last := &r.imageDrawCalls[len(r.imageDrawCalls)-1]
+		if last.textureID == texID {
+			// Extend the existing draw call
+			r.addImageQuad(x, y, w, h, u0, v0, u1, v1, tint)
+			last.vertCount += 6
+			return
+		}
+	}
+
+	// New draw call
+	r.addImageQuad(x, y, w, h, u0, v0, u1, v1, tint)
+	r.imageDrawCalls = append(r.imageDrawCalls, imageDrawCall{
+		textureID: texID,
+		vertStart: vertStart,
+		vertCount: 6,
+	})
+}
+
+// addImageQuad adds a textured quad to the image vertex buffer.
+func (r *Renderer) addImageQuad(x, y, w, h, u0, v0, u1, v1 float32, c Color) {
+	// Same vertex format as text: pos(3) + uv(2) + color(4) = 9 floats
+	r.imageVertices = append(r.imageVertices,
+		x, y, 0, u0, v0, c.R, c.G, c.B, c.A,
+		x+w, y, 0, u1, v0, c.R, c.G, c.B, c.A,
+		x+w, y+h, 0, u1, v1, c.R, c.G, c.B, c.A,
+	)
+	r.imageVertices = append(r.imageVertices,
+		x, y, 0, u0, v0, c.R, c.G, c.B, c.A,
+		x+w, y+h, 0, u1, v1, c.R, c.G, c.B, c.A,
+		x, y+h, 0, u0, v1, c.R, c.G, c.B, c.A,
+	)
+}
+
+// createImageShader creates the shader for image quads (full RGBA with tint).
+func (r *Renderer) createImageShader() (uint32, error) {
+	vertexShaderSource := `
+		#version 410 core
+
+		layout (location = 0) in vec3 aPos;
+		layout (location = 1) in vec2 aTexCoord;
+		layout (location = 2) in vec4 aColor;
+
+		uniform mat4 uProjection;
+
+		out vec2 vTexCoord;
+		out vec4 vColor;
+
+		void main() {
+			gl_Position = uProjection * vec4(aPos, 1.0);
+			vTexCoord = aTexCoord;
+			vColor = aColor;
+		}
+	` + "\x00"
+
+	fragmentShaderSource := `
+		#version 410 core
+
+		uniform sampler2D uTexture;
+
+		in vec2 vTexCoord;
+		in vec4 vColor;
+		out vec4 FragColor;
+
+		void main() {
+			FragColor = texture(uTexture, vTexCoord) * vColor;
+		}
+	` + "\x00"
+
+	return r.linkShaderProgram(vertexShaderSource, fragmentShaderSource)
+}
+
+// createImageBuffers creates VAO/VBO for image quad rendering.
+func (r *Renderer) createImageBuffers() error {
+	gl.GenVertexArrays(1, &r.imageVAO)
+	gl.BindVertexArray(r.imageVAO)
+
+	gl.GenBuffers(1, &r.imageVBO)
+	gl.BindBuffer(gl.ARRAY_BUFFER, r.imageVBO)
+
+	// Same vertex format as text: pos(3) + texcoord(2) + color(4) = 9 floats, 36 bytes
+	stride := int32(9 * 4)
+
+	gl.VertexAttribPointerWithOffset(0, 3, gl.FLOAT, false, stride, 0)
+	gl.EnableVertexAttribArray(0)
+
+	gl.VertexAttribPointerWithOffset(1, 2, gl.FLOAT, false, stride, 3*4)
+	gl.EnableVertexAttribArray(1)
+
+	gl.VertexAttribPointerWithOffset(2, 4, gl.FLOAT, false, stride, 5*4)
+	gl.EnableVertexAttribArray(2)
 
 	gl.BindVertexArray(0)
 	gl.BindBuffer(gl.ARRAY_BUFFER, 0)
