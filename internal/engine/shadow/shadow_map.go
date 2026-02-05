@@ -8,9 +8,10 @@ import (
 // Map represents a shadow map framebuffer for directional light shadows.
 // Uses a depth-only texture for shadow comparison sampling.
 type Map struct {
-	FBO          uint32 // Framebuffer object
-	DepthTexture uint32 // Depth texture for shadow sampling
-	Resolution   int32  // Shadow map resolution (width = height)
+	FBO          uint32   // Framebuffer object
+	DepthTexture uint32   // Depth texture for shadow sampling
+	Resolution   int32    // Shadow map resolution (width = height)
+	prevViewport [4]int32 // Saved viewport for restore
 }
 
 // DefaultResolution is the default shadow map resolution.
@@ -92,6 +93,9 @@ func NewMap(resolution int32) *Map {
 // Bind binds the shadow map framebuffer for rendering the depth pass.
 // Sets the viewport to match the shadow map resolution.
 func (sm *Map) Bind() {
+	// Save current viewport for restore
+	gl.GetIntegerv(gl.VIEWPORT, &sm.prevViewport[0])
+
 	gl.BindFramebuffer(gl.FRAMEBUFFER, sm.FBO)
 	gl.Viewport(0, 0, sm.Resolution, sm.Resolution)
 	gl.Clear(gl.DEPTH_BUFFER_BIT)
@@ -106,9 +110,12 @@ func (sm *Map) Bind() {
 }
 
 // Unbind unbinds the shadow map framebuffer.
-// Restores back-face culling.
+// Restores viewport and back-face culling.
 func (sm *Map) Unbind() {
 	gl.BindFramebuffer(gl.FRAMEBUFFER, 0)
+
+	// Restore previous viewport
+	gl.Viewport(sm.prevViewport[0], sm.prevViewport[1], sm.prevViewport[2], sm.prevViewport[3])
 
 	// Restore normal culling
 	gl.CullFace(gl.BACK)

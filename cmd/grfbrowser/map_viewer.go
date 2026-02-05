@@ -341,6 +341,9 @@ type MapViewer struct {
 	PlayMode  bool
 	MoveSpeed float32
 
+	// Debug options
+	WalkThroughBlocked bool // Allow walking through blocked cells
+
 	// Player character (Play mode)
 	Player            *PlayerCharacter
 	spriteProgram     uint32 // Shader for billboard sprites
@@ -3354,6 +3357,9 @@ func (mv *MapViewer) GetHeight(worldX, worldZ float32) float32 {
 // Delegates to terrain package for GAT-based walkability check.
 // Also implements character.TerrainQuery interface.
 func (mv *MapViewer) IsWalkable(worldX, worldZ float32) bool {
+	if mv.WalkThroughBlocked {
+		return true
+	}
 	return terrain.IsWalkable(mv.GAT, worldX, worldZ)
 }
 
