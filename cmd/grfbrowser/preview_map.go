@@ -905,6 +905,11 @@ func (app *App) renderMapControlsPanel() {
 		if imgui.SliderFloatV("##IdleAnim", &idleAnim, 50.0, 500.0, "%.0f", imgui.SliderFlagsNone) {
 			character.IdleAnimInterval = idleAnim
 		}
+
+		walkThrough := app.mapViewer.WalkThroughBlocked
+		if imgui.Checkbox("Walk Through Blocked", &walkThrough) {
+			app.mapViewer.WalkThroughBlocked = walkThrough
+		}
 	}
 
 	imgui.Spacing()

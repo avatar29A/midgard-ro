@@ -19,15 +19,24 @@ type State interface {
 	HandleInput(event interface{}) error
 }
 
+// TexLoaderFunc is a function that loads asset data from GRF.
+type TexLoaderFunc func(path string) ([]byte, error)
+
 // Manager manages game state transitions.
 type Manager struct {
-	current State
-	next    State
+	current   State
+	next      State
+	TexLoader TexLoaderFunc
 }
 
 // NewManager creates a new state manager.
 func NewManager() *Manager {
 	return &Manager{}
+}
+
+// SetTexLoader sets the texture loader function.
+func (m *Manager) SetTexLoader(loader TexLoaderFunc) {
+	m.TexLoader = loader
 }
 
 // Current returns the current state.

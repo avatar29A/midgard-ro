@@ -9,7 +9,13 @@ type Config struct {
 	Audio    AudioConfig    `yaml:"audio"`
 	Network  NetworkConfig  `yaml:"network"`
 	Game     GameConfig     `yaml:"game"`
+	Data     DataConfig     `yaml:"data"`
 	Logging  LoggingConfig  `yaml:"logging"`
+}
+
+// DataConfig holds game data file paths.
+type DataConfig struct {
+	GRFPaths []string `yaml:"grf_paths"` // Paths to GRF archives
 }
 
 // GraphicsConfig holds display and rendering settings.
@@ -33,6 +39,8 @@ type AudioConfig struct {
 type NetworkConfig struct {
 	LoginServer    string        `yaml:"login_server"`
 	ConnectTimeout time.Duration `yaml:"connect_timeout"`
+	Username       string        `yaml:"username"`
+	Password       string        `yaml:"password"`
 }
 
 // GameConfig holds gameplay settings.
@@ -72,6 +80,9 @@ func Default() *Config {
 			Language: "en",
 			ShowFPS:  false,
 			ShowPing: false,
+		},
+		Data: DataConfig{
+			GRFPaths: []string{"data.grf"},
 		},
 		Logging: LoggingConfig{
 			Level:   "info",
