@@ -20,6 +20,9 @@ type Context struct {
 	// Current listbox being drawn (nil if not in a listbox)
 	currentListBox *ListBoxState
 
+	// Default window skin (nine-slice frame texture)
+	defaultSkin *NineSlice
+
 	// Layout state
 	cursorX float32
 	cursorY float32
@@ -33,6 +36,7 @@ type WindowState struct {
 	W, H   float32
 	Open   bool
 	Moving bool
+	Skin   *NineSlice // Per-window skin override (nil uses default)
 }
 
 // New creates a new UI context.
@@ -69,6 +73,11 @@ func (c *Context) Resize(width, height int) {
 // Input returns the input state for modification.
 func (c *Context) Input() *InputState {
 	return c.input
+}
+
+// SetDefaultWindowSkin sets the default nine-slice skin for all windows.
+func (c *Context) SetDefaultWindowSkin(skin *NineSlice) {
+	c.defaultSkin = skin
 }
 
 // Begin starts a new UI frame.
@@ -135,11 +144,21 @@ func (c *Context) BeginWindow(id string, x, y, w, h float32, title string) bool 
 		}
 	}
 
-	// Draw window
-	c.renderer.DrawPanel(ws.X, ws.Y, ws.W, ws.H, ColorPanelBg, ColorPanelBorder)
+	// Draw window background
+	skin := ws.Skin
+	if skin == nil {
+		skin = c.defaultSkin
+	}
+	if skin != nil {
+		skin.Draw(c.renderer, ws.X, ws.Y, ws.W, ws.H, ColorWhite)
+	} else {
+		c.renderer.DrawPanel(ws.X, ws.Y, ws.W, ws.H, ColorPanelBg, ColorPanelBorder)
+	}
 
-	// Draw title bar
-	c.renderer.DrawRect(ws.X+1, ws.Y+1, ws.W-2, titleBarH-1, ColorButtonNormal)
+	// Draw title bar (solid color fallback only when no skin)
+	if skin == nil {
+		c.renderer.DrawRect(ws.X+1, ws.Y+1, ws.W-2, titleBarH-1, ColorButtonNormal)
+	}
 
 	// Draw title text
 	scale := float32(2.0)

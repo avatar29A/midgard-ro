@@ -139,6 +139,12 @@ func main() {
 	}
 	g.SetUIBackend(ui2dBackend)
 
+	// Wire GRF asset loader to UI for texture-based skins
+	if am := g.AssetManager(); am != nil {
+		ui2dBackend.SetAssetLoader(am.Load)
+		logger.Info("UI2D asset loader wired")
+	}
+
 	logger.Info("UI2D backend initialized")
 
 	// Initialize timing
