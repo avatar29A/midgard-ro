@@ -47,8 +47,12 @@ func TestTextureCache_CacheHitMiss(t *testing.T) {
 	}
 
 	// TextureCache.Load would call loadFunc for uncached paths
-	_, _ = loadFunc("test1")
-	_, _ = loadFunc("test2")
+	if _, err := loadFunc("test1"); err == nil {
+		t.Error("expected error from mock loadFunc")
+	}
+	if _, err := loadFunc("test2"); err == nil {
+		t.Error("expected error from mock loadFunc")
+	}
 	if loadCount != 2 {
 		t.Errorf("expected 2 load calls, got %d", loadCount)
 	}
