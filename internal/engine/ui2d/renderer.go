@@ -60,9 +60,6 @@ type Renderer struct {
 
 	// Font for text rendering
 	font *Font
-
-	// Current text texture (for batching)
-	currentTextTex uint32
 }
 
 // New creates a new 2D UI renderer.
