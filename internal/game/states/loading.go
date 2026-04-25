@@ -6,10 +6,11 @@ import (
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/Faultbox/midgard-ro/internal/logger"
 	"github.com/Faultbox/midgard-ro/internal/network"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
-	"go.uber.org/zap"
 )
 
 // LoadingStateConfig contains configuration for the loading state.

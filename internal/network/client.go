@@ -10,8 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Faultbox/midgard-ro/internal/logger"
 	"go.uber.org/zap"
+
+	"github.com/Faultbox/midgard-ro/internal/logger"
 )
 
 // ServerType represents the type of server.
