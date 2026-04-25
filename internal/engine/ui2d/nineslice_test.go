@@ -50,9 +50,9 @@ func TestNineSlice_AsymmetricBorders(t *testing.T) {
 	tw := float32(ns.TexWidth)
 	th := float32(ns.TexHeight)
 
-	uL := float32(ns.Left) / tw   // 10/100 = 0.1
-	uR := (tw - float32(ns.Right)) / tw // 80/100 = 0.8
-	vT := float32(ns.Top) / th    // 5/50 = 0.1
+	uL := float32(ns.Left) / tw          // 10/100 = 0.1
+	uR := (tw - float32(ns.Right)) / tw  // 80/100 = 0.8
+	vT := float32(ns.Top) / th           // 5/50 = 0.1
 	vB := (th - float32(ns.Bottom)) / th // 35/50 = 0.7
 
 	const epsilon = 0.0001

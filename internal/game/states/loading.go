@@ -14,12 +14,12 @@ import (
 
 // LoadingStateConfig contains configuration for the loading state.
 type LoadingStateConfig struct {
-	MapName    string
-	SpawnX     int
-	SpawnY     int
-	SpawnDir   uint8
-	CharID     uint32
-	TexLoader  func(string) ([]byte, error) // Function to load textures from GRF
+	MapName   string
+	SpawnX    int
+	SpawnY    int
+	SpawnDir  uint8
+	CharID    uint32
+	TexLoader func(string) ([]byte, error) // Function to load textures from GRF
 }
 
 // LoadingState handles map loading before entering the game.
@@ -29,11 +29,11 @@ type LoadingState struct {
 	manager *Manager
 
 	// Loading progress
-	StatusMsg     string
-	ErrorMsg      string
-	Progress      float32 // 0.0 to 1.0
-	LoadingPhase  string
-	IsComplete    bool
+	StatusMsg    string
+	ErrorMsg     string
+	Progress     float32 // 0.0 to 1.0
+	LoadingPhase string
+	IsComplete   bool
 
 	// Loaded data (passed to InGame state)
 	MapLoaded bool
@@ -185,7 +185,7 @@ func (s *LoadingState) sendLoadingComplete() {
 	pkt := &packets.LoadingComplete{
 		PacketID: packets.CZ_NOTIFY_ACTORINIT,
 	}
-	s.client.Send(pkt.Encode())
+	_ = s.client.Send(pkt.Encode())
 }
 
 func (s *LoadingState) transitionToInGame() {
@@ -201,11 +201,7 @@ func (s *LoadingState) transitionToInGame() {
 
 func (s *LoadingState) getDisplayMapName() string {
 	// Remove .gat extension for display
-	name := s.config.MapName
-	if strings.HasSuffix(name, ".gat") {
-		name = name[:len(name)-4]
-	}
-	return name
+	return strings.TrimSuffix(s.config.MapName, ".gat")
 }
 
 // GetStatusMessage returns the current status message.

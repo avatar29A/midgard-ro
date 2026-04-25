@@ -150,10 +150,7 @@ func (s *InGameState) loadMap() error {
 	}
 
 	// Get base map name (remove .gat extension)
-	baseName := s.MapName
-	if strings.HasSuffix(baseName, ".gat") {
-		baseName = baseName[:len(baseName)-4]
-	}
+	baseName := strings.TrimSuffix(s.MapName, ".gat")
 
 	// Load GND (terrain)
 	gndPath := "data\\" + baseName + ".gnd"

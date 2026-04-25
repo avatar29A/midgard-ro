@@ -32,11 +32,11 @@ type DebugOverlay struct {
 	MapHeight int
 
 	// Entity counts
-	EntityCount   int
-	PlayerCount   int
-	MonsterCount  int
-	NPCCount      int
-	ItemCount     int
+	EntityCount  int
+	PlayerCount  int
+	MonsterCount int
+	NPCCount     int
+	ItemCount    int
 
 	// Network stats
 	PacketsSent     int
@@ -46,30 +46,30 @@ type DebugOverlay struct {
 	Ping            int
 
 	// Render stats
-	DrawCalls    int
-	Triangles    int
+	DrawCalls       int
+	Triangles       int
 	TextureSwitches int
 
 	// Display toggles
-	ShowFPS       bool
-	ShowPosition  bool
-	ShowEntityInfo bool
+	ShowFPS         bool
+	ShowPosition    bool
+	ShowEntityInfo  bool
 	ShowNetworkInfo bool
-	ShowRenderInfo bool
-	ShowMemory    bool
-	Enabled       bool
+	ShowRenderInfo  bool
+	ShowMemory      bool
+	Enabled         bool
 }
 
 // NewDebugOverlay creates a new debug overlay.
 func NewDebugOverlay() *DebugOverlay {
 	return &DebugOverlay{
-		ShowFPS:       true,
-		ShowPosition:  true,
-		ShowEntityInfo: false,
+		ShowFPS:         true,
+		ShowPosition:    true,
+		ShowEntityInfo:  false,
 		ShowNetworkInfo: false,
-		ShowRenderInfo: false,
-		ShowMemory:    false,
-		Enabled:       true,
+		ShowRenderInfo:  false,
+		ShowMemory:      false,
+		Enabled:         true,
 	}
 }
 

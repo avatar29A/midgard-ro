@@ -87,7 +87,7 @@ func (ui *LoginUI) renderContent() {
 	// Login button (full width)
 	imgui.BeginDisabledV(ui.state.IsLoadingState())
 	if imgui.ButtonV("Login", imgui.NewVec2(-1, 30)) {
-		ui.state.AttemptLogin()
+		_ = ui.state.AttemptLogin()
 	}
 	imgui.EndDisabled()
 

@@ -240,7 +240,7 @@ func (m *Manager) PlayBGM(data []byte, path string, loop bool) error {
 	if loop {
 		// For looping, we need a seekable streamer
 		finalStreamer = &loopStreamer{
-			streamer: streamer,
+			streamer:  streamer,
 			resampled: resampled,
 			loop:      true,
 		}

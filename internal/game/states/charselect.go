@@ -24,10 +24,10 @@ type CharSelectState struct {
 	manager *Manager
 
 	// Character data
-	Characters    []*packets.CharInfo
-	SelectedSlot  int
-	MaxSlots      int
-	AvailSlots    int
+	Characters   []*packets.CharInfo
+	SelectedSlot int
+	MaxSlots     int
+	AvailSlots   int
 
 	// State
 	IsLoading     bool

@@ -29,11 +29,11 @@ const (
 	CH_DELETE_CHAR uint16 = 0x0068 // Delete character
 
 	// Char Server -> Client
-	HC_ACCEPT_ENTER     uint16 = 0x006B // Enter accepted + char list
-	HC_REFUSE_ENTER     uint16 = 0x006C // Enter refused
-	HC_ACCEPT_MAKECHAR  uint16 = 0x006D // Character created
-	HC_NOTIFY_ZONESVR   uint16 = 0x0071 // Map server info (old)
-	HC_NOTIFY_ZONESVR2  uint16 = 0x0AC5 // Map server info (modern rAthena)
+	HC_ACCEPT_ENTER    uint16 = 0x006B // Enter accepted + char list
+	HC_REFUSE_ENTER    uint16 = 0x006C // Enter refused
+	HC_ACCEPT_MAKECHAR uint16 = 0x006D // Character created
+	HC_NOTIFY_ZONESVR  uint16 = 0x0071 // Map server info (old)
+	HC_NOTIFY_ZONESVR2 uint16 = 0x0AC5 // Map server info (modern rAthena)
 )
 
 // Packet IDs for map server
@@ -236,9 +236,9 @@ func DecodeCharInfo(data []byte) *CharInfo {
 
 	c := &CharInfo{
 		CharID:       readU32(data, 0),
-		BaseExp:      uint32(readU32(data, 4)),
-		Zeny:         uint32(readU32(data, 12)),
-		JobExp:       uint32(readU32(data, 20)),
+		BaseExp:      readU32(data, 4),
+		Zeny:         readU32(data, 12),
+		JobExp:       readU32(data, 20),
 		JobLevel:     readU32(data, 28),
 		BodyState:    0,
 		HealthState:  0,
@@ -246,16 +246,16 @@ func DecodeCharInfo(data []byte) *CharInfo {
 		Virtue:       0,
 		Honor:        0,
 		StatusPoint:  0,
-		HP:           uint32(readU16(data, 66)),  // HP at offset 66
-		MaxHP:        uint32(readU16(data, 74)),  // MaxHP at offset 74
-		SP:           readU16(data, 58),          // SP at offset 58
-		MaxSP:        readU16(data, 58),          // Assume same as SP for now
-		WalkSpeed:    readU16(data, 82),          // WalkSpeed at offset 82
-		Class:        readU16(data, 50),          // Class at offset 50
+		HP:           uint32(readU16(data, 66)), // HP at offset 66
+		MaxHP:        uint32(readU16(data, 74)), // MaxHP at offset 74
+		SP:           readU16(data, 58),         // SP at offset 58
+		MaxSP:        readU16(data, 58),         // Assume same as SP for now
+		WalkSpeed:    readU16(data, 82),         // WalkSpeed at offset 82
+		Class:        readU16(data, 50),         // Class at offset 50
 		HairStyle:    readU16(data, 84),
 		Body:         readU16(data, 86),
 		Weapon:       readU16(data, 88),
-		BaseLevel:    readU16(data, 90),          // BaseLevel at offset 90
+		BaseLevel:    readU16(data, 90), // BaseLevel at offset 90
 		SkillPoint:   0,
 		HeadBottom:   0,
 		Shield:       0,
@@ -440,13 +440,13 @@ func (p *MapEnter) Encode() []byte {
 // MapEnter2 (CZ_ENTER2 0x0436) packet - modern rAthena (Korangar format).
 // Note: This does NOT include auth token - it uses 4 unknown bytes instead.
 type MapEnter2 struct {
-	PacketID   uint16    // 0x0436
+	PacketID   uint16 // 0x0436
 	AccountID  uint32
 	CharID     uint32
 	LoginID1   uint32
 	ClientTick uint32
 	Sex        uint8
-	Unknown    [4]byte   // Always zeros
+	Unknown    [4]byte // Always zeros
 }
 
 // Size returns packet size.
@@ -474,7 +474,7 @@ type MapAccept struct {
 	StartTime uint32
 	PosDir    [3]byte // Packed position and direction
 	Unknown   [2]byte
-	Font      uint16  // Only in ZC_ACCEPT_ENTER2
+	Font      uint16 // Only in ZC_ACCEPT_ENTER2
 }
 
 // DecodeMapAccept decodes the map enter accept packet.
@@ -507,7 +507,7 @@ func (p *MapAccept) GetPosition() (x, y int, dir uint8) {
 
 // MoveRequest (CZ_REQUEST_MOVE 0x0085) packet.
 type MoveRequest struct {
-	PacketID uint16 // 0x0085
+	PacketID uint16  // 0x0085
 	Dest     [3]byte // Packed destination
 }
 

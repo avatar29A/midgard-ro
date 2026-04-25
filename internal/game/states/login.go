@@ -19,27 +19,27 @@ type LoginStateConfig struct {
 
 // LoginState handles the login screen and authentication.
 type LoginState struct {
-	config     LoginStateConfig
-	client     *network.Client
-	manager    *Manager
+	config  LoginStateConfig
+	client  *network.Client
+	manager *Manager
 
 	// UI state
-	Username   string
-	Password   string
-	ErrorMsg   string
-	IsLoading  bool
+	Username  string
+	Password  string
+	ErrorMsg  string
+	IsLoading bool
 
 	// Connection state
-	connected  bool
-	loginSent  bool
+	connected bool
+	loginSent bool
 }
 
 // NewLoginState creates a new login state.
 func NewLoginState(cfg LoginStateConfig, client *network.Client, manager *Manager) *LoginState {
 	return &LoginState{
-		config:  cfg,
-		client:  client,
-		manager: manager,
+		config:   cfg,
+		client:   client,
+		manager:  manager,
 		Username: cfg.Username,
 		Password: cfg.Password,
 	}
