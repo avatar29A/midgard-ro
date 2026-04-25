@@ -401,6 +401,12 @@ func (s *Scene) RenderSprite(viewProj math.Mat4, camRight, camUp math.Vec3, worl
 	s.spriteRenderer.Render(viewProj, camRight, camUp, worldPos, width, height, textureID, tint)
 }
 
+// FramebufferSize returns the scene framebuffer dimensions in pixels.
+// Used by the debug overlay.
+func (s *Scene) FramebufferSize() (width, height int32) {
+	return s.config.Width, s.config.Height
+}
+
 // Resize updates the scene dimensions.
 func (s *Scene) Resize(width, height int32) {
 	if width == s.config.Width && height == s.config.Height {
