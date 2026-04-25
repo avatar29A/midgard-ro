@@ -543,8 +543,10 @@ func (ui *ImGuiInGameUI) renderDockSpaceHost(w, h float32) {
 	imgui.PushStyleVarVec2(imgui.StyleVarWindowPadding, imgui.NewVec2(0, 0))
 	imgui.PushStyleVarFloat(imgui.StyleVarWindowBorderSize, 0)
 	if imgui.BeginV("##GameDockHost", nil, hostFlags) {
-		dockID := imgui.IDStr("GameDockSpaceID")
-		imgui.DockSpaceV(dockID, imgui.NewVec2(0, 0), imgui.DockNodeFlagsPassthruCentralNode, nil)
+		// DockSpaceV crashes with nil WindowClass (cimgui-go calls .Handle() unconditionally).
+		// Use the simple overload instead — host has NoInputs+NoBackground so click pass-through
+		// and transparency are already handled without PassthruCentralNode.
+		imgui.DockSpace(imgui.IDStr("GameDockSpaceID"))
 	}
 	imgui.End()
 	imgui.PopStyleVar()
