@@ -5,7 +5,7 @@
 // rendering — the working reference Boris confirmed visually before. We
 // own our own GL state (program, VAO, texture) rather than going through
 // scene.SpriteRenderer. The shader source is shared with scene's sprite
-// renderer (same vertex layout, same uniforms) so behaviour matches.
+// renderer (same vertex layout, same uniforms) so behavior matches.
 //
 // Today the texture is procedural (a small humanoid colored quad). The
 // next PR replaces it with real Novice SPR/ACT composites loaded from the
