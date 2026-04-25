@@ -36,12 +36,19 @@ const (
 	HC_NOTIFY_ZONESVR2 uint16 = 0x0AC5 // Map server info (modern rAthena)
 )
 
-// Packet IDs for map server
+// Packet IDs for map server.
+//
+// rAthena shuffles packet IDs by packetver. The IDs below are the ones
+// rAthena binds for our pinned packetver (20211103, see
+// docker/rathena/docker-compose.yml BUILDER_CONFIGURE). For
+// PACKETVER > 20180307 most C->S map-server packets get re-bound to the
+// 0x03XX range (see clif_shuffle.hpp).
 const (
 	// Client -> Map Server
-	CZ_ENTER            uint16 = 0x0072 // Enter map (old)
+	CZ_ENTER            uint16 = 0x0072 // Enter map (old, pre-2008)
 	CZ_ENTER2           uint16 = 0x0436 // Enter map (modern rAthena with auth token)
-	CZ_REQUEST_MOVE     uint16 = 0x0085 // Request move
+	CZ_REQUEST_MOVE     uint16 = 0x035F // Request move (WalkToXY) — was 0x0085 pre-2010
+	CZ_REQUEST_TIME     uint16 = 0x0360 // Keep-alive (TickSend) — must be sent or session times out
 	CZ_NOTIFY_ACTORINIT uint16 = 0x007D // Loading complete
 
 	// Map Server -> Client
@@ -49,8 +56,10 @@ const (
 	ZC_ACCEPT_ENTER2     uint16 = 0x02EB // Map enter accepted (modern rAthena)
 	ZC_NOTIFY_STANDENTRY uint16 = 0x0078 // Entity spawn (standing)
 	ZC_NOTIFY_MOVEENTRY  uint16 = 0x007B // Entity spawn (moving)
+	ZC_NOTIFY_PLAYERMOVE uint16 = 0x0087 // Own player walk-OK (start_tick + packed positions)
 	ZC_NOTIFY_ACT        uint16 = 0x008A // Entity action
-	ZC_NPCACK_MAPMOVE    uint16 = 0x0091 // Map change
+	ZC_NPCACK_MAPMOVE    uint16 = 0x0091 // Map change (server-driven warp)
+	ZC_NOTIFY_TIME       uint16 = 0x007F // Server tick reply to CZ_REQUEST_TIME
 )
 
 // LoginRequest (CA_LOGIN 0x0064)
@@ -505,10 +514,10 @@ func (p *MapAccept) GetPosition() (x, y int, dir uint8) {
 	return
 }
 
-// MoveRequest (CZ_REQUEST_MOVE 0x0085) packet.
+// MoveRequest (CZ_REQUEST_MOVE 0x035F for packetver 20211103) packet.
 type MoveRequest struct {
-	PacketID uint16  // 0x0085
-	Dest     [3]byte // Packed destination
+	PacketID uint16  // 0x035F
+	Dest     [3]byte // Packed destination (x:10 | y:10 | dir:4)
 }
 
 // Size returns packet size.
@@ -527,10 +536,72 @@ func (p *MoveRequest) Encode() []byte {
 
 // SetDestination packs the destination coordinates.
 func (p *MoveRequest) SetDestination(x, y int) {
-	// Pack position into 3 bytes
+	// Pack position into 3 bytes (rAthena WBUFPOS: x:10|y:10|dir:4)
 	p.Dest[0] = byte(x >> 2)
 	p.Dest[1] = byte((x << 6) | ((y >> 4) & 0x3F))
 	p.Dest[2] = byte(y << 4)
+}
+
+// TickSend (CZ_REQUEST_TIME 0x0360 for packetver 20211103) — keep-alive
+// from client to map server. rAthena's map server times out the session
+// after a few seconds of silence, so this must be sent periodically
+// (every ~10 s is safe).
+type TickSend struct {
+	PacketID   uint16 // 0x0360
+	ClientTick uint32 // Milliseconds since some local epoch
+}
+
+// Size returns packet size.
+func (p *TickSend) Size() int {
+	return 6
+}
+
+// Encode encodes the packet.
+func (p *TickSend) Encode() []byte {
+	buf := make([]byte, p.Size())
+	buf[0] = byte(p.PacketID)
+	buf[1] = byte(p.PacketID >> 8)
+	buf[2] = byte(p.ClientTick)
+	buf[3] = byte(p.ClientTick >> 8)
+	buf[4] = byte(p.ClientTick >> 16)
+	buf[5] = byte(p.ClientTick >> 24)
+	return buf
+}
+
+// PlayerMove (ZC_NOTIFY_PLAYERMOVE 0x0087, 12 bytes) — server confirms
+// our own move, returning the start tick and packed start/end positions.
+type PlayerMove struct {
+	StartTick uint32
+	StartX    int
+	StartY    int
+	EndX      int
+	EndY      int
+}
+
+// DecodePlayerMove parses ZC_NOTIFY_PLAYERMOVE. Returns nil on short data.
+//
+// Layout: header(2) + start_tick(4) + walk_data(6) where walk_data uses
+// rAthena WBUFPOS2: x0:10 | y0:10 | x1:10 | y1:10 | sx:4 | sy:4 = 48 bits.
+func DecodePlayerMove(data []byte) *PlayerMove {
+	if len(data) < 12 {
+		return nil
+	}
+	tick := uint32(data[2]) | uint32(data[3])<<8 | uint32(data[4])<<16 | uint32(data[5])<<24
+
+	// Unpack 6-byte position pair (rAthena RBUFPOS2 layout)
+	b := data[6:12]
+	x0 := int(b[0])<<2 | int(b[1])>>6
+	y0 := (int(b[1])&0x3F)<<4 | int(b[2])>>4
+	x1 := (int(b[2])&0x0F)<<6 | int(b[3])>>2
+	y1 := (int(b[3])&0x03)<<8 | int(b[4])
+
+	return &PlayerMove{
+		StartTick: tick,
+		StartX:    x0,
+		StartY:    y0,
+		EndX:      x1,
+		EndY:      y1,
+	}
 }
 
 // LoadingComplete (CZ_NOTIFY_ACTORINIT 0x007D) packet.
