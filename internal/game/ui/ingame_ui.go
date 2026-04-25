@@ -86,6 +86,12 @@ func (ui *InGameUI) Update(deltaMs float64) {
 
 		// Update minimap player position
 		ui.minimap.SetPlayerPosition(tileX, tileY)
+
+		// Forward the GAT once it's loaded so the minimap can lay out its
+		// click-to-move grid against real walkability data.
+		if gat := ui.state.GetGAT(); gat != nil {
+			ui.minimap.SetMapData(gat, ui.state.GetMapName())
+		}
 	}
 
 	ui.debugOverlay.MapName = ui.state.GetMapName()
@@ -114,6 +120,13 @@ func (ui *InGameUI) Render(viewportWidth, viewportHeight float32) {
 	// Minimap (top-right)
 	if ui.ShowMinimap {
 		ui.minimap.Render(viewportWidth-170, 10)
+		// Forward minimap click-to-move requests to the server.
+		if clicked, tileX, tileY := ui.minimap.ConsumePendingClick(); clicked {
+			if err := ui.state.RequestMove(tileX, tileY); err != nil {
+				// RequestMove already wrote ErrorMsg via the network layer.
+				_ = err
+			}
+		}
 	}
 
 	// Status bar with HP/SP (top-left, below debug)
