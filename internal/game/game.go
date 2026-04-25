@@ -70,6 +70,10 @@ type Game struct {
 
 	// Deferred actions (execute next frame for visual feedback)
 	pendingAction func()
+
+	// Debug overlay toggle (F3). Default off so the HUD isn't cluttered;
+	// turn on to inspect player/camera/scene/network telemetry live.
+	showDebug bool
 }
 
 // New creates a new game instance with ImGui windowing (backward compatible).
@@ -301,6 +305,11 @@ func (g *Game) frame() {
 		g.screenshotRequested = true
 	}
 
+	// F3 toggles the in-game debug overlay (player/camera/scene/network).
+	if imgui.IsKeyPressedBoolV(imgui.KeyF3, false) {
+		g.showDebug = !g.showDebug
+	}
+
 	// Handle camera controls when in InGameState
 	if inGameState, ok := g.stateManager.Current().(*states.InGameState); ok {
 		g.handleInGameInput(inGameState)
@@ -396,7 +405,7 @@ func (g *Game) renderUI() {
 		}
 		playerTileX, playerTileY = state.GetPlayerTilePosition()
 
-		g.uiBackend.RenderInGameUI(ui.InGameUIState{
+		uiState := ui.InGameUIState{
 			MapName:         state.GetMapName(),
 			PlayerX:         playerX,
 			PlayerY:         playerY,
@@ -408,9 +417,11 @@ func (g *Game) renderUI() {
 			SceneTexture:    state.GetSceneTexture(),
 			StatusMessage:   state.GetStatusMessage(),
 			ErrorMessage:    state.GetErrorMessage(),
-			ShowDebugInfo:   true,
+			ShowDebugInfo:   g.showDebug,
 			FPS:             g.fps,
-		}, g.dt, viewportWidth, viewportHeight)
+		}
+		populateDebugFields(&uiState, state, g.client)
+		g.uiBackend.RenderInGameUI(uiState, g.dt, viewportWidth, viewportHeight)
 
 	default:
 		// Show placeholder for unknown state (using ImGui directly for simplicity)
