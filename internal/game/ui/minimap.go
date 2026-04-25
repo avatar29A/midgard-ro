@@ -33,10 +33,10 @@ type Minimap struct {
 
 // MinimapMarker represents a point of interest on the minimap.
 type MinimapMarker struct {
-	X, Y  int           // Tile position
-	Type  MarkerType    // Type of marker
-	Color imgui.Vec4    // Display color
-	Label string        // Optional label
+	X, Y  int        // Tile position
+	Type  MarkerType // Type of marker
+	Color imgui.Vec4 // Display color
+	Label string     // Optional label
 }
 
 // MarkerType defines the type of minimap marker.
@@ -234,19 +234,19 @@ func (m *Minimap) renderMarker(drawList *imgui.DrawList, cursorPos imgui.Vec2, o
 
 func (m *Minimap) drawDiamond(drawList *imgui.DrawList, x, y, size float32, color uint32) {
 	drawList.AddQuadFilled(
-		imgui.NewVec2(x, y-size),     // Top
-		imgui.NewVec2(x+size, y),     // Right
-		imgui.NewVec2(x, y+size),     // Bottom
-		imgui.NewVec2(x-size, y),     // Left
+		imgui.NewVec2(x, y-size), // Top
+		imgui.NewVec2(x+size, y), // Right
+		imgui.NewVec2(x, y+size), // Bottom
+		imgui.NewVec2(x-size, y), // Left
 		color,
 	)
 }
 
 func (m *Minimap) drawTriangle(drawList *imgui.DrawList, x, y, size float32, color uint32) {
 	drawList.AddTriangleFilled(
-		imgui.NewVec2(x, y-size),       // Top
-		imgui.NewVec2(x+size, y+size),  // Bottom right
-		imgui.NewVec2(x-size, y+size),  // Bottom left
+		imgui.NewVec2(x, y-size),      // Top
+		imgui.NewVec2(x+size, y+size), // Bottom right
+		imgui.NewVec2(x-size, y+size), // Bottom left
 		color,
 	)
 }

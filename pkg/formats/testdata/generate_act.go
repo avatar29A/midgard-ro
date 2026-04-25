@@ -16,10 +16,10 @@ func main() {
 
 	// Header (16 bytes)
 	buf.WriteString("AC")
-	buf.WriteByte(0x05)                                    // minor
-	buf.WriteByte(0x02)                                    // major (version 2.5)
-	binary.Write(&buf, binary.LittleEndian, uint16(2))     // 2 actions
-	buf.Write(make([]byte, 10))                            // reserved
+	buf.WriteByte(0x05)                                // minor
+	buf.WriteByte(0x02)                                // major (version 2.5)
+	binary.Write(&buf, binary.LittleEndian, uint16(2)) // 2 actions
+	buf.Write(make([]byte, 10))                        // reserved
 
 	// Action 0: idle (1 frame, 1 layer)
 	binary.Write(&buf, binary.LittleEndian, uint32(1)) // 1 frame
@@ -27,8 +27,8 @@ func main() {
 
 	// Action 1: walk (2 frames, 1 layer each)
 	binary.Write(&buf, binary.LittleEndian, uint32(2)) // 2 frames
-	writeFrame(&buf, 1, 1, false)                       // frame 0, sprite 1, event=1
-	writeFrame(&buf, 2, -1, false)                      // frame 1, sprite 2, no event
+	writeFrame(&buf, 1, 1, false)                      // frame 0, sprite 1, event=1
+	writeFrame(&buf, 2, -1, false)                     // frame 1, sprite 2, no event
 
 	// Events (1 event)
 	binary.Write(&buf, binary.LittleEndian, int32(1))
@@ -59,17 +59,17 @@ func writeFrame(buf *bytes.Buffer, spriteID, eventID int, withAnchor bool) {
 	binary.Write(buf, binary.LittleEndian, uint32(1))
 
 	// Layer
-	binary.Write(buf, binary.LittleEndian, int32(0))           // X
-	binary.Write(buf, binary.LittleEndian, int32(0))           // Y
-	binary.Write(buf, binary.LittleEndian, int32(spriteID))    // sprite ID
-	binary.Write(buf, binary.LittleEndian, uint32(0))          // flags
-	buf.Write([]byte{255, 255, 255, 255})                      // color RGBA
-	binary.Write(buf, binary.LittleEndian, float32(1.0))       // scale X
-	binary.Write(buf, binary.LittleEndian, float32(1.0))       // scale Y (v0x204+)
-	binary.Write(buf, binary.LittleEndian, float32(0.0))       // rotation
-	binary.Write(buf, binary.LittleEndian, int32(0))           // sprite type
-	binary.Write(buf, binary.LittleEndian, int32(32))          // width (v0x205+)
-	binary.Write(buf, binary.LittleEndian, int32(32))          // height (v0x205+)
+	binary.Write(buf, binary.LittleEndian, int32(0))        // X
+	binary.Write(buf, binary.LittleEndian, int32(0))        // Y
+	binary.Write(buf, binary.LittleEndian, int32(spriteID)) // sprite ID
+	binary.Write(buf, binary.LittleEndian, uint32(0))       // flags
+	buf.Write([]byte{255, 255, 255, 255})                   // color RGBA
+	binary.Write(buf, binary.LittleEndian, float32(1.0))    // scale X
+	binary.Write(buf, binary.LittleEndian, float32(1.0))    // scale Y (v0x204+)
+	binary.Write(buf, binary.LittleEndian, float32(0.0))    // rotation
+	binary.Write(buf, binary.LittleEndian, int32(0))        // sprite type
+	binary.Write(buf, binary.LittleEndian, int32(32))       // width (v0x205+)
+	binary.Write(buf, binary.LittleEndian, int32(32))       // height (v0x205+)
 
 	// Event ID
 	binary.Write(buf, binary.LittleEndian, int32(eventID))

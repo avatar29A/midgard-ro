@@ -31,12 +31,12 @@ type PointLight struct {
 
 // Config contains scene configuration options.
 type Config struct {
-	Width            int32
-	Height           int32
-	ShadowResolution int32
-	ShadowsEnabled   bool
+	Width              int32
+	Height             int32
+	ShadowResolution   int32
+	ShadowsEnabled     bool
 	PointLightsEnabled bool
-	FogEnabled       bool
+	FogEnabled         bool
 }
 
 // DefaultConfig returns a default scene configuration.
@@ -66,8 +66,8 @@ type Scene struct {
 	spriteRenderer  *SpriteRenderer
 
 	// Shadow mapping
-	shadowMap     *shadow.Map
-	shadowProgram uint32
+	shadowMap              *shadow.Map
+	shadowProgram          uint32
 	locShadowLightViewProj int32
 	locShadowModel         int32
 
@@ -90,8 +90,8 @@ type Scene struct {
 	FogColor   [3]float32
 
 	// Shadows
-	ShadowsEnabled   bool
-	lightViewProj    math.Mat4
+	ShadowsEnabled bool
+	lightViewProj  math.Mat4
 
 	// Map bounds
 	MinBounds [3]float32
@@ -125,10 +125,10 @@ func New(cfg Config) (*Scene, error) {
 		LightOpacity: 1.0,
 		Brightness:   1.0,
 		// Shadow/light settings
-		ShadowsEnabled:     cfg.ShadowsEnabled,
-		PointLightsEnabled: cfg.PointLightsEnabled,
+		ShadowsEnabled:      cfg.ShadowsEnabled,
+		PointLightsEnabled:  cfg.PointLightsEnabled,
 		PointLightIntensity: 1.0,
-		FogEnabled:         cfg.FogEnabled,
+		FogEnabled:          cfg.FogEnabled,
 	}
 
 	// Create framebuffer

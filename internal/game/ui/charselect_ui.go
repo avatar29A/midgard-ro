@@ -171,26 +171,22 @@ func (ui *CharSelectUI) renderActionButtons() {
 	// Select button
 	imgui.BeginDisabledV(ui.selectedIndex < 0 || ui.state.IsLoadingState())
 	if imgui.ButtonV("Enter Game", imgui.NewVec2(150, 30)) {
-		ui.state.SelectCharacter(ui.selectedIndex)
+		_ = ui.state.SelectCharacter(ui.selectedIndex)
 	}
 	imgui.EndDisabled()
 
 	imgui.SameLine()
 
-	// Create character button (placeholder)
+	// Create character button (placeholder, always disabled for MVP)
 	imgui.BeginDisabledV(true)
-	if imgui.ButtonV("Create Character", imgui.NewVec2(150, 0)) {
-		// TODO: Character creation
-	}
+	imgui.ButtonV("Create Character", imgui.NewVec2(150, 0))
 	imgui.EndDisabled()
 
 	imgui.SameLine()
 
-	// Delete character button (placeholder)
+	// Delete character button (placeholder, always disabled for MVP)
 	imgui.BeginDisabledV(true)
-	if imgui.ButtonV("Delete Character", imgui.NewVec2(150, 0)) {
-		// TODO: Character deletion
-	}
+	imgui.ButtonV("Delete Character", imgui.NewVec2(150, 0))
 	imgui.EndDisabled()
 }
 
@@ -291,7 +287,7 @@ func getJobName(jobID uint16) string {
 		4070: "Sura",
 		4071: "Genetic",
 		4072: "Shadow Chaser",
-		4073: "Royal Guard (Gryphon)",
+		4073: "Royal Guard (Gryphon)", //nolint:misspell // "Gryphon" is the RO Royal Guard mount name
 	}
 
 	if name, ok := jobs[jobID]; ok {

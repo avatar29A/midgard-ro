@@ -16,15 +16,15 @@ func main() {
 
 	// Header
 	buf.WriteString("SP")
-	buf.WriteByte(1)                                       // minor = 1
-	buf.WriteByte(2)                                       // major = 2 (so version 2.1)
-	binary.Write(&buf, binary.LittleEndian, uint16(2))     // 2 indexed images
-	binary.Write(&buf, binary.LittleEndian, uint16(1))     // 1 true-color image
+	buf.WriteByte(1)                                   // minor = 1
+	buf.WriteByte(2)                                   // major = 2 (so version 2.1)
+	binary.Write(&buf, binary.LittleEndian, uint16(2)) // 2 indexed images
+	binary.Write(&buf, binary.LittleEndian, uint16(1)) // 1 true-color image
 
 	// Indexed image 1: 4x4 with RLE compression
 	// Pattern: checkerboard of transparent (0) and color 1
-	binary.Write(&buf, binary.LittleEndian, uint16(4))     // width
-	binary.Write(&buf, binary.LittleEndian, uint16(4))     // height
+	binary.Write(&buf, binary.LittleEndian, uint16(4)) // width
+	binary.Write(&buf, binary.LittleEndian, uint16(4)) // height
 	// RLE data for: 0,1,0,1, 1,0,1,0, 0,1,0,1, 1,0,1,0 (checkerboard)
 	// = 0x00 0x01, 0x01, 0x00 0x01, 0x01, 0x01, 0x00 0x01, 0x01, 0x00 0x01, ...
 	rle1 := []byte{
@@ -49,20 +49,20 @@ func main() {
 	buf.Write(rle1)
 
 	// Indexed image 2: 2x2 simple image
-	binary.Write(&buf, binary.LittleEndian, uint16(2))     // width
-	binary.Write(&buf, binary.LittleEndian, uint16(2))     // height
-	rle2 := []byte{0x01, 0x02, 0x03, 0x04}                 // 4 palette indices (no zeros = no RLE)
+	binary.Write(&buf, binary.LittleEndian, uint16(2)) // width
+	binary.Write(&buf, binary.LittleEndian, uint16(2)) // height
+	rle2 := []byte{0x01, 0x02, 0x03, 0x04}             // 4 palette indices (no zeros = no RLE)
 	binary.Write(&buf, binary.LittleEndian, uint16(len(rle2)))
 	buf.Write(rle2)
 
 	// True-color image: 2x2 RGBA
-	binary.Write(&buf, binary.LittleEndian, uint16(2))     // width
-	binary.Write(&buf, binary.LittleEndian, uint16(2))     // height
+	binary.Write(&buf, binary.LittleEndian, uint16(2)) // width
+	binary.Write(&buf, binary.LittleEndian, uint16(2)) // height
 	// ABGR pixels: Red, Green, Blue, White
 	buf.Write([]byte{
-		255, 0, 0, 255,     // ABGR -> Red (A=255, B=0, G=0, R=255)
-		255, 0, 255, 0,     // ABGR -> Green (A=255, B=0, G=255, R=0)
-		255, 255, 0, 0,     // ABGR -> Blue (A=255, B=255, G=0, R=0)
+		255, 0, 0, 255, // ABGR -> Red (A=255, B=0, G=0, R=255)
+		255, 0, 255, 0, // ABGR -> Green (A=255, B=0, G=255, R=0)
+		255, 255, 0, 0, // ABGR -> Blue (A=255, B=255, G=0, R=0)
 		255, 255, 255, 255, // ABGR -> White (A=255, B=255, G=255, R=255)
 	})
 

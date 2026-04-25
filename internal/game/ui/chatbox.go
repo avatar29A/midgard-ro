@@ -21,13 +21,13 @@ type ChatMessage struct {
 type ChatChannel uint8
 
 const (
-	ChatChannelNormal ChatChannel = iota // White - normal chat
-	ChatChannelParty                     // Green - party chat
-	ChatChannelGuild                     // Yellow - guild chat
-	ChatChannelWhisper                   // Pink - whisper
-	ChatChannelGlobal                    // Orange - global/world chat
-	ChatChannelSystem                    // Red - system messages
-	ChatChannelAnnounce                  // Blue - server announcements
+	ChatChannelNormal   ChatChannel = iota // White - normal chat
+	ChatChannelParty                       // Green - party chat
+	ChatChannelGuild                       // Yellow - guild chat
+	ChatChannelWhisper                     // Pink - whisper
+	ChatChannelGlobal                      // Orange - global/world chat
+	ChatChannelSystem                      // Red - system messages
+	ChatChannelAnnounce                    // Blue - server announcements
 )
 
 // ChatBox renders the game chat interface.

@@ -18,13 +18,13 @@ type SpriteRenderer struct {
 	program uint32
 
 	// Uniform locations
-	locViewProj  int32
-	locWorldPos  int32
+	locViewProj   int32
+	locWorldPos   int32
 	locSpriteSize int32
-	locCamRight  int32
-	locCamUp     int32
-	locTexture   int32
-	locTint      int32
+	locCamRight   int32
+	locCamUp      int32
+	locTexture    int32
+	locTint       int32
 
 	// Billboard quad mesh
 	vao uint32
@@ -62,10 +62,10 @@ func (sr *SpriteRenderer) createQuad() {
 	vertices := []float32{
 		// Position (XY), TexCoord (UV)
 		-0.5, 0.0, 0.0, 1.0, // Bottom-left
-		0.5, 0.0, 1.0, 1.0,  // Bottom-right
-		0.5, 1.0, 1.0, 0.0,  // Top-right
+		0.5, 0.0, 1.0, 1.0, // Bottom-right
+		0.5, 1.0, 1.0, 0.0, // Top-right
 		-0.5, 0.0, 0.0, 1.0, // Bottom-left
-		0.5, 1.0, 1.0, 0.0,  // Top-right
+		0.5, 1.0, 1.0, 0.0, // Top-right
 		-0.5, 1.0, 0.0, 0.0, // Top-left
 	}
 

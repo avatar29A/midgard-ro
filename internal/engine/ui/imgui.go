@@ -18,7 +18,7 @@ var koreanGlyphRanges = []imgui.Wchar{
 	0x3000, 0x30FF, // CJK Symbols and Punctuation, Hiragana, Katakana
 	0x3130, 0x318F, // Hangul Compatibility Jamo
 	0xAC00, 0xD7AF, // Hangul Syllables
-	0,              // Terminator
+	0, // Terminator
 }
 
 // Backend wraps the ImGui SDL backend for game use.

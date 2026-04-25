@@ -41,18 +41,18 @@ type ModelRenderer struct {
 	program uint32
 
 	// Uniform locations
-	locMVP           int32
-	locModel         int32
-	locLightDir      int32
-	locAmbient       int32
-	locDiffuse       int32
-	locTexture       int32
-	locFogUse        int32
-	locFogNear       int32
-	locFogFar        int32
-	locFogColor      int32
-	locLightViewProj int32
-	locShadowMap     int32
+	locMVP            int32
+	locModel          int32
+	locLightDir       int32
+	locAmbient        int32
+	locDiffuse        int32
+	locTexture        int32
+	locFogUse         int32
+	locFogNear        int32
+	locFogFar         int32
+	locFogColor       int32
+	locLightViewProj  int32
+	locShadowMap      int32
 	locShadowsEnabled int32
 
 	// Point light uniforms

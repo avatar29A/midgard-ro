@@ -6,12 +6,16 @@ import (
 	"github.com/Faultbox/midgard-ro/pkg/formats"
 )
 
-// mockGAT creates a simple GAT for testing.
-func mockGAT(width, height int, blocked [][2]int) *formats.GAT {
+// mockGATSize is the side length of the square test grid.
+const mockGATSize = 5
+
+// mockGAT creates a 5x5 GAT for testing.
+func mockGAT(blocked [][2]int) *formats.GAT {
+	const size = mockGATSize
 	gat := &formats.GAT{
-		Width:  uint32(width),
-		Height: uint32(height),
-		Cells:  make([]formats.GATCell, width*height),
+		Width:  uint32(size),
+		Height: uint32(size),
+		Cells:  make([]formats.GATCell, size*size),
 	}
 
 	// Mark all cells as walkable by default
@@ -21,7 +25,7 @@ func mockGAT(width, height int, blocked [][2]int) *formats.GAT {
 
 	// Mark blocked cells
 	for _, b := range blocked {
-		idx := b[1]*width + b[0]
+		idx := b[1]*size + b[0]
 		if idx >= 0 && idx < len(gat.Cells) {
 			gat.Cells[idx].Type = formats.GATBlocked
 		}
@@ -32,7 +36,7 @@ func mockGAT(width, height int, blocked [][2]int) *formats.GAT {
 
 func TestPathFinder_FindPath_Simple(t *testing.T) {
 	// 5x5 grid, no obstacles
-	gat := mockGAT(5, 5, nil)
+	gat := mockGAT(nil)
 	pf := NewPathFinder(gat)
 
 	path := pf.FindPath(0, 0, 4, 4)
@@ -56,7 +60,7 @@ func TestPathFinder_FindPath_WithObstacle(t *testing.T) {
 	blocked := [][2]int{
 		{2, 0}, {2, 1}, {2, 2}, {2, 3},
 	}
-	gat := mockGAT(5, 5, blocked)
+	gat := mockGAT(blocked)
 	pf := NewPathFinder(gat)
 
 	path := pf.FindPath(0, 2, 4, 2)
@@ -77,7 +81,7 @@ func TestPathFinder_FindPath_NoPath(t *testing.T) {
 	blocked := [][2]int{
 		{2, 0}, {2, 1}, {2, 2}, {2, 3}, {2, 4},
 	}
-	gat := mockGAT(5, 5, blocked)
+	gat := mockGAT(blocked)
 	pf := NewPathFinder(gat)
 
 	path := pf.FindPath(0, 2, 4, 2)
@@ -87,11 +91,11 @@ func TestPathFinder_FindPath_NoPath(t *testing.T) {
 }
 
 func TestPathFinder_FindPath_SameStartGoal(t *testing.T) {
-	gat := mockGAT(5, 5, nil)
+	gat := mockGAT(nil)
 	pf := NewPathFinder(gat)
 
 	path := pf.FindPath(2, 2, 2, 2)
-	if path == nil || len(path) == 0 {
+	if len(path) == 0 {
 		t.Fatal("expected path with single node")
 	}
 
@@ -101,7 +105,7 @@ func TestPathFinder_FindPath_SameStartGoal(t *testing.T) {
 }
 
 func TestPathFinder_FindPath_OutOfBounds(t *testing.T) {
-	gat := mockGAT(5, 5, nil)
+	gat := mockGAT(nil)
 	pf := NewPathFinder(gat)
 
 	// Start out of bounds
@@ -119,7 +123,7 @@ func TestPathFinder_FindPath_OutOfBounds(t *testing.T) {
 
 func TestPathFinder_FindPath_BlockedGoal(t *testing.T) {
 	blocked := [][2]int{{4, 4}}
-	gat := mockGAT(5, 5, blocked)
+	gat := mockGAT(blocked)
 	pf := NewPathFinder(gat)
 
 	path := pf.FindPath(0, 0, 4, 4)
@@ -130,7 +134,7 @@ func TestPathFinder_FindPath_BlockedGoal(t *testing.T) {
 
 func TestPathFinder_IsWalkable(t *testing.T) {
 	blocked := [][2]int{{2, 2}}
-	gat := mockGAT(5, 5, blocked)
+	gat := mockGAT(blocked)
 	pf := NewPathFinder(gat)
 
 	if pf.IsWalkable(2, 2) {

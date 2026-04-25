@@ -39,7 +39,7 @@ type WindowState struct {
 	Skin   *NineSlice // Per-window skin override (nil uses default)
 }
 
-// New creates a new UI context.
+// NewContext creates a new UI context.
 func NewContext(width, height int) (*Context, error) {
 	r, err := New(width, height)
 	if err != nil {

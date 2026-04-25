@@ -41,25 +41,25 @@ type Entity struct {
 	State     State
 
 	// Visual
-	SpriteID    int    // Base sprite ID (job ID for players, monster ID for mobs)
-	HeadSprite  int    // Head sprite for players
-	Weapon      int    // Weapon sprite
-	Shield      int    // Shield sprite
-	HeadTop     int    // Headgear top
-	HeadMid     int    // Headgear mid
-	HeadBottom  int    // Headgear bottom
-	HairStyle   int    // Hair style
-	HairColor   int    // Hair color
-	ClothesColor int   // Clothes color
-	BodyPalette int    // Body palette
+	SpriteID     int // Base sprite ID (job ID for players, monster ID for mobs)
+	HeadSprite   int // Head sprite for players
+	Weapon       int // Weapon sprite
+	Shield       int // Shield sprite
+	HeadTop      int // Headgear top
+	HeadMid      int // Headgear mid
+	HeadBottom   int // Headgear bottom
+	HairStyle    int // Hair style
+	HairColor    int // Hair color
+	ClothesColor int // Clothes color
+	BodyPalette  int // Body palette
 
 	// Display properties
-	ShowHP      bool    // Whether to show HP bar
-	ShowName    bool    // Whether to show name
+	ShowHP      bool       // Whether to show HP bar
+	ShowName    bool       // Whether to show name
 	NameColor   [4]float32 // Name display color (RGBA)
-	GuildName   string  // Guild name (for players)
-	GuildEmblem int     // Guild emblem ID
-	Title       string  // Title/party name
+	GuildName   string     // Guild name (for players)
+	GuildEmblem int        // Guild emblem ID
+	Title       string     // Title/party name
 
 	// Stats (for players/monsters)
 	Level int
@@ -70,21 +70,21 @@ type Entity struct {
 	Job   int // Job/class ID
 
 	// Movement
-	MoveSpeed    float64
-	MovePath     []math.Vec2
+	MoveSpeed     float64
+	MovePath      []math.Vec2
 	MoveStartTime float64 // When movement started
 	MoveEndTime   float64 // When movement should end
 
 	// Animation
-	AnimAction   int     // Current animation action
-	AnimFrame    int     // Current frame
-	AnimTime     float64 // Time in current animation
-	AnimSpeed    float64 // Animation speed multiplier
+	AnimAction int     // Current animation action
+	AnimFrame  int     // Current frame
+	AnimTime   float64 // Time in current animation
+	AnimSpeed  float64 // Animation speed multiplier
 
 	// Combat
-	AttackSpeed  int     // Attack speed (ASPD)
-	AttackRange  int     // Attack range
-	TargetID     uint32  // Current target
+	AttackSpeed int    // Attack speed (ASPD)
+	AttackRange int    // Attack range
+	TargetID    uint32 // Current target
 
 	// Flags
 	IsVisible    bool
@@ -95,13 +95,13 @@ type Entity struct {
 // NewEntity creates a new entity.
 func NewEntity(id uint32, entityType Type) *Entity {
 	e := &Entity{
-		ID:          id,
-		Type:        entityType,
-		MoveSpeed:   1.0,
-		AnimSpeed:   1.0,
-		IsVisible:   true,
+		ID:           id,
+		Type:         entityType,
+		MoveSpeed:    1.0,
+		AnimSpeed:    1.0,
+		IsVisible:    true,
 		IsTargetable: true,
-		NameColor:   [4]float32{1, 1, 1, 1}, // White by default
+		NameColor:    [4]float32{1, 1, 1, 1}, // White by default
 	}
 
 	// Set default display properties based on type
@@ -191,12 +191,6 @@ func (e *Entity) Heal(amount int) {
 func (e *Entity) Update(dt float64) {
 	// Update animation time
 	e.AnimTime += dt * e.AnimSpeed
-
-	// Process movement path if any
-	if len(e.MovePath) > 0 && e.State == StateWalking {
-		// Movement processing would be handled by the movement controller
-		// This is just for animation state updates
-	}
 
 	// Update state based on conditions
 	if e.IsDead && e.State != StateDead {

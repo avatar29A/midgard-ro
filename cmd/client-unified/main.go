@@ -69,11 +69,11 @@ func main() {
 	defer sdl.Quit()
 
 	// Set OpenGL attributes
-	sdl.GLSetAttribute(sdl.GL_CONTEXT_MAJOR_VERSION, 4)
-	sdl.GLSetAttribute(sdl.GL_CONTEXT_MINOR_VERSION, 1)
-	sdl.GLSetAttribute(sdl.GL_CONTEXT_PROFILE_MASK, sdl.GL_CONTEXT_PROFILE_CORE)
-	sdl.GLSetAttribute(sdl.GL_DOUBLEBUFFER, 1)
-	sdl.GLSetAttribute(sdl.GL_DEPTH_SIZE, 24)
+	_ = sdl.GLSetAttribute(sdl.GL_CONTEXT_MAJOR_VERSION, 4)
+	_ = sdl.GLSetAttribute(sdl.GL_CONTEXT_MINOR_VERSION, 1)
+	_ = sdl.GLSetAttribute(sdl.GL_CONTEXT_PROFILE_MASK, sdl.GL_CONTEXT_PROFILE_CORE)
+	_ = sdl.GLSetAttribute(sdl.GL_DOUBLEBUFFER, 1)
+	_ = sdl.GLSetAttribute(sdl.GL_DEPTH_SIZE, 24)
 
 	// Create window with HiDPI support
 	window, err := sdl.CreateWindow(
@@ -86,7 +86,7 @@ func main() {
 		logger.Error("Window creation failed", zap.Error(err))
 		os.Exit(1)
 	}
-	defer window.Destroy()
+	defer func() { _ = window.Destroy() }()
 
 	// Create OpenGL context
 	glContext, err := window.GLCreateContext()
@@ -110,7 +110,7 @@ func main() {
 	)
 
 	// Enable VSync
-	sdl.GLSetSwapInterval(1)
+	_ = sdl.GLSetSwapInterval(1)
 
 	// Set initial viewport using actual drawable size (for HiDPI/Retina displays)
 	drawableW, drawableH := window.GLGetDrawableSize()

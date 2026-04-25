@@ -35,25 +35,25 @@ type InputState struct {
 	TextInput string
 
 	// Key state
-	KeyBackspace  bool
-	KeyDelete     bool
-	KeyEnter      bool
-	KeyTab        bool
-	KeyEscape     bool
-	KeyLeft       bool
-	KeyRight      bool
-	KeyUp         bool
-	KeyDown       bool
-	KeyHome       bool
-	KeyEnd        bool
-	KeyCtrl       bool
-	KeyShift      bool
-	KeyAlt        bool
-	KeySelectAll  bool // Ctrl+A
-	KeyCopy       bool // Ctrl+C
-	KeyPaste      bool // Ctrl+V
-	KeyCut        bool // Ctrl+X
-	KeyUndo       bool // Ctrl+Z
+	KeyBackspace bool
+	KeyDelete    bool
+	KeyEnter     bool
+	KeyTab       bool
+	KeyEscape    bool
+	KeyLeft      bool
+	KeyRight     bool
+	KeyUp        bool
+	KeyDown      bool
+	KeyHome      bool
+	KeyEnd       bool
+	KeyCtrl      bool
+	KeyShift     bool
+	KeyAlt       bool
+	KeySelectAll bool // Ctrl+A
+	KeyCopy      bool // Ctrl+C
+	KeyPaste     bool // Ctrl+V
+	KeyCut       bool // Ctrl+X
+	KeyUndo      bool // Ctrl+Z
 
 	// Previous frame state for edge detection
 	prevMouseLeft   bool
