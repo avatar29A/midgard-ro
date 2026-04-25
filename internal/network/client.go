@@ -304,13 +304,15 @@ func (c *Client) getPacketLength(packetID uint16, data []byte) int {
 		return 54
 	case 0x007B: // ZC_NOTIFY_MOVEENTRY
 		return 60
+	case 0x0087: // ZC_NOTIFY_PLAYERMOVE (own walk-OK)
+		return 12
 	case 0x008A: // ZC_NOTIFY_ACT
 		return 29
 	case 0x0091: // ZC_NPCACK_MAPMOVE
 		return 22
 
 	// Keep-alive
-	case 0x007F: // Server tick
+	case 0x007F: // ZC_NOTIFY_TIME (server reply to CZ_REQUEST_TIME)
 		return 6
 
 	default:

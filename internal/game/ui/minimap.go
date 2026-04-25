@@ -29,6 +29,12 @@ type Minimap struct {
 
 	// Markers
 	markers []MinimapMarker
+
+	// Click-to-move: HandleInput sets these inside the minimap window's
+	// imgui scope; outer UI consumes via ConsumePendingClick.
+	hasPendingClick bool
+	pendingClickX   int
+	pendingClickY   int
 }
 
 // MinimapMarker represents a point of interest on the minimap.
@@ -112,6 +118,12 @@ func (m *Minimap) Render(x, y float32) {
 
 	if imgui.BeginV(title+"###Minimap", nil, flags) {
 		m.renderMap()
+		// Process input inside the window scope so IsWindowHovered() works.
+		if clicked, tx, ty := m.HandleInput(); clicked {
+			m.hasPendingClick = true
+			m.pendingClickX = tx
+			m.pendingClickY = ty
+		}
 	}
 	imgui.End()
 
@@ -259,6 +271,16 @@ func (m *Minimap) renderPlayer(drawList *imgui.DrawList, cursorPos imgui.Vec2, o
 	playerSize := float32(4)
 	drawList.AddCircleFilledV(imgui.NewVec2(px, py), playerSize, imgui.ColorU32Vec4(imgui.NewVec4(0.2, 1.0, 0.2, 1.0)), 12)
 	drawList.AddCircleV(imgui.NewVec2(px, py), playerSize, imgui.ColorU32Vec4(imgui.NewVec4(1.0, 1.0, 1.0, 1.0)), 12, 1)
+}
+
+// ConsumePendingClick returns the latest click-to-move target (if any) and
+// clears the pending state. Returns clicked=false when nothing is queued.
+func (m *Minimap) ConsumePendingClick() (clicked bool, tileX, tileY int) {
+	if !m.hasPendingClick {
+		return false, 0, 0
+	}
+	m.hasPendingClick = false
+	return true, m.pendingClickX, m.pendingClickY
 }
 
 // HandleInput handles mouse input for the minimap (zoom, click-to-move).

@@ -9,6 +9,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/Faultbox/midgard-ro/internal/engine/camera"
+	"github.com/Faultbox/midgard-ro/internal/engine/picking"
 	"github.com/Faultbox/midgard-ro/internal/engine/scene"
 	"github.com/Faultbox/midgard-ro/internal/game/entity"
 	"github.com/Faultbox/midgard-ro/internal/logger"
@@ -36,6 +37,7 @@ type InGameState struct {
 	// Rendering
 	scene  *scene.Scene
 	camera *camera.ThirdPersonCamera
+	gat    *formats.GAT // Walkability + minimap shape
 
 	// Entities
 	entityManager *entity.Manager
@@ -51,8 +53,11 @@ type InGameState struct {
 	moveInputZ float32 // -1 to 1
 
 	// Network timing
-	lastMoveTick uint32
-	moveTickRate time.Duration
+	lastMoveTick      uint32
+	moveTickRate      time.Duration
+	lastKeepAlive     time.Time
+	keepAliveInterval time.Duration
+	enterTime         time.Time // Used as the local epoch for ClientTick
 
 	// State
 	ErrorMsg   string
@@ -64,14 +69,15 @@ type InGameState struct {
 // NewInGameState creates a new in-game state.
 func NewInGameState(cfg InGameStateConfig, client *network.Client, manager *Manager) *InGameState {
 	return &InGameState{
-		config:        cfg,
-		client:        client,
-		manager:       manager,
-		entityManager: entity.NewManager(),
-		MapName:       cfg.MapName,
-		TileX:         cfg.SpawnX,
-		TileY:         cfg.SpawnY,
-		moveTickRate:  100 * time.Millisecond, // Send move requests every 100ms max
+		config:            cfg,
+		client:            client,
+		manager:           manager,
+		entityManager:     entity.NewManager(),
+		MapName:           cfg.MapName,
+		TileX:             cfg.SpawnX,
+		TileY:             cfg.SpawnY,
+		moveTickRate:      100 * time.Millisecond, // Send move requests every 100ms max
+		keepAliveInterval: 10 * time.Second,       // rAthena map server times out around 30s of silence
 	}
 }
 
@@ -138,6 +144,11 @@ func (s *InGameState) Enter() error {
 
 	s.StatusMsg = fmt.Sprintf("Entered %s", s.MapName)
 
+	// Mark entry time — used as the local epoch for ClientTick and as the
+	// gate for the keep-alive ticker (only run after we're actually in-game).
+	s.enterTime = time.Now()
+	s.lastKeepAlive = s.enterTime
+
 	// Register packet handlers
 	s.registerPacketHandlers()
 
@@ -152,6 +163,18 @@ func (s *InGameState) loadMap() error {
 
 	// Get base map name (remove .gat extension)
 	baseName := strings.TrimSuffix(s.MapName, ".gat")
+
+	// Load GAT (walkability + minimap shape).  Non-fatal — log and continue.
+	gatPath := "data\\" + baseName + ".gat"
+	if gatData, gatErr := s.manager.TexLoader(gatPath); gatErr == nil {
+		if gat, parseErr := formats.ParseGAT(gatData); parseErr == nil {
+			s.gat = gat
+		} else {
+			logger.Warn("failed to parse GAT", zap.Error(parseErr))
+		}
+	} else {
+		logger.Warn("failed to load GAT", zap.Error(gatErr))
+	}
 
 	// Load GND (terrain)
 	gndPath := "data\\" + baseName + ".gnd"
@@ -208,6 +231,13 @@ func (s *InGameState) Update(dt float64) error {
 		s.ErrorMsg = fmt.Sprintf("Network error: %v", err)
 	}
 
+	// Keep-alive: rAthena's map server drops the session after a few seconds
+	// of silence. Send CZ_REQUEST_TIME at keepAliveInterval cadence.
+	if !s.enterTime.IsZero() && time.Since(s.lastKeepAlive) >= s.keepAliveInterval {
+		s.sendKeepAlive()
+		s.lastKeepAlive = time.Now()
+	}
+
 	// Update player movement
 	if s.player != nil {
 		// Handle keyboard movement input
@@ -235,9 +265,11 @@ func (s *InGameState) Update(dt float64) error {
 
 // Render is called every frame to draw the state.
 func (s *InGameState) Render() error {
-	// Render 3D scene if available
+	// Render 3D scene if available. Player billboard rendering is parked
+	// here pending a faithful port of the working grfbrowser PlayMode
+	// path (RFC #49 Track B follow-up) — the speculative procedural
+	// billboard was reverted because integration was non-trivial.
 	if s.scene != nil && s.camera != nil && s.SceneReady && s.player != nil {
-		// Get player position for camera to follow
 		x, y, z := s.player.RenderPosition()
 		s.scene.RenderWithThirdPerson(s.camera, x, y, z)
 	}
@@ -280,6 +312,43 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_NOTIFY_STANDENTRY, s.handleEntitySpawn)
 	s.client.RegisterHandler(packets.ZC_NOTIFY_MOVEENTRY, s.handleEntityMove)
 	s.client.RegisterHandler(packets.ZC_NPCACK_MAPMOVE, s.handleMapChange)
+	s.client.RegisterHandler(packets.ZC_NOTIFY_PLAYERMOVE, s.handlePlayerMove)
+}
+
+// sendKeepAlive sends CZ_REQUEST_TIME so the map server doesn't time us out.
+func (s *InGameState) sendKeepAlive() {
+	pkt := &packets.TickSend{
+		PacketID:   packets.CZ_REQUEST_TIME,
+		ClientTick: uint32(time.Since(s.enterTime).Milliseconds()),
+	}
+	if err := s.client.Send(pkt.Encode()); err != nil {
+		logger.Warn("keep-alive send failed", zap.Error(err))
+	}
+}
+
+// handlePlayerMove processes ZC_NOTIFY_PLAYERMOVE — server confirms our
+// own walk request. We trust the server-reported start/end tiles and
+// re-target our local destination so the rendered position converges
+// on the authoritative path.
+func (s *InGameState) handlePlayerMove(data []byte) error {
+	mv := packets.DecodePlayerMove(data)
+	if mv == nil {
+		return fmt.Errorf("invalid ZC_NOTIFY_PLAYERMOVE: %d bytes", len(data))
+	}
+
+	logger.Debug("player walk-OK",
+		zap.Uint32("startTick", mv.StartTick),
+		zap.Int("startX", mv.StartX),
+		zap.Int("startY", mv.StartY),
+		zap.Int("endX", mv.EndX),
+		zap.Int("endY", mv.EndY))
+
+	if s.player == nil {
+		return nil
+	}
+	tileSize := float32(5.0)
+	s.player.SetDestination(float32(mv.EndX)*tileSize, float32(mv.EndY)*tileSize)
+	return nil
 }
 
 func (s *InGameState) handleEntitySpawn(data []byte) error {
@@ -303,6 +372,26 @@ func (s *InGameState) handleMapChange(data []byte) error {
 func (s *InGameState) SetMoveInput(x, z float32) {
 	s.moveInputX = x
 	s.moveInputZ = z
+}
+
+// ScreenToTile maps a screen-space click (in viewport pixels) to a tile
+// coordinate by ray-casting against the y=0 ground plane using the most
+// recent view-projection matrix the scene rendered with.
+//
+// Returns ok=false if the scene hasn't rendered yet, or if the ray points
+// away from the ground (e.g. clicking the sky).
+func (s *InGameState) ScreenToTile(screenX, screenY, viewportW, viewportH float32) (tileX, tileY int, ok bool) {
+	if s.scene == nil || viewportW <= 0 || viewportH <= 0 {
+		return 0, 0, false
+	}
+	invViewProj := s.scene.LastViewProj().Inverse()
+	ray := picking.ScreenToRay(screenX, screenY, viewportW, viewportH, invViewProj)
+	worldX, worldZ, hit := ray.IntersectPlaneY(0)
+	if !hit {
+		return 0, 0, false
+	}
+	const tileSize = float32(5.0)
+	return int(worldX / tileSize), int(worldZ / tileSize), true
 }
 
 // RequestMove sends a movement request to the server.
@@ -362,6 +451,11 @@ func (s *InGameState) GetErrorMessage() string {
 // GetMapName returns the current map name.
 func (s *InGameState) GetMapName() string {
 	return s.MapName
+}
+
+// GetGAT returns the loaded GAT (walkability) data, or nil if unavailable.
+func (s *InGameState) GetGAT() *formats.GAT {
+	return s.gat
 }
 
 // GetPlayerEntity returns the player as an Entity (for UI).
