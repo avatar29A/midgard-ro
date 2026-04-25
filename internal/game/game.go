@@ -552,7 +552,17 @@ func (g *Game) handleInGameInput(state *states.InGameState) {
 	g.lastMouseX = mouseX
 	g.lastMouseY = mouseY
 
-	// TODO: Left click for movement (needs world-space ray casting)
+	// Left click for click-to-move. Skip if any imgui window (HUD, minimap,
+	// chat, etc) is consuming the click; otherwise ray-cast to ground plane
+	// and dispatch a server move request.
+	if imgui.IsMouseClickedBool(imgui.MouseButtonLeft) && !io.WantCaptureMouse() {
+		viewportW, viewportH := g.uiBackend.GetScreenSize()
+		if tileX, tileY, ok := state.ScreenToTile(mouseX, mouseY, viewportW, viewportH); ok {
+			if err := state.RequestMove(tileX, tileY); err != nil {
+				logger.Warn("click-to-move RequestMove failed", zap.Error(err))
+			}
+		}
+	}
 }
 
 // LoadAsset loads an asset from GRF archives.
