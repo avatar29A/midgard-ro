@@ -20,6 +20,10 @@ docker compose up
 First run takes ~5 minutes (Alpine package install + rAthena compile).
 Subsequent `docker compose up` invocations skip both.
 
+> **Memory:** the rAthena C++ compile needs at least **8 GB** of VM RAM —
+> with less, `cc1plus` is OOM-killed mid-build of `skill.cpp`. On colima:
+> `colima start --memory 8 --cpu 4` (or higher).
+
 ## What's here
 
 | File | Purpose |
@@ -59,12 +63,17 @@ rm -rf build/
 ## Apple Silicon (M-series Macs)
 
 On Apple Silicon we recommend [colima](https://github.com/abiosoft/colima)
-as the Docker runtime. Suggested startup for native `arm64` with
-Rosetta-backed `amd64` fallback:
+as the Docker runtime. Suggested startup for native `arm64` with enough
+headroom for the rAthena compile:
 
 ```bash
-colima start --vm-type=vz --vz-rosetta --cpu 4 --memory 6
+colima start --vm-type=vz --cpu 4 --memory 8
 ```
+
+Validated on Apple Silicon with colima `vz` + virtiofs mount type. The
+compile finishes in ~3 minutes on M-series hardware; the whole stack
+(db + builder + login + char + map) takes ~5 minutes total to first
+ready state.
 
 The Alpine 3.23 base in the upstream Dockerfile has a native `arm64` tag,
 so the build runs natively without Rosetta in the common case. If

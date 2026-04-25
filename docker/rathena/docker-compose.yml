@@ -29,6 +29,14 @@ services:
     command: /rathena/tools/docker/builder.sh
     volumes: &rathena_volumes
       - ./build/rathena:/rathena
+      # Upstream `tools/docker/asset/` overrides — redirect DB/cross-server
+      # IPs from 127.0.0.1 (default) to the `db` / `login` / `char` service
+      # names. Required for inter-server connectivity inside the compose
+      # network. Not vendored: lives inside the cloned rAthena tree at the
+      # pinned SHA, so we mount it directly.
+      - ./build/rathena/tools/docker/asset/inter_conf.txt:/rathena/conf/import/inter_conf.txt
+      - ./build/rathena/tools/docker/asset/char_conf.txt:/rathena/conf/import/char_conf.txt
+      - ./build/rathena/tools/docker/asset/map_conf.txt:/rathena/conf/import/map_conf.txt
     init: true
     tty: true
     stdin_open: true
