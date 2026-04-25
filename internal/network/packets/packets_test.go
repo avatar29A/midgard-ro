@@ -117,8 +117,60 @@ func TestMoveRequestEncode(t *testing.T) {
 		t.Errorf("expected size 5, got %d", len(data))
 	}
 
-	if data[0] != 0x85 || data[1] != 0x00 {
-		t.Errorf("expected packet ID 0x0085, got %02x%02x", data[1], data[0])
+	if data[0] != 0x5F || data[1] != 0x03 {
+		t.Errorf("expected packet ID 0x035F, got %02x%02x", data[1], data[0])
+	}
+}
+
+func TestTickSendEncode(t *testing.T) {
+	pkt := &TickSend{
+		PacketID:   CZ_REQUEST_TIME,
+		ClientTick: 0x12345678,
+	}
+
+	data := pkt.Encode()
+
+	if len(data) != 6 {
+		t.Errorf("expected size 6, got %d", len(data))
+	}
+	if data[0] != 0x60 || data[1] != 0x03 {
+		t.Errorf("expected packet ID 0x0360, got %02x%02x", data[1], data[0])
+	}
+	// Tick is little-endian
+	if data[2] != 0x78 || data[3] != 0x56 || data[4] != 0x34 || data[5] != 0x12 {
+		t.Errorf("expected tick 0x12345678 LE, got %02x%02x%02x%02x", data[2], data[3], data[4], data[5])
+	}
+}
+
+func TestDecodePlayerMove(t *testing.T) {
+	// Build a synthetic ZC_NOTIFY_PLAYERMOVE: header(0x0087) + tick(4) + packed positions(6)
+	// Pack (x0, y0, x1, y1) = (10, 20, 30, 40) using WBUFPOS2 layout.
+	x0, y0, x1, y1 := 10, 20, 30, 40
+	b := make([]byte, 12)
+	b[0] = 0x87
+	b[1] = 0x00
+	// tick = 0xCAFEBABE little-endian
+	b[2], b[3], b[4], b[5] = 0xBE, 0xBA, 0xFE, 0xCA
+	// 6-byte packed positions (matches encoder used by rAthena WBUFPOS2)
+	b[6] = byte(x0 >> 2)
+	b[7] = byte((x0&0x03)<<6) | byte(y0>>4)
+	b[8] = byte((y0&0x0F)<<4) | byte(x1>>6)
+	b[9] = byte((x1&0x3F)<<2) | byte(y1>>8)
+	b[10] = byte(y1 & 0xFF)
+	b[11] = 0 // sub-cell positions, ignored
+
+	mv := DecodePlayerMove(b)
+	if mv == nil {
+		t.Fatal("DecodePlayerMove returned nil")
+	}
+	if mv.StartTick != 0xCAFEBABE {
+		t.Errorf("expected tick 0xCAFEBABE, got %08x", mv.StartTick)
+	}
+	if mv.StartX != x0 || mv.StartY != y0 {
+		t.Errorf("expected start (%d,%d), got (%d,%d)", x0, y0, mv.StartX, mv.StartY)
+	}
+	if mv.EndX != x1 || mv.EndY != y1 {
+		t.Errorf("expected end (%d,%d), got (%d,%d)", x1, y1, mv.EndX, mv.EndY)
 	}
 }
 
