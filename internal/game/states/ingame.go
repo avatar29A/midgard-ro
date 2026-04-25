@@ -9,12 +9,15 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/Faultbox/midgard-ro/internal/engine/camera"
+	"github.com/Faultbox/midgard-ro/internal/engine/picking"
+	"github.com/Faultbox/midgard-ro/internal/engine/playerview"
 	"github.com/Faultbox/midgard-ro/internal/engine/scene"
 	"github.com/Faultbox/midgard-ro/internal/game/entity"
 	"github.com/Faultbox/midgard-ro/internal/logger"
 	"github.com/Faultbox/midgard-ro/internal/network"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
 	"github.com/Faultbox/midgard-ro/pkg/formats"
+	"github.com/Faultbox/midgard-ro/pkg/math"
 )
 
 // InGameStateConfig contains configuration for the in-game state.
@@ -34,9 +37,10 @@ type InGameState struct {
 	manager *Manager
 
 	// Rendering
-	scene  *scene.Scene
-	camera *camera.ThirdPersonCamera
-	gat    *formats.GAT // Walkability + minimap shape
+	scene      *scene.Scene
+	camera     *camera.ThirdPersonCamera
+	gat        *formats.GAT // Walkability + minimap shape
+	playerView *playerview.View
 
 	// Entities
 	entityManager *entity.Manager
@@ -141,6 +145,10 @@ func (s *InGameState) Enter() error {
 	s.camera.Distance = 145 // RO-style close distance (like grfbrowser PlayMode)
 	s.camera.Yaw = 0
 
+	// Create the player billboard view (procedural for now — real Novice
+	// composite frames land in the next Track B PR).
+	s.playerView = playerview.New(s.player)
+
 	s.StatusMsg = fmt.Sprintf("Entered %s", s.MapName)
 
 	// Mark entry time — used as the local epoch for ClientTick and as the
@@ -214,6 +222,10 @@ func (s *InGameState) loadMap() error {
 
 // Exit is called when leaving this state.
 func (s *InGameState) Exit() error {
+	if s.playerView != nil {
+		s.playerView.Destroy()
+		s.playerView = nil
+	}
 	if s.scene != nil {
 		s.scene.Destroy()
 		s.scene = nil
@@ -268,7 +280,11 @@ func (s *InGameState) Render() error {
 	if s.scene != nil && s.camera != nil && s.SceneReady && s.player != nil {
 		// Get player position for camera to follow
 		x, y, z := s.player.RenderPosition()
-		s.scene.RenderWithThirdPerson(s.camera, x, y, z)
+		s.scene.RenderWithThirdPersonExtras(s.camera, x, y, z, func(viewProj math.Mat4) {
+			if s.playerView != nil {
+				s.playerView.Render(s.scene, viewProj, s.camera.PosX, s.camera.PosZ)
+			}
+		})
 	}
 	return nil
 }
@@ -369,6 +385,26 @@ func (s *InGameState) handleMapChange(data []byte) error {
 func (s *InGameState) SetMoveInput(x, z float32) {
 	s.moveInputX = x
 	s.moveInputZ = z
+}
+
+// ScreenToTile maps a screen-space click (in viewport pixels) to a tile
+// coordinate by ray-casting against the y=0 ground plane using the most
+// recent view-projection matrix the scene rendered with.
+//
+// Returns ok=false if the scene hasn't rendered yet, or if the ray points
+// away from the ground (e.g. clicking the sky).
+func (s *InGameState) ScreenToTile(screenX, screenY, viewportW, viewportH float32) (tileX, tileY int, ok bool) {
+	if s.scene == nil || viewportW <= 0 || viewportH <= 0 {
+		return 0, 0, false
+	}
+	invViewProj := s.scene.LastViewProj().Inverse()
+	ray := picking.ScreenToRay(screenX, screenY, viewportW, viewportH, invViewProj)
+	worldX, worldZ, hit := ray.IntersectPlaneY(0)
+	if !hit {
+		return 0, 0, false
+	}
+	const tileSize = float32(5.0)
+	return int(worldX / tileSize), int(worldZ / tileSize), true
 }
 
 // RequestMove sends a movement request to the server.

@@ -93,6 +93,10 @@ type Scene struct {
 	ShadowsEnabled bool
 	lightViewProj  math.Mat4
 
+	// Last computed view-projection matrix (set by RenderWithView).
+	// Exposed for picking — see LastViewProj().
+	lastViewProj math.Mat4
+
 	// Map bounds
 	MinBounds [3]float32
 	MaxBounds [3]float32
@@ -312,15 +316,38 @@ func (s *Scene) Render(cam *camera.OrbitCamera) uint32 {
 
 // RenderWithThirdPerson renders the scene using a ThirdPersonCamera following a target.
 func (s *Scene) RenderWithThirdPerson(cam *camera.ThirdPersonCamera, targetX, targetY, targetZ float32) uint32 {
-	return s.RenderWithView(cam.ViewMatrix(targetX, targetY, targetZ))
+	return s.RenderWithViewExtras(cam.ViewMatrix(targetX, targetY, targetZ), nil)
+}
+
+// RenderWithThirdPersonExtras is RenderWithThirdPerson plus an extras callback
+// that runs inside the scene framebuffer (after world rendering, before
+// unbind) — use this to draw billboards/overlays that need to appear in the
+// composited scene texture.
+func (s *Scene) RenderWithThirdPersonExtras(cam *camera.ThirdPersonCamera, targetX, targetY, targetZ float32, extras func(viewProj math.Mat4)) uint32 {
+	return s.RenderWithViewExtras(cam.ViewMatrix(targetX, targetY, targetZ), extras)
 }
 
 // RenderWithView renders the scene with a pre-computed view matrix.
 func (s *Scene) RenderWithView(view math.Mat4) uint32 {
+	return s.RenderWithViewExtras(view, nil)
+}
+
+// LastViewProj returns the most recently used view-projection matrix.
+// Useful for screen-to-world ray casting (picking).
+func (s *Scene) LastViewProj() math.Mat4 {
+	return s.lastViewProj
+}
+
+// RenderWithViewExtras renders the scene with a pre-computed view matrix and
+// an optional extras callback that runs in the scene framebuffer just before
+// it is unbound, so callers can draw additional content (e.g. player sprite,
+// effects) into the composited scene texture.
+func (s *Scene) RenderWithViewExtras(view math.Mat4, extras func(viewProj math.Mat4)) uint32 {
 	// Calculate view/projection matrices
 	aspect := float32(s.config.Width) / float32(s.config.Height)
 	proj := math.Perspective(0.785398, aspect, 1.0, 10000.0) // 45 degrees FOV
 	viewProj := proj.Mul(view)
+	s.lastViewProj = viewProj
 
 	// Calculate light view projection for shadows
 	if s.ShadowsEnabled && s.shadowMap != nil {
@@ -369,6 +396,11 @@ func (s *Scene) RenderWithView(view math.Mat4) uint32 {
 	// Render water
 	if s.waterRenderer.HasWater() {
 		s.waterRenderer.Render(viewProj)
+	}
+
+	// Run extras (e.g. player billboard) inside the framebuffer.
+	if extras != nil {
+		extras(viewProj)
 	}
 
 	return s.framebuffer.ColorTexture()
