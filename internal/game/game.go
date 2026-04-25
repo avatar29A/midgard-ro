@@ -265,6 +265,14 @@ func (g *Game) Run() error {
 
 // frame processes a single frame.
 func (g *Game) frame() {
+	// Run any pending UI action from the previous frame (login, char-select, etc).
+	// Deferred one frame so the click visibly highlights before the action fires.
+	if g.pendingAction != nil {
+		action := g.pendingAction
+		g.pendingAction = nil
+		action()
+	}
+
 	// Calculate delta time
 	now := time.Now()
 	g.dt = now.Sub(g.lastTime).Seconds()
