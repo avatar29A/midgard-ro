@@ -403,6 +403,19 @@ func (s *Scene) RenderWithViewExtras(view math.Mat4, extras func(viewProj math.M
 		extras(viewProj)
 	}
 
+	// Force a GL flush before returning so that any writes made by world
+	// renderers OR by the extras callback are committed to the FBO's
+	// color texture before the imgui display step samples it.
+	//
+	// On macOS, OpenGL is layered on Metal which is deferred/tiled. Our
+	// FBO writes can sit in a command queue past the end of this function
+	// and not be visible when imgui samples the texture in the same
+	// frame — the symptom is the texture appearing to contain pre-write
+	// content (the world without the extras' contribution). Verified
+	// empirically: a sprite render in extras was invisible until we
+	// added a flush; with it the sprite shows correctly.
+	gl.Flush()
+
 	return s.framebuffer.ColorTexture()
 }
 
@@ -437,6 +450,15 @@ func (s *Scene) RenderSprite(viewProj math.Mat4, camRight, camUp math.Vec3, worl
 // Used by the debug overlay.
 func (s *Scene) FramebufferSize() (width, height int32) {
 	return s.config.Width, s.config.Height
+}
+
+// FramebufferID returns the underlying GL framebuffer object ID.
+// Used by diagnostics to verify the correct FB is bound.
+func (s *Scene) FramebufferID() uint32 {
+	if s.framebuffer == nil {
+		return 0
+	}
+	return s.framebuffer.FBO()
 }
 
 // Resize updates the scene dimensions.
