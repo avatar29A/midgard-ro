@@ -3,8 +3,10 @@ package ui
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/AllenDang/cimgui-go/imgui"
+	"github.com/go-gl/gl/v4.1-core/gl"
 
 	"github.com/Faultbox/midgard-ro/internal/game/entity"
 	"github.com/Faultbox/midgard-ro/internal/game/states"
@@ -83,6 +85,11 @@ func (ui *InGameUI) Update(deltaMs float64) {
 		ui.debugOverlay.PlayerTileX = tileX
 		ui.debugOverlay.PlayerTileY = tileY
 		ui.debugOverlay.PlayerDirection = uint8(player.Direction)
+		ui.debugOverlay.PlayerHasDest = player.HasDestination
+		ui.debugOverlay.PlayerDestX = player.DestX
+		ui.debugOverlay.PlayerDestZ = player.DestZ
+		ui.debugOverlay.PlayerIsMoving = player.IsMoving
+		ui.debugOverlay.PlayerAction = player.CurrentAction
 
 		// Update minimap player position
 		ui.minimap.SetPlayerPosition(tileX, tileY)
@@ -94,7 +101,51 @@ func (ui *InGameUI) Update(deltaMs float64) {
 		}
 	}
 
+	// Camera diagnostics
+	if cam := ui.state.GetCamera(); cam != nil {
+		ui.debugOverlay.CamX = cam.PosX
+		ui.debugOverlay.CamY = cam.PosY
+		ui.debugOverlay.CamZ = cam.PosZ
+		ui.debugOverlay.CamDistance = cam.Distance
+		ui.debugOverlay.CamYaw = cam.Yaw
+		ui.debugOverlay.CamPitch = cam.Pitch
+	}
+
+	// Scene / GL diagnostics — sample once per UI tick. gl.GetError() is
+	// cheap and consumes only the most recent error flag, which gives the
+	// debug overlay a live "smoking gun" indicator without log spam.
+	if sc := ui.state.GetScene(); sc != nil {
+		w, h := sc.FramebufferSize()
+		ui.debugOverlay.SceneFBWidth = w
+		ui.debugOverlay.SceneFBHeight = h
+		ui.debugOverlay.SceneTexID = sc.ColorTexture()
+		if player != nil {
+			ui.debugOverlay.TerrainY = sc.GetTerrainHeight(player.WorldX, player.WorldZ)
+		}
+	}
+	ui.debugOverlay.LastGLError = gl.GetError()
+
 	ui.debugOverlay.MapName = ui.state.GetMapName()
+
+	// Network diagnostics
+	if nc := ui.state.NetworkClient(); nc != nil {
+		st := nc.Stats()
+		ui.debugOverlay.PacketsSent = st.PacketsSent
+		ui.debugOverlay.PacketsReceived = st.PacketsRecvd
+		ui.debugOverlay.BytesSent = st.BytesSent
+		ui.debugOverlay.BytesReceived = st.BytesRecvd
+		ui.debugOverlay.LastSentID = st.LastSentID
+		ui.debugOverlay.LastSentLen = st.LastSentLen
+		ui.debugOverlay.LastRecvID = st.LastRecvID
+		ui.debugOverlay.LastRecvLen = st.LastRecvLen
+		now := time.Now()
+		if !st.LastSentAt.IsZero() {
+			ui.debugOverlay.LastSentAgo = now.Sub(st.LastSentAt)
+		}
+		if !st.LastRecvAt.IsZero() {
+			ui.debugOverlay.LastRecvAgo = now.Sub(st.LastRecvAt)
+		}
+	}
 
 	// Update entity counts
 	entityMgr := ui.state.GetEntityManager()

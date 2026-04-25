@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/AllenDang/cimgui-go/imgui"
+	"github.com/go-gl/gl/v4.1-core/gl"
 
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
@@ -518,18 +519,77 @@ func (ui *ImGuiInGameUI) Render(state InGameUIState, dt float64, viewportWidth, 
 }
 
 func (ui *ImGuiInGameUI) renderDebugOverlay(state InGameUIState) {
+	// Sample the most-recent GL error here. gl.GetError() consumes one
+	// error flag from the GL queue per call, which means the overlay
+	// drains errors as it displays them — exactly what we want for live
+	// diagnostics. It does NOT need to be deferred or buffered.
+	state.LastGLError = gl.GetError()
+
 	imgui.SetNextWindowPos(imgui.NewVec2(10, 10))
+	imgui.SetNextWindowSize(imgui.NewVec2(320, 0))
 	imgui.SetNextWindowBgAlpha(0.7)
 	flags := imgui.WindowFlagsNoTitleBar | imgui.WindowFlagsNoResize |
-		imgui.WindowFlagsNoMove | imgui.WindowFlagsAlwaysAutoResize
+		imgui.WindowFlagsNoMove | imgui.WindowFlagsNoScrollbar |
+		imgui.WindowFlagsNoSavedSettings | imgui.WindowFlagsNoFocusOnAppearing |
+		imgui.WindowFlagsNoInputs
 	if imgui.BeginV("##Debug", nil, flags) {
-		imgui.Text(fmt.Sprintf("Map: %s", state.MapName))
-		imgui.Text(fmt.Sprintf("Tile: (%d, %d)", state.PlayerTileX, state.PlayerTileY))
-		imgui.Text(fmt.Sprintf("World: (%.1f, %.1f, %.1f)", state.PlayerX, state.PlayerY, state.PlayerZ))
-		imgui.Text(fmt.Sprintf("Dir: %d", state.PlayerDirection))
+		imgui.TextDisabled("F3 to toggle")
+
+		// FPS
+		fpsColor := imgui.NewVec4(0.2, 1.0, 0.2, 1.0)
+		if state.FPS < 30 {
+			fpsColor = imgui.NewVec4(1.0, 0.2, 0.2, 1.0)
+		} else if state.FPS < 60 {
+			fpsColor = imgui.NewVec4(1.0, 1.0, 0.2, 1.0)
+		}
+		imgui.TextColored(fpsColor, fmt.Sprintf("FPS: %.0f", state.FPS))
+
 		imgui.Separator()
-		imgui.Text(fmt.Sprintf("Entities: %d", state.EntityCount))
-		imgui.Text(fmt.Sprintf("FPS: %.0f", state.FPS))
+		imgui.Text(fmt.Sprintf("Map:  %s", state.MapName))
+		imgui.Text(fmt.Sprintf("Pos:  %.1f, %.1f, %.1f", state.PlayerX, state.PlayerY, state.PlayerZ))
+		imgui.Text(fmt.Sprintf("Tile: %d, %d   Dir: %d", state.PlayerTileX, state.PlayerTileY, state.PlayerDirection))
+		moveState := "idle"
+		if state.PlayerIsMoving {
+			moveState = "MOVING"
+		}
+		if state.PlayerHasDest {
+			imgui.Text(fmt.Sprintf("State:%s  Dest: %.0f, %.0f", moveState, state.PlayerDestX, state.PlayerDestZ))
+		} else {
+			imgui.Text(fmt.Sprintf("State:%s", moveState))
+		}
+
+		// Camera
+		imgui.Separator()
+		imgui.Text("Camera")
+		imgui.Text(fmt.Sprintf("  Pos: %.1f, %.1f, %.1f", state.CamX, state.CamY, state.CamZ))
+		imgui.Text(fmt.Sprintf("  Dist: %.1f  Yaw: %.2f  Pitch: %.2f", state.CamDistance, state.CamYaw, state.CamPitch))
+
+		// Scene / GL
+		imgui.Separator()
+		imgui.Text("Scene / GL")
+		imgui.Text(fmt.Sprintf("  FB:    %dx%d   Tex: %d", state.SceneFBWidth, state.SceneFBHeight, state.SceneTexID))
+		imgui.Text(fmt.Sprintf("  TerrY: %.1f  GAT: %v", state.TerrainY, state.HasGAT))
+		if state.LastGLError != 0 {
+			imgui.TextColored(imgui.NewVec4(1, 0.2, 0.2, 1), fmt.Sprintf("  GL ERR: 0x%04x", state.LastGLError))
+		} else {
+			imgui.Text("  GL Err: NONE")
+		}
+
+		// Network
+		imgui.Separator()
+		imgui.Text("Network")
+		imgui.Text(fmt.Sprintf("  Sent: %d pkts (%dB)", state.PacketsSent, state.BytesSent))
+		imgui.Text(fmt.Sprintf("  Recv: %d pkts (%dB)", state.PacketsReceived, state.BytesReceived))
+		if state.LastSentID != 0 {
+			imgui.Text(fmt.Sprintf("  -> 0x%04X (%dB) %dms ago", state.LastSentID, state.LastSentLen, state.LastSentAgoMs))
+		}
+		if state.LastRecvID != 0 {
+			imgui.Text(fmt.Sprintf("  <- 0x%04X (%dB) %dms ago", state.LastRecvID, state.LastRecvLen, state.LastRecvAgoMs))
+		}
+
+		imgui.Separator()
+		imgui.Text(fmt.Sprintf("Entities: %d (P:%d M:%d N:%d I:%d)",
+			state.EntityCount, state.PlayerCount, state.MonsterCount, state.NPCCount, state.ItemCount))
 	}
 	imgui.End()
 }
