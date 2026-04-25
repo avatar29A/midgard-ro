@@ -12,9 +12,9 @@ import (
 
 // imageDrawCall represents a batched image draw call.
 type imageDrawCall struct {
-	textureID  uint32
-	vertStart  int
-	vertCount  int
+	textureID uint32
+	vertStart int
+	vertCount int
 }
 
 // Renderer handles 2D UI rendering with OpenGL.

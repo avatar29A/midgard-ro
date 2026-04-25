@@ -11,10 +11,10 @@ func TestVolumeConversion(t *testing.T) {
 		min float64
 		max float64
 	}{
-		{1.0, -1, 1},      // Full volume should be ~0dB
-		{0.5, -8, -4},     // Half volume should be around -6dB
-		{0.25, -14, -10},  // Quarter volume should be around -12dB
-		{0.0, -200, -90},  // Zero volume should be very negative
+		{1.0, -1, 1},     // Full volume should be ~0dB
+		{0.5, -8, -4},    // Half volume should be around -6dB
+		{0.25, -14, -10}, // Quarter volume should be around -12dB
+		{0.0, -200, -90}, // Zero volume should be very negative
 	}
 
 	for _, tt := range tests {

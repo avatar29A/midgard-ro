@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/Faultbox/midgard-ro/internal/engine/camera"
 	"github.com/Faultbox/midgard-ro/internal/engine/scene"
 	"github.com/Faultbox/midgard-ro/internal/game/entity"
@@ -13,7 +15,6 @@ import (
 	"github.com/Faultbox/midgard-ro/internal/network"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
 	"github.com/Faultbox/midgard-ro/pkg/formats"
-	"go.uber.org/zap"
 )
 
 // InGameStateConfig contains configuration for the in-game state.
@@ -150,10 +151,7 @@ func (s *InGameState) loadMap() error {
 	}
 
 	// Get base map name (remove .gat extension)
-	baseName := s.MapName
-	if strings.HasSuffix(baseName, ".gat") {
-		baseName = baseName[:len(baseName)-4]
-	}
+	baseName := strings.TrimSuffix(s.MapName, ".gat")
 
 	// Load GND (terrain)
 	gndPath := "data\\" + baseName + ".gnd"

@@ -10,18 +10,18 @@ import (
 
 // ConnectingStateConfig contains configuration for the connecting state.
 type ConnectingStateConfig struct {
-	NextState   string // State to transition to after connecting
-	ServerHost  string // Server to connect to (for char/map server)
-	ServerPort  int
-	Timeout     time.Duration
-	MapName     string // Map name (for ingame transition)
+	NextState  string // State to transition to after connecting
+	ServerHost string // Server to connect to (for char/map server)
+	ServerPort int
+	Timeout    time.Duration
+	MapName    string // Map name (for ingame transition)
 }
 
 // ConnectingState handles connection transitions between servers.
 type ConnectingState struct {
-	config    ConnectingStateConfig
-	client    *network.Client
-	manager   *Manager
+	config  ConnectingStateConfig
+	client  *network.Client
+	manager *Manager
 
 	// Connection state
 	startTime time.Time

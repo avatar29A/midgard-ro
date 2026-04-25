@@ -22,27 +22,27 @@ type InGameUI struct {
 	entityHPBar  *EntityHPBar
 
 	// Settings
-	ShowDebugInfo    bool
-	ShowMinimap      bool
-	ShowChat         bool
-	ShowStatusBar    bool
-	ShowEntityBars   bool
+	ShowDebugInfo  bool
+	ShowMinimap    bool
+	ShowChat       bool
+	ShowStatusBar  bool
+	ShowEntityBars bool
 }
 
 // NewInGameUI creates a new in-game UI.
 func NewInGameUI(state *states.InGameState) *InGameUI {
 	return &InGameUI{
-		state:            state,
-		statusBar:        NewStatusBar(),
-		minimap:          NewMinimap(),
-		chatBox:          NewChatBox(),
-		debugOverlay:     NewDebugOverlay(),
-		entityHPBar:      NewEntityHPBar(),
-		ShowDebugInfo:    true, // Show debug info by default during development
-		ShowMinimap:      true,
-		ShowChat:         true,
-		ShowStatusBar:    true,
-		ShowEntityBars:   true,
+		state:          state,
+		statusBar:      NewStatusBar(),
+		minimap:        NewMinimap(),
+		chatBox:        NewChatBox(),
+		debugOverlay:   NewDebugOverlay(),
+		entityHPBar:    NewEntityHPBar(),
+		ShowDebugInfo:  true, // Show debug info by default during development
+		ShowMinimap:    true,
+		ShowChat:       true,
+		ShowStatusBar:  true,
+		ShowEntityBars: true,
 	}
 }
 
