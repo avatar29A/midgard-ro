@@ -1,0 +1,37 @@
+# Midgard RO client config — copy to config.yaml and edit.
+# config.yaml is gitignored; this template is tracked.
+#
+# Quick start: `make config` copies this file to config.yaml.
+
+graphics:
+  width: 1280
+  height: 720
+  fullscreen: false
+  vsync: true
+
+audio:
+  master_volume: 0.8
+  music_volume: 0.7
+  sfx_volume: 0.8
+
+network:
+  # Local rAthena server (see docker/rathena/ + docs/QUICKSTART.md).
+  # To connect to a different server, change this address.
+  login_server: "127.0.0.1:6900"
+  username: "midgard-test"
+  password: "midgard-test"
+  connect_timeout: 10s
+
+game:
+  language: "en"
+  show_fps: true
+
+data:
+  # Absolute paths to your GRF archives. The client reads sprites,
+  # maps, models, and textures from these on startup.
+  grf_paths:
+    - "/CHANGE/ME/path/to/data.grf"
+    - "/CHANGE/ME/path/to/rdata.grf"
+
+logging:
+  level: "info"   # debug | info | warn | error
