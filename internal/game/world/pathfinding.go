@@ -30,7 +30,7 @@ func (h PathHeap) Swap(i, j int) {
 
 func (h *PathHeap) Push(x interface{}) {
 	n := len(*h)
-	node := x.(*PathNode)
+	node, _ := x.(*PathNode)
 	node.Index = n
 	*h = append(*h, node)
 }
@@ -122,7 +122,7 @@ func (pf *PathFinder) FindPath(startX, startY, goalX, goalY int) [][2]int {
 		iterations++
 
 		// Get node with lowest F score
-		current := heap.Pop(openSet).(*PathNode)
+		current, _ := heap.Pop(openSet).(*PathNode)
 
 		// Check if we reached the goal
 		if current.X == goalX && current.Y == goalY {

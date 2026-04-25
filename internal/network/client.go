@@ -88,7 +88,7 @@ func (c *Client) Connect(host string, port int, serverType ServerType) error {
 	c.conn = conn
 	c.connected = true
 	c.serverType = serverType
-	c.readOffset = 0 // Reset read buffer
+	c.readOffset = 0                      // Reset read buffer
 	c.charServerAccountIDReceived = false // Reset for new connection
 
 	logger.Info("connected to server", zap.String("addr", addr))
@@ -164,7 +164,7 @@ func (c *Client) Process() (err error) {
 	c.mu.Unlock()
 
 	// Set short read deadline for non-blocking behavior
-	conn.SetReadDeadline(time.Now().Add(10 * time.Millisecond))
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Millisecond))
 
 	// Read available data
 	n, err := conn.Read(c.readBuf[c.readOffset:])

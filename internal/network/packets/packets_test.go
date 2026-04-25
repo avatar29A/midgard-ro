@@ -167,11 +167,11 @@ func TestCharInfoDecode(t *testing.T) {
 	data[2] = 0x02
 	data[3] = 0x00
 
-	// Set name at offset 80
-	copy(data[80:104], "TestChar\x00")
+	// Set name at offset 108
+	copy(data[108:132], "TestChar\x00")
 
-	// Set slot at offset 110
-	data[110] = 3
+	// Set slot at offset 138
+	data[138] = 3
 
 	info := DecodeCharInfo(data)
 	if info == nil {

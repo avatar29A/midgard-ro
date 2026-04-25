@@ -22,10 +22,10 @@ type WaterRenderer struct {
 	program uint32
 
 	// Uniform locations
-	locMVP       int32
+	locMVP        int32
 	locWaterColor int32
-	locTime      int32
-	locWaterTex  int32
+	locTime       int32
+	locWaterTex   int32
 	locUseTexture int32
 
 	// Mesh
@@ -33,12 +33,12 @@ type WaterRenderer struct {
 	vbo uint32
 
 	// Water properties
-	waterLevel    float32
-	hasWater      bool
-	waterTime     float32
-	waterTextures []uint32
-	waterFrame    int
-	useWaterTex   bool
+	waterLevel     float32
+	hasWater       bool
+	waterTime      float32
+	waterTextures  []uint32
+	waterFrame     int
+	useWaterTex    bool
 	waterAnimSpeed float32
 }
 

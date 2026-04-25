@@ -47,7 +47,7 @@ func (mc *MovementController) MoveTo(destTileX, destTileY int) [][2]int {
 
 	// Find path
 	path := mc.pathFinder.FindPath(currentTileX, currentTileY, destTileX, destTileY)
-	if path == nil || len(path) == 0 {
+	if len(path) == 0 {
 		return nil
 	}
 

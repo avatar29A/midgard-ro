@@ -30,7 +30,7 @@ var koreanGlyphRanges = []imgui.Wchar{
 	0x3000, 0x30FF, // CJK Symbols and Punctuation, Hiragana, Katakana
 	0x3130, 0x318F, // Hangul Compatibility Jamo
 	0xAC00, 0xD7AF, // Hangul Syllables
-	0,              // Terminator
+	0, // Terminator
 }
 
 // Game is the main game instance.
@@ -342,7 +342,7 @@ func (g *Game) renderUI() {
 			},
 			OnLogin: func() {
 				g.pendingAction = func() {
-					state.AttemptLogin()
+					_ = state.AttemptLogin()
 				}
 			},
 		}, viewportWidth, viewportHeight)
@@ -363,7 +363,7 @@ func (g *Game) renderUI() {
 			IsReady:       state.IsCharListReady(),
 			OnSelect: func(index int) {
 				g.pendingAction = func() {
-					state.SelectCharacter(index)
+					_ = state.SelectCharacter(index)
 				}
 			},
 		}, viewportWidth, viewportHeight)
@@ -688,7 +688,7 @@ func parseHostPort(addr string) (string, int) {
 		for i := len(addr) - 1; i >= 0; i-- {
 			if addr[i] == ':' {
 				host = addr[:i]
-				fmt.Sscanf(addr[i+1:], "%d", &port)
+				_, _ = fmt.Sscanf(addr[i+1:], "%d", &port)
 				break
 			}
 		}
