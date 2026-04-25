@@ -55,6 +55,50 @@ type Client struct {
 
 	// Protocol quirk: char server sends account ID prefix
 	charServerAccountIDReceived bool
+
+	// Telemetry — exposed via Stats() for the debug overlay.
+	lastSentID   uint16
+	lastSentAt   time.Time
+	lastSentLen  int
+	lastRecvID   uint16
+	lastRecvAt   time.Time
+	lastRecvLen  int
+	packetsSent  uint64
+	packetsRecvd uint64
+	bytesSent    uint64
+	bytesRecvd   uint64
+}
+
+// Stats is a point-in-time snapshot of network telemetry.
+type Stats struct {
+	LastSentID   uint16
+	LastSentAt   time.Time
+	LastSentLen  int
+	LastRecvID   uint16
+	LastRecvAt   time.Time
+	LastRecvLen  int
+	PacketsSent  uint64
+	PacketsRecvd uint64
+	BytesSent    uint64
+	BytesRecvd   uint64
+}
+
+// Stats returns a snapshot of network telemetry counters.
+func (c *Client) Stats() Stats {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return Stats{
+		LastSentID:   c.lastSentID,
+		LastSentAt:   c.lastSentAt,
+		LastSentLen:  c.lastSentLen,
+		LastRecvID:   c.lastRecvID,
+		LastRecvAt:   c.lastRecvAt,
+		LastRecvLen:  c.lastRecvLen,
+		PacketsSent:  c.packetsSent,
+		PacketsRecvd: c.packetsRecvd,
+		BytesSent:    c.bytesSent,
+		BytesRecvd:   c.bytesRecvd,
+	}
 }
 
 // PacketHandler handles incoming packets.
@@ -132,12 +176,17 @@ func (c *Client) Send(data []byte) error {
 	if len(data) >= 2 {
 		packetID := binary.LittleEndian.Uint16(data[0:2])
 		logger.Debug("sending packet", zap.String("id", fmt.Sprintf("0x%04X", packetID)), zap.Int("len", len(data)))
+		c.lastSentID = packetID
+		c.lastSentAt = time.Now()
+		c.lastSentLen = len(data)
 	}
 
-	_, err := c.conn.Write(data)
+	n, err := c.conn.Write(data)
 	if err != nil {
 		logger.Error("send failed", zap.Error(err))
 	}
+	c.packetsSent++
+	c.bytesSent += uint64(n)
 	return err
 }
 
@@ -240,6 +289,13 @@ func (c *Client) Process() (err error) {
 
 		// Dispatch to handler
 		logger.Debug("received packet", zap.String("id", fmt.Sprintf("0x%04X", packetID)), zap.Int("len", packetLen))
+		c.mu.Lock()
+		c.lastRecvID = packetID
+		c.lastRecvAt = time.Now()
+		c.lastRecvLen = packetLen
+		c.packetsRecvd++
+		c.bytesRecvd += uint64(packetLen)
+		c.mu.Unlock()
 		if handler, ok := c.handlers[packetID]; ok {
 			if err := handler(packetData); err != nil {
 				logger.Error("packet handler error", zap.String("id", fmt.Sprintf("0x%04X", packetID)), zap.Error(err))

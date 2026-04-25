@@ -257,6 +257,17 @@ func (s *InGameState) GetCamera() *camera.ThirdPersonCamera {
 	return s.camera
 }
 
+// GetScene returns the underlying scene (for diagnostics — exposes
+// framebuffer dimensions, terrain Y query, etc).
+func (s *InGameState) GetScene() *scene.Scene {
+	return s.scene
+}
+
+// NetworkClient returns the underlying network client (for diagnostics).
+func (s *InGameState) NetworkClient() *network.Client {
+	return s.client
+}
+
 // ResizeScene resizes the scene framebuffer to match the window size.
 func (s *InGameState) ResizeScene(width, height int32) {
 	if s.scene != nil {

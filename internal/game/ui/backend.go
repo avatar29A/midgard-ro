@@ -104,6 +104,22 @@ type InGameUIState struct {
 	PlayerX, PlayerY, PlayerZ float32
 	PlayerTileX, PlayerTileY  int
 	PlayerDirection           uint8
+	PlayerHasDest             bool
+	PlayerDestX, PlayerDestZ  float32
+	PlayerIsMoving            bool
+
+	// Camera (debug)
+	CamX, CamY, CamZ float32
+	CamDistance      float32
+	CamYaw, CamPitch float32
+
+	// Scene framebuffer + GL diagnostics (debug)
+	SceneFBWidth  int32
+	SceneFBHeight int32
+	SceneTexID    uint32
+	LastGLError   uint32 // 0 = NO_ERROR
+	TerrainY      float32
+	HasGAT        bool
 
 	// Player stats
 	PlayerHP, PlayerMaxHP int
@@ -117,6 +133,18 @@ type InGameUIState struct {
 	MonsterCount int
 	NPCCount     int
 	ItemCount    int
+
+	// Network telemetry (debug)
+	PacketsSent     uint64
+	PacketsReceived uint64
+	BytesSent       uint64
+	BytesReceived   uint64
+	LastSentID      uint16
+	LastSentLen     int
+	LastSentAgoMs   int64
+	LastRecvID      uint16
+	LastRecvLen     int
+	LastRecvAgoMs   int64
 
 	// Scene info
 	SceneReady    bool
