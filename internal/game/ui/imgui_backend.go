@@ -543,10 +543,12 @@ func (ui *ImGuiInGameUI) renderDockSpaceHost(w, h float32) {
 	imgui.PushStyleVarVec2(imgui.StyleVarWindowPadding, imgui.NewVec2(0, 0))
 	imgui.PushStyleVarFloat(imgui.StyleVarWindowBorderSize, 0)
 	if imgui.BeginV("##GameDockHost", nil, hostFlags) {
-		// DockSpaceV crashes with nil WindowClass (cimgui-go calls .Handle() unconditionally).
-		// Use the simple overload instead — host has NoInputs+NoBackground so click pass-through
-		// and transparency are already handled without PassthruCentralNode.
-		imgui.DockSpace(imgui.IDStr("GameDockSpaceID"))
+		// DockSpaceV requires a non-nil *WindowClass (cimgui-go calls .Handle() unconditionally).
+		// Allocate a default one so the central node uses PassthruCentralNode, which keeps the
+		// dockspace center transparent and lets the scene texture show through underneath.
+		wc := imgui.NewWindowClass()
+		imgui.DockSpaceV(imgui.IDStr("GameDockSpaceID"), imgui.NewVec2(0, 0), imgui.DockNodeFlagsPassthruCentralNode, wc)
+		wc.Destroy()
 	}
 	imgui.End()
 	imgui.PopStyleVar()
