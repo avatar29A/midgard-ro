@@ -10,14 +10,12 @@ import (
 
 	"github.com/Faultbox/midgard-ro/internal/engine/camera"
 	"github.com/Faultbox/midgard-ro/internal/engine/picking"
-	"github.com/Faultbox/midgard-ro/internal/engine/playerview"
 	"github.com/Faultbox/midgard-ro/internal/engine/scene"
 	"github.com/Faultbox/midgard-ro/internal/game/entity"
 	"github.com/Faultbox/midgard-ro/internal/logger"
 	"github.com/Faultbox/midgard-ro/internal/network"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
 	"github.com/Faultbox/midgard-ro/pkg/formats"
-	"github.com/Faultbox/midgard-ro/pkg/math"
 )
 
 // InGameStateConfig contains configuration for the in-game state.
@@ -37,10 +35,9 @@ type InGameState struct {
 	manager *Manager
 
 	// Rendering
-	scene      *scene.Scene
-	camera     *camera.ThirdPersonCamera
-	gat        *formats.GAT // Walkability + minimap shape
-	playerView *playerview.View
+	scene  *scene.Scene
+	camera *camera.ThirdPersonCamera
+	gat    *formats.GAT // Walkability + minimap shape
 
 	// Entities
 	entityManager *entity.Manager
@@ -145,10 +142,6 @@ func (s *InGameState) Enter() error {
 	s.camera.Distance = 145 // RO-style close distance (like grfbrowser PlayMode)
 	s.camera.Yaw = 0
 
-	// Create the player billboard view (procedural for now — real Novice
-	// composite frames land in the next Track B PR).
-	s.playerView = playerview.New(s.player)
-
 	s.StatusMsg = fmt.Sprintf("Entered %s", s.MapName)
 
 	// Mark entry time — used as the local epoch for ClientTick and as the
@@ -222,10 +215,6 @@ func (s *InGameState) loadMap() error {
 
 // Exit is called when leaving this state.
 func (s *InGameState) Exit() error {
-	if s.playerView != nil {
-		s.playerView.Destroy()
-		s.playerView = nil
-	}
 	if s.scene != nil {
 		s.scene.Destroy()
 		s.scene = nil
@@ -276,15 +265,13 @@ func (s *InGameState) Update(dt float64) error {
 
 // Render is called every frame to draw the state.
 func (s *InGameState) Render() error {
-	// Render 3D scene if available
+	// Render 3D scene if available. Player billboard rendering is parked
+	// here pending a faithful port of the working grfbrowser PlayMode
+	// path (RFC #49 Track B follow-up) — the speculative procedural
+	// billboard was reverted because integration was non-trivial.
 	if s.scene != nil && s.camera != nil && s.SceneReady && s.player != nil {
-		// Get player position for camera to follow
 		x, y, z := s.player.RenderPosition()
-		s.scene.RenderWithThirdPersonExtras(s.camera, x, y, z, func(viewProj math.Mat4) {
-			if s.playerView != nil {
-				s.playerView.Render(s.scene, viewProj, s.camera.PosX, s.camera.PosZ)
-			}
-		})
+		s.scene.RenderWithThirdPerson(s.camera, x, y, z)
 	}
 	return nil
 }
