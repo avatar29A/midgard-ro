@@ -118,6 +118,7 @@ func New(cfg *config.Config) (*Game, error) {
 		io := imgui.CurrentIO()
 		flags := io.ConfigFlags()
 		flags &^= imgui.ConfigFlagsViewportsEnable // Clear viewport flag
+		flags |= imgui.ConfigFlagsDockingEnable    // Enable panel docking
 		io.SetConfigFlags(flags)
 
 		g.loadKoreanFont()

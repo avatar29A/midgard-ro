@@ -482,7 +482,8 @@ func NewImGuiInGameUI() *ImGuiInGameUI {
 
 // Render renders the in-game HUD.
 func (ui *ImGuiInGameUI) Render(state InGameUIState, dt float64, viewportWidth, viewportHeight float32) {
-	// Scene background
+	// Scene background — rendered first so it always sits behind all panels.
+	// NoDocking prevents it from accidentally participating in the dockspace.
 	if state.SceneReady && state.SceneTexture != 0 {
 		imgui.SetNextWindowPos(imgui.NewVec2(0, 0))
 		imgui.SetNextWindowSize(imgui.NewVec2(viewportWidth, viewportHeight))
@@ -490,7 +491,7 @@ func (ui *ImGuiInGameUI) Render(state InGameUIState, dt float64, viewportWidth, 
 		flags := imgui.WindowFlagsNoTitleBar | imgui.WindowFlagsNoResize |
 			imgui.WindowFlagsNoMove | imgui.WindowFlagsNoScrollbar |
 			imgui.WindowFlagsNoScrollWithMouse | imgui.WindowFlagsNoBringToFrontOnFocus |
-			imgui.WindowFlagsNoInputs
+			imgui.WindowFlagsNoInputs | imgui.WindowFlagsNoDocking
 
 		imgui.PushStyleVarVec2(imgui.StyleVarWindowPadding, imgui.NewVec2(0, 0))
 		if imgui.BeginV("##SceneBackground", nil, flags) {
@@ -504,7 +505,11 @@ func (ui *ImGuiInGameUI) Render(state InGameUIState, dt float64, viewportWidth, 
 		imgui.PopStyleVar()
 	}
 
-	// Debug overlay (top-left)
+	// Fullscreen dockspace host — transparent container that ensures all panels
+	// are always rendered on top of the scene background.
+	ui.renderDockSpaceHost(viewportWidth, viewportHeight)
+
+	// Panels — submitted after the dockspace, always on top of the scene.
 	if state.ShowDebugInfo {
 		ui.renderDebugOverlay(state)
 	}
@@ -518,6 +523,34 @@ func (ui *ImGuiInGameUI) Render(state InGameUIState, dt float64, viewportWidth, 
 	}
 }
 
+// renderDockSpaceHost creates a transparent fullscreen dockspace that acts as the
+// parent container for all in-game panels. Panels submitted after this call are
+// guaranteed to render above the scene background and can be docked together.
+func (ui *ImGuiInGameUI) renderDockSpaceHost(w, h float32) {
+	imgui.SetNextWindowPos(imgui.NewVec2(0, 0))
+	imgui.SetNextWindowSize(imgui.NewVec2(w, h))
+
+	hostFlags := imgui.WindowFlagsNoDocking |
+		imgui.WindowFlagsNoTitleBar |
+		imgui.WindowFlagsNoResize |
+		imgui.WindowFlagsNoMove |
+		imgui.WindowFlagsNoScrollbar |
+		imgui.WindowFlagsNoScrollWithMouse |
+		imgui.WindowFlagsNoSavedSettings |
+		imgui.WindowFlagsNoBringToFrontOnFocus |
+		imgui.WindowFlagsNoBackground
+
+	imgui.PushStyleVarVec2(imgui.StyleVarWindowPadding, imgui.NewVec2(0, 0))
+	imgui.PushStyleVarFloat(imgui.StyleVarWindowBorderSize, 0)
+	if imgui.BeginV("##GameDockHost", nil, hostFlags) {
+		dockID := imgui.IDStr("GameDockSpaceID")
+		imgui.DockSpaceV(dockID, imgui.NewVec2(0, 0), imgui.DockNodeFlagsPassthruCentralNode, nil)
+	}
+	imgui.End()
+	imgui.PopStyleVar()
+	imgui.PopStyleVar()
+}
+
 func (ui *ImGuiInGameUI) renderDebugOverlay(state InGameUIState) {
 	// Sample the most-recent GL error here. gl.GetError() consumes one
 	// error flag from the GL queue per call, which means the overlay
@@ -525,13 +558,13 @@ func (ui *ImGuiInGameUI) renderDebugOverlay(state InGameUIState) {
 	// diagnostics. It does NOT need to be deferred or buffered.
 	state.LastGLError = gl.GetError()
 
-	imgui.SetNextWindowPos(imgui.NewVec2(10, 10))
-	imgui.SetNextWindowSize(imgui.NewVec2(320, 0))
+	// CondFirstUseEver: starts top-left on first launch; player can then
+	// move or dock it anywhere and the position persists via imgui.ini.
+	imgui.SetNextWindowPosV(imgui.NewVec2(10, 10), imgui.CondFirstUseEver, imgui.NewVec2(0, 0))
+	imgui.SetNextWindowSizeV(imgui.NewVec2(320, 0), imgui.CondFirstUseEver)
 	imgui.SetNextWindowBgAlpha(0.7)
-	flags := imgui.WindowFlagsNoTitleBar | imgui.WindowFlagsNoResize |
-		imgui.WindowFlagsNoMove | imgui.WindowFlagsNoScrollbar |
-		imgui.WindowFlagsNoSavedSettings | imgui.WindowFlagsNoFocusOnAppearing |
-		imgui.WindowFlagsNoInputs
+	flags := imgui.WindowFlagsNoTitleBar | imgui.WindowFlagsNoScrollbar |
+		imgui.WindowFlagsNoFocusOnAppearing
 	if imgui.BeginV("##Debug", nil, flags) {
 		imgui.TextDisabled("F3 to toggle")
 
