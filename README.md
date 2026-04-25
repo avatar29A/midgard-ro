@@ -92,25 +92,18 @@ This project is designed as a learning experience. Each phase teaches specific c
 
 ## 🚦 Getting Started
 
-### Prerequisites
-
-1. **Go 1.22+**: `brew install go`
-2. **SDL2**: `brew install sdl2` (macOS) or `apt install libsdl2-dev` (Linux)
-3. **RO Assets**: Obtain data.grf from a legitimate RO installation
-
-### Running
+End-to-end setup (client + self-hosted rAthena server) is documented in
+**[docs/QUICKSTART.md](docs/QUICKSTART.md)**. The short version:
 
 ```bash
-# Clone the repository
-git clone https://github.com/Faultbox/midgard-ro.git
-cd midgard-ro
-
-# Install dependencies
-go mod download
-
-# Run the client
-go run ./cmd/client
+make env-install-macos    # Go, SDL2, colima, docker, docker-compose
+colima start --memory 8 --cpu 4
+make config               # creates config.yaml — edit GRF paths
+make play                 # starts the local rAthena server and launches the client
 ```
+
+You also need a legitimate copy of `data.grf` and `rdata.grf` from a
+Ragnarok Online installation. Run `make help` for all targets.
 
 ## 📚 Documentation
 
