@@ -1,7 +1,8 @@
 # Midgard RO Client - Makefile
 # Requires: Go 1.22+, SDL2
 
-.PHONY: all build build-tools run run-debug run-release clean test deps check fmt lint help
+.PHONY: all build build-tools run run-debug run-release play config clean test deps check fmt lint help \
+	server-up server-down server-reset server-rebuild server-logs server-status server-shell-db
 
 # Build settings
 BINARY_NAME := midgard
@@ -47,6 +48,44 @@ run-debug: ## Run with debug mode (uses config.yaml + race detector)
 run-release: build ## Run optimized release build
 	./$(BUILD_DIR)/$(BINARY_NAME)
 
+play: server-up config ## Start server (if needed) and launch client against it
+	@echo "Launching client against localhost:6900 ..."
+	go run $(CMD_DIR) --config config.yaml
+
+config: ## Create config.yaml from config.example.yaml if missing
+	@if [ ! -f config.yaml ]; then \
+		echo "Creating config.yaml from config.example.yaml ..."; \
+		cp config.example.yaml config.yaml; \
+		echo "Edit config.yaml to set your GRF paths."; \
+	fi
+
+## Self-hosted rAthena server (RFC #49 / Track A — see docker/rathena/README.md)
+
+server-up: ## Bring up the local rAthena stack (clones rAthena at pin on first run)
+	@cd docker/rathena && \
+		[ -d build/rathena/.git ] || ./setup.sh && \
+		docker compose up -d
+	@echo "rAthena listening on localhost:6900 (login), 6121 (char), 5121 (map)"
+	@echo "Test account: midgard-test / midgard-test"
+
+server-down: ## Stop the rAthena stack (preserves DB volume)
+	cd docker/rathena && docker compose down
+
+server-reset: ## Stop and wipe the DB volume (next server-up re-seeds)
+	cd docker/rathena && docker compose down --volumes
+
+server-rebuild: ## Wipe everything (DB + cloned rAthena), force re-clone and re-compile
+	cd docker/rathena && docker compose down --volumes && rm -rf build/
+
+server-logs: ## Tail logs from all rAthena services
+	cd docker/rathena && docker compose logs -f --tail=50
+
+server-status: ## Show status of rAthena containers
+	@cd docker/rathena && docker compose ps
+
+server-shell-db: ## Open a mariadb shell against the running DB
+	docker exec -it midgard-rathena-db mariadb -uragnarok -pragnarok ragnarok
+
 ## Development
 
 deps: ## Install/update dependencies
@@ -90,13 +129,21 @@ clean: ## Remove build artifacts
 
 env-check: ## Check if required tools are installed
 	@echo "Checking environment..."
-	@echo -n "Go: "; go version || echo "NOT INSTALLED"
-	@echo -n "SDL2: "; pkg-config --modversion sdl2 2>/dev/null || echo "NOT INSTALLED"
-	@echo -n "GCC: "; gcc --version | head -1 || echo "NOT INSTALLED"
+	@printf "Go:             "; go version 2>/dev/null || echo "NOT INSTALLED"
+	@printf "pkg-config:     "; pkg-config --version 2>/dev/null || echo "NOT INSTALLED"
+	@printf "SDL2:           "; pkg-config --modversion sdl2 2>/dev/null || echo "NOT INSTALLED"
+	@printf "GCC:            "; gcc --version 2>/dev/null | head -1 || echo "NOT INSTALLED"
+	@printf "Docker:         "; docker --version 2>/dev/null || echo "NOT INSTALLED"
+	@printf "Docker Compose: "; docker compose version 2>/dev/null || echo "NOT INSTALLED"
+	@printf "Colima:         "; colima version 2>/dev/null | head -1 || echo "NOT INSTALLED"
 
-env-install-macos: ## Install dependencies on macOS
-	brew install go sdl2
-	@echo "Dependencies installed. Run 'make deps' to download Go modules."
+env-install-macos: ## Install dependencies on macOS (build + server)
+	brew install go pkg-config sdl2 colima docker docker-compose
+	@echo
+	@echo "If 'docker compose' isn't found, ensure ~/.docker/config.json contains:"
+	@echo "  \"cliPluginsExtraDirs\": [\"/opt/homebrew/lib/docker/cli-plugins\"]"
+	@echo
+	@echo "Next: 'colima start --memory 8 --cpu 4' then 'make deps' then 'make play'"
 
 env-install-linux: ## Install dependencies on Linux (Debian/Ubuntu)
 	sudo apt update
@@ -111,8 +158,11 @@ help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 	@echo ""
 	@echo "Examples:"
-	@echo "  make run          # Run the client (go run)"
-	@echo "  make run-debug    # Run with debug flags + race detector"
-	@echo "  make run-release  # Build and run optimized binary"
+	@echo "  make play         # Start server + run client (one-shot end-to-end)"
+	@echo "  make server-up    # Start rAthena Docker stack (login/char/map + DB)"
+	@echo "  make server-logs  # Tail server logs"
+	@echo "  make server-down  # Stop server"
+	@echo "  make run          # Run the client only (server already running)"
+	@echo "  make run-debug    # Run with debug flags"
 	@echo "  make test         # Run all tests"
 	@echo "  make env-check    # Check if tools are installed"
