@@ -1,0 +1,92 @@
+# Vendored from rathena/tools/docker/docker-compose.yml (master, see ../pin.txt).
+# Differences from upstream:
+#   - Volume paths rebased to ./build/rathena (created by ./setup.sh)
+#   - Container names prefixed `midgard-` to avoid collisions
+#   - Single Dockerfile build context referenced once via `&build` anchor
+# See docs/research/rathena-setup.md for rationale.
+
+services:
+  db:
+    image: mariadb:noble
+    container_name: midgard-rathena-db
+    ports:
+      - "3306:3306"
+    volumes:
+      - rathenadb:/var/lib/mysql
+      - ./build/rathena/sql-files:/docker-entrypoint-initdb.d:ro
+    environment:
+      MYSQL_ROOT_PASSWORD: ragnarok
+      MYSQL_DATABASE: ragnarok
+      MYSQL_USER: ragnarok
+      MYSQL_PASSWORD: ragnarok
+
+  builder:
+    image: rathena:local
+    container_name: midgard-rathena-builder
+    build: &rathena_build
+      context: ./build/rathena/tools/docker
+      dockerfile: Dockerfile
+    command: /rathena/tools/docker/builder.sh
+    volumes: &rathena_volumes
+      - ./build/rathena:/rathena
+      # Upstream `tools/docker/asset/` overrides — redirect DB/cross-server
+      # IPs from 127.0.0.1 (default) to the `db` / `login` / `char` service
+      # names. Required for inter-server connectivity inside the compose
+      # network. Not vendored: lives inside the cloned rAthena tree at the
+      # pinned SHA, so we mount it directly.
+      - ./build/rathena/tools/docker/asset/inter_conf.txt:/rathena/conf/import/inter_conf.txt
+      - ./build/rathena/tools/docker/asset/char_conf.txt:/rathena/conf/import/char_conf.txt
+      - ./build/rathena/tools/docker/asset/map_conf.txt:/rathena/conf/import/map_conf.txt
+    init: true
+    tty: true
+    stdin_open: true
+    environment:
+      BUILDER_CONFIGURE: "--enable-packetver=20211103"
+
+  login:
+    image: rathena:local
+    container_name: midgard-rathena-login
+    build: *rathena_build
+    command: sh -c "/bin/wait-for db:3306 -- /rathena/login-server"
+    ports:
+      - "6900:6900"
+    volumes: *rathena_volumes
+    init: true
+    tty: true
+    stdin_open: true
+    depends_on:
+      builder:
+        condition: service_completed_successfully
+      db:
+        condition: service_started
+
+  char:
+    image: rathena:local
+    container_name: midgard-rathena-char
+    build: *rathena_build
+    command: sh -c "/bin/wait-for db:3306 -- /rathena/char-server"
+    ports:
+      - "6121:6121"
+    volumes: *rathena_volumes
+    init: true
+    tty: true
+    stdin_open: true
+    depends_on:
+      - login
+
+  map:
+    image: rathena:local
+    container_name: midgard-rathena-map
+    build: *rathena_build
+    command: sh -c "/bin/wait-for db:3306 -- /rathena/map-server"
+    ports:
+      - "5121:5121"
+    volumes: *rathena_volumes
+    init: true
+    tty: true
+    stdin_open: true
+    depends_on:
+      - char
+
+volumes:
+  rathenadb:
