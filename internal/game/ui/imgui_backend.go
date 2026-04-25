@@ -482,8 +482,9 @@ func NewImGuiInGameUI() *ImGuiInGameUI {
 
 // Render renders the in-game HUD.
 func (ui *ImGuiInGameUI) Render(state InGameUIState, dt float64, viewportWidth, viewportHeight float32) {
-	// Scene background — rendered first so it always sits behind all panels.
-	// NoDocking prevents it from accidentally participating in the dockspace.
+	// Scene background — rendered first (lowest z-order). NoBringToFrontOnFocus
+	// prevents it from jumping on top of panels. NoDocking stops it from becoming
+	// an accidental dock target when ConfigFlagsDockingEnable is active.
 	if state.SceneReady && state.SceneTexture != 0 {
 		imgui.SetNextWindowPos(imgui.NewVec2(0, 0))
 		imgui.SetNextWindowSize(imgui.NewVec2(viewportWidth, viewportHeight))
@@ -505,11 +506,8 @@ func (ui *ImGuiInGameUI) Render(state InGameUIState, dt float64, viewportWidth, 
 		imgui.PopStyleVar()
 	}
 
-	// Fullscreen dockspace host — transparent container that ensures all panels
-	// are always rendered on top of the scene background.
-	ui.renderDockSpaceHost(viewportWidth, viewportHeight)
-
-	// Panels — submitted after the dockspace, always on top of the scene.
+	// Panels are submitted after the scene background, so they always appear on top.
+	// ConfigFlagsDockingEnable (set in game.go) lets them be docked to each other.
 	if state.ShowDebugInfo {
 		ui.renderDebugOverlay(state)
 	}
@@ -523,37 +521,6 @@ func (ui *ImGuiInGameUI) Render(state InGameUIState, dt float64, viewportWidth, 
 	}
 }
 
-// renderDockSpaceHost creates a transparent fullscreen dockspace that acts as the
-// parent container for all in-game panels. Panels submitted after this call are
-// guaranteed to render above the scene background and can be docked together.
-func (ui *ImGuiInGameUI) renderDockSpaceHost(w, h float32) {
-	imgui.SetNextWindowPos(imgui.NewVec2(0, 0))
-	imgui.SetNextWindowSize(imgui.NewVec2(w, h))
-
-	hostFlags := imgui.WindowFlagsNoDocking |
-		imgui.WindowFlagsNoTitleBar |
-		imgui.WindowFlagsNoResize |
-		imgui.WindowFlagsNoMove |
-		imgui.WindowFlagsNoScrollbar |
-		imgui.WindowFlagsNoScrollWithMouse |
-		imgui.WindowFlagsNoSavedSettings |
-		imgui.WindowFlagsNoBringToFrontOnFocus |
-		imgui.WindowFlagsNoBackground
-
-	imgui.PushStyleVarVec2(imgui.StyleVarWindowPadding, imgui.NewVec2(0, 0))
-	imgui.PushStyleVarFloat(imgui.StyleVarWindowBorderSize, 0)
-	if imgui.BeginV("##GameDockHost", nil, hostFlags) {
-		// DockSpaceV requires a non-nil *WindowClass (cimgui-go calls .Handle() unconditionally).
-		// Allocate a default one so the central node uses PassthruCentralNode, which keeps the
-		// dockspace center transparent and lets the scene texture show through underneath.
-		wc := imgui.NewWindowClass()
-		imgui.DockSpaceV(imgui.IDStr("GameDockSpaceID"), imgui.NewVec2(0, 0), imgui.DockNodeFlagsPassthruCentralNode, wc)
-		wc.Destroy()
-	}
-	imgui.End()
-	imgui.PopStyleVar()
-	imgui.PopStyleVar()
-}
 
 func (ui *ImGuiInGameUI) renderDebugOverlay(state InGameUIState) {
 	// Sample the most-recent GL error here. gl.GetError() consumes one
