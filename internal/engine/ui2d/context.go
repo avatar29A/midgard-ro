@@ -30,13 +30,18 @@ type Context struct {
 }
 
 // WindowState holds state for a UI window.
+//
+// Dragged becomes true the first time the user moves the window; once set,
+// the caller's x/y arguments to BeginWindow are treated as initial-only and
+// ignored, so the new position survives across frames.
 type WindowState struct {
-	ID     string
-	X, Y   float32
-	W, H   float32
-	Open   bool
-	Moving bool
-	Skin   *NineSlice // Per-window skin override (nil uses default)
+	ID      string
+	X, Y    float32
+	W, H    float32
+	Open    bool
+	Moving  bool
+	Dragged bool
+	Skin    *NineSlice // Per-window skin override (nil uses default)
 }
 
 // NewContext creates a new UI context.
@@ -108,10 +113,13 @@ func (c *Context) BeginWindow(id string, x, y, w, h float32, title string) bool 
 		}
 		c.windows[id] = ws
 	} else {
-		// Always update size from parameters (position only when not moving)
+		// Always update size from parameters. Position parameters are only an
+		// initial hint: once the user drags the window we stop overwriting
+		// X/Y so the new position survives drop. Without this the window
+		// snaps back to the caller's center-of-screen each frame.
 		ws.W = w
 		ws.H = h
-		if !ws.Moving {
+		if !ws.Moving && !ws.Dragged {
 			ws.X = x
 			ws.Y = y
 		}
@@ -135,6 +143,7 @@ func (c *Context) BeginWindow(id string, x, y, w, h float32, title string) bool 
 	if ws.Moving && c.input.MouseLeftDown {
 		ws.X += c.input.MouseDeltaX
 		ws.Y += c.input.MouseDeltaY
+		ws.Dragged = true
 	}
 
 	if c.input.MouseLeftReleased {
@@ -153,18 +162,17 @@ func (c *Context) BeginWindow(id string, x, y, w, h float32, title string) bool 
 		skin.Draw(c.renderer, ws.X, ws.Y, ws.W, ws.H, ColorWhite)
 	} else {
 		c.renderer.DrawPanel(ws.X, ws.Y, ws.W, ws.H, ColorPanelBg, ColorPanelBorder)
-	}
 
-	// Draw title bar (solid color fallback only when no skin)
-	if skin == nil {
+		// Draw title bar + title only in the skinless fallback. The GRF
+		// skin (win_msgbox.bmp) bakes its own "메세지" title bar, so we
+		// don't draw a competing one — that produced the overlap Boris
+		// saw on first render.
 		c.renderer.DrawRect(ws.X+1, ws.Y+1, ws.W-2, titleBarH-1, ColorButtonNormal)
+		scale := float32(2.0)
+		_, textH := c.renderer.MeasureText(title, scale)
+		textY := ws.Y + (titleBarH-textH)/2
+		c.renderer.DrawText(ws.X+8, textY, title, scale, ColorText)
 	}
-
-	// Draw title text
-	scale := float32(2.0)
-	_, textH := c.renderer.MeasureText(title, scale)
-	textY := ws.Y + (titleBarH-textH)/2
-	c.renderer.DrawText(ws.X+8, textY, title, scale, ColorText)
 
 	// Set cursor for content (below title bar, with padding)
 	c.cursorX = ws.X + 8

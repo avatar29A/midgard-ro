@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/Faultbox/midgard-ro/pkg/encoding"
 	"github.com/Faultbox/midgard-ro/pkg/grf"
 )
 
@@ -38,6 +39,13 @@ func (m *Manager) AddArchive(path string) error {
 }
 
 // Load loads a file from the archives.
+//
+// Path encoding: GRFs store Korean folder/file names as raw EUC-KR bytes (the
+// original Windows clients are CP949). Go source uses UTF-8, so a literal like
+// `data\texture\유저인터페이스\…` won't match the on-disk entry as-is. We try
+// the path verbatim first (for ASCII-only paths and any caller that already
+// pre-encoded), and only fall back to UTF-8→EUC-KR if that misses. The cache
+// is keyed by the original path so callers don't need to think about it.
 func (m *Manager) Load(path string) ([]byte, error) {
 	// Check cache first
 	if data, ok := m.cache.Get(path); ok {
@@ -53,6 +61,16 @@ func (m *Manager) Load(path string) ([]byte, error) {
 		if err == nil {
 			m.cache.Set(path, data)
 			return data, nil
+		}
+	}
+
+	if encoded := string(encoding.UTF8ToEUCKR(path)); encoded != path {
+		for i := len(m.archives) - 1; i >= 0; i-- {
+			data, err := m.archives[i].Read(encoded)
+			if err == nil {
+				m.cache.Set(path, data)
+				return data, nil
+			}
 		}
 	}
 

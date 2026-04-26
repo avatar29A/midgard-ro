@@ -4,6 +4,9 @@ package ui
 import (
 	"fmt"
 
+	"github.com/AllenDang/cimgui-go/imgui"
+	"github.com/go-gl/gl/v4.1-core/gl"
+
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
 )
 
@@ -39,8 +42,77 @@ func NewUI2DBackend(width, height int) (*UI2DBackend, error) {
 }
 
 // Begin starts a new UI frame.
+//
+// We piggyback on cimgui-go's SDL backend for windowing and input. ImGui has
+// already pumped SDL events into its IO by this point, so we read the mouse
+// and key state straight off ImGui's IO rather than installing a parallel SDL
+// event handler. Same trick the ImGuiBackend uses (see updateInputFromImGui).
 func (b *UI2DBackend) Begin() {
+	b.syncInputFromImGui()
+	b.syncViewportSize()
+	b.fixHiDPIViewport()
 	b.ctx.Begin()
+}
+
+// fixHiDPIViewport overrides the glViewport that cimgui-go's SDL backend set
+// to (0, 0, DisplaySize.x, DisplaySize.y). Those numbers are in logical
+// points, but glViewport interprets them as framebuffer pixels — on a 2x
+// retina display that confines our drawing to the bottom-left quadrant of the
+// real framebuffer. Setting the viewport to the drawable size
+// (points × DisplayFramebufferScale) makes our point-space rendering land
+// 1:1 under the OS cursor.
+func (b *UI2DBackend) fixHiDPIViewport() {
+	io := imgui.CurrentIO()
+	disp := io.DisplaySize()
+	scale := io.DisplayFramebufferScale()
+	if scale.X <= 0 {
+		scale.X = 1
+	}
+	if scale.Y <= 0 {
+		scale.Y = 1
+	}
+	gl.Viewport(0, 0, int32(disp.X*scale.X), int32(disp.Y*scale.Y))
+}
+
+// syncInputFromImGui copies the current frame's mouse + key state from ImGui's
+// IO into the ui2d InputState. Must run before ctx.Begin() (which calls
+// InputState.Update for edge detection).
+//
+// Coordinate space: empirically (via the click-corner test) cimgui-go's SDL
+// backend reports mouse position in *global screen* points, not relative to
+// the SDL window. Click deltas across known widget widths matched our render
+// units 1:1, so the only correction needed is subtracting the SDL window's
+// screen position — given to us by MainViewport().Pos(). After that the
+// mouse lives in the same logical 0..DisplaySize space we render into,
+// which fixHiDPIViewport stretches across the full retina framebuffer.
+func (b *UI2DBackend) syncInputFromImGui() {
+	in := b.ctx.Input()
+	io := imgui.CurrentIO()
+
+	winPos := imgui.MainViewport().Pos()
+	mp := imgui.MousePos()
+	in.MouseX = mp.X - winPos.X
+	in.MouseY = mp.Y - winPos.Y
+	in.MouseLeftDown = imgui.IsMouseDown(imgui.MouseButtonLeft)
+	in.MouseRightDown = imgui.IsMouseDown(imgui.MouseButtonRight)
+	in.MouseMiddleDown = imgui.IsMouseDown(imgui.MouseButtonMiddle)
+	in.ScrollX = io.MouseWheelH()
+	in.ScrollY = io.MouseWheel()
+
+	in.KeyBackspace = imgui.IsKeyDown(imgui.KeyBackspace)
+	in.KeyEnter = imgui.IsKeyDown(imgui.KeyEnter)
+	in.KeyEscape = imgui.IsKeyDown(imgui.KeyEscape)
+	in.KeyTab = imgui.IsKeyDown(imgui.KeyTab)
+}
+
+// syncViewportSize keeps the ui2d renderer matched to ImGui's viewport size,
+// so the UI scales correctly when the SDL window is resized.
+func (b *UI2DBackend) syncViewportSize() {
+	size := imgui.MainViewport().Size()
+	curW, curH := b.ctx.GetScreenSize()
+	if int(size.X) != int(curW) || int(size.Y) != int(curH) {
+		b.ctx.Resize(int(size.X), int(size.Y))
+	}
 }
 
 // End finishes the UI frame.
@@ -402,11 +474,11 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 	scale := float32(2.0)
 	barY := height - 25
 	b.ctx.Renderer().DrawRect(0, barY, width, 25, ui2d.ColorPanelBg)
-	b.ctx.Renderer().DrawText(10, barY+4, statusText, scale, ui2d.ColorText)
+	b.ctx.Renderer().DrawText(10, barY+4, statusText, scale, ui2d.ColorTextOnDark)
 
 	posText := fmt.Sprintf("(%d, %d)", state.PlayerTileX, state.PlayerTileY)
 	posW, _ := b.ctx.Renderer().MeasureText(posText, scale)
-	b.ctx.Renderer().DrawText(width-posW-10, barY+4, posText, scale, ui2d.ColorText)
+	b.ctx.Renderer().DrawText(width-posW-10, barY+4, posText, scale, ui2d.ColorTextOnDark)
 }
 
 // RenderFPSOverlay renders an FPS counter.
@@ -420,7 +492,7 @@ func (b *UI2DBackend) RenderFPSOverlay(fps float64, width, height float32) {
 
 	// Semi-transparent background
 	b.ctx.Renderer().DrawRect(x-5, y-2, textW+10, 20, ui2d.ColorPanelBg.WithAlpha(0.5))
-	b.ctx.Renderer().DrawText(x, y, text, scale, ui2d.ColorText)
+	b.ctx.Renderer().DrawText(x, y, text, scale, ui2d.ColorTextOnDark)
 }
 
 // RenderScreenshotMessage renders a screenshot notification.
