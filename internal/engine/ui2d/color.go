@@ -27,10 +27,10 @@ var (
 	ColorInputBorder  = Color{0.2, 0.2, 0.3, 1}
 	// ColorText is the default text color, tuned for legibility on the cream
 	// win_msgbox.bmp body (which is the dominant text surface).
-	ColorText        = Color{0.1, 0.1, 0.15, 1}
-	ColorTextOnDark  = Color{0.9, 0.9, 0.9, 1}
-	ColorTextDim     = Color{0.4, 0.4, 0.5, 1}
-	ColorHighlight    = Color{0.2, 0.6, 0.9, 1}
+	ColorText       = Color{0.1, 0.1, 0.15, 1}
+	ColorTextOnDark = Color{0.9, 0.9, 0.9, 1}
+	ColorTextDim    = Color{0.4, 0.4, 0.5, 1}
+	ColorHighlight  = Color{0.2, 0.6, 0.9, 1}
 )
 
 // RGBA creates a color from 8-bit RGBA values (0-255).

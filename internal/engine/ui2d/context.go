@@ -30,14 +30,17 @@ type Context struct {
 }
 
 // WindowState holds state for a UI window.
+//
+// Dragged becomes true the first time the user moves the window; once set,
+// the caller's x/y arguments to BeginWindow are treated as initial-only and
+// ignored, so the new position survives across frames.
 type WindowState struct {
 	ID      string
 	X, Y    float32
 	W, H    float32
 	Open    bool
 	Moving  bool
-	Dragged bool       // True once the user has dragged this window — caller
-	                   // x/y are then treated as initial-only and ignored.
+	Dragged bool
 	Skin    *NineSlice // Per-window skin override (nil uses default)
 }
 
