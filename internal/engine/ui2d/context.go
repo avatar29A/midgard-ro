@@ -350,13 +350,7 @@ func (c *Context) TextInput(id string, width float32, value string) (string, boo
 		}
 	}
 
-	// Draw input field
-	c.renderer.DrawRect(x, y, width, h, ColorInputBg)
-	borderColor := ColorInputBorder
-	if focused {
-		borderColor = ColorHighlight
-	}
-	c.renderer.DrawRectOutline(x, y, width, h, 1, borderColor)
+	drawSunkenInput(c.renderer, x, y, width, h, focused)
 
 	// Draw text value
 	scale := float32(2.0)
@@ -374,6 +368,23 @@ func (c *Context) TextInput(id string, width float32, value string) (string, boo
 	c.cursorX += width + 4
 
 	return value, changed, submitted
+}
+
+// drawSunkenInput renders a text-input field as a recessed (sunken) box on
+// the white BMP body: white fill plus a 1-pixel inverse bevel — dark on
+// top/left, light on bottom/right — so it reads as inset rather than raised.
+// Focused fields tint the border blue (RO accent).
+func drawSunkenInput(r *Renderer, x, y, width, h float32, focused bool) {
+	r.DrawRect(x, y, width, h, ColorInputBg)
+	border := ColorInputBorder
+	if focused {
+		border = ColorInputBorderFocus
+	}
+	// Inverse bevel: shadow on top/left, highlight on bottom/right.
+	r.DrawRect(x+1, y, width-2, 1, border)                 // top edge (shadow)
+	r.DrawRect(x, y+1, 1, h-2, border)                     // left edge
+	r.DrawRect(x+1, y+h-1, width-2, 1, ColorButtonBevelHi) // bottom edge (highlight)
+	r.DrawRect(x+width-1, y+1, 1, h-2, ColorButtonBevelHi) // right edge
 }
 
 // Spacer adds vertical space.
@@ -496,12 +507,7 @@ func (c *Context) PasswordInput(id string, width float32, value string) (string,
 	}
 
 	// Draw input field
-	c.renderer.DrawRect(x, y, width, h, ColorInputBg)
-	borderColor := ColorInputBorder
-	if focused {
-		borderColor = ColorHighlight
-	}
-	c.renderer.DrawRectOutline(x, y, width, h, 1, borderColor)
+	drawSunkenInput(c.renderer, x, y, width, h, focused)
 
 	// Draw masked text (dots instead of characters)
 	scale := float32(2.0)
