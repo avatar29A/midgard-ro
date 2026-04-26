@@ -29,14 +29,20 @@ func LoadWindowSkin(tc *TextureCache) (*WindowSkin, error) {
 		return nil, fmt.Errorf("loading window frame skin: %w", err)
 	}
 
+	// Sample the rightmost 6px column of the title bar as the "clean strip"
+	// overlay — that region of win_msgbox.bmp is empty gradient (no text or
+	// icons), so stretching it across the whole title bar gives us a blank
+	// canvas to render our own title text on.
 	frame := &ui2d.NineSlice{
-		TextureID: info.ID,
-		TexWidth:  info.Width,
-		TexHeight: info.Height,
-		Left:      6,
-		Right:     6,
-		Top:       24,
-		Bottom:    12,
+		TextureID:      info.ID,
+		TexWidth:       info.Width,
+		TexHeight:      info.Height,
+		Left:           6,
+		Right:          6,
+		Top:            24,
+		Bottom:         12,
+		TitleStripSrcX: info.Width - 6,
+		TitleStripSrcW: 6,
 	}
 
 	return &WindowSkin{Frame: frame}, nil

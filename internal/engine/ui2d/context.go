@@ -159,18 +159,26 @@ func (c *Context) BeginWindow(id string, x, y, w, h float32, title string) bool 
 		skin = c.defaultSkin
 	}
 	if skin != nil {
+		// The GRF skin's optional clean title-strip overlay (see
+		// NineSlice.TitleStripSrcW) hides the BMP's baked-in "메세지"
+		// title and close icon, leaving us a blank title bar to stamp
+		// our own title text onto below.
 		skin.Draw(c.renderer, ws.X, ws.Y, ws.W, ws.H, ColorWhite)
 	} else {
 		c.renderer.DrawPanel(ws.X, ws.Y, ws.W, ws.H, ColorPanelBg, ColorPanelBorder)
-
-		// Draw title bar + title only in the skinless fallback. The GRF
-		// skin (win_msgbox.bmp) bakes its own "메세지" title bar, so we
-		// don't draw a competing one — that produced the overlap Boris
-		// saw on first render.
 		c.renderer.DrawRect(ws.X+1, ws.Y+1, ws.W-2, titleBarH-1, ColorButtonNormal)
+	}
+
+	// Draw the per-window title text on the title bar (always, regardless of
+	// skin — the skin's clean strip leaves room for it).
+	if title != "" {
 		scale := float32(2.0)
+		barH := titleBarH
+		if skin != nil && skin.Top > 0 {
+			barH = float32(skin.Top)
+		}
 		_, textH := c.renderer.MeasureText(title, scale)
-		textY := ws.Y + (titleBarH-textH)/2
+		textY := ws.Y + (barH-textH)/2
 		c.renderer.DrawText(ws.X+8, textY, title, scale, ColorText)
 	}
 
