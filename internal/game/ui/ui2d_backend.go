@@ -3,6 +3,7 @@ package ui
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/AllenDang/cimgui-go/imgui"
 	"github.com/go-gl/gl/v4.1-core/gl"
@@ -103,6 +104,20 @@ func (b *UI2DBackend) syncInputFromImGui() {
 	in.KeyEnter = imgui.IsKeyDown(imgui.KeyEnter)
 	in.KeyEscape = imgui.IsKeyDown(imgui.KeyEscape)
 	in.KeyTab = imgui.IsKeyDown(imgui.KeyTab)
+
+	// Bridge ImGui's per-frame character input queue into ui2d's TextInput
+	// so users can type into our text fields. ImGui already translates
+	// SDL2 SDL_TEXTINPUT events into Wchars on its IO; we just consume the
+	// queue. Non-ASCII Wchars become multi-byte UTF-8 via rune conversion.
+	if chars := io.InputQueueCharacters().Slice(); len(chars) > 0 {
+		var buf strings.Builder
+		for _, ch := range chars {
+			if ch >= 32 { // skip control chars; backspace/enter handled via key flags
+				buf.WriteRune(rune(ch))
+			}
+		}
+		in.TextInput += buf.String()
+	}
 }
 
 // syncViewportSize keeps the ui2d renderer matched to ImGui's viewport size,
