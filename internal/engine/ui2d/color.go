@@ -36,8 +36,12 @@ var (
 	ColorButtonBorder  = Color{0.40, 0.40, 0.45, 1}
 	ColorButtonBevelHi = Color{1.00, 1.00, 1.00, 1}
 	ColorButtonBevelLo = Color{0.30, 0.30, 0.35, 1}
-	ColorInputBg       = Color{0.05, 0.05, 0.08, 1}
-	ColorInputBorder   = Color{0.2, 0.2, 0.3, 1}
+	// Input fields: white fill on the white BMP body, recessed bevel
+	// (inverted from buttons — dark on top/left, light on bottom/right).
+	// Focused border tints blue (RO accent rgb 53,93,204).
+	ColorInputBg          = Color{1.00, 1.00, 1.00, 1}
+	ColorInputBorder      = Color{0.55, 0.55, 0.58, 1}
+	ColorInputBorderFocus = Color{0.21, 0.36, 0.80, 1}
 	// ColorText is the default text color, tuned for legibility on the cream
 	// win_msgbox.bmp body (which is the dominant text surface).
 	ColorText       = Color{0.1, 0.1, 0.15, 1}
