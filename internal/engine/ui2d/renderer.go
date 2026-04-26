@@ -160,19 +160,10 @@ func (r *Renderer) End() {
 
 	proj := r.orthoMatrix(0, float32(r.screenWidth), float32(r.screenHeight), 0, -1, 1)
 
-	// Render solid quads first
-	if len(r.solidVertices) > 0 {
-		gl.UseProgram(r.solidShader)
-		projLoc := gl.GetUniformLocation(r.solidShader, gl.Str("uProjection\x00"))
-		gl.UniformMatrix4fv(projLoc, 1, false, &proj[0])
-
-		gl.BindVertexArray(r.solidVAO)
-		gl.BindBuffer(gl.ARRAY_BUFFER, r.solidVBO)
-		gl.BufferData(gl.ARRAY_BUFFER, len(r.solidVertices)*4, unsafe.Pointer(&r.solidVertices[0]), gl.STREAM_DRAW)
-		gl.DrawArrays(gl.TRIANGLES, 0, int32(len(r.solidVertices)/7)) // 7 floats per vertex
-	}
-
-	// Render image quads (UI textures) between solid and text
+	// Render image quads first (window skins, scene textures, etc).
+	// Solid quads paint on top so structural rectangles — buttons, input
+	// fields, separators — aren't buried under skin backgrounds. Order is:
+	//   image -> solid -> text.
 	if len(r.imageDrawCalls) > 0 {
 		gl.UseProgram(r.imageShader)
 		projLoc := gl.GetUniformLocation(r.imageShader, gl.Str("uProjection\x00"))
@@ -190,6 +181,18 @@ func (r *Renderer) End() {
 			gl.BindTexture(gl.TEXTURE_2D, dc.textureID)
 			gl.DrawArrays(gl.TRIANGLES, int32(dc.vertStart), int32(dc.vertCount))
 		}
+	}
+
+	// Solid quads on top of images.
+	if len(r.solidVertices) > 0 {
+		gl.UseProgram(r.solidShader)
+		projLoc := gl.GetUniformLocation(r.solidShader, gl.Str("uProjection\x00"))
+		gl.UniformMatrix4fv(projLoc, 1, false, &proj[0])
+
+		gl.BindVertexArray(r.solidVAO)
+		gl.BindBuffer(gl.ARRAY_BUFFER, r.solidVBO)
+		gl.BufferData(gl.ARRAY_BUFFER, len(r.solidVertices)*4, unsafe.Pointer(&r.solidVertices[0]), gl.STREAM_DRAW)
+		gl.DrawArrays(gl.TRIANGLES, 0, int32(len(r.solidVertices)/7)) // 7 floats per vertex
 	}
 
 	// Render textured quads (text) on top
