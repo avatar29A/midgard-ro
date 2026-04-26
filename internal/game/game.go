@@ -143,8 +143,14 @@ func New(cfg *config.Config) (*Game, error) {
 		return nil, err
 	}
 
-	// Create UI backend (ImGui by default for backward compatibility)
-	g.uiBackend = ui.NewImGuiBackend()
+	// Create UI backend. We swapped from ImGui to the custom ui2d renderer
+	// (see RFC #67) — ImGui stays only as the SDL/GL windowing host.
+	ui2dBackend, err := ui.NewUI2DBackend(cfg.Graphics.Width, cfg.Graphics.Height)
+	if err != nil {
+		return nil, fmt.Errorf("create ui2d backend: %w", err)
+	}
+	ui2dBackend.SetAssetLoader(g.assetManager.Load)
+	g.uiBackend = ui2dBackend
 
 	logger.Info("game initialized successfully")
 	return g, nil
