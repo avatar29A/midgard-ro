@@ -36,8 +36,8 @@ var (
 	ColorButtonBorder  = Color{0.40, 0.40, 0.45, 1}
 	ColorButtonBevelHi = Color{1.00, 1.00, 1.00, 1}
 	ColorButtonBevelLo = Color{0.30, 0.30, 0.35, 1}
-	ColorInputBg      = Color{0.05, 0.05, 0.08, 1}
-	ColorInputBorder  = Color{0.2, 0.2, 0.3, 1}
+	ColorInputBg       = Color{0.05, 0.05, 0.08, 1}
+	ColorInputBorder   = Color{0.2, 0.2, 0.3, 1}
 	// ColorText is the default text color, tuned for legibility on the cream
 	// win_msgbox.bmp body (which is the dominant text surface).
 	ColorText       = Color{0.1, 0.1, 0.15, 1}
