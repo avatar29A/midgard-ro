@@ -166,7 +166,9 @@ func (c *Context) BeginWindow(id string, x, y, w, h float32, title string) bool 
 		skin.Draw(c.renderer, ws.X, ws.Y, ws.W, ws.H, ColorWhite)
 	} else {
 		c.renderer.DrawPanel(ws.X, ws.Y, ws.W, ws.H, ColorPanelBg, ColorPanelBorder)
-		c.renderer.DrawRect(ws.X+1, ws.Y+1, ws.W-2, titleBarH-1, ColorButtonNormal)
+		// Skinless fallback: title bar uses the darker panel border color
+		// since ColorButtonNormal is now near-white (would look wrong here).
+		c.renderer.DrawRect(ws.X+1, ws.Y+1, ws.W-2, titleBarH-1, ColorPanelBorder)
 	}
 
 	// Draw the per-window title text on the title bar (always, regardless of
@@ -246,14 +248,26 @@ func (c *Context) Button(id string, width float32, label string) bool {
 
 	// Draw button
 	color := ColorButtonNormal
-	if c.activeWidget == fullID {
+	pressed := c.activeWidget == fullID
+	if pressed {
 		color = ColorButtonActive
 	} else if hovered {
 		color = ColorButtonHover
 	}
 
 	c.renderer.DrawRect(x, y, width, h, color)
-	c.renderer.DrawRectOutline(x, y, width, h, 1, ColorPanelBorder)
+	// Raised-button bevel: light highlight on top/left, dark shadow on
+	// bottom/right gives a 3D look that reads as a clickable widget on the
+	// pure-white BMP body. When pressed, swap the bevel direction so the
+	// button appears "pushed in".
+	hi, lo := ColorButtonBevelHi, ColorButtonBevelLo
+	if pressed {
+		hi, lo = ColorButtonBevelLo, ColorButtonBevelHi
+	}
+	c.renderer.DrawRect(x, y, width, 1, hi)     // top
+	c.renderer.DrawRect(x, y, 1, h, hi)         // left
+	c.renderer.DrawRect(x, y+h-1, width, 1, lo) // bottom
+	c.renderer.DrawRect(x+width-1, y, 1, h, lo) // right
 
 	// Draw button label centered
 	scale := float32(2.0)
@@ -660,7 +674,7 @@ func (c *Context) ButtonDisabled(id string, width float32, label string) {
 
 	// Draw button in disabled state
 	c.renderer.DrawRect(x, y, width, h, ColorButtonNormal.Darken(0.3))
-	c.renderer.DrawRectOutline(x, y, width, h, 1, ColorPanelBorder.Darken(0.3))
+	c.renderer.DrawRectOutline(x, y, width, h, 1, ColorButtonBorder.Darken(0.3))
 
 	// Draw button label centered (dimmed)
 	scale := float32(2.0)
