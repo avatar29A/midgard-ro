@@ -1,4 +1,4 @@
-// TrueType font loading + glyph atlas for the ui2d renderer.
+// Package ui2d — TTF font loading + glyph atlas (this file).
 //
 // Replaces the old hard-coded 8x8 bitmap font. We rasterize each glyph from
 // a system TTF (Arial Unicode on macOS, falling back per-platform) into a
@@ -201,7 +201,7 @@ func NewFont() *Font {
 	}
 
 	// Convert alpha → RGBA so the existing text shader (which expects RGBA
-	// + tints by per-vertex colour) just works.
+	// + tints by per-vertex color) just works.
 	rgba := alphaToRGBA(atlas)
 
 	gl.GenTextures(1, &f.textureID)
@@ -282,7 +282,7 @@ func loadSystemFont() ([]byte, error) {
 
 // alphaToRGBA expands an alpha-only image to RGBA where every pixel is
 // white with the alpha mask applied. Lets the text shader tint via its
-// per-vertex colour without needing a separate alpha-only shader.
+// per-vertex color without needing a separate alpha-only shader.
 func alphaToRGBA(a *image.Alpha) []byte {
 	w := a.Rect.Dx()
 	h := a.Rect.Dy()
