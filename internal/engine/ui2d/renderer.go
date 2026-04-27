@@ -335,27 +335,40 @@ func (r *Renderer) addTexturedQuad(x, y, w, h float32, u0, v0, u1, v1 float32, c
 	)
 }
 
-// DrawText draws text at the given position.
+// DrawText draws text starting at the given top-left position. Y is the
+// top of the line; the renderer adds the font's ascent internally to land
+// glyphs on the baseline. Variable-width glyphs are positioned by their
+// per-glyph bearing + advance.
 func (r *Renderer) DrawText(x, y float32, text string, scale float32, color Color) {
 	if r.font == nil {
 		return
 	}
+	f := r.font
+	lineH := f.LineHeight() * scale
+	ascent := f.Ascent() * scale
 
-	gw, gh := r.font.GlyphSize()
-	charW := float32(gw) * scale
-	charH := float32(gh) * scale
-
-	curX := x
+	cursorX := x
+	yLine := y
 	for _, char := range text {
 		if char == '\n' {
-			curX = x
-			y += charH
+			cursorX = x
+			yLine += lineH
 			continue
 		}
-
-		u0, v0, u1, v1 := r.font.GetGlyphUV(char)
-		r.addTexturedQuad(curX, y, charW, charH, u0, v0, u1, v1, color)
-		curX += charW
+		g := f.Glyph(char)
+		if g == nil {
+			continue
+		}
+		if g.Width > 0 && g.Height > 0 {
+			gx := cursorX + g.BearingX*scale
+			gy := yLine + ascent + g.BearingY*scale
+			r.addTexturedQuad(
+				gx, gy,
+				float32(g.Width)*scale, float32(g.Height)*scale,
+				g.U0, g.V0, g.U1, g.V1, color,
+			)
+		}
+		cursorX += g.Advance * scale
 	}
 }
 
