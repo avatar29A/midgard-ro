@@ -33,7 +33,10 @@ type Glyph struct {
 	Advance float32
 }
 
-// Font is a TTF-rasterized atlas for ASCII printable glyphs.
+// Font is a TTF-rasterized atlas for the pre-loaded glyph ranges plus
+// any runes encountered at runtime (e.g. Korean/CJK in chat). The atlas
+// is allocated once at startup and grown into via shelf-pack as new
+// glyphs come in; misses upload just the new region via TexSubImage2D.
 type Font struct {
 	textureID uint32
 	texWidth  int
@@ -44,6 +47,13 @@ type Font struct {
 
 	ascent     float32 // baseline → top of typical glyphs (positive)
 	lineHeight float32 // total line advance (ascent + descent + leading)
+
+	// Kept alive after NewFont so we can rasterize glyphs on demand.
+	face  font.Face
+	atlas *image.Alpha
+
+	// Shelf-pack cursor — where the next runtime glyph will land.
+	curX, curY, rowH int
 }
 
 const (
@@ -51,7 +61,8 @@ const (
 	// old 8x8 bitmap font at scale=2.0 (~16px visual). Tuned by eye.
 	fontSize = 14.0
 	fontDPI  = 96.0
-	atlasW   = 512
+	atlasW   = 1024
+	atlasH   = 1024
 	glyphPad = 1
 )
 
@@ -97,113 +108,21 @@ func NewFont() *Font {
 	if err != nil {
 		return nil
 	}
-	defer face.Close()
 
 	metrics := face.Metrics()
 	f := &Font{
-		glyphs:     make(map[rune]*Glyph, 96),
+		glyphs:     make(map[rune]*Glyph, 512),
 		texWidth:   atlasW,
+		texHeight:  atlasH,
 		ascent:     float32(metrics.Ascent.Ceil()),
 		lineHeight: float32(metrics.Height.Ceil()),
+		face:       face,
+		atlas:      image.NewAlpha(image.Rect(0, 0, atlasW, atlasH)),
 	}
 
-	// Plan glyph placement before allocating the atlas — we don't know the
-	// full height until we've shelf-packed every glyph. We copy each mask
-	// into a private buffer here because face.Glyph reuses its internal
-	// rasterizer; without the copy, subsequent Glyph calls overwrite the
-	// pixels we're about to read.
-	type placement struct {
-		r        rune
-		x, y     int
-		w, h     int
-		bearingX float32
-		bearingY float32
-		advance  float32
-		mask     *image.Alpha // private copy, origin at (0,0)
-	}
-	var plans []placement
-	curX, curY, rowH := 0, 0, 0
-
-	for _, rg := range glyphRanges {
-		for r := rg[0]; r <= rg[1]; r++ {
-			dr, mask, maskp, advance, ok := face.Glyph(fixed.P(0, 0), r)
-			if !ok {
-				continue
-			}
-			gw := dr.Dx()
-			gh := dr.Dy()
-			adv := float32(advance.Ceil())
-
-			if gw <= 0 || gh <= 0 {
-				// Whitespace and similar — record advance only, no atlas slot.
-				plans = append(plans, placement{r: r, advance: adv})
-				continue
-			}
-
-			if curX+gw+glyphPad > atlasW {
-				curX = 0
-				curY += rowH + glyphPad
-				rowH = 0
-			}
-
-			// Take an immediate copy — the rasterizer reuses its internal
-			// mask buffer across calls.
-			maskCopy := image.NewAlpha(image.Rect(0, 0, gw, gh))
-			draw.Draw(maskCopy, maskCopy.Bounds(), mask, maskp, draw.Src)
-
-			plans = append(plans, placement{
-				r:        r,
-				x:        curX,
-				y:        curY,
-				w:        gw,
-				h:        gh,
-				bearingX: float32(dr.Min.X),
-				bearingY: float32(dr.Min.Y),
-				advance:  adv,
-				mask:     maskCopy,
-			})
-
-			curX += gw + glyphPad
-			if gh > rowH {
-				rowH = gh
-			}
-		}
-	}
-
-	atlasH := nextPow2(curY + rowH + glyphPad)
-	if atlasH < 16 {
-		atlasH = 16
-	}
-	f.texHeight = atlasH
-
-	// Rasterize each glyph into the alpha atlas.
-	atlas := image.NewAlpha(image.Rect(0, 0, atlasW, atlasH))
-	for _, p := range plans {
-		g := &Glyph{
-			Width:    p.w,
-			Height:   p.h,
-			BearingX: p.bearingX,
-			BearingY: p.bearingY,
-			Advance:  p.advance,
-		}
-		if p.mask != nil && p.w > 0 && p.h > 0 {
-			dst := image.Rect(p.x, p.y, p.x+p.w, p.y+p.h)
-			draw.Draw(atlas, dst, p.mask, image.Point{}, draw.Src)
-			g.U0 = float32(p.x) / float32(atlasW)
-			g.V0 = float32(p.y) / float32(atlasH)
-			g.U1 = float32(p.x+p.w) / float32(atlasW)
-			g.V1 = float32(p.y+p.h) / float32(atlasH)
-		}
-		f.glyphs[p.r] = g
-	}
-	if g, ok := f.glyphs['?']; ok {
-		f.fallback = g
-	}
-
-	// Convert alpha → RGBA so the existing text shader (which expects RGBA
-	// + tints by per-vertex color) just works.
-	rgba := alphaToRGBA(atlas)
-
+	// Allocate the GL texture up front; we'll fill it via TexSubImage2D as
+	// glyphs are added. Initial state is fully transparent which is fine
+	// (empty atlas → nothing draws until a glyph is added).
 	gl.GenTextures(1, &f.textureID)
 	gl.BindTexture(gl.TEXTURE_2D, f.textureID)
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
@@ -211,14 +130,117 @@ func NewFont() *Font {
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
 	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA, int32(atlasW), int32(atlasH), 0,
-		gl.RGBA, gl.UNSIGNED_BYTE, unsafe.Pointer(&rgba[0]))
+		gl.RGBA, gl.UNSIGNED_BYTE, nil)
 	gl.BindTexture(gl.TEXTURE_2D, 0)
+
+	// Pre-rasterize the common ranges so most text avoids per-glyph upload
+	// in the hot path.
+	for _, rg := range glyphRanges {
+		for r := rg[0]; r <= rg[1]; r++ {
+			f.rasterize(r)
+		}
+	}
+	if g, ok := f.glyphs['?']; ok {
+		f.fallback = g
+	}
 
 	return f
 }
 
+// rasterize generates the glyph for r, places it in the atlas via
+// shelf-pack, uploads the new region, and caches the metrics. Returns
+// the cached glyph (which may be nil if the rune has no representation
+// in the font, in which case the caller should fall back).
+func (f *Font) rasterize(r rune) *Glyph {
+	dr, mask, maskp, advance, ok := f.face.Glyph(fixed.P(0, 0), r)
+	if !ok {
+		f.glyphs[r] = nil
+		return nil
+	}
+	gw := dr.Dx()
+	gh := dr.Dy()
+	adv := float32(advance.Ceil())
+
+	g := &Glyph{
+		Width:    gw,
+		Height:   gh,
+		BearingX: float32(dr.Min.X),
+		BearingY: float32(dr.Min.Y),
+		Advance:  adv,
+	}
+
+	if gw <= 0 || gh <= 0 {
+		// Whitespace etc — advance only, no atlas slot.
+		f.glyphs[r] = g
+		return g
+	}
+
+	// Shelf-pack: wrap to next row when current row is full.
+	if f.curX+gw+glyphPad > atlasW {
+		f.curX = 0
+		f.curY += f.rowH + glyphPad
+		f.rowH = 0
+	}
+	if f.curY+gh+glyphPad > atlasH {
+		// Atlas is full — return whatever fallback we have.
+		f.glyphs[r] = f.fallback
+		return f.fallback
+	}
+
+	x, y := f.curX, f.curY
+
+	// Copy the just-rasterized mask into the atlas immediately, then
+	// upload that sub-region to the GPU. face.Glyph reuses its internal
+	// mask buffer, so we can't defer this.
+	dst := image.Rect(x, y, x+gw, y+gh)
+	draw.Draw(f.atlas, dst, mask, maskp, draw.Src)
+
+	rgba := alphaSubregionToRGBA(f.atlas, x, y, gw, gh)
+	gl.BindTexture(gl.TEXTURE_2D, f.textureID)
+	gl.TexSubImage2D(gl.TEXTURE_2D, 0, int32(x), int32(y), int32(gw), int32(gh),
+		gl.RGBA, gl.UNSIGNED_BYTE, unsafe.Pointer(&rgba[0]))
+	gl.BindTexture(gl.TEXTURE_2D, 0)
+
+	g.U0 = float32(x) / float32(atlasW)
+	g.V0 = float32(y) / float32(atlasH)
+	g.U1 = float32(x+gw) / float32(atlasW)
+	g.V1 = float32(y+gh) / float32(atlasH)
+
+	f.curX += gw + glyphPad
+	if gh > f.rowH {
+		f.rowH = gh
+	}
+
+	f.glyphs[r] = g
+	return g
+}
+
+// alphaSubregionToRGBA copies a (w×h) rectangle of the alpha atlas
+// starting at (x,y) into a fresh RGBA byte slice (R=G=B=255, A=alpha).
+// Used to feed a single newly-added glyph to TexSubImage2D.
+func alphaSubregionToRGBA(a *image.Alpha, x, y, w, h int) []byte {
+	out := make([]byte, w*h*4)
+	for j := 0; j < h; j++ {
+		srcRow := (y + j) * a.Stride
+		dstRow := j * w * 4
+		for i := 0; i < w; i++ {
+			alpha := a.Pix[srcRow+x+i]
+			off := dstRow + i*4
+			out[off+0] = 255
+			out[off+1] = 255
+			out[off+2] = 255
+			out[off+3] = alpha
+		}
+	}
+	return out
+}
+
 // Close releases font resources.
 func (f *Font) Close() {
+	if f.face != nil {
+		_ = f.face.Close()
+		f.face = nil
+	}
 	if f.textureID != 0 {
 		gl.DeleteTextures(1, &f.textureID)
 		f.textureID = 0
@@ -234,10 +256,20 @@ func (f *Font) Ascent() float32 { return f.ascent }
 // LineHeight returns the line advance in pixels at scale=1.
 func (f *Font) LineHeight() float32 { return f.lineHeight }
 
-// Glyph returns the metrics for the given rune, or the fallback for
-// missing glyphs.
+// Glyph returns the metrics for the given rune, lazily rasterizing it
+// into the atlas if it isn't already cached. Returns the fallback glyph
+// (`?`) when the font has no representation for r.
 func (f *Font) Glyph(r rune) *Glyph {
 	if g, ok := f.glyphs[r]; ok {
+		if g == nil {
+			return f.fallback
+		}
+		return g
+	}
+	if f.face == nil {
+		return f.fallback
+	}
+	if g := f.rasterize(r); g != nil {
 		return g
 	}
 	return f.fallback
@@ -278,38 +310,4 @@ func loadSystemFont() ([]byte, error) {
 		}
 	}
 	return nil, fmt.Errorf("no system TTF found in %v", systemFontPaths)
-}
-
-// alphaToRGBA expands an alpha-only image to RGBA where every pixel is
-// white with the alpha mask applied. Lets the text shader tint via its
-// per-vertex color without needing a separate alpha-only shader.
-func alphaToRGBA(a *image.Alpha) []byte {
-	w := a.Rect.Dx()
-	h := a.Rect.Dy()
-	out := make([]byte, w*h*4)
-	for y := 0; y < h; y++ {
-		srcRow := y * a.Stride
-		dstRow := y * w * 4
-		for x := 0; x < w; x++ {
-			alpha := a.Pix[srcRow+x]
-			off := dstRow + x*4
-			out[off+0] = 255
-			out[off+1] = 255
-			out[off+2] = 255
-			out[off+3] = alpha
-		}
-	}
-	return out
-}
-
-// nextPow2 rounds n up to the next power of two (minimum 1).
-func nextPow2(n int) int {
-	if n < 1 {
-		return 1
-	}
-	p := 1
-	for p < n {
-		p <<= 1
-	}
-	return p
 }
