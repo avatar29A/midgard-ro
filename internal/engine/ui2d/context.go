@@ -174,7 +174,7 @@ func (c *Context) BeginWindow(id string, x, y, w, h float32, title string) bool 
 	// Draw the per-window title text on the title bar (always, regardless of
 	// skin — the skin's clean strip leaves room for it).
 	if title != "" {
-		scale := float32(2.0)
+		scale := float32(1.0)
 		barH := titleBarH
 		if skin != nil && skin.Top > 0 {
 			barH = float32(skin.Top)
@@ -270,7 +270,7 @@ func (c *Context) Button(id string, width float32, label string) bool {
 	c.renderer.DrawRect(x+width-1, y, 1, h, lo) // right
 
 	// Draw button label centered
-	scale := float32(2.0)
+	scale := float32(1.0)
 	textW, textH := c.renderer.MeasureText(label, scale)
 	textX := x + (width-textW)/2
 	textY := y + (h-textH)/2
@@ -294,7 +294,7 @@ func (c *Context) LabelColored(text string, color Color) {
 	}
 
 	// Draw text with scale 2.0 (16px font from 8px glyphs)
-	scale := float32(2.0)
+	scale := float32(1.0)
 	c.renderer.DrawText(c.cursorX, c.cursorY, text, scale, color)
 
 	// Advance cursor
@@ -353,8 +353,9 @@ func (c *Context) TextInput(id string, width float32, value string) (string, boo
 	drawSunkenInput(c.renderer, x, y, width, h, focused)
 
 	// Draw text value
-	scale := float32(2.0)
-	textY := y + (h-float32(8)*scale)/2
+	scale := float32(1.0)
+	_, textH := c.renderer.MeasureText("Ag", scale) // representative height
+	textY := y + (h-textH)/2
 	c.renderer.DrawText(x+4, textY, value, scale, ColorText)
 
 	// Draw cursor when focused
@@ -446,7 +447,7 @@ func (c *Context) ProgressBar(fraction float32, width, height float32, label str
 
 	// Label (centered)
 	if label != "" {
-		scale := float32(2.0)
+		scale := float32(1.0)
 		textW, textH := c.renderer.MeasureText(label, scale)
 		textX := x + (width-textW)/2
 		textY := y + (height-textH)/2
@@ -510,12 +511,13 @@ func (c *Context) PasswordInput(id string, width float32, value string) (string,
 	drawSunkenInput(c.renderer, x, y, width, h, focused)
 
 	// Draw masked text (dots instead of characters)
-	scale := float32(2.0)
+	scale := float32(1.0)
 	maskedText := ""
 	for range value {
 		maskedText += "*"
 	}
-	textY := y + (h-float32(8)*scale)/2
+	_, textH := c.renderer.MeasureText("Ag", scale)
+	textY := y + (h-textH)/2
 	c.renderer.DrawText(x+4, textY, maskedText, scale, ColorText)
 
 	// Draw cursor when focused
@@ -589,7 +591,7 @@ func (c *Context) Selectable(id string, label string, selected bool) bool {
 	}
 
 	// Draw label
-	scale := float32(2.0)
+	scale := float32(1.0)
 	_, textH := c.renderer.MeasureText(label, scale)
 	textY := y + (h-textH)/2
 	c.renderer.DrawText(x+4, textY, label, scale, ColorText)
@@ -683,7 +685,7 @@ func (c *Context) ButtonDisabled(id string, width float32, label string) {
 	c.renderer.DrawRectOutline(x, y, width, h, 1, ColorButtonBorder.Darken(0.3))
 
 	// Draw button label centered (dimmed)
-	scale := float32(2.0)
+	scale := float32(1.0)
 	textW, textH := c.renderer.MeasureText(label, scale)
 	textX := x + (width-textW)/2
 	textY := y + (h-textH)/2
@@ -740,7 +742,7 @@ func (c *Context) Checkbox(id string, label string, checked bool) bool {
 	}
 
 	// Draw label
-	scale := float32(2.0)
+	scale := float32(1.0)
 	_, textH := c.renderer.MeasureText(label, scale)
 	textY := y + (boxSize-textH)/2
 	c.renderer.DrawText(x+boxSize+8, textY, label, scale, ColorText)
@@ -758,7 +760,7 @@ func (c *Context) LabelCentered(text string) {
 		return
 	}
 
-	scale := float32(2.0)
+	scale := float32(1.0)
 	textW, _ := c.renderer.MeasureText(text, scale)
 	windowContentWidth := c.currentWindow.W - 16
 	x := c.currentWindow.X + 8 + (windowContentWidth-textW)/2

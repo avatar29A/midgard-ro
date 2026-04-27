@@ -1,274 +1,217 @@
+// Package ui2d — TTF font loading + glyph atlas (this file).
+//
+// Replaces the old hard-coded 8x8 bitmap font. We rasterize each glyph from
+// a system TTF (Arial Unicode on macOS, falling back per-platform) into a
+// shelf-packed alpha atlas at startup, and store per-glyph metrics so
+// variable-width text renders correctly.
 package ui2d
 
 import (
+	"fmt"
+	"image"
+	"image/draw"
+	"os"
 	"unsafe"
 
 	"github.com/go-gl/gl/v4.1-core/gl"
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/opentype"
+	"golang.org/x/image/math/fixed"
 )
 
-// Font holds a bitmap font texture and rendering data.
+// Glyph holds atlas + render metrics for a single rasterized character.
+type Glyph struct {
+	// UV bounds within the atlas (0..1).
+	U0, V0, U1, V1 float32
+	// Pixel dimensions of the glyph image at scale=1.
+	Width, Height int
+	// Bearing: offset from the cursor (baseline X, baseline Y) to the glyph's
+	// top-left in the atlas. BearingY is typically negative — capitals extend
+	// above the baseline.
+	BearingX, BearingY float32
+	// Advance: how far to move the cursor X after drawing this glyph.
+	Advance float32
+}
+
+// Font is a TTF-rasterized atlas for ASCII printable glyphs.
 type Font struct {
-	textureID   uint32
-	glyphWidth  int
-	glyphHeight int
-	texWidth    int
-	texHeight   int
+	textureID uint32
+	texWidth  int
+	texHeight int
+
+	glyphs   map[rune]*Glyph
+	fallback *Glyph
+
+	ascent     float32 // baseline → top of typical glyphs (positive)
+	lineHeight float32 // total line advance (ascent + descent + leading)
 }
 
-// Classic 8x8 bitmap font data for ASCII characters 32-126
-// Each character is 8 bytes (8 rows of 8 bits each)
-var font8x8 = []byte{
-	// Space (32)
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	// ! (33)
-	0x18, 0x18, 0x18, 0x18, 0x18, 0x00, 0x18, 0x00,
-	// " (34)
-	0x6C, 0x6C, 0x24, 0x00, 0x00, 0x00, 0x00, 0x00,
-	// # (35)
-	0x6C, 0x6C, 0xFE, 0x6C, 0xFE, 0x6C, 0x6C, 0x00,
-	// $ (36)
-	0x18, 0x3E, 0x60, 0x3C, 0x06, 0x7C, 0x18, 0x00,
-	// % (37)
-	0x00, 0xC6, 0xCC, 0x18, 0x30, 0x66, 0xC6, 0x00,
-	// & (38)
-	0x38, 0x6C, 0x38, 0x76, 0xDC, 0xCC, 0x76, 0x00,
-	// ' (39)
-	0x18, 0x18, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00,
-	// ( (40)
-	0x0C, 0x18, 0x30, 0x30, 0x30, 0x18, 0x0C, 0x00,
-	// ) (41)
-	0x30, 0x18, 0x0C, 0x0C, 0x0C, 0x18, 0x30, 0x00,
-	// * (42)
-	0x00, 0x66, 0x3C, 0xFF, 0x3C, 0x66, 0x00, 0x00,
-	// + (43)
-	0x00, 0x18, 0x18, 0x7E, 0x18, 0x18, 0x00, 0x00,
-	// , (44)
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x30,
-	// - (45)
-	0x00, 0x00, 0x00, 0x7E, 0x00, 0x00, 0x00, 0x00,
-	// . (46)
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x00,
-	// / (47)
-	0x06, 0x0C, 0x18, 0x30, 0x60, 0xC0, 0x80, 0x00,
-	// 0 (48)
-	0x7C, 0xCE, 0xDE, 0xF6, 0xE6, 0xC6, 0x7C, 0x00,
-	// 1 (49)
-	0x18, 0x38, 0x18, 0x18, 0x18, 0x18, 0x7E, 0x00,
-	// 2 (50)
-	0x7C, 0xC6, 0x06, 0x7C, 0xC0, 0xC0, 0xFE, 0x00,
-	// 3 (51)
-	0xFC, 0x06, 0x06, 0x3C, 0x06, 0x06, 0xFC, 0x00,
-	// 4 (52)
-	0x0C, 0xCC, 0xCC, 0xCC, 0xFE, 0x0C, 0x0C, 0x00,
-	// 5 (53)
-	0xFE, 0xC0, 0xFC, 0x06, 0x06, 0xC6, 0x7C, 0x00,
-	// 6 (54)
-	0x7C, 0xC0, 0xC0, 0xFC, 0xC6, 0xC6, 0x7C, 0x00,
-	// 7 (55)
-	0xFE, 0x06, 0x06, 0x0C, 0x18, 0x18, 0x18, 0x00,
-	// 8 (56)
-	0x7C, 0xC6, 0xC6, 0x7C, 0xC6, 0xC6, 0x7C, 0x00,
-	// 9 (57)
-	0x7C, 0xC6, 0xC6, 0x7E, 0x06, 0x06, 0x7C, 0x00,
-	// : (58)
-	0x00, 0x18, 0x18, 0x00, 0x00, 0x18, 0x18, 0x00,
-	// ; (59)
-	0x00, 0x18, 0x18, 0x00, 0x00, 0x18, 0x18, 0x30,
-	// < (60)
-	0x0C, 0x18, 0x30, 0x60, 0x30, 0x18, 0x0C, 0x00,
-	// = (61)
-	0x00, 0x00, 0x7E, 0x00, 0x7E, 0x00, 0x00, 0x00,
-	// > (62)
-	0x30, 0x18, 0x0C, 0x06, 0x0C, 0x18, 0x30, 0x00,
-	// ? (63)
-	0x3C, 0x66, 0x0C, 0x18, 0x18, 0x00, 0x18, 0x00,
-	// @ (64)
-	0x7C, 0xC6, 0xDE, 0xDE, 0xDE, 0xC0, 0x7E, 0x00,
-	// A (65)
-	0x38, 0x6C, 0xC6, 0xC6, 0xFE, 0xC6, 0xC6, 0x00,
-	// B (66)
-	0xFC, 0xC6, 0xC6, 0xFC, 0xC6, 0xC6, 0xFC, 0x00,
-	// C (67)
-	0x7C, 0xC6, 0xC0, 0xC0, 0xC0, 0xC6, 0x7C, 0x00,
-	// D (68)
-	0xF8, 0xCC, 0xC6, 0xC6, 0xC6, 0xCC, 0xF8, 0x00,
-	// E (69)
-	0xFE, 0xC0, 0xC0, 0xF8, 0xC0, 0xC0, 0xFE, 0x00,
-	// F (70)
-	0xFE, 0xC0, 0xC0, 0xF8, 0xC0, 0xC0, 0xC0, 0x00,
-	// G (71)
-	0x7C, 0xC6, 0xC0, 0xCE, 0xC6, 0xC6, 0x7C, 0x00,
-	// H (72)
-	0xC6, 0xC6, 0xC6, 0xFE, 0xC6, 0xC6, 0xC6, 0x00,
-	// I (73)
-	0x7E, 0x18, 0x18, 0x18, 0x18, 0x18, 0x7E, 0x00,
-	// J (74)
-	0x06, 0x06, 0x06, 0x06, 0xC6, 0xC6, 0x7C, 0x00,
-	// K (75)
-	0xC6, 0xCC, 0xD8, 0xF0, 0xD8, 0xCC, 0xC6, 0x00,
-	// L (76)
-	0xC0, 0xC0, 0xC0, 0xC0, 0xC0, 0xC0, 0xFE, 0x00,
-	// M (77)
-	0xC6, 0xEE, 0xFE, 0xD6, 0xC6, 0xC6, 0xC6, 0x00,
-	// N (78)
-	0xC6, 0xE6, 0xF6, 0xDE, 0xCE, 0xC6, 0xC6, 0x00,
-	// O (79)
-	0x7C, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0x7C, 0x00,
-	// P (80)
-	0xFC, 0xC6, 0xC6, 0xFC, 0xC0, 0xC0, 0xC0, 0x00,
-	// Q (81)
-	0x7C, 0xC6, 0xC6, 0xC6, 0xD6, 0xDE, 0x7C, 0x06,
-	// R (82)
-	0xFC, 0xC6, 0xC6, 0xFC, 0xD8, 0xCC, 0xC6, 0x00,
-	// S (83)
-	0x7C, 0xC6, 0xC0, 0x7C, 0x06, 0xC6, 0x7C, 0x00,
-	// T (84)
-	0x7E, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x00,
-	// U (85)
-	0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0x7C, 0x00,
-	// V (86)
-	0xC6, 0xC6, 0xC6, 0xC6, 0x6C, 0x38, 0x10, 0x00,
-	// W (87)
-	0xC6, 0xC6, 0xC6, 0xD6, 0xFE, 0xEE, 0xC6, 0x00,
-	// X (88)
-	0xC6, 0xC6, 0x6C, 0x38, 0x6C, 0xC6, 0xC6, 0x00,
-	// Y (89)
-	0x66, 0x66, 0x66, 0x3C, 0x18, 0x18, 0x18, 0x00,
-	// Z (90)
-	0xFE, 0x06, 0x0C, 0x18, 0x30, 0x60, 0xFE, 0x00,
-	// [ (91)
-	0x3C, 0x30, 0x30, 0x30, 0x30, 0x30, 0x3C, 0x00,
-	// \ (92)
-	0xC0, 0x60, 0x30, 0x18, 0x0C, 0x06, 0x02, 0x00,
-	// ] (93)
-	0x3C, 0x0C, 0x0C, 0x0C, 0x0C, 0x0C, 0x3C, 0x00,
-	// ^ (94)
-	0x10, 0x38, 0x6C, 0xC6, 0x00, 0x00, 0x00, 0x00,
-	// _ (95)
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFE,
-	// ` (96)
-	0x18, 0x18, 0x0C, 0x00, 0x00, 0x00, 0x00, 0x00,
-	// a (97)
-	0x00, 0x00, 0x7C, 0x06, 0x7E, 0xC6, 0x7E, 0x00,
-	// b (98)
-	0xC0, 0xC0, 0xFC, 0xC6, 0xC6, 0xC6, 0xFC, 0x00,
-	// c (99)
-	0x00, 0x00, 0x7C, 0xC6, 0xC0, 0xC6, 0x7C, 0x00,
-	// d (100)
-	0x06, 0x06, 0x7E, 0xC6, 0xC6, 0xC6, 0x7E, 0x00,
-	// e (101)
-	0x00, 0x00, 0x7C, 0xC6, 0xFE, 0xC0, 0x7C, 0x00,
-	// f (102)
-	0x1C, 0x36, 0x30, 0x78, 0x30, 0x30, 0x30, 0x00,
-	// g (103)
-	0x00, 0x00, 0x7E, 0xC6, 0xC6, 0x7E, 0x06, 0x7C,
-	// h (104)
-	0xC0, 0xC0, 0xFC, 0xC6, 0xC6, 0xC6, 0xC6, 0x00,
-	// i (105)
-	0x18, 0x00, 0x38, 0x18, 0x18, 0x18, 0x3C, 0x00,
-	// j (106)
-	0x06, 0x00, 0x0E, 0x06, 0x06, 0x66, 0x66, 0x3C,
-	// k (107)
-	0xC0, 0xC0, 0xCC, 0xD8, 0xF0, 0xD8, 0xCC, 0x00,
-	// l (108)
-	0x38, 0x18, 0x18, 0x18, 0x18, 0x18, 0x3C, 0x00,
-	// m (109)
-	0x00, 0x00, 0xEC, 0xFE, 0xD6, 0xC6, 0xC6, 0x00,
-	// n (110)
-	0x00, 0x00, 0xFC, 0xC6, 0xC6, 0xC6, 0xC6, 0x00,
-	// o (111)
-	0x00, 0x00, 0x7C, 0xC6, 0xC6, 0xC6, 0x7C, 0x00,
-	// p (112)
-	0x00, 0x00, 0xFC, 0xC6, 0xC6, 0xFC, 0xC0, 0xC0,
-	// q (113)
-	0x00, 0x00, 0x7E, 0xC6, 0xC6, 0x7E, 0x06, 0x06,
-	// r (114)
-	0x00, 0x00, 0xDC, 0xE6, 0xC0, 0xC0, 0xC0, 0x00,
-	// s (115)
-	0x00, 0x00, 0x7E, 0xC0, 0x7C, 0x06, 0xFC, 0x00,
-	// t (116)
-	0x30, 0x30, 0x7C, 0x30, 0x30, 0x36, 0x1C, 0x00,
-	// u (117)
-	0x00, 0x00, 0xC6, 0xC6, 0xC6, 0xC6, 0x7E, 0x00,
-	// v (118)
-	0x00, 0x00, 0xC6, 0xC6, 0xC6, 0x6C, 0x38, 0x00,
-	// w (119)
-	0x00, 0x00, 0xC6, 0xC6, 0xD6, 0xFE, 0x6C, 0x00,
-	// x (120)
-	0x00, 0x00, 0xC6, 0x6C, 0x38, 0x6C, 0xC6, 0x00,
-	// y (121)
-	0x00, 0x00, 0xC6, 0xC6, 0xC6, 0x7E, 0x06, 0x7C,
-	// z (122)
-	0x00, 0x00, 0xFE, 0x0C, 0x38, 0x60, 0xFE, 0x00,
-	// { (123)
-	0x0E, 0x18, 0x18, 0x70, 0x18, 0x18, 0x0E, 0x00,
-	// | (124)
-	0x18, 0x18, 0x18, 0x00, 0x18, 0x18, 0x18, 0x00,
-	// } (125)
-	0x70, 0x18, 0x18, 0x0E, 0x18, 0x18, 0x70, 0x00,
-	// ~ (126)
-	0x76, 0xDC, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+const (
+	// fontSize: chosen so text rendered at scale=1.0 visually matches the
+	// old 8x8 bitmap font at scale=2.0 (~16px visual). Tuned by eye.
+	fontSize = 14.0
+	fontDPI  = 96.0
+	atlasW   = 512
+	glyphPad = 1
+)
+
+// glyphRanges is the inclusive Unicode ranges we pre-rasterize at startup.
+// Covers ASCII printable + Latin-1 Supplement (accented chars) + Cyrillic
+// (Russian). Korean/CJK is intentionally left out — those would balloon
+// startup time and atlas size; on-demand caching is the right answer there
+// and is a follow-up.
+var glyphRanges = [][2]rune{
+	{0x0020, 0x007E}, // Basic Latin (printable ASCII)
+	{0x00A0, 0x00FF}, // Latin-1 Supplement
+	{0x0400, 0x04FF}, // Cyrillic
 }
 
-// NewFont creates a new bitmap font from the built-in 8x8 font data.
+// systemFontPaths is a per-platform fallback list of TTFs we try in order.
+var systemFontPaths = []string{
+	"/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+	"/Library/Fonts/Arial Unicode.ttf",
+	"/System/Library/Fonts/Helvetica.ttc",
+	"C:\\Windows\\Fonts\\arial.ttf",
+	"/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+	"/usr/share/fonts/TTF/DejaVuSans.ttf",
+}
+
+// NewFont loads a system TTF and builds the glyph atlas. Returns nil if
+// no usable font is found; callers should treat that as "no text".
 func NewFont() *Font {
-	f := &Font{
-		glyphWidth:  8,
-		glyphHeight: 8,
+	data, err := loadSystemFont()
+	if err != nil {
+		return nil
 	}
 
-	// Create a texture atlas with all glyphs arranged horizontally
-	// Characters 32-126 = 95 characters
-	numChars := 95
-	f.texWidth = numChars * f.glyphWidth
-	f.texHeight = f.glyphHeight
+	parsed, err := opentype.Parse(data)
+	if err != nil {
+		return nil
+	}
 
-	// Create RGBA texture data
-	texData := make([]byte, f.texWidth*f.texHeight*4)
+	face, err := opentype.NewFace(parsed, &opentype.FaceOptions{
+		Size:    fontSize,
+		DPI:     fontDPI,
+		Hinting: font.HintingFull,
+	})
+	if err != nil {
+		return nil
+	}
+	defer face.Close()
 
-	for charIdx := 0; charIdx < numChars; charIdx++ {
-		charOffset := charIdx * 8 // 8 bytes per character
-		texX := charIdx * f.glyphWidth
+	metrics := face.Metrics()
+	f := &Font{
+		glyphs:     make(map[rune]*Glyph, 96),
+		texWidth:   atlasW,
+		ascent:     float32(metrics.Ascent.Ceil()),
+		lineHeight: float32(metrics.Height.Ceil()),
+	}
 
-		for row := 0; row < 8; row++ {
-			if charOffset+row >= len(font8x8) {
-				break
+	// Plan glyph placement before allocating the atlas — we don't know the
+	// full height until we've shelf-packed every glyph. We copy each mask
+	// into a private buffer here because face.Glyph reuses its internal
+	// rasterizer; without the copy, subsequent Glyph calls overwrite the
+	// pixels we're about to read.
+	type placement struct {
+		r        rune
+		x, y     int
+		w, h     int
+		bearingX float32
+		bearingY float32
+		advance  float32
+		mask     *image.Alpha // private copy, origin at (0,0)
+	}
+	var plans []placement
+	curX, curY, rowH := 0, 0, 0
+
+	for _, rg := range glyphRanges {
+		for r := rg[0]; r <= rg[1]; r++ {
+			dr, mask, maskp, advance, ok := face.Glyph(fixed.P(0, 0), r)
+			if !ok {
+				continue
 			}
-			rowData := font8x8[charOffset+row]
+			gw := dr.Dx()
+			gh := dr.Dy()
+			adv := float32(advance.Ceil())
 
-			for col := 0; col < 8; col++ {
-				// Check if bit is set (MSB first)
-				bit := (rowData >> (7 - col)) & 1
+			if gw <= 0 || gh <= 0 {
+				// Whitespace and similar — record advance only, no atlas slot.
+				plans = append(plans, placement{r: r, advance: adv})
+				continue
+			}
 
-				// Calculate texture position
-				px := texX + col
-				py := row
-				idx := (py*f.texWidth + px) * 4
+			if curX+gw+glyphPad > atlasW {
+				curX = 0
+				curY += rowH + glyphPad
+				rowH = 0
+			}
 
-				if bit == 1 {
-					texData[idx+0] = 255 // R
-					texData[idx+1] = 255 // G
-					texData[idx+2] = 255 // B
-					texData[idx+3] = 255 // A
-				} else {
-					texData[idx+0] = 0
-					texData[idx+1] = 0
-					texData[idx+2] = 0
-					texData[idx+3] = 0
-				}
+			// Take an immediate copy — the rasterizer reuses its internal
+			// mask buffer across calls.
+			maskCopy := image.NewAlpha(image.Rect(0, 0, gw, gh))
+			draw.Draw(maskCopy, maskCopy.Bounds(), mask, maskp, draw.Src)
+
+			plans = append(plans, placement{
+				r:        r,
+				x:        curX,
+				y:        curY,
+				w:        gw,
+				h:        gh,
+				bearingX: float32(dr.Min.X),
+				bearingY: float32(dr.Min.Y),
+				advance:  adv,
+				mask:     maskCopy,
+			})
+
+			curX += gw + glyphPad
+			if gh > rowH {
+				rowH = gh
 			}
 		}
 	}
 
-	// Create OpenGL texture
+	atlasH := nextPow2(curY + rowH + glyphPad)
+	if atlasH < 16 {
+		atlasH = 16
+	}
+	f.texHeight = atlasH
+
+	// Rasterize each glyph into the alpha atlas.
+	atlas := image.NewAlpha(image.Rect(0, 0, atlasW, atlasH))
+	for _, p := range plans {
+		g := &Glyph{
+			Width:    p.w,
+			Height:   p.h,
+			BearingX: p.bearingX,
+			BearingY: p.bearingY,
+			Advance:  p.advance,
+		}
+		if p.mask != nil && p.w > 0 && p.h > 0 {
+			dst := image.Rect(p.x, p.y, p.x+p.w, p.y+p.h)
+			draw.Draw(atlas, dst, p.mask, image.Point{}, draw.Src)
+			g.U0 = float32(p.x) / float32(atlasW)
+			g.V0 = float32(p.y) / float32(atlasH)
+			g.U1 = float32(p.x+p.w) / float32(atlasW)
+			g.V1 = float32(p.y+p.h) / float32(atlasH)
+		}
+		f.glyphs[p.r] = g
+	}
+	if g, ok := f.glyphs['?']; ok {
+		f.fallback = g
+	}
+
+	// Convert alpha → RGBA so the existing text shader (which expects RGBA
+	// + tints by per-vertex color) just works.
+	rgba := alphaToRGBA(atlas)
+
 	gl.GenTextures(1, &f.textureID)
 	gl.BindTexture(gl.TEXTURE_2D, f.textureID)
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA, int32(f.texWidth), int32(f.texHeight), 0,
-		gl.RGBA, gl.UNSIGNED_BYTE, unsafe.Pointer(&texData[0]))
+	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA, int32(atlasW), int32(atlasH), 0,
+		gl.RGBA, gl.UNSIGNED_BYTE, unsafe.Pointer(&rgba[0]))
 	gl.BindTexture(gl.TEXTURE_2D, 0)
 
 	return f
@@ -282,37 +225,91 @@ func (f *Font) Close() {
 	}
 }
 
-// GlyphSize returns the size of a single glyph.
-func (f *Font) GlyphSize() (int, int) {
-	return f.glyphWidth, f.glyphHeight
-}
+// TextureID returns the OpenGL texture ID for the glyph atlas.
+func (f *Font) TextureID() uint32 { return f.textureID }
 
-// TextureID returns the OpenGL texture ID.
-func (f *Font) TextureID() uint32 {
-	return f.textureID
-}
+// Ascent returns the baseline-to-top distance in pixels at scale=1.
+func (f *Font) Ascent() float32 { return f.ascent }
 
-// GetGlyphUV returns the UV coordinates for a character.
-// Returns (u0, v0, u1, v1) for the character's texture region.
-func (f *Font) GetGlyphUV(char rune) (float32, float32, float32, float32) {
-	// Map character to glyph index (32-126)
-	idx := int(char) - 32
-	if idx < 0 || idx >= 95 {
-		idx = 0 // Use space for invalid characters
+// LineHeight returns the line advance in pixels at scale=1.
+func (f *Font) LineHeight() float32 { return f.lineHeight }
+
+// Glyph returns the metrics for the given rune, or the fallback for
+// missing glyphs.
+func (f *Font) Glyph(r rune) *Glyph {
+	if g, ok := f.glyphs[r]; ok {
+		return g
 	}
-
-	// Calculate UV coordinates
-	u0 := float32(idx*f.glyphWidth) / float32(f.texWidth)
-	u1 := float32((idx+1)*f.glyphWidth) / float32(f.texWidth)
-	v0 := float32(0)
-	v1 := float32(1)
-
-	return u0, v0, u1, v1
+	return f.fallback
 }
 
-// MeasureText returns the width and height of rendered text.
+// MeasureText returns the bounding (width, height) of the rendered text
+// at the given scale factor.
 func (f *Font) MeasureText(text string, scale float32) (float32, float32) {
-	width := float32(len(text)) * float32(f.glyphWidth) * scale
-	height := float32(f.glyphHeight) * scale
-	return width, height
+	if f == nil {
+		return 0, 0
+	}
+	var maxLineW, lineW float32
+	lines := 1
+	for _, ch := range text {
+		if ch == '\n' {
+			if lineW > maxLineW {
+				maxLineW = lineW
+			}
+			lineW = 0
+			lines++
+			continue
+		}
+		if g := f.Glyph(ch); g != nil {
+			lineW += g.Advance * scale
+		}
+	}
+	if lineW > maxLineW {
+		maxLineW = lineW
+	}
+	return maxLineW, float32(lines) * f.lineHeight * scale
+}
+
+// loadSystemFont returns the bytes of the first system TTF that exists.
+func loadSystemFont() ([]byte, error) {
+	for _, p := range systemFontPaths {
+		if data, err := os.ReadFile(p); err == nil {
+			return data, nil
+		}
+	}
+	return nil, fmt.Errorf("no system TTF found in %v", systemFontPaths)
+}
+
+// alphaToRGBA expands an alpha-only image to RGBA where every pixel is
+// white with the alpha mask applied. Lets the text shader tint via its
+// per-vertex color without needing a separate alpha-only shader.
+func alphaToRGBA(a *image.Alpha) []byte {
+	w := a.Rect.Dx()
+	h := a.Rect.Dy()
+	out := make([]byte, w*h*4)
+	for y := 0; y < h; y++ {
+		srcRow := y * a.Stride
+		dstRow := y * w * 4
+		for x := 0; x < w; x++ {
+			alpha := a.Pix[srcRow+x]
+			off := dstRow + x*4
+			out[off+0] = 255
+			out[off+1] = 255
+			out[off+2] = 255
+			out[off+3] = alpha
+		}
+	}
+	return out
+}
+
+// nextPow2 rounds n up to the next power of two (minimum 1).
+func nextPow2(n int) int {
+	if n < 1 {
+		return 1
+	}
+	p := 1
+	for p < n {
+		p <<= 1
+	}
+	return p
 }

@@ -486,7 +486,7 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 	if state.StatusMessage != "" {
 		statusText = state.StatusMessage
 	}
-	scale := float32(2.0)
+	scale := float32(1.0)
 	barY := height - 25
 	b.ctx.Renderer().DrawRect(0, barY, width, 25, ui2d.ColorPanelBg)
 	b.ctx.Renderer().DrawText(10, barY+4, statusText, scale, ui2d.ColorTextOnDark)
@@ -498,7 +498,7 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 
 // RenderFPSOverlay renders an FPS counter.
 func (b *UI2DBackend) RenderFPSOverlay(fps float64, width, height float32) {
-	scale := float32(2.0)
+	scale := float32(1.0)
 	text := fmt.Sprintf("FPS: %.0f", fps)
 	textW, _ := b.ctx.Renderer().MeasureText(text, scale)
 
@@ -512,7 +512,7 @@ func (b *UI2DBackend) RenderFPSOverlay(fps float64, width, height float32) {
 
 // RenderScreenshotMessage renders a screenshot notification.
 func (b *UI2DBackend) RenderScreenshotMessage(msg string, width, height float32) {
-	scale := float32(2.0)
+	scale := float32(1.0)
 	textW, textH := b.ctx.Renderer().MeasureText(msg, scale)
 
 	msgWidth := textW + 20
