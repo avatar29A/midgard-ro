@@ -300,10 +300,14 @@ func (g *Game) frame() {
 		}
 	}
 
-	// Handle ESC to quit
+	// Handle ESC to quit. The cimgui-go SDL backend's SetShouldClose is
+	// currently a no-op TODO upstream, so we exit the process directly.
+	// Deferred a frame so the input event finishes processing cleanly.
 	if imgui.IsKeyPressedBoolV(imgui.KeyEscape, false) {
-		g.running = false
-		g.imguiBackend.SetShouldClose(true)
+		g.pendingAction = func() {
+			logger.Info("escape pressed, exiting")
+			os.Exit(0)
+		}
 	}
 
 	// Handle F12 for screenshot (will capture at start of NEXT frame)
@@ -368,6 +372,16 @@ func (g *Game) renderUI() {
 					_ = state.AttemptLogin()
 				}
 			},
+			OnExit: func() {
+				// SDLBackend.SetShouldClose is a no-op TODO upstream
+				// (cimgui-go), so we terminate the process directly.
+				// Deferred a frame via pendingAction so the button
+				// visibly registers its pressed state first.
+				g.pendingAction = func() {
+					logger.Info("exit button clicked, exiting")
+					os.Exit(0)
+				}
+			},
 		}, viewportWidth, viewportHeight)
 
 	case *states.ConnectingState:
@@ -392,12 +406,18 @@ func (g *Game) renderUI() {
 		}, viewportWidth, viewportHeight)
 
 	case *states.LoadingState:
+		// Debug gate: once loading hits 100% the state holds until the
+		// user presses Enter, so we can inspect the loading screen.
+		if state.IsReadyForTransition() && imgui.IsKeyPressedBoolV(imgui.KeyEnter, false) {
+			state.PressEnter()
+		}
 		g.uiBackend.RenderLoadingUI(ui.LoadingUIState{
 			MapName:       state.GetMapName(),
 			StatusMessage: state.GetStatusMessage(),
 			ErrorMessage:  state.GetErrorMessage(),
 			Progress:      state.GetProgress(),
 			Phase:         state.GetLoadingPhase(),
+			ReadyForInput: state.IsReadyForTransition(),
 		}, viewportWidth, viewportHeight)
 
 	case *states.InGameState:

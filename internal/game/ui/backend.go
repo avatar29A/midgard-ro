@@ -64,6 +64,7 @@ type LoginUIState struct {
 	OnUsernameChange func(string)
 	OnPasswordChange func(string)
 	OnLogin          func()
+	OnExit           func()
 }
 
 // ConnectingUIState contains the data needed to render the connecting UI.
@@ -93,6 +94,10 @@ type LoadingUIState struct {
 	ErrorMessage  string
 	Progress      float32
 	Phase         string
+	// ReadyForInput is true once loading has hit 100% and the state is
+	// holding for the user to press Enter (debug gate). The UI shows a
+	// hint when this is set.
+	ReadyForInput bool
 }
 
 // InGameUIState contains the data needed to render the in-game HUD.

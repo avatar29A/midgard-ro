@@ -277,6 +277,13 @@ func (r *Renderer) DrawRect(x, y, width, height float32, color Color) {
 	r.addQuad(x, y, width, height, color)
 }
 
+// DrawRectGradient draws a rectangle with a vertical gradient — top vertices
+// get topColor, bottom vertices get bottomColor. The solid shader already
+// reads per-vertex color, so this is a free upgrade over DrawRect.
+func (r *Renderer) DrawRectGradient(x, y, width, height float32, topColor, bottomColor Color) {
+	r.addQuadGradient(x, y, width, height, topColor, bottomColor)
+}
+
 // DrawRectOutline draws a rectangle outline.
 func (r *Renderer) DrawRectOutline(x, y, width, height, thickness float32, color Color) {
 	// Top
@@ -313,6 +320,23 @@ func (r *Renderer) addQuad(x, y, w, h float32, c Color) {
 		x, y, 0, c.R, c.G, c.B, c.A,
 		x+w, y+h, 0, c.R, c.G, c.B, c.A,
 		x, y+h, 0, c.R, c.G, c.B, c.A,
+	)
+}
+
+// addQuadGradient adds a vertically-gradient quad: top vertices get t,
+// bottom vertices get b.
+func (r *Renderer) addQuadGradient(x, y, w, h float32, t, b Color) {
+	// Triangle 1
+	r.solidVertices = append(r.solidVertices,
+		x, y, 0, t.R, t.G, t.B, t.A,
+		x+w, y, 0, t.R, t.G, t.B, t.A,
+		x+w, y+h, 0, b.R, b.G, b.B, b.A,
+	)
+	// Triangle 2
+	r.solidVertices = append(r.solidVertices,
+		x, y, 0, t.R, t.G, t.B, t.A,
+		x+w, y+h, 0, b.R, b.G, b.B, b.A,
+		x, y+h, 0, b.R, b.G, b.B, b.A,
 	)
 }
 
@@ -378,6 +402,16 @@ func (r *Renderer) MeasureText(text string, scale float32) (float32, float32) {
 		return 0, 0
 	}
 	return r.font.MeasureText(text, scale)
+}
+
+// FontAscent returns the cap-height of the body font at the given scale —
+// useful for vertically centering text in a box where line-height would
+// look top-heavy because of leading + descender padding.
+func (r *Renderer) FontAscent(scale float32) float32 {
+	if r.font == nil {
+		return 0
+	}
+	return r.font.Ascent() * scale
 }
 
 // DrawSceneTexture draws a scene texture as a fullscreen or positioned quad.
