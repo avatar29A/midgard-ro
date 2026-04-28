@@ -19,9 +19,8 @@ type UI2DBackend struct {
 	texCache *TextureCache
 
 	// Login screen textures (lazy-loaded)
-	loginBgTex    *TextureInfo
-	logoTex       *TextureInfo
-	loginTexTried bool // avoid repeated load attempts
+	loginBgTex    *TextureInfo // t_login.jpg — fullscreen title backdrop
+	loginTexTried bool         // avoid repeated load attempts
 
 	// Cached widget states
 	loginUsername string
@@ -105,6 +104,7 @@ func (b *UI2DBackend) syncInputFromImGui() {
 	in.KeyEscape = imgui.IsKeyDown(imgui.KeyEscape)
 	in.KeyTab = imgui.IsKeyDown(imgui.KeyTab)
 
+
 	// Bridge ImGui's per-frame character input queue into ui2d's TextInput
 	// so users can type into our text fields. ImGui already translates
 	// SDL2 SDL_TEXTINPUT events into Wchars on its IO; we just consume the
@@ -145,6 +145,12 @@ func (b *UI2DBackend) SetAssetLoader(loadFunc func(string) ([]byte, error)) {
 	if err == nil && skin.Frame != nil {
 		b.ctx.SetDefaultWindowSkin(skin.Frame)
 	}
+
+	// Try to load input skin (RO `name-edit.bmp`). If the asset is missing
+	// the inputs fall back to drawSunkenInput's procedural bevel.
+	if inputSkin, err := LoadInputSkin(b.texCache); err == nil && inputSkin != nil {
+		b.ctx.SetDefaultInputSkin(inputSkin)
+	}
 }
 
 // Close releases backend resources.
@@ -177,38 +183,40 @@ func (b *UI2DBackend) DrawSceneTexture(x, y, w, h float32, textureID uint32) {
 	b.ctx.Renderer().DrawSceneTexture(x, y, w, h, textureID)
 }
 
-// loginTexBasePath is the GRF path for login screen textures.
-const loginTexBasePath = `data\texture\유저인터페이스\login_interface\`
+// loginUIBasePath is the GRF path under which RO stores all login-screen
+// textures (the Korean folder name means "user interface").
+const loginUIBasePath = `data\texture\유저인터페이스\`
 
-// loadLoginTextures lazy-loads the login background and logo.
+// loadLoginTextures lazy-loads the login-screen backdrop. We use
+// `t_login.jpg`, the Korean RO client's title-screen art, drawn fullscreen
+// behind the dialog. Dialog chrome itself is rendered from the generic
+// `win_msgbox` skin so labels and buttons stay text-driven (translatable);
+// the per-screen `win_login.bmp` is *not* used because its Korean labels
+// are baked into the artwork.
 func (b *UI2DBackend) loadLoginTextures() {
 	if b.loginTexTried || b.texCache == nil {
 		return
 	}
 	b.loginTexTried = true
 
-	bg, err := b.texCache.Load(loginTexBasePath + `login_bg.bmp`)
-	if err == nil {
+	if bg, err := b.texCache.Load(loginUIBasePath + `t_login.jpg`); err == nil {
 		b.loginBgTex = bg
-	}
-
-	logo, err := b.texCache.Load(loginTexBasePath + `login_logo.bmp`)
-	if err == nil {
-		b.logoTex = logo
 	}
 }
 
 // RenderLoginUI renders the login screen.
+//
+// Layout: t_login.jpg fills the screen as the title backdrop; the dialog
+// itself is a generic themed window centered on top. Labels and the Login
+// button are drawn from Go strings (not from baked-in BMP artwork) so they
+// remain translatable.
 func (b *UI2DBackend) RenderLoginUI(state LoginUIState, width, height float32) {
-	// Lazy-load login textures on first render
 	b.loadLoginTextures()
 
-	// Draw login background fullscreen
 	if b.loginBgTex != nil {
 		b.ctx.Renderer().DrawImage(b.loginBgTex.ID, 0, 0, width, height, ui2d.ColorWhite)
 	}
 
-	// Sync state to local cache
 	if b.loginUsername == "" && state.Username != "" {
 		b.loginUsername = state.Username
 	}
@@ -216,231 +224,216 @@ func (b *UI2DBackend) RenderLoginUI(state LoginUIState, width, height float32) {
 		b.loginPassword = state.Password
 	}
 
-	// Center the login window
-	windowWidth := float32(400)
-	windowHeight := float32(340)
+	// Compact dialog modeled on the original RO "Log On" — labels sit
+	// LEFT of inputs (not above), and login/exit buttons live in the
+	// bottom-right corner. HStack flex sizes the inputs to fill the
+	// remaining width after the fixed-width label column.
+	windowWidth := float32(420)
+	windowHeight := float32(190)
 	windowX := (width - windowWidth) / 2
 	windowY := (height - windowHeight) / 2
 
-	// Draw logo centered above the login window
-	if b.logoTex != nil {
-		logoW := float32(b.logoTex.Width)
-		logoH := float32(b.logoTex.Height)
-		logoX := (width - logoW) / 2
-		logoY := windowY - logoH - 16
-		if logoY < 0 {
-			logoY = 0
-		}
-		b.ctx.Renderer().DrawImage(b.logoTex.ID, logoX, logoY, logoW, logoH, ui2d.ColorWhite)
-	}
-
-	if b.ctx.BeginWindow("login", windowX, windowY, windowWidth, windowHeight, "Login to Ragnarok Online") {
-		b.ctx.Spacer(12)
-		b.ctx.LabelCentered("Welcome to Midgard")
-		b.ctx.Spacer(12)
-		b.ctx.Separator()
-		b.ctx.Spacer(12)
-
-		// Username
-		b.ctx.Row(20)
-		b.ctx.Label("Username:")
-		b.ctx.Row(32)
-		newUsername, changed, _ := b.ctx.TextInput("username", 0, b.loginUsername)
-		if changed {
-			b.loginUsername = newUsername
-			if state.OnUsernameChange != nil {
-				state.OnUsernameChange(newUsername)
+	if b.ctx.BeginWindow("login", windowX, windowY, windowWidth, windowHeight, "Log On") {
+		doLogin := func() {
+			if !state.IsLoading && state.OnLogin != nil {
+				state.OnLogin()
 			}
 		}
-		b.ctx.Spacer(12)
 
-		// Password
-		b.ctx.Row(20)
-		b.ctx.Label("Password:")
-		b.ctx.Row(32)
-		newPassword, changed, submitted := b.ctx.PasswordInput("password", 0, b.loginPassword)
-		if changed {
-			b.loginPassword = newPassword
-			if state.OnPasswordChange != nil {
-				state.OnPasswordChange(newPassword)
-			}
-		}
-		b.ctx.Spacer(16)
+		labelW := float32(80) // wide enough for "Password" without wrap
 
-		// Error message
-		if state.ErrorMessage != "" {
-			b.ctx.LabelColored(state.ErrorMessage, ui2d.Color{R: 1, G: 0.3, B: 0.3, A: 1})
-			b.ctx.Spacer(8)
-		}
+		idRow := ui2d.HStack(8,
+			ui2d.Sized(labelW, 0, ui2d.Label("ID")),
+			ui2d.Sized(0, 22, ui2d.TextInput("username", &b.loginUsername, nil)),
+		)
+		passRow := ui2d.HStack(8,
+			ui2d.Sized(labelW, 0, ui2d.Label("Password")),
+			ui2d.Sized(0, 22, ui2d.PasswordInput("password", &b.loginPassword, doLogin)),
+		)
 
-		// Login button - larger for easier clicking
-		b.ctx.Row(40)
-		if state.IsLoading {
-			b.ctx.ButtonDisabled("login", 0, "Login")
-		} else {
-			btnClicked := b.ctx.Button("login", 0, "Login")
-			if btnClicked || submitted {
-				if state.OnLogin != nil {
-					state.OnLogin()
+		// Bottom action row: Filler pushes the buttons to the right edge.
+		// 28px tall gives the radius-6 corners visible vertical space
+		// (h - 2*r = 16px straight middle) without the button looking
+		// chunky.
+		btnW := float32(80)
+		btnH := float32(28)
+		btnRow := ui2d.HStack(6,
+			ui2d.Filler(),
+			ui2d.Sized(btnW, btnH, ui2d.Button("login", "login", doLogin)),
+			ui2d.Sized(btnW, btnH, ui2d.Button("exit", "exit", func() {
+				if state.OnExit != nil {
+					state.OnExit()
 				}
-			}
-		}
+			})),
+		)
 
+		var rows []ui2d.Element
+		rows = append(rows, idRow, passRow)
+		if state.ErrorMessage != "" {
+			rows = append(rows, ui2d.LabelColor(state.ErrorMessage, ui2d.Color{R: 1, G: 0.4, B: 0.4, A: 1}))
+		}
 		if state.IsLoading {
-			b.ctx.Spacer(8)
-			b.ctx.LabelCentered("Connecting...")
+			rows = append(rows, ui2d.LabelCenteredEl("Connecting..."))
 		}
+		rows = append(rows,
+			ui2d.LabelColor("Server: "+state.ServerName, ui2d.ColorTextDim),
+			ui2d.Filler(), // pushes button row to bottom
+			btnRow,
+		)
 
-		b.ctx.Spacer(12)
-		b.ctx.Separator()
-		b.ctx.Spacer(8)
-		b.ctx.LabelColored("Server: "+state.ServerName, ui2d.ColorTextDim)
+		// Notify owners if the tree mutated the editable values.
+		prevUser := state.Username
+		prevPass := state.Password
+		b.ctx.RenderTree(ui2d.VStack(8, rows...), b.ctx.CurrentWindowContentRect())
+		if b.loginUsername != prevUser && state.OnUsernameChange != nil {
+			state.OnUsernameChange(b.loginUsername)
+		}
+		if b.loginPassword != prevPass && state.OnPasswordChange != nil {
+			state.OnPasswordChange(b.loginPassword)
+		}
 
 		b.ctx.EndWindow()
 	}
 }
 
-// RenderConnectingUI renders the connecting screen.
+// RenderConnectingUI renders the connecting screen — same backdrop as
+// login/charselect, themed window with status messages.
 func (b *UI2DBackend) RenderConnectingUI(state ConnectingUIState, width, height float32) {
-	windowWidth := float32(300)
-	windowHeight := float32(120)
+	b.loadLoginTextures()
+	if b.loginBgTex != nil {
+		b.ctx.Renderer().DrawImage(b.loginBgTex.ID, 0, 0, width, height, ui2d.ColorWhite)
+	}
+
+	windowWidth := float32(320)
+	windowHeight := float32(150)
 	windowX := (width - windowWidth) / 2
 	windowY := (height - windowHeight) / 2
 
 	if b.ctx.BeginWindow("connecting", windowX, windowY, windowWidth, windowHeight, "Connecting") {
-		b.ctx.Spacer(16)
-
+		var rows []ui2d.Element
 		if state.StatusMessage != "" {
-			b.ctx.LabelCentered(state.StatusMessage)
+			rows = append(rows, ui2d.LabelCenteredEl(state.StatusMessage))
 		}
-		b.ctx.Spacer(8)
-
 		if state.ErrorMessage != "" {
-			b.ctx.LabelColored(state.ErrorMessage, ui2d.Color{R: 1, G: 0.3, B: 0.3, A: 1})
+			rows = append(rows, ui2d.LabelColor(state.ErrorMessage, ui2d.Color{R: 1, G: 0.4, B: 0.4, A: 1}))
 		}
+		rows = append(rows, ui2d.Spacer(8), ui2d.LabelCenteredEl("Please wait..."))
 
-		b.ctx.Spacer(16)
-		b.ctx.LabelCentered("Please wait...")
-
+		b.ctx.RenderTree(ui2d.VStack(8, rows...), b.ctx.CurrentWindowContentRect())
 		b.ctx.EndWindow()
 	}
 }
 
 // RenderCharSelectUI renders the character selection screen.
+//
+// Layout: t_login.jpg backdrop, centered themed window. The body is a
+// declarative tree — VStack of status/error rows, character Selectables,
+// detail labels, and the Enter Game button — so positions are deterministic
+// and every row gets the same vertical rhythm.
 func (b *UI2DBackend) RenderCharSelectUI(state CharSelectUIState, width, height float32) {
-	windowWidth := float32(500)
-	windowHeight := float32(400)
+	// Reuse the title-screen backdrop: it doubles as the char-select
+	// scenery in vanilla RO and saves loading another big asset.
+	b.loadLoginTextures()
+	if b.loginBgTex != nil {
+		b.ctx.Renderer().DrawImage(b.loginBgTex.ID, 0, 0, width, height, ui2d.ColorWhite)
+	}
+
+	windowWidth := float32(420)
+	windowHeight := float32(420)
 	windowX := (width - windowWidth) / 2
 	windowY := (height - windowHeight) / 2
 
 	if b.ctx.BeginWindow("charselect", windowX, windowY, windowWidth, windowHeight, "Character Selection") {
+		// Auto-select first row when characters arrive.
+		if state.IsReady && b.charSelectIdx < 0 && len(state.Characters) > 0 {
+			b.charSelectIdx = 0
+			if state.OnSelectIndex != nil {
+				state.OnSelectIndex(0)
+			}
+		}
+
+		var rows []ui2d.Element
 		if state.StatusMessage != "" {
-			b.ctx.Label(state.StatusMessage)
-			b.ctx.Spacer(4)
+			rows = append(rows, ui2d.Label(state.StatusMessage))
 		}
 		if state.ErrorMessage != "" {
-			b.ctx.LabelColored(state.ErrorMessage, ui2d.Color{R: 1, G: 0.3, B: 0.3, A: 1})
-			b.ctx.Spacer(4)
+			rows = append(rows, ui2d.LabelColor(state.ErrorMessage, ui2d.Color{R: 1, G: 0.4, B: 0.4, A: 1}))
 		}
 
-		b.ctx.Separator()
-		b.ctx.Spacer(8)
-
-		if !state.IsReady {
-			b.ctx.LabelCentered("Loading character list...")
-		} else if len(state.Characters) == 0 {
-			b.ctx.Spacer(16)
-			b.ctx.LabelCentered("No characters found.")
-			b.ctx.Spacer(8)
-			b.ctx.LabelCentered("Create a new character on the server.")
-		} else {
-			// Auto-select first character if none selected
-			if b.charSelectIdx < 0 && len(state.Characters) > 0 {
-				b.charSelectIdx = 0
-				if state.OnSelectIndex != nil {
-					state.OnSelectIndex(0)
-				}
-			}
-
-			// Character list
-			b.ctx.Row(20)
-			b.ctx.Label("Characters:")
-			b.ctx.Spacer(8)
-			b.ctx.BeginListBox("charlist", 0, 150)
-
+		switch {
+		case !state.IsReady:
+			rows = append(rows, ui2d.Spacer(8), ui2d.LabelCenteredEl("Loading character list..."))
+		case len(state.Characters) == 0:
+			rows = append(rows,
+				ui2d.Spacer(8),
+				ui2d.LabelCenteredEl("No characters found."),
+				ui2d.Spacer(4),
+				ui2d.LabelCenteredEl("Create a new character on the server."),
+			)
+		default:
+			rows = append(rows, ui2d.Label("Characters:"))
 			for i, char := range state.Characters {
-				label := fmt.Sprintf("%s (Lv %d)", char.GetName(), char.BaseLevel)
-				if b.ctx.Selectable(fmt.Sprintf("char_%d", i), label, b.charSelectIdx == i) {
-					b.charSelectIdx = i
-					if state.OnSelectIndex != nil {
-						state.OnSelectIndex(i)
-					}
-				}
+				idx := i // capture for closure
+				rows = append(rows, ui2d.Sized(0, 24, ui2d.Selectable(
+					fmt.Sprintf("char_%d", i),
+					fmt.Sprintf("%s  (Lv %d)", char.GetName(), char.BaseLevel),
+					b.charSelectIdx == i,
+					func() {
+						b.charSelectIdx = idx
+						if state.OnSelectIndex != nil {
+							state.OnSelectIndex(idx)
+						}
+					},
+				)))
 			}
 
-			b.ctx.EndListBox()
-			b.ctx.Spacer(8)
-
-			// Show selected character details
 			if b.charSelectIdx >= 0 && b.charSelectIdx < len(state.Characters) {
 				char := state.Characters[b.charSelectIdx]
-				b.ctx.Row(20)
-				b.ctx.Label(fmt.Sprintf("HP: %d/%d   SP: %d/%d", char.HP, char.MaxHP, char.SP, char.MaxSP))
-				b.ctx.Row(20)
-				b.ctx.Label(fmt.Sprintf("Map: %s", char.GetMapName()))
+				rows = append(rows,
+					ui2d.Spacer(8),
+					ui2d.Label(fmt.Sprintf("HP: %d/%d    SP: %d/%d", char.HP, char.MaxHP, char.SP, char.MaxSP)),
+					ui2d.Label(fmt.Sprintf("Map: %s", char.GetMapName())),
+				)
 			}
 
-			b.ctx.Spacer(8)
-			b.ctx.Separator()
-			b.ctx.Spacer(8)
-
-			// Action buttons
-			b.ctx.Row(40)
-			if state.IsLoading || b.charSelectIdx < 0 {
-				b.ctx.ButtonDisabled("enter", 0, "Enter Game")
-			} else {
-				btnClicked := b.ctx.Button("enter", 0, "Enter Game")
-				if btnClicked {
-					if state.OnSelect != nil {
-						state.OnSelect(b.charSelectIdx)
-					}
+			rows = append(rows, ui2d.Spacer(8))
+			canEnter := !state.IsLoading && b.charSelectIdx >= 0
+			enterLabel := "Enter Game"
+			rows = append(rows, ui2d.Sized(0, 36, ui2d.Button("enter", enterLabel, func() {
+				if canEnter && state.OnSelect != nil {
+					state.OnSelect(b.charSelectIdx)
 				}
-			}
+			})))
 		}
 
+		b.ctx.RenderTree(ui2d.VStack(6, rows...), b.ctx.CurrentWindowContentRect())
 		b.ctx.EndWindow()
 	}
 }
 
-// RenderLoadingUI renders the loading screen.
+// RenderLoadingUI renders the loading screen the same way the original
+// RO client does: just the title backdrop fills the screen and a single
+// short progress bar sits centered on the X-axis near the bottom — no
+// dialog chrome, no labels, no percentage caption.
 func (b *UI2DBackend) RenderLoadingUI(state LoadingUIState, width, height float32) {
-	windowWidth := float32(400)
-	windowHeight := float32(150)
-	windowX := (width - windowWidth) / 2
-	windowY := (height - windowHeight) / 2
+	b.loadLoginTextures()
+	if b.loginBgTex != nil {
+		b.ctx.Renderer().DrawImage(b.loginBgTex.ID, 0, 0, width, height, ui2d.ColorWhite)
+	}
 
-	if b.ctx.BeginWindow("loading", windowX, windowY, windowWidth, windowHeight, "Loading") {
-		b.ctx.Spacer(8)
+	barW := float32(280)
+	barH := float32(16)
+	barX := (width - barW) / 2
+	barY := height - 60
 
-		b.ctx.LabelCentered(fmt.Sprintf("Loading: %s", state.MapName))
-		b.ctx.Spacer(8)
+	b.ctx.ProgressBarAt(barX, barY, barW, barH, state.Progress, fmt.Sprintf("%.0f%%", state.Progress*100))
 
-		if state.StatusMessage != "" {
-			b.ctx.LabelCentered(state.StatusMessage)
-		}
-		b.ctx.Spacer(8)
-
-		// Progress bar
-		b.ctx.ProgressBar(state.Progress, 0, 20, fmt.Sprintf("%.0f%%", state.Progress*100))
-		b.ctx.Spacer(4)
-
-		if state.ErrorMessage != "" {
-			b.ctx.LabelColored(state.ErrorMessage, ui2d.Color{R: 1, G: 0.3, B: 0.3, A: 1})
-		}
-
-		b.ctx.LabelColored(fmt.Sprintf("Phase: %s", state.Phase), ui2d.ColorTextDim)
-
-		b.ctx.EndWindow()
+	// Debug gate hint — visible once loading is done and the state is
+	// waiting on Enter. Sits just above the progress bar in light text.
+	if state.ReadyForInput {
+		hint := "Press Enter to continue"
+		tw, _ := b.ctx.Renderer().MeasureText(hint, 1.0)
+		b.ctx.LabelAtColored((width-tw)/2, barY-26, hint, ui2d.ColorTextOnDark)
 	}
 }
 
