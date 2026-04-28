@@ -11,6 +11,28 @@ type WindowSkin struct {
 	Frame *ui2d.NineSlice
 }
 
+// LoadInputSkin loads the RO `name-edit.bmp` (101×20) as a 9-slice for text
+// input fields. The BMP has a thin border + recessed body with a subtle
+// vertical gradient — exactly the look our procedural sunken bevel was
+// faking. Insets chosen by eye: 3px on each edge captures the border + first
+// gradient pixel, leaving the smooth body region as the stretchable center.
+func LoadInputSkin(tc *TextureCache) (*ui2d.NineSlice, error) {
+	path := skinBasePath + `login_interface\name-edit.bmp`
+	info, err := tc.Load(path)
+	if err != nil {
+		return nil, fmt.Errorf("loading input skin: %w", err)
+	}
+	return &ui2d.NineSlice{
+		TextureID: info.ID,
+		TexWidth:  info.Width,
+		TexHeight: info.Height,
+		Left:      3,
+		Right:     3,
+		Top:       3,
+		Bottom:    3,
+	}, nil
+}
+
 // RO UI texture base path (Korean folder name for "user interface").
 // Note: there is no `basic_interface\` subfolder for win_msgbox — the file
 // sits directly under 유저인터페이스. Other UI assets (login_interface, etc.)
