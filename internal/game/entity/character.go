@@ -64,25 +64,25 @@ type Character struct {
 	HasDestination bool    // Whether moving to a destination
 
 	// Animation state
-	CurrentAction int     // 0=Idle, 1=Walk
-	CurrentFrame  int     // Current frame within action
-	FrameTime     float32 // Accumulated time for frame timing (ms)
-	LastVisualDir int     // Previous visual direction for hysteresis (-1 = none)
+	CurrentAction    int     // 0=Idle, 1=Walk
+	CurrentFrame     int     // Current frame within action
+	FrameTime        float32 // Accumulated time for frame timing (ms)
+	LastCameraSector int     // Previous camera sector for sprite hysteresis (-1 = none)
 }
 
 // NewCharacter creates a new character at the given position.
 func NewCharacter(x, y, z float32) *Character {
 	return &Character{
-		WorldX:        x,
-		WorldY:        y,
-		WorldZ:        z,
-		RenderX:       x, // Initialize render position to match world position
-		RenderY:       y,
-		RenderZ:       z,
-		Direction:     DirS,
-		MoveSpeed:     DefaultFreeMoveSpeed,
-		WalkSpeedMs:   DefaultWalkSpeedMs,
-		LastVisualDir: -1, // No previous direction
+		WorldX:           x,
+		WorldY:           y,
+		WorldZ:           z,
+		RenderX:          x, // Initialize render position to match world position
+		RenderY:          y,
+		RenderZ:          z,
+		Direction:        DirS,
+		MoveSpeed:        DefaultFreeMoveSpeed,
+		WalkSpeedMs:      DefaultWalkSpeedMs,
+		LastCameraSector: -1, // No previous camera sector
 	}
 }
 

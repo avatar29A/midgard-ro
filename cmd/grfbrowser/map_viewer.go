@@ -1992,8 +1992,8 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 
 	// ========== STEP 2: Calculate visual direction with hysteresis ==========
 	cameraAngle := character.CameraAngleToPlayer(mv.FollowCam.PosX, mv.FollowCam.PosZ, player.RenderX, player.RenderZ)
-	visualDir, newSector := character.CalculateVisualDirection(cameraAngle, player.Direction, player.LastVisualDir)
-	player.LastVisualDir = newSector
+	visualDir, camSector := character.CalculateVisualDirection(cameraAngle, player.Direction, player.LastCameraSector)
+	player.LastCameraSector = camSector
 
 	// ========== STEP 3: Use composite sprites if available ==========
 	// Composite sprites have head+body pre-merged for solid appearance
