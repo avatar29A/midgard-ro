@@ -3,6 +3,7 @@ package states
 
 import (
 	"fmt"
+	gomath "math"
 	"strings"
 	"time"
 
@@ -59,16 +60,22 @@ type InGameState struct {
 	TileY   int // Current tile Y
 
 	// Network timing
-	lastMoveTick      uint32
-	lastMoveSent      time.Time
-	lastWalkEnded     time.Time
-	wasWalking        bool
-	keepAliveSentAt   time.Time
-	pingMs            float64
-	moveTickRate      time.Duration
-	lastKeepAlive     time.Time
-	keepAliveInterval time.Duration
-	enterTime         time.Time // Used as the local epoch for ClientTick
+	lastMoveTick    uint32
+	lastMoveSent    time.Time
+	lastWalkEnded   time.Time
+	wasWalking      bool
+	keepAliveSentAt time.Time
+	pingMs          float64
+
+	// Click-to-move destination. The server will only path a limited distance
+	// per request, so a far click is walked in stages toward this.
+	destCellX, destCellY   int
+	hasDest                bool
+	chainCellX, chainCellY int
+	moveTickRate           time.Duration
+	lastKeepAlive          time.Time
+	keepAliveInterval      time.Duration
+	enterTime              time.Time // Used as the local epoch for ClientTick
 
 	// State
 	ErrorMsg   string
@@ -321,6 +328,7 @@ func (s *InGameState) Update(dt float64) error {
 		if s.wasWalking && !walking {
 			s.lastWalkEnded = time.Now()
 			trace.Emit(trace.Move, "walk-end")
+			s.continueToDestination()
 		}
 		s.wasWalking = walking
 
@@ -585,6 +593,9 @@ func (s *InGameState) StepToward(dirX, dirZ float32) error {
 		return nil
 	}
 
+	// Taking manual control abandons wherever the last click was headed.
+	s.hasDest = false
+
 	dir := entity.CalculateDirection(dirX, dirZ)
 	dx, dy := entity.CellDeltaForDirection(dir)
 	if dx == 0 && dy == 0 {
@@ -665,20 +676,81 @@ func (s *InGameState) ScreenToTile(screenX, screenY, viewportW, viewportH float3
 }
 
 // RequestMove sends a movement request to the server.
+// MaxWalkRequestCells is the furthest a single walk request may reach.
+//
+// rAthena's nominal ceiling is MAX_WALKPATH, 32 cells. The real one is lower:
+// path_search keeps known nodes in a fixed 1024-entry table indexed by
+// (x + 32*y) & 1023, and the FIXME above that array in path.cpp admits it is
+// "too small to ensure all paths shorter than MAX_WALKPATH can be found
+// without node collision". Searching much past ~17 cells explores more cells
+// than the table holds, collisions become certain and the search gives up —
+// and a refused walk is answered with no packet at all, so the client simply
+// appears to ignore the click.
+//
+// Measured against this server: requests up to 17 cells were acknowledged,
+// every one of 18 or more was dropped. We stay well under that, because the
+// limit is on path length and a route around an obstacle is longer than the
+// straight-line distance suggests. Longer walks are chained, one request at a
+// time, which is what the official client does.
+const MaxWalkRequestCells = 12
+
+// clampWalkRequest pulls a destination back along the line from the character
+// until it is close enough for the server to path to, preserving the direction
+// so the character still sets off towards where the player clicked.
+func clampWalkRequest(fromX, fromY, toX, toY int) (int, int) {
+	dx, dy := toX-fromX, toY-fromY
+
+	reach := abs(dx)
+	if abs(dy) > reach {
+		reach = abs(dy)
+	}
+	if reach <= MaxWalkRequestCells {
+		return toX, toY
+	}
+
+	scale := float64(MaxWalkRequestCells) / float64(reach)
+	return fromX + int(gomath.Round(float64(dx)*scale)),
+		fromY + int(gomath.Round(float64(dy)*scale))
+}
+
+func abs(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+// RequestMove asks the server to walk to a cell, remembering it as the
+// player's actual intent so a destination beyond one request's reach can be
+// walked in stages.
 func (s *InGameState) RequestMove(tileX, tileY int) error {
+	s.destCellX, s.destCellY = tileX, tileY
+	s.hasDest = true
+	s.chainCellX, s.chainCellY = -1, -1
+	return s.sendWalkRequest(tileX, tileY)
+}
+
+// sendWalkRequest sends one walk packet toward a cell, clamped to a distance
+// the server will actually path.
+func (s *InGameState) sendWalkRequest(tileX, tileY int) error {
+	fromX, fromY := 0, 0
+	if s.player != nil {
+		fromX, fromY = s.player.CurrentCell()
+	}
+
+	reqX, reqY := clampWalkRequest(fromX, fromY, tileX, tileY)
+
 	pkt := &packets.MoveRequest{
 		PacketID: packets.CZ_REQUEST_MOVE,
 	}
-	pkt.SetDestination(tileX, tileY)
+	pkt.SetDestination(reqX, reqY)
 
 	if trace.On(trace.Move) {
-		fromX, fromY := 0, 0
-		if s.player != nil {
-			fromX, fromY = s.player.CurrentCell()
-		}
 		trace.Emit(trace.Move, "request",
 			zap.Int("fromCellX", fromX), zap.Int("fromCellY", fromY),
-			zap.Int("toCellX", tileX), zap.Int("toCellY", tileY),
+			zap.Int("toCellX", reqX), zap.Int("toCellY", reqY),
+			zap.Int("wantCellX", tileX), zap.Int("wantCellY", tileY),
+			zap.Bool("clamped", reqX != tileX || reqY != tileY),
 			zap.String("packet", fmt.Sprintf("0x%04X", packets.CZ_REQUEST_MOVE)),
 			zap.String("bytes", fmt.Sprintf("% X", pkt.Encode())))
 	}
@@ -688,12 +760,49 @@ func (s *InGameState) RequestMove(tileX, tileY int) error {
 		return fmt.Errorf("send move request: %w", err)
 	}
 
-	// No local prediction: we start walking when ZC_NOTIFY_PLAYERMOVE comes
-	// back, so the route and its timing are the server's, not a guess we'd
-	// have to reconcile. The server also gets to refuse the move outright.
 	s.lastMoveTick = uint32(time.Now().UnixMilli() & 0xFFFFFFFF)
 	s.lastMoveSent = time.Now()
 	return nil
+}
+
+// continueToDestination is called when a walk finishes. If the player asked to
+// go further than one request could carry them, this sends the next leg.
+func (s *InGameState) continueToDestination() {
+	if !s.hasDest || s.player == nil {
+		return
+	}
+
+	cellX, cellY := s.player.CurrentCell()
+	if cellX == s.destCellX && cellY == s.destCellY {
+		s.hasDest = false
+		return
+	}
+
+	// If the last leg left us exactly where it started, the destination is one
+	// the server will not walk us to. Stop rather than asking forever.
+	if cellX == s.chainCellX && cellY == s.chainCellY {
+		trace.Emit(trace.Move, "chain-stalled",
+			zap.Int("cellX", cellX), zap.Int("cellY", cellY),
+			zap.Int("destX", s.destCellX), zap.Int("destY", s.destCellY))
+		s.hasDest = false
+		return
+	}
+
+	s.chainCellX, s.chainCellY = cellX, cellY
+	trace.Emit(trace.Move, "chain",
+		zap.Int("cellX", cellX), zap.Int("cellY", cellY),
+		zap.Int("destX", s.destCellX), zap.Int("destY", s.destCellY))
+
+	if err := s.sendWalkRequest(s.destCellX, s.destCellY); err != nil {
+		logger.Warn("chained walk request failed", zap.Error(err))
+		s.hasDest = false
+	}
+}
+
+// ClearDestination forgets the click-to-move destination, so a keyboard step
+// or a new click doesn't get overridden by the previous walk continuing.
+func (s *InGameState) ClearDestination() {
+	s.hasDest = false
 }
 
 // GetPlayer returns the player character.
