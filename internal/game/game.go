@@ -22,6 +22,7 @@ import (
 	"github.com/Faultbox/midgard-ro/internal/game/ui"
 	"github.com/Faultbox/midgard-ro/internal/logger"
 	"github.com/Faultbox/midgard-ro/internal/network"
+	"github.com/Faultbox/midgard-ro/internal/trace"
 )
 
 // koreanGlyphRanges defines the Unicode ranges for Korean text rendering.
@@ -554,10 +555,19 @@ func (g *Game) handleInGameInput(state *states.InGameState) {
 		camera.HandleZoom(scroll * 2)
 	}
 
-	// Get current mouse position
-	mousePos := imgui.MousePos()
-	mouseX := mousePos.X
-	mouseY := mousePos.Y
+	// Get current mouse position, in the same point space we render into.
+	//
+	// cimgui-go's SDL backend reports the cursor in *global screen* points,
+	// not relative to the window, so the window's screen position has to come
+	// off first — exactly the correction UI2DBackend.syncInputFromImGui makes
+	// for widget hit-testing. Click-to-move was missing it, so every ray was
+	// cast from a point offset by wherever the window happened to sit on the
+	// desktop; the further from the top-left corner, the further the character
+	// walked from where you clicked.
+	winPos := imgui.MainViewport().Pos()
+	rawMouse := imgui.MousePos()
+	mouseX := rawMouse.X - winPos.X
+	mouseY := rawMouse.Y - winPos.Y
 
 	// Right mouse button drag for camera rotation
 	if imgui.IsMouseDragging(imgui.MouseButtonRight) {
@@ -604,10 +614,19 @@ func (g *Game) handleInGameInput(state *states.InGameState) {
 	// and dispatch a server move request.
 	if imgui.IsMouseClickedBool(imgui.MouseButtonLeft) && !io.WantCaptureMouse() {
 		viewportW, viewportH := g.uiBackend.GetScreenSize()
+
+		trace.Emit(trace.Pick, "click",
+			zap.Float32("rawX", rawMouse.X), zap.Float32("rawY", rawMouse.Y),
+			zap.Float32("windowX", winPos.X), zap.Float32("windowY", winPos.Y),
+			zap.Float32("mouseX", mouseX), zap.Float32("mouseY", mouseY),
+			zap.Float32("viewportW", viewportW), zap.Float32("viewportH", viewportH))
+
 		if tileX, tileY, ok := state.ScreenToTile(mouseX, mouseY, viewportW, viewportH); ok {
 			if err := state.RequestMove(tileX, tileY); err != nil {
 				logger.Warn("click-to-move RequestMove failed", zap.Error(err))
 			}
+		} else {
+			trace.Emit(trace.Pick, "miss")
 		}
 	}
 }

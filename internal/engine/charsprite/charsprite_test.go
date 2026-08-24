@@ -121,7 +121,7 @@ func TestBuildSheetPadsFramesToUniformSize(t *testing.T) {
 		})
 	}
 
-	sheet := BuildSheet(bodySPR, act, nil, nil)
+	sheet := BuildSheet(bodySPR, act, nil, nil, HeadStraight)
 	if sheet == nil {
 		t.Fatal("BuildSheet returned nil")
 	}
@@ -151,22 +151,25 @@ func TestBuildSheetCoversAllDirections(t *testing.T) {
 		})
 	}
 
-	sheet := BuildSheet(bodySPR, act, nil, nil)
+	sheet := BuildSheet(bodySPR, act, nil, nil, HeadStraight)
 	if sheet == nil {
 		t.Fatal("BuildSheet returned nil")
 	}
 
-	for action := 0; action < LoadedActions; action++ {
-		for dir := 0; dir < Directions; dir++ {
-			if got := sheet.FrameCount(action, dir); got != 2 {
-				t.Errorf("action %d dir %d has %d frames, want 2", action, dir, got)
-			}
+	for dir := 0; dir < Directions; dir++ {
+		// Idle collapses to the single chosen head pose; walk keeps its
+		// animation frames.
+		if got := sheet.FrameCount(ActionIdle, dir); got != 1 {
+			t.Errorf("idle dir %d has %d frames, want 1 (one head pose, not an animation)", dir, got)
+		}
+		if got := sheet.FrameCount(ActionWalk, dir); got != 2 {
+			t.Errorf("walk dir %d has %d frames, want 2", dir, got)
 		}
 	}
 }
 
 func TestBuildSheetNilBody(t *testing.T) {
-	if got := BuildSheet(nil, nil, nil, nil); got != nil {
+	if got := BuildSheet(nil, nil, nil, nil, HeadStraight); got != nil {
 		t.Error("BuildSheet with no body should return nil")
 	}
 }

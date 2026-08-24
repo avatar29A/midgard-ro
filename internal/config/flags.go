@@ -10,11 +10,17 @@ var (
 	flagFullscreen = flag.Bool("fullscreen", false, "Run in fullscreen mode")
 	flagWidth      = flag.Int("width", 0, "Window width")
 	flagHeight     = flag.Int("height", 0, "Window height")
+	flagTrace      = flag.String("trace", "", "Comma-separated trace channels (move, pick, net, or all)")
 )
 
 // ParseFlags parses command-line flags. Call this early in main().
 func ParseFlags() {
 	flag.Parse()
+}
+
+// TraceSpec returns the --trace channel list, empty when tracing is off.
+func TraceSpec() string {
+	return *flagTrace
 }
 
 // ConfigPath returns the explicit config path if provided via --config flag.
