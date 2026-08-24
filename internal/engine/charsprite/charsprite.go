@@ -32,6 +32,12 @@ const (
 
 	// Directions is the number of facings every action provides.
 	Directions = 8
+
+	// HeadStraight is the head direction for looking dead ahead. RO gives a
+	// character three head poses — turned each way and straight — which the
+	// head sprite stores as its three "frames". The server can change this
+	// per entity; until that is wired up everyone looks straight ahead.
+	HeadStraight = 0
 )
 
 // Spec identifies which character sprites to load.
@@ -39,6 +45,10 @@ type Spec struct {
 	Job       int  // rAthena job/class id
 	Female    bool // sex M/F selects the sprite folder and filename suffix
 	HairStyle int  // head sprite number
+
+	// HeadDirection is which of the three head poses to bake (see
+	// HeadStraight). Zero value looks straight ahead.
+	HeadDirection int
 }
 
 // Sheet is a complete set of pre-composited frames for one character, keyed
@@ -104,7 +114,7 @@ func Load(load Loader, spec Spec) (*Assets, error) {
 		a.HeadPath = headSPRPath
 	}
 
-	a.Sheet = BuildSheet(a.BodySPR, a.BodyACT, a.HeadSPR, a.HeadACT)
+	a.Sheet = BuildSheet(a.BodySPR, a.BodyACT, a.HeadSPR, a.HeadACT, spec.HeadDirection)
 	if a.Sheet == nil {
 		return nil, fmt.Errorf("body sprite %q produced no frames", bodySPRPath)
 	}
@@ -117,9 +127,34 @@ func Load(load Loader, spec Spec) (*Assets, error) {
 // bottom, so the character's feet sit at the same place in every frame — the
 // billboard quad is foot-anchored, so that keeps them planted on the ground
 // as the animation plays.
-func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR, headACT *formats.ACT) *Sheet {
+//
+// headDir picks which of the three head poses to bake in (see HeadStraight).
+//
+// Standing still is a single frame, not three. RO's "idle" action stores one
+// entry per head direction rather than an animation — the body art is
+// identical across all three, only the head turns — so cycling them makes a
+// standing character swivel their head forever. Walking is a real 8-frame
+// animation, and its head stays on the chosen pose while the legs cycle.
+func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR, headACT *formats.ACT, headDir int) *Sheet {
 	if bodySPR == nil || bodyACT == nil || len(bodyACT.Actions) == 0 {
 		return nil
+	}
+	if headDir < 0 {
+		headDir = HeadStraight
+	}
+
+	// frameIndices returns the (bodyFrame, headFrame) pairs to bake for an
+	// action. Idle indexes the body by head direction too, because the body's
+	// neck anchor moves with the head pose.
+	frameIndices := func(action, available int) [][2]int {
+		if action == ActionIdle {
+			return [][2]int{{headDir, headDir}}
+		}
+		pairs := make([][2]int, 0, available)
+		for i := 0; i < available; i++ {
+			pairs = append(pairs, [2]int{i, headDir})
+		}
+		return pairs
 	}
 
 	// First pass: the largest frame decides the sheet size.
@@ -130,8 +165,8 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 			if idx >= len(bodyACT.Actions) {
 				continue
 			}
-			for frame := range bodyACT.Actions[idx].Frames {
-				r := sprite.CompositeSprites(bodySPR, bodyACT, headSPR, headACT, action, dir, frame)
+			for _, fp := range frameIndices(action, len(bodyACT.Actions[idx].Frames)) {
+				r := sprite.CompositeSprites(bodySPR, bodyACT, headSPR, headACT, action, dir, fp[0], fp[1])
 				if r.Width > maxW {
 					maxW = r.Width
 				}
@@ -158,20 +193,21 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 			if idx >= len(bodyACT.Actions) {
 				continue
 			}
-			count := len(bodyACT.Actions[idx].Frames)
-			if count == 0 {
+			available := len(bodyACT.Actions[idx].Frames)
+			if available == 0 {
 				continue
 			}
 
-			frames := make([]Frame, count)
-			for frame := 0; frame < count; frame++ {
-				r := sprite.CompositeSprites(bodySPR, bodyACT, headSPR, headACT, action, dir, frame)
+			pairs := frameIndices(action, available)
+			frames := make([]Frame, len(pairs))
+			for i, fp := range pairs {
+				r := sprite.CompositeSprites(bodySPR, bodyACT, headSPR, headACT, action, dir, fp[0], fp[1])
 				if r.Pixels == nil || r.Width == 0 || r.Height == 0 {
-					// Keep the slot so frame indices stay aligned with the ACT.
-					frames[frame] = Frame{Pixels: make([]byte, maxW*maxH*4)}
+					// Keep the slot so frame indices stay contiguous.
+					frames[i] = Frame{Pixels: make([]byte, maxW*maxH*4)}
 					continue
 				}
-				frames[frame] = Frame{Pixels: pad(r, maxW, maxH)}
+				frames[i] = Frame{Pixels: pad(r, maxW, maxH)}
 			}
 			sheet.Frames[idx] = frames
 		}

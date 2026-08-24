@@ -18,6 +18,7 @@ import (
 	"github.com/Faultbox/midgard-ro/internal/logger"
 	"github.com/Faultbox/midgard-ro/internal/network"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
+	"github.com/Faultbox/midgard-ro/internal/trace"
 	"github.com/Faultbox/midgard-ro/pkg/formats"
 	"github.com/Faultbox/midgard-ro/pkg/math"
 )
@@ -420,7 +421,23 @@ func (s *InGameState) sendKeepAlive() {
 func (s *InGameState) handlePlayerMove(data []byte) error {
 	mv := packets.DecodePlayerMove(data)
 	if mv == nil {
+		trace.Emit(trace.Move, "ack-undecodable",
+			zap.Int("bytes", len(data)),
+			zap.String("raw", fmt.Sprintf("% X", data)))
 		return fmt.Errorf("invalid ZC_NOTIFY_PLAYERMOVE: %d bytes", len(data))
+	}
+
+	if trace.On(trace.Move) {
+		curX, curY := 0, 0
+		if s.player != nil {
+			curX, curY = s.player.CurrentCell()
+		}
+		trace.Emit(trace.Move, "ack",
+			zap.Uint32("startTick", mv.StartTick),
+			zap.Int("startX", mv.StartX), zap.Int("startY", mv.StartY),
+			zap.Int("endX", mv.EndX), zap.Int("endY", mv.EndY),
+			zap.Int("weThinkCellX", curX), zap.Int("weThinkCellY", curY),
+			zap.String("raw", fmt.Sprintf("% X", data)))
 	}
 
 	if s.player == nil {
@@ -446,7 +463,35 @@ func (s *InGameState) handlePlayerMove(data []byte) error {
 		zap.Int("endY", mv.EndY),
 		zap.Int("cells", len(path)))
 
+	if trace.On(trace.Move) {
+		straight, diagonal := 0, 0
+		for i := 1; i < len(path); i++ {
+			if path[i][0] != path[i-1][0] && path[i][1] != path[i-1][1] {
+				diagonal++
+			} else {
+				straight++
+			}
+		}
+		expected := float32(straight)*s.player.WalkSpeedMs +
+			float32(diagonal)*s.player.WalkSpeedMs*entity.DiagonalCostFactor
+		trace.Emit(trace.Move, "path",
+			zap.Int("cells", len(path)),
+			zap.Int("straight", straight), zap.Int("diagonal", diagonal),
+			zap.Float32("expectedMs", expected),
+			zap.String("first", fmt.Sprintf("%v", path[0])),
+			zap.String("last", fmt.Sprintf("%v", path[len(path)-1])))
+	}
+
 	s.player.FollowPath(path)
+
+	if trace.On(trace.Move) {
+		trace.Emit(trace.Move, "walk-start",
+			zap.Int("facing", s.player.Direction),
+			zap.Float32("renderX", s.player.RenderX),
+			zap.Float32("renderZ", s.player.RenderZ),
+			zap.Float32("worldX", s.player.WorldX),
+			zap.Float32("worldZ", s.player.WorldZ))
+	}
 	return nil
 }
 
@@ -494,8 +539,18 @@ func (s *InGameState) StepToward(dirX, dirZ float32) error {
 
 	// Don't bother the server with a step into a wall.
 	if s.pathFinder != nil && !s.pathFinder.IsWalkable(targetX, targetY) {
+		trace.Emit(trace.Move, "step-blocked",
+			zap.Int("cellX", cellX), zap.Int("cellY", cellY),
+			zap.Int("targetX", targetX), zap.Int("targetY", targetY),
+			zap.Int("facing", dir))
 		return nil
 	}
+
+	trace.Emit(trace.Move, "step",
+		zap.Float32("inputX", dirX), zap.Float32("inputZ", dirZ),
+		zap.Int("facing", dir),
+		zap.Int("cellX", cellX), zap.Int("cellY", cellY),
+		zap.Int("targetX", targetX), zap.Int("targetY", targetY))
 
 	return s.RequestMove(targetX, targetY)
 }
@@ -508,6 +563,8 @@ func (s *InGameState) StepToward(dirX, dirZ float32) error {
 // away from the ground (e.g. clicking the sky).
 func (s *InGameState) ScreenToTile(screenX, screenY, viewportW, viewportH float32) (tileX, tileY int, ok bool) {
 	if s.scene == nil || viewportW <= 0 || viewportH <= 0 {
+		trace.Emit(trace.Pick, "reject", zap.Bool("hasScene", s.scene != nil),
+			zap.Float32("viewportW", viewportW), zap.Float32("viewportH", viewportH))
 		return 0, 0, false
 	}
 	invViewProj := s.scene.LastViewProj().Inverse()
@@ -517,10 +574,36 @@ func (s *InGameState) ScreenToTile(screenX, screenY, viewportW, viewportH float3
 		groundY = s.player.RenderY
 	}
 	worldX, worldZ, hit := ray.IntersectPlaneY(groundY)
+
+	if trace.On(trace.Pick) {
+		trace.Emit(trace.Pick, "ray",
+			zap.Float32("screenX", screenX), zap.Float32("screenY", screenY),
+			zap.Float32("viewportW", viewportW), zap.Float32("viewportH", viewportH),
+			zap.Float32("originX", ray.Origin[0]), zap.Float32("originY", ray.Origin[1]),
+			zap.Float32("originZ", ray.Origin[2]),
+			zap.Float32("dirX", ray.Direction[0]), zap.Float32("dirY", ray.Direction[1]),
+			zap.Float32("dirZ", ray.Direction[2]),
+			zap.Float32("groundY", groundY),
+			zap.Bool("hit", hit))
+	}
+
 	if !hit {
 		return 0, 0, false
 	}
 	cellX, cellY := entity.WorldToCell(worldX, worldZ)
+
+	if trace.On(trace.Pick) {
+		playerCellX, playerCellY := 0, 0
+		if s.player != nil {
+			playerCellX, playerCellY = s.player.CurrentCell()
+		}
+		walkable := s.pathFinder == nil || s.pathFinder.IsWalkable(cellX, cellY)
+		trace.Emit(trace.Pick, "hit",
+			zap.Float32("worldX", worldX), zap.Float32("worldZ", worldZ),
+			zap.Int("cellX", cellX), zap.Int("cellY", cellY),
+			zap.Int("playerCellX", playerCellX), zap.Int("playerCellY", playerCellY),
+			zap.Bool("walkable", walkable))
+	}
 	return cellX, cellY, true
 }
 
@@ -531,7 +614,20 @@ func (s *InGameState) RequestMove(tileX, tileY int) error {
 	}
 	pkt.SetDestination(tileX, tileY)
 
+	if trace.On(trace.Move) {
+		fromX, fromY := 0, 0
+		if s.player != nil {
+			fromX, fromY = s.player.CurrentCell()
+		}
+		trace.Emit(trace.Move, "request",
+			zap.Int("fromCellX", fromX), zap.Int("fromCellY", fromY),
+			zap.Int("toCellX", tileX), zap.Int("toCellY", tileY),
+			zap.String("packet", fmt.Sprintf("0x%04X", packets.CZ_REQUEST_MOVE)),
+			zap.String("bytes", fmt.Sprintf("% X", pkt.Encode())))
+	}
+
 	if err := s.client.Send(pkt.Encode()); err != nil {
+		trace.Emit(trace.Move, "request-failed", zap.Error(err))
 		return fmt.Errorf("send move request: %w", err)
 	}
 
