@@ -13,6 +13,7 @@ import (
 	"github.com/Faultbox/midgard-ro/internal/engine/playerrender"
 	"github.com/Faultbox/midgard-ro/internal/engine/scene"
 	"github.com/Faultbox/midgard-ro/internal/game/entity"
+	"github.com/Faultbox/midgard-ro/internal/game/world"
 	"github.com/Faultbox/midgard-ro/internal/logger"
 	"github.com/Faultbox/midgard-ro/internal/network"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
@@ -45,6 +46,10 @@ type InGameState struct {
 	// Entities
 	entityManager *entity.Manager
 	player        *entity.Character
+
+	// Walk pathing over the GAT, used to reproduce the route the server
+	// walks us along (it only tells us the endpoints).
+	pathFinder *world.PathFinder
 
 	// Map info
 	MapName string
@@ -113,11 +118,12 @@ func (s *InGameState) Enter() error {
 		s.SceneReady = true
 	}
 
-	// Create player character at spawn position
-	// Convert tile coords to world coords (RO uses 5 units per tile)
-	tileSize := float32(5.0)
-	worldX := float32(s.config.SpawnX) * tileSize
-	worldZ := float32(s.config.SpawnY) * tileSize
+	// Pathfinder over the map's walkability grid. The server tells us only
+	// where a walk starts and ends, so we re-derive the cells in between.
+	s.pathFinder = world.NewPathFinder(s.gat)
+
+	// Create player character at the spawn cell's center.
+	worldX, worldZ := entity.CellToWorld(s.config.SpawnX, s.config.SpawnY)
 
 	// Get terrain height at spawn position
 	var worldY float32
@@ -127,6 +133,21 @@ func (s *InGameState) Enter() error {
 
 	s.player = entity.NewCharacter(worldX, worldY, worldZ)
 	s.player.Direction = int(s.config.SpawnDir)
+
+	// Walk timing comes from the character's `speed` stat (ms per cell).
+	s.player.WalkSpeedMs = s.manager.Session.WalkSpeedMs()
+
+	// Let the character follow the ground as it walks.
+	if s.scene != nil && s.MapLoaded {
+		scn := s.scene
+		s.player.TerrainHeight = func(x, z float32) float32 {
+			return scn.GetTerrainHeight(x, z)
+		}
+	}
+
+	logger.Info("player walk speed",
+		zap.Float32("msPerCell", s.player.WalkSpeedMs),
+		zap.Bool("hasPathfinder", s.pathFinder != nil))
 
 	logger.Debug("created player character",
 		zap.Float32("worldX", worldX),
@@ -259,17 +280,17 @@ func (s *InGameState) Update(dt float64) error {
 		if s.moveInputX != 0 || s.moveInputZ != 0 {
 			s.player.UpdateWithVelocity(s.moveInputX, s.moveInputZ, deltaMs)
 		} else {
-			// Handle click-to-move
+			// Walks the active server path, or falls through to free
+			// movement when there isn't one.
 			s.player.Update(deltaMs)
 		}
 
-		// Update render interpolation
+		// Free movement needs a render catch-up pass; path walking already
+		// interpolates on server timing and ignores this.
 		s.player.UpdateRenderPosition(deltaMs)
 
-		// Update tile position
-		tileSize := float32(5.0)
-		s.TileX = int(s.player.WorldX / tileSize)
-		s.TileY = int(s.player.WorldZ / tileSize)
+		// Update cell position
+		s.TileX, s.TileY = s.player.CurrentCell()
 	}
 
 	// Update all entities
@@ -358,14 +379,31 @@ func (s *InGameState) sendKeepAlive() {
 	}
 }
 
-// handlePlayerMove processes ZC_NOTIFY_PLAYERMOVE — server confirms our
-// own walk request. We trust the server-reported start/end tiles and
-// re-target our local destination so the rendered position converges
-// on the authoritative path.
+// handlePlayerMove processes ZC_NOTIFY_PLAYERMOVE — the server confirming
+// our own walk request. It sends only the start and end cells, because both
+// sides are expected to derive the same route with the same rules: A* over
+// the GAT, diagonals allowed only when both adjacent cells are open. We do
+// exactly that and then walk it on the server's clock (`speed` ms per cell),
+// so our position stays in step with the server's instead of beelining.
 func (s *InGameState) handlePlayerMove(data []byte) error {
 	mv := packets.DecodePlayerMove(data)
 	if mv == nil {
 		return fmt.Errorf("invalid ZC_NOTIFY_PLAYERMOVE: %d bytes", len(data))
+	}
+
+	if s.player == nil {
+		return nil
+	}
+
+	path := s.pathFinder.FindPath(mv.StartX, mv.StartY, mv.EndX, mv.EndY)
+	if len(path) < 2 {
+		// No GAT, or our walkability disagrees with the server's. Walk the
+		// straight cell line instead — the route may clip a corner, but the
+		// timing and endpoint still match what the server expects.
+		logger.Debug("no A* path for server walk, using straight line",
+			zap.Int("startX", mv.StartX), zap.Int("startY", mv.StartY),
+			zap.Int("endX", mv.EndX), zap.Int("endY", mv.EndY))
+		path = entity.CellLine(mv.StartX, mv.StartY, mv.EndX, mv.EndY)
 	}
 
 	logger.Debug("player walk-OK",
@@ -373,13 +411,10 @@ func (s *InGameState) handlePlayerMove(data []byte) error {
 		zap.Int("startX", mv.StartX),
 		zap.Int("startY", mv.StartY),
 		zap.Int("endX", mv.EndX),
-		zap.Int("endY", mv.EndY))
+		zap.Int("endY", mv.EndY),
+		zap.Int("cells", len(path)))
 
-	if s.player == nil {
-		return nil
-	}
-	tileSize := float32(5.0)
-	s.player.SetDestination(float32(mv.EndX)*tileSize, float32(mv.EndY)*tileSize)
+	s.player.FollowPath(path)
 	return nil
 }
 
@@ -418,12 +453,16 @@ func (s *InGameState) ScreenToTile(screenX, screenY, viewportW, viewportH float3
 	}
 	invViewProj := s.scene.LastViewProj().Inverse()
 	ray := picking.ScreenToRay(screenX, screenY, viewportW, viewportH, invViewProj)
-	worldX, worldZ, hit := ray.IntersectPlaneY(0)
+	groundY := float32(0)
+	if s.player != nil {
+		groundY = s.player.RenderY
+	}
+	worldX, worldZ, hit := ray.IntersectPlaneY(groundY)
 	if !hit {
 		return 0, 0, false
 	}
-	const tileSize = float32(5.0)
-	return int(worldX / tileSize), int(worldZ / tileSize), true
+	cellX, cellY := entity.WorldToCell(worldX, worldZ)
+	return cellX, cellY, true
 }
 
 // RequestMove sends a movement request to the server.
@@ -437,12 +476,9 @@ func (s *InGameState) RequestMove(tileX, tileY int) error {
 		return fmt.Errorf("send move request: %w", err)
 	}
 
-	// Also set local destination for immediate visual feedback
-	if s.player != nil {
-		tileSize := float32(5.0)
-		s.player.SetDestination(float32(tileX)*tileSize, float32(tileY)*tileSize)
-	}
-
+	// No local prediction: we start walking when ZC_NOTIFY_PLAYERMOVE comes
+	// back, so the route and its timing are the server's, not a guess we'd
+	// have to reconcile. The server also gets to refuse the move outright.
 	s.lastMoveTick = uint32(time.Now().UnixMilli() & 0xFFFFFFFF)
 	return nil
 }
