@@ -52,7 +52,24 @@ func (b *UI2DBackend) Begin() {
 	b.syncInputFromImGui()
 	b.syncViewportSize()
 	b.fixHiDPIViewport()
+	b.syncPixelDensity()
 	b.ctx.Begin()
+}
+
+// syncPixelDensity keeps the glyph atlas rasterized for the display we're
+// actually on. We lay out in points and stretch across the full retina
+// framebuffer (see fixHiDPIViewport), so without this the 14pt atlas gets
+// magnified 2x and every label renders soft.
+func (b *UI2DBackend) syncPixelDensity() {
+	scale := imgui.CurrentIO().DisplayFramebufferScale()
+	density := scale.Y
+	if scale.X > density {
+		density = scale.X
+	}
+	if density <= 0 {
+		density = 1
+	}
+	b.ctx.SetPixelDensity(density)
 }
 
 // fixHiDPIViewport overrides the glViewport that cimgui-go's SDL backend set
