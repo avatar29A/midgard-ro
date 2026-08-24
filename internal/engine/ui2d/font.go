@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"image"
 	"image/draw"
+	gomath "math"
 	"os"
 	"unsafe"
 
@@ -54,16 +55,23 @@ type Font struct {
 
 	// Shelf-pack cursor — where the next runtime glyph will land.
 	curX, curY, rowH int
+
+	// density is the framebuffer pixels per layout point the atlas was
+	// rasterized for. Glyph metrics below are all in *pixels*; dividing by
+	// density converts them back to the point space callers lay out in.
+	density float32
 }
 
 const (
-	// fontSize: chosen so text rendered at scale=1.0 visually matches the
-	// old 8x8 bitmap font at scale=2.0 (~16px visual). Tuned by eye.
-	fontSize = 14.0
-	fontDPI  = 96.0
-	atlasW   = 1024
-	atlasH   = 1024
-	glyphPad = 1
+	// fontSize is the text size in layout points. It is multiplied by the
+	// display's pixel density before rasterizing, so a 14pt glyph on a 2x
+	// retina panel is rasterized at 28px and drawn back down to 14pt — one
+	// texel per physical pixel instead of a 2x magnification blur.
+	fontSize  = 14.0
+	fontDPI   = 96.0
+	atlasBase = 1024
+	maxAtlas  = 4096
+	glyphPad  = 1
 )
 
 // glyphRanges is the inclusive Unicode ranges we pre-rasterize at startup.
@@ -87,9 +95,15 @@ var systemFontPaths = []string{
 	"/usr/share/fonts/TTF/DejaVuSans.ttf",
 }
 
-// NewFont loads a system TTF and builds the glyph atlas. Returns nil if
-// no usable font is found; callers should treat that as "no text".
-func NewFont() *Font {
+// NewFont loads a system TTF and builds the glyph atlas for the given pixel
+// density (framebuffer pixels per layout point — 2.0 on a retina display).
+// Returns nil if no usable font is found; callers should treat that as
+// "no text".
+func NewFont(density float32) *Font {
+	if density <= 0 {
+		density = 1
+	}
+
 	data, err := loadSystemFont()
 	if err != nil {
 		return nil
@@ -101,13 +115,20 @@ func NewFont() *Font {
 	}
 
 	face, err := opentype.NewFace(parsed, &opentype.FaceOptions{
-		Size:    fontSize,
+		Size:    fontSize * float64(density),
 		DPI:     fontDPI,
 		Hinting: font.HintingFull,
 	})
 	if err != nil {
 		return nil
 	}
+
+	// Bigger glyphs need a bigger atlas to pack into.
+	atlas := atlasBase * int(gomath.Ceil(float64(density)))
+	if atlas > maxAtlas {
+		atlas = maxAtlas
+	}
+	atlasW, atlasH := atlas, atlas
 
 	metrics := face.Metrics()
 	f := &Font{
@@ -118,6 +139,7 @@ func NewFont() *Font {
 		lineHeight: float32(metrics.Height.Ceil()),
 		face:       face,
 		atlas:      image.NewAlpha(image.Rect(0, 0, atlasW, atlasH)),
+		density:    density,
 	}
 
 	// Allocate the GL texture up front; we'll fill it via TexSubImage2D as
@@ -176,12 +198,12 @@ func (f *Font) rasterize(r rune) *Glyph {
 	}
 
 	// Shelf-pack: wrap to next row when current row is full.
-	if f.curX+gw+glyphPad > atlasW {
+	if f.curX+gw+glyphPad > f.texWidth {
 		f.curX = 0
 		f.curY += f.rowH + glyphPad
 		f.rowH = 0
 	}
-	if f.curY+gh+glyphPad > atlasH {
+	if f.curY+gh+glyphPad > f.texHeight {
 		// Atlas is full — return whatever fallback we have.
 		f.glyphs[r] = f.fallback
 		return f.fallback
@@ -201,10 +223,10 @@ func (f *Font) rasterize(r rune) *Glyph {
 		gl.RGBA, gl.UNSIGNED_BYTE, unsafe.Pointer(&rgba[0]))
 	gl.BindTexture(gl.TEXTURE_2D, 0)
 
-	g.U0 = float32(x) / float32(atlasW)
-	g.V0 = float32(y) / float32(atlasH)
-	g.U1 = float32(x+gw) / float32(atlasW)
-	g.V1 = float32(y+gh) / float32(atlasH)
+	g.U0 = float32(x) / float32(f.texWidth)
+	g.V0 = float32(y) / float32(f.texHeight)
+	g.U1 = float32(x+gw) / float32(f.texWidth)
+	g.V1 = float32(y+gh) / float32(f.texHeight)
 
 	f.curX += gw + glyphPad
 	if gh > f.rowH {
@@ -251,10 +273,14 @@ func (f *Font) Close() {
 func (f *Font) TextureID() uint32 { return f.textureID }
 
 // Ascent returns the baseline-to-top distance in pixels at scale=1.
-func (f *Font) Ascent() float32 { return f.ascent }
+func (f *Font) Ascent() float32 { return f.ascent / f.density }
 
 // LineHeight returns the line advance in pixels at scale=1.
-func (f *Font) LineHeight() float32 { return f.lineHeight }
+func (f *Font) LineHeight() float32 { return f.lineHeight / f.density }
+
+// Density returns the pixel density this atlas was rasterized for. Glyph
+// metrics are in pixels; divide by this to get layout points.
+func (f *Font) Density() float32 { return f.density }
 
 // Glyph returns the metrics for the given rune, lazily rasterizing it
 // into the atlas if it isn't already cached. Returns the fallback glyph
@@ -293,13 +319,13 @@ func (f *Font) MeasureText(text string, scale float32) (float32, float32) {
 			continue
 		}
 		if g := f.Glyph(ch); g != nil {
-			lineW += g.Advance * scale
+			lineW += g.Advance * scale / f.density
 		}
 	}
 	if lineW > maxLineW {
 		maxLineW = lineW
 	}
-	return maxLineW, float32(lines) * f.lineHeight * scale
+	return maxLineW, float32(lines) * f.LineHeight() * scale
 }
 
 // loadSystemFont returns the bytes of the first system TTF that exists.
