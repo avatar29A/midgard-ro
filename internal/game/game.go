@@ -75,6 +75,15 @@ type Game struct {
 	// Debug overlay toggle (F3). Default off so the HUD isn't cluttered;
 	// turn on to inspect player/camera/scene/network telemetry live.
 	showDebug bool
+
+	// Per-phase frame cost, accumulated for the render trace.
+	costTimer   time.Time
+	costSamples int
+	costUpdate  float64
+	costScene   float64
+	costUI      float64
+	costTotal   float64
+	costWorst   float64
 }
 
 // New creates a new game instance with ImGui windowing (backward compatible).
@@ -323,23 +332,91 @@ func (g *Game) frame() {
 	}
 
 	// Update state machine
+	updateStart := time.Now()
 	if err := g.stateManager.Update(g.dt); err != nil {
 		logger.Error("state update error", zap.Error(err))
 	}
+	updateMs := msSince(updateStart)
 
 	// Render 3D scene (if applicable)
+	sceneStart := time.Now()
 	if err := g.stateManager.Render(); err != nil {
 		logger.Error("state render error", zap.Error(err))
 	}
+	sceneMs := msSince(sceneStart)
 
 	// Render UI based on current state
+	uiStart := time.Now()
 	g.renderUI()
+	uiMs := msSince(uiStart)
+
+	g.recordFrameCost(updateMs, sceneMs, uiMs)
 
 	// Capture screenshot AFTER rendering (from back buffer before swap)
 	if g.screenshotRequested {
 		g.screenshotRequested = false
 		g.captureScreenshot()
 	}
+}
+
+// msSince returns elapsed milliseconds as a float.
+func msSince(t time.Time) float64 {
+	return float64(time.Since(t).Microseconds()) / 1000
+}
+
+// recordFrameCost accumulates per-phase timings and reports them once a
+// second on the render trace channel.
+//
+// The phases are measured separately because they fail differently: a slow
+// scene means draw calls or fill rate, a slow UI means our 2D batching, and a
+// frame that is slow while every phase is fast means we are blocked in the
+// buffer swap waiting on vsync — which caps at exact divisors of the refresh
+// rate, so being a hair over budget drops you straight from 60 to 30.
+func (g *Game) recordFrameCost(updateMs, sceneMs, uiMs float64) {
+	if !trace.On(trace.Render) {
+		return
+	}
+
+	g.costSamples++
+	g.costUpdate += updateMs
+	g.costScene += sceneMs
+	g.costUI += uiMs
+	total := updateMs + sceneMs + uiMs
+	g.costTotal += total
+	if total > g.costWorst {
+		g.costWorst = total
+	}
+
+	if time.Since(g.costTimer) < time.Second {
+		return
+	}
+
+	n := float64(g.costSamples)
+	if n > 0 {
+		trace.Emit(trace.Render, "frame",
+			zap.Float64("fps", g.fps),
+			zap.Float64("avgWorkMs", g.costTotal/n),
+			zap.Float64("worstWorkMs", g.costWorst),
+			zap.Float64("updateMs", g.costUpdate/n),
+			zap.Float64("sceneMs", g.costScene/n),
+			zap.Float64("uiMs", g.costUI/n),
+			// Whatever is left of the frame budget is spent blocked in the
+			// swap. A large value here with small phase times means vsync.
+			zap.Float64("blockedMs", frameBudgetMs(g.fps)-g.costTotal/n))
+	}
+
+	g.costSamples = 0
+	g.costUpdate, g.costScene, g.costUI, g.costTotal, g.costWorst = 0, 0, 0, 0, 0
+	g.costTimer = time.Now()
+}
+
+// frameBudgetMs is how long each frame actually took, derived from the
+// measured frame rate.
+func frameBudgetMs(fps float64) float64 {
+	if fps <= 0 {
+		return 0
+	}
+	return 1000 / fps
 }
 
 // renderUI renders the appropriate UI for the current state.

@@ -31,6 +31,9 @@ const (
 	Pick = "pick"
 	// Net covers packet-level send/receive framing.
 	Net = "net"
+	// Render covers per-frame timing: how long update, scene and UI each take,
+	// and how much of the frame is spent blocked in the buffer swap.
+	Render = "render"
 )
 
 // All is the channel spec that turns everything on.
