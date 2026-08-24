@@ -46,6 +46,14 @@ type Client struct {
 	mu       sync.Mutex
 	handlers map[uint16]PacketHandler
 
+	// Inbound bytes, filled by a reader goroutine and drained by Process on
+	// the game thread. Only the raw bytes cross the boundary: framing and
+	// handler dispatch stay on the game thread, so handlers keep their
+	// single-threaded guarantees.
+	rx     chan []byte
+	rxErr  chan error
+	rxStop chan struct{}
+
 	// Connection state
 	connected  bool
 	serverType ServerType
@@ -149,8 +157,50 @@ func (c *Client) Connect(host string, port int, serverType ServerType) error {
 	c.readOffset = 0                      // Reset read buffer
 	c.charServerAccountIDReceived = false // Reset for new connection
 
+	// Hand the socket to a reader goroutine. Reading on the game thread means
+	// choosing between blocking it and polling it, and both cost frame time
+	// for nothing: a blocking read parks the loop whenever the server is idle,
+	// while a poll adds up to a frame of latency to every packet. Off-thread,
+	// the read blocks as long as it likes and Process just drains what arrived.
+	c.rx = make(chan []byte, 64)
+	c.rxErr = make(chan error, 1)
+	c.rxStop = make(chan struct{})
+	go readLoop(conn, c.rx, c.rxErr, c.rxStop)
+
 	logger.Info("connected to server", zap.String("addr", addr))
 	return nil
+}
+
+// readLoop pulls bytes off the socket until it is closed or asked to stop.
+//
+// It takes its channels as arguments rather than reading them off the Client
+// so that a reconnect cannot leave an old goroutine writing into the new
+// connection's buffers.
+func readLoop(conn net.Conn, rx chan<- []byte, errc chan<- error, stop <-chan struct{}) {
+	buf := make([]byte, readBufferSize)
+
+	for {
+		n, err := conn.Read(buf)
+
+		if n > 0 {
+			chunk := make([]byte, n)
+			copy(chunk, buf[:n])
+			select {
+			case rx <- chunk:
+			case <-stop:
+				return
+			}
+		}
+
+		if err != nil {
+			select {
+			case errc <- err:
+			case <-stop:
+			default: // an error is already queued; the first one is the useful one
+			}
+			return
+		}
+	}
 }
 
 // Disconnect closes the connection.
@@ -158,10 +208,18 @@ func (c *Client) Disconnect() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// Signal first, then close: the reader is parked in Read, and closing the
+	// socket is what wakes it up.
+	if c.rxStop != nil {
+		close(c.rxStop)
+		c.rxStop = nil
+	}
 	if c.conn != nil {
 		c.conn.Close()
 		c.conn = nil
 	}
+	c.rx = nil
+	c.rxErr = nil
 	c.connected = false
 }
 
@@ -219,54 +277,52 @@ func (c *Client) Process() (err error) {
 	}()
 
 	c.mu.Lock()
-	if !c.connected || c.conn == nil {
+	if !c.connected {
 		c.mu.Unlock()
 		return nil
 	}
-	conn := c.conn
+	rx, rxErr := c.rx, c.rxErr
 	c.mu.Unlock()
 
-	// Poll the socket with a deadline just far enough out to collect whatever
-	// has already arrived.
-	//
-	// This was 10ms, under a comment calling it non-blocking. It is not: it is
-	// a blocking read with a 10ms timeout, and since the server is idle on most
-	// frames the game loop sat in it for the full 10ms every frame — more per
-	// frame than drawing the map's 1304 models, and enough to push the frame
-	// past its 16.7ms budget. Vsync does not degrade gracefully, so that alone
-	// was the difference between 60fps and 30.
-	//
-	// It cannot go to zero either. Go checks the deadline before attempting the
-	// syscall, so an already-expired deadline returns ErrDeadlineExceeded
-	// without reading — buffered data included. Setting it to time.Now() does
-	// not poll the socket, it disables reading entirely, which is silent
-	// because the connection stays up and only the replies go missing.
-	//
-	// A millisecond is enough to pick up anything buffered while costing about
-	// a sixteenth of the frame budget in the worst case. Taking the read off
-	// the frame budget altogether needs a reader goroutine.
-	_ = conn.SetReadDeadline(time.Now().Add(time.Millisecond))
+	if rx == nil {
+		return nil
+	}
 
-	// Read available data
-	n, err := conn.Read(c.readBuf[c.readOffset:])
-	if err != nil {
-		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-			// No data available, that's fine
-			return nil
-		}
-		if err == io.EOF {
+	// Drain whatever the reader has queued. This never blocks: if nothing has
+	// arrived we fall straight through to framing what is already buffered.
+	for draining := true; draining; {
+		select {
+		case chunk := <-rx:
+			if len(chunk) > len(c.readBuf)-c.readOffset {
+				// The buffer holds a whole packet many times over, so this
+				// means framing has stopped consuming and the connection is
+				// unrecoverable. Say so rather than silently truncating.
+				c.mu.Lock()
+				c.connected = false
+				c.mu.Unlock()
+				return fmt.Errorf("read buffer full: %d buffered, %d more arrived",
+					c.readOffset, len(chunk))
+			}
+			copy(c.readBuf[c.readOffset:], chunk)
+			c.readOffset += len(chunk)
+
+			logger.Debug("received raw data", zap.Int("bytes", len(chunk)))
+
+		case err := <-rxErr:
+			// Frame whatever arrived before the error before reporting it —
+			// the last packets are often the ones explaining the disconnect.
 			c.mu.Lock()
 			c.connected = false
 			c.mu.Unlock()
-			return fmt.Errorf("connection closed by server")
-		}
-		return fmt.Errorf("read error: %w", err)
-	}
+			if err == io.EOF {
+				return fmt.Errorf("connection closed by server")
+			}
+			return fmt.Errorf("read error: %w", err)
 
-	if n > 0 {
-		logger.Debug("received raw data", zap.Int("bytes", n), zap.String("hex", fmt.Sprintf("%X", c.readBuf[c.readOffset:c.readOffset+min(n, 32)])))
+		default:
+			draining = false
+		}
 	}
-	c.readOffset += n
 
 	// Process complete packets
 	for c.readOffset >= 2 {
