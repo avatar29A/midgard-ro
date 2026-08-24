@@ -9,6 +9,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/Faultbox/midgard-ro/internal/engine/camera"
+	"github.com/Faultbox/midgard-ro/internal/engine/charsprite"
 	"github.com/Faultbox/midgard-ro/internal/engine/picking"
 	"github.com/Faultbox/midgard-ro/internal/engine/playerrender"
 	"github.com/Faultbox/midgard-ro/internal/engine/scene"
@@ -166,12 +167,14 @@ func (s *InGameState) Enter() error {
 	s.camera.Distance = 145 // RO-style close distance (like grfbrowser PlayMode)
 	s.camera.Yaw = 0
 
-	// Build the player billboard renderer (procedural texture for now —
-	// real Novice SPR/ACT composites land in a follow-up PR).
+	// Build the player billboard renderer and load the character's sprites.
+	// A sprite failure is not fatal: the renderer keeps drawing its
+	// procedural marker so the player can still see where they are.
 	if pr, prErr := playerrender.New(); prErr != nil {
 		logger.Warn("failed to create player renderer", zap.Error(prErr))
 	} else {
 		s.playerRender = pr
+		s.loadPlayerSprites()
 	}
 
 	s.StatusMsg = fmt.Sprintf("Entered %s", s.MapName)
@@ -185,6 +188,30 @@ func (s *InGameState) Enter() error {
 	s.registerPacketHandlers()
 
 	return nil
+}
+
+// loadPlayerSprites loads the SPR/ACT art for the character we're playing and
+// bakes it into the billboard renderer.
+func (s *InGameState) loadPlayerSprites() {
+	if s.manager.TexLoader == nil {
+		logger.Warn("no asset loader; player will render as a placeholder")
+		return
+	}
+
+	spec := s.manager.Session.SpriteSpec()
+	if err := s.playerRender.LoadCharacter(charsprite.Loader(s.manager.TexLoader), spec); err != nil {
+		logger.Warn("failed to load character sprites, using placeholder",
+			zap.Int("job", spec.Job),
+			zap.Bool("female", spec.Female),
+			zap.Int("hairStyle", spec.HairStyle),
+			zap.Error(err))
+		return
+	}
+
+	logger.Info("character sprites loaded",
+		zap.String("sprite", s.playerRender.SpritePath()),
+		zap.Int("idleFrames", s.playerRender.FrameCount(entity.ActionIdle, entity.DirS)),
+		zap.Int("walkFrames", s.playerRender.FrameCount(entity.ActionWalk, entity.DirS)))
 }
 
 // loadMap loads the map data from GRF archives.
@@ -288,6 +315,18 @@ func (s *InGameState) Update(dt float64) error {
 		// Free movement needs a render catch-up pass; path walking already
 		// interpolates on server timing and ignores this.
 		s.player.UpdateRenderPosition(deltaMs)
+
+		// Advance the sprite animation. Frame counts come from the loaded
+		// sheet; with no sprites this parks on frame 0 harmlessly.
+		frames := 0
+		if s.playerRender != nil {
+			action := entity.ActionIdle
+			if s.player.IsMoving {
+				action = entity.ActionWalk
+			}
+			frames = s.playerRender.FrameCount(action, s.player.Direction)
+		}
+		s.player.AdvanceAnimation(deltaMs, frames)
 
 		// Update cell position
 		s.TileX, s.TileY = s.player.CurrentCell()

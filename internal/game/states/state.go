@@ -2,6 +2,7 @@
 package states
 
 import (
+	"github.com/Faultbox/midgard-ro/internal/engine/charsprite"
 	"github.com/Faultbox/midgard-ro/internal/game/entity"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
 )
@@ -46,6 +47,22 @@ func (s *Session) WalkSpeedMs() float32 {
 		return entity.DefaultWalkSpeedMs
 	}
 	return speed
+}
+
+// SpriteSpec returns which character sprites to load for this session,
+// defaulting to a male Novice when we have no character data yet.
+//
+// Sex comes from CharInfo.Sex, where rAthena sends 0 for female and 1 for
+// male; anything else is treated as male.
+func (s *Session) SpriteSpec() charsprite.Spec {
+	if s == nil || s.Char == nil {
+		return charsprite.Spec{Job: charsprite.FallbackJob, HairStyle: 1}
+	}
+	return charsprite.Spec{
+		Job:       int(s.Char.Class),
+		Female:    s.Char.Sex == 0,
+		HairStyle: int(s.Char.HairStyle),
+	}
 }
 
 // Manager manages game state transitions.
