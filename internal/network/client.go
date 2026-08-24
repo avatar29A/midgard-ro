@@ -13,7 +13,20 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/Faultbox/midgard-ro/internal/logger"
+	"github.com/Faultbox/midgard-ro/internal/network/packets"
+	"github.com/Faultbox/midgard-ro/internal/trace"
 )
+
+// Net is the trace channel for packet framing. Aliased here so callers don't
+// need to import the trace package just to name it.
+const Net = trace.Net
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
 
 // ServerType represents the type of server.
 type ServerType int
@@ -213,8 +226,26 @@ func (c *Client) Process() (err error) {
 	conn := c.conn
 	c.mu.Unlock()
 
-	// Set short read deadline for non-blocking behavior
-	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Millisecond))
+	// Poll the socket with a deadline just far enough out to collect whatever
+	// has already arrived.
+	//
+	// This was 10ms, under a comment calling it non-blocking. It is not: it is
+	// a blocking read with a 10ms timeout, and since the server is idle on most
+	// frames the game loop sat in it for the full 10ms every frame — more per
+	// frame than drawing the map's 1304 models, and enough to push the frame
+	// past its 16.7ms budget. Vsync does not degrade gracefully, so that alone
+	// was the difference between 60fps and 30.
+	//
+	// It cannot go to zero either. Go checks the deadline before attempting the
+	// syscall, so an already-expired deadline returns ErrDeadlineExceeded
+	// without reading — buffered data included. Setting it to time.Now() does
+	// not poll the socket, it disables reading entirely, which is silent
+	// because the connection stays up and only the replies go missing.
+	//
+	// A millisecond is enough to pick up anything buffered while costing about
+	// a sixteenth of the frame budget in the worst case. Taking the read off
+	// the frame budget altogether needs a reader goroutine.
+	_ = conn.SetReadDeadline(time.Now().Add(time.Millisecond))
 
 	// Read available data
 	n, err := conn.Read(c.readBuf[c.readOffset:])
@@ -258,19 +289,36 @@ func (c *Client) Process() (err error) {
 		packetID := binary.LittleEndian.Uint16(c.readBuf[0:2])
 
 		// Determine packet length
-		packetLen := c.getPacketLength(packetID, c.readBuf[:c.readOffset])
+		packetLen, known := c.packetLength(packetID, c.readBuf[:c.readOffset])
 		logger.Debug("parsing packet", zap.String("id", fmt.Sprintf("0x%04X", packetID)), zap.Int("len", packetLen), zap.Int("available", c.readOffset))
-		if packetLen == 0 {
-			// Unknown packet - if we have less than 32 bytes of unknown data,
-			// it's likely garbage from a previous packet, so flush it
-			if c.readOffset < 32 {
-				logger.Debug("flushing unknown packet data", zap.Int("bytes", c.readOffset))
+
+		if known && packetLen == 0 {
+			// Variable-length packet whose header hasn't arrived yet.
+			break
+		}
+
+		if !known {
+			// An id we have no length for. We cannot know where the next
+			// packet starts, so scan forward for a boundary that looks real
+			// rather than guessing this one's size.
+			skip := resyncOffset(c.readBuf[:c.readOffset])
+
+			logger.Warn("unknown packet id, resynchronising",
+				zap.String("id", fmt.Sprintf("0x%04X", packetID)),
+				zap.Int("skipped", skip),
+				zap.Int("buffered", c.readOffset))
+			trace.Emit(Net, "unknown-packet",
+				zap.String("id", fmt.Sprintf("0x%04X", packetID)),
+				zap.Int("buffered", c.readOffset),
+				zap.Int("skipped", skip),
+				zap.String("head", fmt.Sprintf("% X", c.readBuf[:minInt(c.readOffset, 24)])))
+
+			if skip >= c.readOffset {
 				c.readOffset = 0
 				break
 			}
-			// Otherwise, skip 2 bytes and try again
-			copy(c.readBuf, c.readBuf[2:c.readOffset])
-			c.readOffset -= 2
+			copy(c.readBuf, c.readBuf[skip:c.readOffset])
+			c.readOffset -= skip
 			continue
 		}
 
@@ -296,6 +344,11 @@ func (c *Client) Process() (err error) {
 		c.packetsRecvd++
 		c.bytesRecvd += uint64(packetLen)
 		c.mu.Unlock()
+		trace.Emit(Net, "recv",
+			zap.String("id", fmt.Sprintf("0x%04X", packetID)),
+			zap.Int("len", packetLen),
+			zap.Int("remaining", c.readOffset))
+
 		if handler, ok := c.handlers[packetID]; ok {
 			if err := handler(packetData); err != nil {
 				logger.Error("packet handler error", zap.String("id", fmt.Sprintf("0x%04X", packetID)), zap.Error(err))
@@ -303,87 +356,61 @@ func (c *Client) Process() (err error) {
 			}
 		} else {
 			logger.Debug("no handler for packet", zap.String("id", fmt.Sprintf("0x%04X", packetID)))
+			trace.Emit(Net, "unhandled", zap.String("id", fmt.Sprintf("0x%04X", packetID)))
 		}
 	}
 
 	return nil
 }
 
-// getPacketLength returns the length of a packet based on its ID.
-// Returns 0 for unknown packets.
-func (c *Client) getPacketLength(packetID uint16, data []byte) int {
-	// Variable-length packets have length in bytes 2-4
-	switch packetID {
-	// Login server packets
-	case 0x0069: // AC_ACCEPT_LOGIN (variable, old)
-		if len(data) >= 4 {
-			return int(binary.LittleEndian.Uint16(data[2:4]))
-		}
-		return 0
-	case 0x0AC4: // AC_ACCEPT_LOGIN2 (variable, modern rAthena)
-		if len(data) >= 4 {
-			return int(binary.LittleEndian.Uint16(data[2:4]))
-		}
-		return 0
-	case 0x006A: // AC_REFUSE_LOGIN (old)
-		return 23
-	case 0x0081: // AC_NOTIFY_ERROR
-		return 3
-	case 0x083E: // AC_REFUSE_LOGIN2 (modern)
-		return 26
-
-	// Character server packets
-	case 0x006B: // HC_ACCEPT_ENTER (variable)
-		if len(data) >= 4 {
-			return int(binary.LittleEndian.Uint16(data[2:4]))
-		}
-		return 0
-	case 0x006C: // HC_REFUSE_ENTER
-		return 3
-	case 0x006D: // HC_ACCEPT_MAKECHAR
-		return 155 + 2
-	case 0x0071: // HC_NOTIFY_ZONESVR
-		return 28
-	case 0x0AC5: // HC_NOTIFY_ZONESVR2 (modern rAthena)
-		return 28
-
-	// Map server packets
-	case 0x0073: // ZC_ACCEPT_ENTER
-		return 11
-	case 0x02EB: // ZC_ACCEPT_ENTER2 (modern rAthena)
-		return 13
-	case 0x0283: // Entity ID confirmation
-		return 6
-	case 0x0B18: // Unknown inventory-related packet
-		return 4
-	case 0x0078: // ZC_NOTIFY_STANDENTRY
-		return 54
-	case 0x007B: // ZC_NOTIFY_MOVEENTRY
-		return 60
-	case 0x0087: // ZC_NOTIFY_PLAYERMOVE (own walk-OK)
-		return 12
-	case 0x008A: // ZC_NOTIFY_ACT
-		return 29
-	case 0x0091: // ZC_NPCACK_MAPMOVE
-		return 22
-
-	// Keep-alive
-	case 0x007F: // ZC_NOTIFY_TIME (server reply to CZ_REQUEST_TIME)
-		return 6
-
-	default:
-		// For unknown packets, try to read length from packet header
-		// Only do this if length seems reasonable
-		if len(data) >= 4 {
-			possibleLen := int(binary.LittleEndian.Uint16(data[2:4]))
-			// Sanity check: length should be reasonable (4 bytes min, 1KB max for unknown packets)
-			// Known variable packets are explicitly handled above
-			if possibleLen >= 4 && possibleLen <= 1024 {
-				return possibleLen
-			}
-		}
-		return 0
+// packetLength returns the wire length of a packet, and whether the id is one
+// we know at all.
+//
+// Lengths come from internal/network/packets, generated from the rAthena tree
+// we build the server from (tools/packetlen/gen.py). This used to be a
+// hand-written switch that fell back to reading bytes 2-4 as a length for
+// anything it didn't recognise. That fallback is why walking broke: RO frames
+// packets by length alone, so misreading one fixed-length packet's payload as
+// a length consumed the wrong number of bytes and turned every subsequent
+// packet — the walk acknowledgements included — into garbage.
+//
+// A returned length of 0 with known=true means "need more bytes before the
+// length can be determined".
+func (c *Client) packetLength(packetID uint16, data []byte) (length int, known bool) {
+	size, ok := packets.Length(packetID)
+	if !ok {
+		return 0, false
 	}
+
+	if size == packets.VariableLength {
+		if len(data) < 4 {
+			return 0, true // header not fully buffered yet
+		}
+		declared := int(binary.LittleEndian.Uint16(data[2:4]))
+		if declared < 4 {
+			// A variable-length packet must at least cover id + length.
+			return 0, false
+		}
+		return declared, true
+	}
+
+	return size, true
+}
+
+// resyncOffset scans forward for the next plausible packet boundary after a
+// stream desync, returning the number of bytes to discard.
+//
+// It advances one byte at a time on purpose. The previous code skipped two,
+// which preserves parity — so an odd-byte misalignment (the common case, since
+// most payloads have odd-length fields) could never recover no matter how much
+// data went past.
+func resyncOffset(buf []byte) int {
+	for offset := 1; offset+2 <= len(buf); offset++ {
+		if packets.IsKnown(binary.LittleEndian.Uint16(buf[offset : offset+2])) {
+			return offset
+		}
+	}
+	return len(buf)
 }
 
 // SetSession sets session information from login.

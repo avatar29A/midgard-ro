@@ -80,6 +80,12 @@ func (c *Context) Input() *InputState {
 	return c.input
 }
 
+// SetPixelDensity forwards the display's pixel density to the renderer so
+// text is rasterized at native resolution. See Renderer.SetPixelDensity.
+func (c *Context) SetPixelDensity(density float32) {
+	c.renderer.SetPixelDensity(density)
+}
+
 // SetDefaultWindowSkin sets the default nine-slice skin for all windows.
 func (c *Context) SetDefaultWindowSkin(skin *NineSlice) {
 	c.defaultSkin = skin
@@ -293,13 +299,19 @@ func (c *Context) LabelColored(text string, color Color) {
 		return
 	}
 
-	// Draw text with scale 2.0 (16px font from 8px glyphs)
 	scale := float32(1.0)
 	c.renderer.DrawText(c.cursorX, c.cursorY, text, scale, color)
 
-	// Advance cursor
-	w, _ := c.renderer.MeasureText(text, scale)
+	// Advance the cursor along the row, and make sure the row is at least as
+	// tall as the text. Without the height the next Row() advances by however
+	// tall the *previous* row was and the following widget lands on top of
+	// this label — which is exactly what buried the character list behind its
+	// own heading.
+	w, h := c.renderer.MeasureText(text, scale)
 	c.cursorX += w + 4
+	if h > c.rowH {
+		c.rowH = h
+	}
 }
 
 // TextInput draws a text input field.
@@ -761,7 +773,7 @@ func (c *Context) LabelCentered(text string) {
 	}
 
 	scale := float32(1.0)
-	textW, _ := c.renderer.MeasureText(text, scale)
+	textW, textH := c.renderer.MeasureText(text, scale)
 	windowContentWidth := c.currentWindow.W - 16
 	x := c.currentWindow.X + 8 + (windowContentWidth-textW)/2
 	if x < c.currentWindow.X+8 {
@@ -769,6 +781,12 @@ func (c *Context) LabelCentered(text string) {
 	}
 
 	c.renderer.DrawText(x, c.cursorY, text, scale, ColorText)
+
+	// Centered text owns its whole line, so claim the row height. Two
+	// LabelCentered calls in a row used to draw on top of each other.
+	if textH > c.rowH {
+		c.rowH = textH
+	}
 }
 
 // GetScreenSize returns the current screen dimensions.

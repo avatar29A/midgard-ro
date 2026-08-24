@@ -13,6 +13,7 @@ import (
 	"github.com/Faultbox/midgard-ro/internal/config"
 	"github.com/Faultbox/midgard-ro/internal/game"
 	"github.com/Faultbox/midgard-ro/internal/logger"
+	"github.com/Faultbox/midgard-ro/internal/trace"
 )
 
 func main() {
@@ -32,6 +33,9 @@ func main() {
 		os.Exit(1)
 	}
 	defer logger.Sync()
+
+	// Opt-in tracing (--trace=move,pick,net or --trace=all). Off by default.
+	trace.Enable(config.TraceSpec())
 
 	logger.Info("=== Midgard RO Client ===")
 	logger.Sugar.Debugf("Config: %+v", cfg)
