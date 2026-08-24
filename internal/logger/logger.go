@@ -57,7 +57,7 @@ func InitWithFileConfig(level string, fileCfg FileConfig, consoleOutput bool) er
 			LevelKey:         "level",
 			MessageKey:       "msg",
 			CallerKey:        "caller",
-			EncodeTime:       zapcore.TimeEncoderOfLayout("15:04:05"),
+			EncodeTime:       zapcore.TimeEncoderOfLayout("15:04:05.000"),
 			EncodeLevel:      zapcore.CapitalColorLevelEncoder,
 			EncodeCaller:     zapcore.ShortCallerEncoder,
 			ConsoleSeparator: " ",
