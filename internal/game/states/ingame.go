@@ -72,10 +72,17 @@ type InGameState struct {
 	destCellX, destCellY   int
 	hasDest                bool
 	chainCellX, chainCellY int
-	moveTickRate           time.Duration
-	lastKeepAlive          time.Time
-	keepAliveInterval      time.Duration
-	enterTime              time.Time // Used as the local epoch for ClientTick
+
+	// The walk we started on our own authority, so its acknowledgement can be
+	// recognised and ignored rather than restarting the walk.
+	predictStartX, predictStartY int
+	predictEndX, predictEndY     int
+	hasPrediction                bool
+	predictions, predictionHits  int
+	moveTickRate                 time.Duration
+	lastKeepAlive                time.Time
+	keepAliveInterval            time.Duration
+	enterTime                    time.Time // Used as the local epoch for ClientTick
 
 	// State
 	ErrorMsg   string
@@ -492,6 +499,28 @@ func (s *InGameState) handlePlayerMove(data []byte) error {
 		return nil
 	}
 
+	// If this is the walk we already started ourselves, we are on it — leave
+	// it alone. Re-issuing an identical path would restart the current step
+	// and undo the point of predicting.
+	if s.hasPrediction &&
+		mv.StartX == s.predictStartX && mv.StartY == s.predictStartY &&
+		mv.EndX == s.predictEndX && mv.EndY == s.predictEndY {
+		s.hasPrediction = false
+		s.predictionHits++
+		trace.Emit(trace.Move, "ack-confirms-prediction",
+			zap.Int("hits", s.predictionHits), zap.Int("total", s.predictions))
+		return nil
+	}
+
+	if s.hasPrediction {
+		trace.Emit(trace.Move, "ack-corrects-prediction",
+			zap.Int("predictedStartX", s.predictStartX), zap.Int("predictedStartY", s.predictStartY),
+			zap.Int("predictedEndX", s.predictEndX), zap.Int("predictedEndY", s.predictEndY),
+			zap.Int("serverStartX", mv.StartX), zap.Int("serverStartY", mv.StartY),
+			zap.Int("serverEndX", mv.EndX), zap.Int("serverEndY", mv.EndY))
+	}
+	s.hasPrediction = false
+
 	path := s.pathFinder.FindPath(mv.StartX, mv.StartY, mv.EndX, mv.EndY)
 	if len(path) < 2 {
 		// No GAT, or our walkability disagrees with the server's. Walk the
@@ -762,7 +791,53 @@ func (s *InGameState) sendWalkRequest(tileX, tileY int) error {
 
 	s.lastMoveTick = uint32(time.Now().UnixMilli() & 0xFFFFFFFF)
 	s.lastMoveSent = time.Now()
+
+	s.predictWalk(fromX, fromY, reqX, reqY)
 	return nil
+}
+
+// predictWalk starts walking immediately rather than waiting for the server to
+// agree.
+//
+// Both sides derive the route the same way — A* over the same GAT, diagonals
+// only where both neighbours are open — and walk it at the same ms per cell,
+// so the prediction is normally exactly what comes back. Waiting for the
+// acknowledgement instead costs a round trip on every walk, which the
+// character can never make up: it renders permanently behind the server and
+// each correction drags it forward.
+//
+// When the acknowledgement matches, there is nothing to do. When it doesn't,
+// the server wins and the difference is absorbed by the visual offset, so a
+// wrong guess costs a short catch-up rather than a jump.
+func (s *InGameState) predictWalk(fromX, fromY, toX, toY int) {
+	s.hasPrediction = false
+	if s.player == nil {
+		return
+	}
+
+	path := s.pathFinder.FindPath(fromX, fromY, toX, toY)
+	if len(path) < 2 {
+		// Nothing we can walk; wait and see what the server says.
+		return
+	}
+
+	s.predictStartX, s.predictStartY = fromX, fromY
+	s.predictEndX, s.predictEndY = toX, toY
+	s.hasPrediction = true
+	s.predictions++
+
+	s.player.FollowPath(path)
+
+	trace.Emit(trace.Move, "predict",
+		zap.Int("fromX", fromX), zap.Int("fromY", fromY),
+		zap.Int("toX", toX), zap.Int("toY", toY),
+		zap.Int("cells", len(path)))
+}
+
+// PredictionAccuracy returns how many predicted walks the server confirmed
+// unchanged, out of how many were made. Exposed for diagnostics.
+func (s *InGameState) PredictionAccuracy() (hits, total int) {
+	return s.predictionHits, s.predictions
 }
 
 // continueToDestination is called when a walk finishes. If the player asked to
