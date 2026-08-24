@@ -44,6 +44,13 @@ func TestKnownLengths(t *testing.T) {
 		// header was added as a source.
 		{"ZC_PAR_CHANGE (0x00B0)", 0x00B0, 8},
 		{"ZC_EXTEND_BODYITEM_SIZE (0x0B18)", 0x0B18, 4},
+
+		// Declared with DEFINE_PACKET_ID rather than DEFINE_PACKET_HEADER —
+		// an alias the generator did not match at first.
+		{"ZC_COUPLESTATUS (0x0141)", 0x0141, 14},
+		// Sized by a #define in the same header, behind a build feature flag,
+		// and embeds a helper struct: 2 + 1 + 2 + 38*7.
+		{"ZC_SHORTCUT_KEY_LIST (0x0B20)", 0x0B20, 271},
 	}
 
 	for _, tt := range tests {
@@ -74,7 +81,7 @@ func TestUnknownPacketReportsUnknown(t *testing.T) {
 // empty or truncated table — which would make every packet "unknown" and stall
 // the client rather than fail loudly.
 func TestTableIsPopulated(t *testing.T) {
-	if len(mapPacketLengths) < 900 {
+	if len(mapPacketLengths) < 950 {
 		t.Errorf("packet table has %d entries, expected the generated table to be much larger",
 			len(mapPacketLengths))
 	}

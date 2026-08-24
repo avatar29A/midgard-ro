@@ -36,6 +36,12 @@ def build_env(packetver: int) -> dict:
         "PACKETVER_RE": is_re,
         "PACKETVER_ZERO": False,
         "PACKETVER_MAIN": not is_re,
+        # Build feature flags that gate packet structs. Values are whatever a
+        # stock rAthena build has; a server built with custom flags would need
+        # these changed to match, or its packets will be missing from the table.
+        "HOTKEY_SAVING": True,  # src/common/mmo.hpp, unconditional
+        "ENABLE_CASHSHOP_PREVIEW_PATCH": False,  # src/config/core.hpp, commented out
+        "ENABLE_OLD_CASHSHOP_PREVIEW_PATCH": False,  # src/config/core.hpp, commented out
     }
     return env
 
@@ -86,17 +92,23 @@ ARRAY_CONSTS = {
     "WEB_AUTH_TOKEN_LENGTH": 17,  # 16 + 1
 }
 
-STRUCT_START_RE = re.compile(r"^\s*struct\s+(PACKET_\w+)\s*\{")
+# Any packed struct, not just PACKET_* — some packets embed helper structs
+# (hotkey_data, for one) whose size is needed to size the packet.
+STRUCT_START_RE = re.compile(r"^\s*struct\s+(\w+)\s*\{")
 STRUCT_END_RE = re.compile(r"^\s*\}\s*__attribute__\(\(packed\)\)\s*;")
 FIELD_RE = re.compile(
     r"^\s*(?:struct\s+)?(\w+)\s+(\w+)\s*(?:\[\s*([^\]]*)\s*\])?\s*;"
 )
 HEADER_RE = re.compile(
-    r"^\s*DEFINE_PACKET_HEADER\s*\(\s*(\w+)\s*,\s*(0[xX][0-9A-Fa-f]+)\s*\)"
+    r"^\s*DEFINE_PACKET_(?:HEADER|ID)\s*\(\s*(\w+)\s*,\s*(0[xX][0-9A-Fa-f]+)\s*\)"
 )
 
+# Array bounds are sometimes #defined in the same header, inside the version
+# guards, so they have to be picked up as we walk rather than known up front.
+DEFINE_RE = re.compile(r"^\s*#\s*define\s+([A-Z_][A-Z_0-9]*)\s+(.+?)\s*$")
 
-def struct_size(fields, structs):
+
+def struct_size(fields, structs, consts):
     """Packed size of a struct, or None when it can't be resolved."""
     total = 0
     for type_name, field_name, bound in fields:
@@ -106,7 +118,7 @@ def struct_size(fields, structs):
         if type_name in SCALAR_SIZES:
             width = SCALAR_SIZES[type_name]
         elif type_name in structs:
-            nested = struct_size(structs[type_name], structs)
+            nested = struct_size(structs[type_name], structs, consts)
             if nested is None or nested == VARIABLE:
                 return None
             width = nested
@@ -122,8 +134,8 @@ def struct_size(fields, structs):
             return VARIABLE
         if bound.isdigit():
             count = int(bound)
-        elif bound in ARRAY_CONSTS:
-            count = ARRAY_CONSTS[bound]
+        elif bound in consts:
+            count = consts[bound]
         else:
             return None
         total += width * count
@@ -137,6 +149,7 @@ def parse_structs(path, env):
     """Collect struct definitions and their packet ids, honouring #if guards."""
     structs = {}
     ids = {}
+    consts = dict(ARRAY_CONSTS)
     stack = []
     current = None
     fields = []
@@ -175,6 +188,17 @@ def parse_structs(path, env):
                 continue
 
             if current is None:
+                define = DEFINE_RE.match(line)
+                if define:
+                    value = define.group(2).split("//")[0].strip()
+                    try:
+                        consts[define.group(1)] = int(
+                            eval(value, {"__builtins__": {}}, dict(consts))  # noqa: S307
+                        )
+                    except Exception:
+                        pass  # not an integer constant; nothing we can use
+                    continue
+
                 start = STRUCT_START_RE.match(line)
                 if start:
                     current = start.group(1)
@@ -198,7 +222,7 @@ def parse_structs(path, env):
     for name, pid in ids.items():
         if name not in structs:
             continue
-        size = struct_size(structs[name], structs)
+        size = struct_size(structs[name], structs, consts)
         if size is not None:
             lengths[pid] = size
     return lengths
