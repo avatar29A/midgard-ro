@@ -1,6 +1,11 @@
 // Package states implements game state management.
 package states
 
+import (
+	"github.com/Faultbox/midgard-ro/internal/game/entity"
+	"github.com/Faultbox/midgard-ro/internal/network/packets"
+)
+
 // State represents a game state (login, character select, in-game, etc.)
 type State interface {
 	// Enter is called when entering this state.
@@ -22,11 +27,35 @@ type State interface {
 // TexLoaderFunc is a function that loads asset data from GRF.
 type TexLoaderFunc func(path string) ([]byte, error)
 
+// Session holds the data for the character we're playing, which outlives the
+// individual states that discover it. Character select fills it in; the
+// in-game state reads walk speed, job and appearance back out of it.
+type Session struct {
+	Char *packets.CharInfo
+}
+
+// WalkSpeedMs returns the character's `speed` stat (milliseconds per cell),
+// falling back to rAthena's default when the value is missing or outside the
+// range a real character can have.
+func (s *Session) WalkSpeedMs() float32 {
+	if s == nil || s.Char == nil {
+		return entity.DefaultWalkSpeedMs
+	}
+	speed := float32(s.Char.WalkSpeed)
+	if speed < 20 || speed > 2000 {
+		return entity.DefaultWalkSpeedMs
+	}
+	return speed
+}
+
 // Manager manages game state transitions.
 type Manager struct {
 	current   State
 	next      State
 	TexLoader TexLoaderFunc
+
+	// Session data for the character being played.
+	Session Session
 }
 
 // NewManager creates a new state manager.

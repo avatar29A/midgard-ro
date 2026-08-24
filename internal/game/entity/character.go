@@ -38,7 +38,25 @@ type Character struct {
 	// Movement state
 	IsMoving  bool
 	Direction int     // 0-7: S, SW, W, NW, N, NE, E, SE
-	MoveSpeed float32 // Units per second
+	MoveSpeed float32 // Units per second (free movement — see WalkSpeedMs for walks)
+
+	// WalkSpeedMs is rAthena's `speed` stat: milliseconds per straight cell.
+	// It drives server-path walking; MoveSpeed only covers free movement.
+	WalkSpeedMs float32
+
+	// TerrainHeight, when set, supplies the ground altitude at a world XZ so
+	// the character follows terrain as it walks. Wired up by the game state.
+	TerrainHeight func(worldX, worldZ float32) float32
+
+	// Server-authoritative cell path and progress along the current step.
+	path        [][2]int
+	pathIdx     int
+	segElapsed  float32
+	segDuration float32
+	segFromX    float32
+	segFromZ    float32
+	segToX      float32
+	segToZ      float32
 
 	// Click-to-move destination
 	DestX          float32 // Target X position
@@ -62,14 +80,25 @@ func NewCharacter(x, y, z float32) *Character {
 		RenderY:       y,
 		RenderZ:       z,
 		Direction:     DirS,
-		MoveSpeed:     150.0, // Default movement speed
-		LastVisualDir: -1,    // No previous direction
+		MoveSpeed:     DefaultFreeMoveSpeed,
+		WalkSpeedMs:   DefaultWalkSpeedMs,
+		LastVisualDir: -1, // No previous direction
 	}
 }
+
+// DefaultFreeMoveSpeed is the velocity, in world units per second, that
+// matches DefaultWalkSpeedMs. Free movement (keyboard nudging, tools) uses a
+// velocity; server walks use the ms-per-cell duration instead.
+const DefaultFreeMoveSpeed = CellSize * 1000.0 / DefaultWalkSpeedMs
+
+// ArrivalThreshold is how close, in world units, counts as having reached a
+// free-movement destination.
+const ArrivalThreshold = 1.0
 
 // SetPosition sets the character's world position.
 // Also updates render position to prevent interpolation lag on teleport.
 func (c *Character) SetPosition(x, y, z float32) {
+	c.StopWalking()
 	c.WorldX = x
 	c.WorldY = y
 	c.WorldZ = z
@@ -93,6 +122,7 @@ func (c *Character) SetDestination(x, z float32) {
 
 // ClearDestination clears the current destination.
 func (c *Character) ClearDestination() {
+	c.StopWalking()
 	c.HasDestination = false
 	c.IsMoving = false
 	c.CurrentAction = ActionIdle
@@ -104,14 +134,19 @@ func (c *Character) ClearDestination() {
 func (c *Character) Update(deltaMs float32) bool {
 	changed := false
 
+	// A server path supersedes free movement: it carries its own timing and
+	// drives the render position directly.
+	if c.IsWalkingPath() {
+		return c.UpdateWalk(deltaMs)
+	}
+
 	// Update movement towards destination
 	if c.HasDestination {
 		dx := c.DestX - c.WorldX
 		dz := c.DestZ - c.WorldZ
 		dist := sqrtf32(dx*dx + dz*dz)
 
-		arrivalThreshold := float32(5.0) // Arrival distance
-		if dist < arrivalThreshold {
+		if dist < ArrivalThreshold {
 			// Arrived at destination
 			c.HasDestination = false
 			c.IsMoving = false
@@ -229,6 +264,12 @@ const RenderLerpSpeed = 500.0
 // Uses linear interpolation with fixed speed (Korangar-style).
 // deltaMs is the time since last update in milliseconds.
 func (c *Character) UpdateRenderPosition(deltaMs float32) {
+	// Path walking interpolates the render position itself, on server
+	// timing — a second catch-up pass here would fight it.
+	if c.IsWalkingPath() {
+		return
+	}
+
 	// Calculate distance to target
 	dx := c.WorldX - c.RenderX
 	dy := c.WorldY - c.RenderY

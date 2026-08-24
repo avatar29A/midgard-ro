@@ -226,6 +226,10 @@ func (s *CharSelectState) SelectCharacter(slotIndex int) error {
 	s.IsLoading = true
 	s.StatusMsg = "Selecting character..."
 
+	// Remember who we're playing — the in-game state reads walk speed, job
+	// and appearance out of this long after char select is gone.
+	s.manager.Session.Char = s.Characters[slotIndex]
+
 	pkt := &packets.CharSelect{
 		PacketID: packets.CH_SELECT_CHAR,
 		Slot:     s.Characters[slotIndex].Slot,
