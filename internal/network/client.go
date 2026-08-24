@@ -226,8 +226,20 @@ func (c *Client) Process() (err error) {
 	conn := c.conn
 	c.mu.Unlock()
 
-	// Set short read deadline for non-blocking behavior
-	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Millisecond))
+	// Poll: take whatever has already arrived and return immediately.
+	//
+	// This used to set the deadline 10ms out, which is not non-blocking at all
+	// — it is a blocking read with a 10ms timeout. The server is idle on most
+	// frames, so the game loop sat in this read for the full 10ms every frame,
+	// costing more per frame than drawing the entire map and pushing the frame
+	// over its 16.7ms budget. Missing vsync halves the frame rate outright, so
+	// one idle socket read was the difference between 60fps and 30.
+	//
+	// A deadline of now makes Read return what is buffered and time out
+	// instantly if that is nothing. The cost is that data landing just after a
+	// poll waits until the next frame; a reader goroutine would remove that
+	// too, at the price of introducing concurrency here.
+	_ = conn.SetReadDeadline(time.Now())
 
 	// Read available data
 	n, err := conn.Read(c.readBuf[c.readOffset:])
