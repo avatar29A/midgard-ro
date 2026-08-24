@@ -61,6 +61,10 @@ type InGameState struct {
 	// Network timing
 	lastMoveTick      uint32
 	lastMoveSent      time.Time
+	lastWalkEnded     time.Time
+	wasWalking        bool
+	keepAliveSentAt   time.Time
+	pingMs            float64
 	moveTickRate      time.Duration
 	lastKeepAlive     time.Time
 	keepAliveInterval time.Duration
@@ -311,6 +315,15 @@ func (s *InGameState) Update(dt float64) error {
 		// interpolates on server timing and ignores this.
 		s.player.UpdateRenderPosition(deltaMs)
 
+		// Note when a walk finishes so the next one can report how long the
+		// character stood idle in between.
+		walking := s.player.IsWalkingPath()
+		if s.wasWalking && !walking {
+			s.lastWalkEnded = time.Now()
+			trace.Emit(trace.Move, "walk-end")
+		}
+		s.wasWalking = walking
+
 		// Advance the sprite animation. Frame counts come from the loaded
 		// sheet; with no sprites this parks on frame 0 harmlessly.
 		frames := 0
@@ -400,6 +413,7 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_NOTIFY_MOVEENTRY, s.handleEntityMove)
 	s.client.RegisterHandler(packets.ZC_NPCACK_MAPMOVE, s.handleMapChange)
 	s.client.RegisterHandler(packets.ZC_NOTIFY_PLAYERMOVE, s.handlePlayerMove)
+	s.client.RegisterHandler(packets.ZC_NOTIFY_TIME, s.handleServerTick)
 }
 
 // sendKeepAlive sends CZ_REQUEST_TIME so the map server doesn't time us out.
@@ -408,9 +422,29 @@ func (s *InGameState) sendKeepAlive() {
 		PacketID:   packets.CZ_REQUEST_TIME,
 		ClientTick: uint32(time.Since(s.enterTime).Milliseconds()),
 	}
+	s.keepAliveSentAt = time.Now()
 	if err := s.client.Send(pkt.Encode()); err != nil {
 		logger.Warn("keep-alive send failed", zap.Error(err))
 	}
+}
+
+// handleServerTick measures the round trip on ZC_NOTIFY_TIME. The keep-alive
+// is the only exchange with an unambiguous request/response pairing, so it is
+// the honest place to measure latency — walk acknowledgements can't be matched
+// to their request when several are in flight.
+func (s *InGameState) handleServerTick(_ []byte) error {
+	if s.keepAliveSentAt.IsZero() {
+		return nil
+	}
+	rtt := float64(time.Since(s.keepAliveSentAt).Microseconds()) / 1000
+	s.pingMs = rtt
+	trace.Emit(trace.Move, "ping", zap.Float64("rttMs", rtt))
+	return nil
+}
+
+// PingMs returns the last measured round-trip time in milliseconds.
+func (s *InGameState) PingMs() float64 {
+	return s.pingMs
 }
 
 // handlePlayerMove processes ZC_NOTIFY_PLAYERMOVE — the server confirming
@@ -433,7 +467,15 @@ func (s *InGameState) handlePlayerMove(data []byte) error {
 		if s.player != nil {
 			curX, curY = s.player.CurrentCell()
 		}
+		// Round trip as the player experiences it: from putting the request on
+		// the wire to acting on the reply. Includes our own frame quantisation,
+		// which on a local server dominates the network itself.
+		rtt := float64(0)
+		if !s.lastMoveSent.IsZero() {
+			rtt = float64(time.Since(s.lastMoveSent).Microseconds()) / 1000
+		}
 		trace.Emit(trace.Move, "ack",
+			zap.Float64("rttMs", rtt),
 			zap.Uint32("startTick", mv.StartTick),
 			zap.Int("startX", mv.StartX), zap.Int("startY", mv.StartY),
 			zap.Int("endX", mv.EndX), zap.Int("endY", mv.EndY),
@@ -483,9 +525,17 @@ func (s *InGameState) handlePlayerMove(data []byte) error {
 			zap.String("last", fmt.Sprintf("%v", path[len(path)-1])))
 	}
 
+	stallMs := float64(0)
+	if !s.lastWalkEnded.IsZero() {
+		stallMs = float64(time.Since(s.lastWalkEnded).Microseconds()) / 1000
+	}
+
 	s.player.FollowPath(path)
 
 	if trace.On(trace.Move) {
+		// How long the character stood still between the previous walk ending
+		// and this one starting. Anything above a frame is visible as a hitch.
+		trace.Emit(trace.Move, "stall", zap.Float64("idleMs", stallMs))
 		trace.Emit(trace.Move, "walk-start",
 			zap.Int("facing", s.player.Direction),
 			zap.Float32("renderX", s.player.RenderX),
