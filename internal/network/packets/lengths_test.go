@@ -37,6 +37,13 @@ func TestKnownLengths(t *testing.T) {
 		// The old table had no entry, so it read bytes 2-4 as a length and
 		// consumed 70 bytes for a 6-byte packet.
 		{"ZC_OVERWEIGHT_PERCENT (0x0ADE)", 0x0ADE, 6},
+
+		// Both arrive during login and are declared only in
+		// packets_struct.hpp, which the generator missed on its first pass —
+		// so the connection still desynchronised once per login until that
+		// header was added as a source.
+		{"ZC_PAR_CHANGE (0x00B0)", 0x00B0, 8},
+		{"ZC_EXTEND_BODYITEM_SIZE (0x0B18)", 0x0B18, 4},
 	}
 
 	for _, tt := range tests {
@@ -67,7 +74,7 @@ func TestUnknownPacketReportsUnknown(t *testing.T) {
 // empty or truncated table — which would make every packet "unknown" and stall
 // the client rather than fail loudly.
 func TestTableIsPopulated(t *testing.T) {
-	if len(mapPacketLengths) < 500 {
+	if len(mapPacketLengths) < 900 {
 		t.Errorf("packet table has %d entries, expected the generated table to be much larger",
 			len(mapPacketLengths))
 	}

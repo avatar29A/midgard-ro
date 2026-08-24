@@ -265,7 +265,11 @@ def main() -> int:
     db_count = len(lengths)
 
     from_structs = {}
-    for header in ("src/map/packets.hpp", "src/common/packets.hpp"):
+    for header in (
+        "src/map/packets.hpp",
+        "src/map/packets_struct.hpp",
+        "src/common/packets.hpp",
+    ):
         from_structs.update(parse_structs(f"{src}/{header}", env))
 
     conflicts = 0
