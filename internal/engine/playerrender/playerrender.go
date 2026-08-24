@@ -221,8 +221,8 @@ func (r *Renderer) selectFrame(char *entity.Character, camPosX, camPosZ float32)
 	// where they're facing. Hysteresis keeps the sprite from flickering when
 	// the angle sits on a sector boundary.
 	camAngle := character.CameraAngleToPlayer(camPosX, camPosZ, char.RenderX, char.RenderZ)
-	visualDir, sector := character.CalculateVisualDirection(camAngle, char.Direction, char.LastVisualDir)
-	char.LastVisualDir = sector
+	visualDir, camSector := character.CalculateVisualDirection(camAngle, char.Direction, char.LastCameraSector)
+	char.LastCameraSector = camSector
 
 	frames := r.frames[char.CurrentAction*charsprite.Directions+visualDir]
 	if len(frames) == 0 {
