@@ -3,10 +3,7 @@ package main
 
 import (
 	"fmt"
-	"image"
-	"image/png"
 	gomath "math"
-	"os"
 	"sort"
 	"unsafe"
 
@@ -15,6 +12,7 @@ import (
 	"github.com/Faultbox/midgard-ro/cmd/grfbrowser/shaders"
 	"github.com/Faultbox/midgard-ro/internal/engine/camera"
 	"github.com/Faultbox/midgard-ro/internal/engine/character"
+	"github.com/Faultbox/midgard-ro/internal/engine/charsprite"
 	"github.com/Faultbox/midgard-ro/internal/engine/debug"
 	"github.com/Faultbox/midgard-ro/internal/engine/lighting"
 	rsmmodel "github.com/Faultbox/midgard-ro/internal/engine/model"
@@ -108,168 +106,6 @@ type CompositeFrame = character.CompositeFrame
 
 // PlayerCharacter is an alias for character.Player.
 type PlayerCharacter = character.Player
-
-// saveAllDirectionsSheet saves all 8 direction composites into a single sprite sheet
-func saveAllDirectionsSheet(
-	bodySPR *formats.SPR, bodyACT *formats.ACT,
-	headSPR *formats.SPR, headACT *formats.ACT,
-	path string,
-) {
-	dirNames := []string{"S", "SW", "W", "NW", "N", "NE", "E", "SE"}
-
-	// First pass: generate all composites and find max dimensions
-	type dirComposite struct {
-		pixels        []byte
-		width, height int
-	}
-	composites := make([]dirComposite, 8)
-	maxW, maxH := 0, 0
-
-	for dir := 0; dir < 8; dir++ {
-		result := sprite.CompositeSprites(bodySPR, bodyACT, headSPR, headACT, 0, dir, 0)
-		composites[dir] = dirComposite{result.Pixels, result.Width, result.Height}
-		if result.Width > maxW {
-			maxW = result.Width
-		}
-		if result.Height > maxH {
-			maxH = result.Height
-		}
-	}
-
-	// Create combined image: 4 columns x 2 rows with labels
-	padding := 10
-	labelHeight := 20
-	cellW := maxW + padding*2
-	cellH := maxH + padding*2 + labelHeight
-	sheetW := cellW * 4
-	sheetH := cellH * 2
-
-	// Create RGBA image with gray background
-	sheet := image.NewRGBA(image.Rect(0, 0, sheetW, sheetH))
-	// Fill with dark gray background
-	for y := 0; y < sheetH; y++ {
-		for x := 0; x < sheetW; x++ {
-			idx := (y*sheetW + x) * 4
-			sheet.Pix[idx] = 40    // R
-			sheet.Pix[idx+1] = 40  // G
-			sheet.Pix[idx+2] = 40  // B
-			sheet.Pix[idx+3] = 255 // A
-		}
-	}
-
-	// Layout: directions arranged as they appear when rotating camera
-	// Top row: S(0), SE(7), E(6), NE(5)
-	// Bottom row: SW(1), W(2), NW(3), N(4)
-	layout := [][]int{
-		{0, 7, 6, 5}, // Top row
-		{1, 2, 3, 4}, // Bottom row
-	}
-
-	for row := 0; row < 2; row++ {
-		for col := 0; col < 4; col++ {
-			dir := layout[row][col]
-			comp := composites[dir]
-
-			// Calculate cell position
-			cellX := col * cellW
-			cellY := row * cellH
-
-			// Center sprite in cell (below label area)
-			spriteX := cellX + padding + (maxW-comp.width)/2
-			spriteY := cellY + labelHeight + padding + (maxH-comp.height)/2
-
-			// Copy sprite pixels
-			if comp.pixels != nil {
-				for py := 0; py < comp.height; py++ {
-					for px := 0; px < comp.width; px++ {
-						srcIdx := (py*comp.width + px) * 4
-						dstX := spriteX + px
-						dstY := spriteY + py
-						if dstX >= 0 && dstX < sheetW && dstY >= 0 && dstY < sheetH {
-							dstIdx := (dstY*sheetW + dstX) * 4
-							// Copy with alpha
-							sa := comp.pixels[srcIdx+3]
-							if sa > 0 {
-								sheet.Pix[dstIdx] = comp.pixels[srcIdx]
-								sheet.Pix[dstIdx+1] = comp.pixels[srcIdx+1]
-								sheet.Pix[dstIdx+2] = comp.pixels[srcIdx+2]
-								sheet.Pix[dstIdx+3] = sa
-							}
-						}
-					}
-				}
-			}
-
-			// Draw direction label (simple pixel text)
-			label := fmt.Sprintf("Dir %d (%s)", dir, dirNames[dir])
-			drawSimpleText(sheet, cellX+padding, cellY+5, label)
-		}
-	}
-
-	// Save the sheet
-	f, err := os.Create(path)
-	if err != nil {
-		fmt.Printf("Error creating sprite sheet: %v\n", err)
-		return
-	}
-	defer f.Close()
-	if err := png.Encode(f, sheet); err != nil {
-		fmt.Printf("Error encoding sprite sheet: %v\n", err)
-		return
-	}
-	fmt.Printf("Saved all directions sprite sheet to %s\n", path)
-}
-
-// drawSimpleText draws text using a simple 5x7 pixel font
-func drawSimpleText(img *image.RGBA, x, y int, text string) {
-	// Simple 5x7 bitmap font for basic characters
-	font := map[rune][]string{
-		'D': {"####.", "#...#", "#...#", "#...#", "#...#", "#...#", "####."},
-		'i': {"..#..", ".....", "..#..", "..#..", "..#..", "..#..", "..#.."},
-		'r': {".....", ".....", ".###.", ".#...", ".#...", ".#...", ".#..."},
-		' ': {".....", ".....", ".....", ".....", ".....", ".....", "....."},
-		'0': {".###.", "#...#", "#..##", "#.#.#", "##..#", "#...#", ".###."},
-		'1': {"..#..", ".##..", "..#..", "..#..", "..#..", "..#..", ".###."},
-		'2': {".###.", "#...#", "....#", "..##.", ".#...", "#....", "#####"},
-		'3': {".###.", "#...#", "....#", "..##.", "....#", "#...#", ".###."},
-		'4': {"#...#", "#...#", "#...#", "#####", "....#", "....#", "....#"},
-		'5': {"#####", "#....", "####.", "....#", "....#", "#...#", ".###."},
-		'6': {".###.", "#....", "####.", "#...#", "#...#", "#...#", ".###."},
-		'7': {"#####", "....#", "...#.", "..#..", ".#...", ".#...", ".#..."},
-		'8': {".###.", "#...#", "#...#", ".###.", "#...#", "#...#", ".###."},
-		'9': {".###.", "#...#", "#...#", ".####", "....#", "....#", ".###."},
-		'(': {"..#..", ".#...", "#....", "#....", "#....", ".#...", "..#.."},
-		')': {"..#..", "...#.", "....#", "....#", "....#", "...#.", "..#.."},
-		'S': {".###.", "#....", ".###.", "....#", "....#", "#...#", ".###."},
-		'W': {"#...#", "#...#", "#...#", "#.#.#", "#.#.#", "#.#.#", ".#.#."},
-		'N': {"#...#", "##..#", "#.#.#", "#..##", "#...#", "#...#", "#...#"},
-		'E': {"#####", "#....", "#....", "####.", "#....", "#....", "#####"},
-	}
-
-	curX := x
-	for _, ch := range text {
-		if glyph, ok := font[ch]; ok {
-			for row, line := range glyph {
-				for col, c := range line {
-					if c == '#' {
-						px := curX + col
-						py := y + row
-						if px >= 0 && px < img.Bounds().Dx() && py >= 0 && py < img.Bounds().Dy() {
-							idx := (py*img.Bounds().Dx() + px) * 4
-							img.Pix[idx] = 255   // R
-							img.Pix[idx+1] = 255 // G
-							img.Pix[idx+2] = 255 // B
-							img.Pix[idx+3] = 255 // A
-						}
-					}
-				}
-			}
-			curX += 6 // Character width + spacing
-		} else {
-			curX += 6 // Unknown char, just space
-		}
-	}
-}
 
 // MapViewer handles 3D rendering of complete RO maps.
 type MapViewer struct {
@@ -3061,129 +2897,40 @@ func (mv *MapViewer) LoadPlayerCharacterFromPath(texLoader func(string) ([]byte,
 
 			player.HeadTextures[i] = tex
 		}
+		// Bake head+body composites for every action/direction/frame.
+		// Shared with the game client via internal/engine/charsprite so both
+		// render from one implementation.
+		sheet := charsprite.BuildSheet(spr, act, player.HeadSPR, player.HeadACT)
+		if sheet != nil {
+			player.CompositeMaxWidth = sheet.Width
+			player.CompositeMaxHeight = sheet.Height
+			player.CompositeFrames = make(map[int][]CompositeFrame, len(sheet.Frames))
 
-		// Generate composite textures (head+body merged) for each action/direction/frame
-		// This creates proper head-body alignment using anchor points
-		fmt.Println("Generating composite sprites...")
-
-		// Debug: print body and head anchors for each direction
-		fmt.Println("Body anchors per direction (action 0):")
-		for dir := 0; dir < 8 && dir < len(act.Actions); dir++ {
-			ba := &act.Actions[dir]
-			if len(ba.Frames) > 0 {
-				bf := &ba.Frames[0]
-				if len(bf.AnchorPoints) > 0 {
-					fmt.Printf("  Dir %d: body anchor(%d,%d)\n", dir, bf.AnchorPoints[0].X, bf.AnchorPoints[0].Y)
-				}
-			}
-		}
-		fmt.Println("Head anchors per direction:")
-		for dir := 0; dir < 8 && dir < len(player.HeadACT.Actions); dir++ {
-			ha := &player.HeadACT.Actions[dir]
-			if len(ha.Frames) > 0 {
-				hf := &ha.Frames[0]
-				if len(hf.AnchorPoints) > 0 {
-					fmt.Printf("  Dir %d: head anchor(%d,%d)\n", dir, hf.AnchorPoints[0].X, hf.AnchorPoints[0].Y)
-				}
-			}
-		}
-
-		player.CompositeFrames = make(map[int][]CompositeFrame)
-		player.CompositeMaxWidth = 0
-		player.CompositeMaxHeight = 0
-
-		// First pass: find max dimensions across all composites
-		for action := 0; action < 2; action++ {
-			for dir := 0; dir < 8; dir++ {
-				actionIdx := action*8 + dir
-				if actionIdx >= len(act.Actions) {
-					continue
-				}
-				actAction := &act.Actions[actionIdx]
-				for frame := 0; frame < len(actAction.Frames); frame++ {
-					result := sprite.CompositeSprites(spr, act, player.HeadSPR, player.HeadACT, action, dir, frame)
-					if result.Width > player.CompositeMaxWidth {
-						player.CompositeMaxWidth = result.Width
-					}
-					if result.Height > player.CompositeMaxHeight {
-						player.CompositeMaxHeight = result.Height
-					}
-				}
-			}
-		}
-		fmt.Printf("Composite max dimensions: %dx%d\n", player.CompositeMaxWidth, player.CompositeMaxHeight)
-
-		// Second pass: generate composites padded to max dimensions
-		for action := 0; action < 2; action++ {
-			for dir := 0; dir < 8; dir++ {
-				actionDirKey := action*8 + dir
-				actionIdx := action*8 + dir
-				if actionIdx >= len(act.Actions) {
-					continue
-				}
-				actAction := &act.Actions[actionIdx]
-				numFrames := len(actAction.Frames)
-				if numFrames == 0 {
-					continue
-				}
-
-				frames := make([]CompositeFrame, numFrames)
-				for frame := 0; frame < numFrames; frame++ {
-					result := sprite.CompositeSprites(spr, act, player.HeadSPR, player.HeadACT, action, dir, frame)
-					if result.Pixels == nil || result.Width == 0 || result.Height == 0 {
-						continue
-					}
-
-					// Pad to max dimensions (center horizontally, align bottom for feet)
-					paddedW := player.CompositeMaxWidth
-					paddedH := player.CompositeMaxHeight
-					paddedPixels := make([]byte, paddedW*paddedH*4)
-
-					// Calculate offset to center horizontally and align feet at bottom
-					offsetX := (paddedW - result.Width) / 2
-					offsetY := paddedH - result.Height // Align bottom (feet)
-
-					// Copy original pixels to padded canvas
-					for py := 0; py < result.Height; py++ {
-						for px := 0; px < result.Width; px++ {
-							srcIdx := (py*result.Width + px) * 4
-							dstX := offsetX + px
-							dstY := offsetY + py
-							dstIdx := (dstY*paddedW + dstX) * 4
-							paddedPixels[dstIdx] = result.Pixels[srcIdx]
-							paddedPixels[dstIdx+1] = result.Pixels[srcIdx+1]
-							paddedPixels[dstIdx+2] = result.Pixels[srcIdx+2]
-							paddedPixels[dstIdx+3] = result.Pixels[srcIdx+3]
-						}
-					}
-
-					// Create GPU texture for padded composite
+			for key, frames := range sheet.Frames {
+				out := make([]CompositeFrame, len(frames))
+				for i, f := range frames {
 					var tex uint32
 					gl.GenTextures(1, &tex)
 					gl.BindTexture(gl.TEXTURE_2D, tex)
-					gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, int32(paddedW), int32(paddedH), 0,
-						gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(paddedPixels))
+					gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8,
+						int32(sheet.Width), int32(sheet.Height), 0,
+						gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(f.Pixels))
 					gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
 					gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
 					gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
 					gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-
-					frames[frame] = CompositeFrame{
+					out[i] = CompositeFrame{
 						Texture: tex,
-						Width:   paddedW,
-						Height:  paddedH,
-						OriginX: offsetX,
-						OriginY: offsetY,
+						Width:   sheet.Width,
+						Height:  sheet.Height,
 					}
 				}
-				player.CompositeFrames[actionDirKey] = frames
+				player.CompositeFrames[key] = out
 			}
+			player.UseComposite = true
+			fmt.Printf("Generated %d composite frame sets (%dx%d)\n",
+				len(player.CompositeFrames), sheet.Width, sheet.Height)
 		}
-		player.UseComposite = true
-		fmt.Printf("Generated %d composite frame sets\n", len(player.CompositeFrames))
-
-		// Save all directions to a single sprite sheet for debugging
-		saveAllDirectionsSheet(spr, act, player.HeadSPR, player.HeadACT, "/tmp/all_directions.png")
 	}
 
 	// Create billboard VAO/VBO
