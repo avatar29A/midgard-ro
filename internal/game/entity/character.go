@@ -48,6 +48,15 @@ type Character struct {
 	// the character follows terrain as it walks. Wired up by the game state.
 	TerrainHeight func(worldX, worldZ float32) float32
 
+	// offsetX/offsetZ hold the gap between where the character is drawn and
+	// where the server says they are, bled off over time rather than snapped.
+	offsetX float32
+	offsetZ float32
+
+	// sinceWalkMs counts time since the character last had a path, used to
+	// hold the walk animation across the gap between consecutive steps.
+	sinceWalkMs float32
+
 	// Server-authoritative cell path and progress along the current step.
 	path        [][2]int
 	pathIdx     int
@@ -99,6 +108,7 @@ const ArrivalThreshold = 1.0
 // Also updates render position to prevent interpolation lag on teleport.
 func (c *Character) SetPosition(x, y, z float32) {
 	c.StopWalking()
+	c.offsetX, c.offsetZ = 0, 0 // a teleport has nothing to catch up to
 	c.WorldX = x
 	c.WorldY = y
 	c.WorldZ = z
@@ -251,6 +261,13 @@ func (c *Character) UpdateRenderPosition(deltaMs float32) {
 	// Path walking interpolates the render position itself, on server
 	// timing — a second catch-up pass here would fight it.
 	if c.IsWalkingPath() {
+		return
+	}
+
+	// Still owed a correction from the last path: keep bleeding it off so the
+	// character settles onto the authoritative cell rather than stopping short.
+	if c.offsetX != 0 || c.offsetZ != 0 {
+		c.applyVisualOffset(c.WorldX, c.WorldZ, deltaMs)
 		return
 	}
 
