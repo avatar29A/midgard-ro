@@ -226,20 +226,26 @@ func (c *Client) Process() (err error) {
 	conn := c.conn
 	c.mu.Unlock()
 
-	// Poll: take whatever has already arrived and return immediately.
+	// Poll the socket with a deadline just far enough out to collect whatever
+	// has already arrived.
 	//
-	// This used to set the deadline 10ms out, which is not non-blocking at all
-	// — it is a blocking read with a 10ms timeout. The server is idle on most
-	// frames, so the game loop sat in this read for the full 10ms every frame,
-	// costing more per frame than drawing the entire map and pushing the frame
-	// over its 16.7ms budget. Missing vsync halves the frame rate outright, so
-	// one idle socket read was the difference between 60fps and 30.
+	// This was 10ms, under a comment calling it non-blocking. It is not: it is
+	// a blocking read with a 10ms timeout, and since the server is idle on most
+	// frames the game loop sat in it for the full 10ms every frame — more per
+	// frame than drawing the map's 1304 models, and enough to push the frame
+	// past its 16.7ms budget. Vsync does not degrade gracefully, so that alone
+	// was the difference between 60fps and 30.
 	//
-	// A deadline of now makes Read return what is buffered and time out
-	// instantly if that is nothing. The cost is that data landing just after a
-	// poll waits until the next frame; a reader goroutine would remove that
-	// too, at the price of introducing concurrency here.
-	_ = conn.SetReadDeadline(time.Now())
+	// It cannot go to zero either. Go checks the deadline before attempting the
+	// syscall, so an already-expired deadline returns ErrDeadlineExceeded
+	// without reading — buffered data included. Setting it to time.Now() does
+	// not poll the socket, it disables reading entirely, which is silent
+	// because the connection stays up and only the replies go missing.
+	//
+	// A millisecond is enough to pick up anything buffered while costing about
+	// a sixteenth of the frame budget in the worst case. Taking the read off
+	// the frame budget altogether needs a reader goroutine.
+	_ = conn.SetReadDeadline(time.Now().Add(time.Millisecond))
 
 	// Read available data
 	n, err := conn.Read(c.readBuf[c.readOffset:])
