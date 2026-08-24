@@ -18,9 +18,17 @@ const (
 	// straight one. rAthena charges the same 1.4x the pathfinder does.
 	DiagonalCostFactor = 1.4
 
-	// resyncCells is how far the rendered position may drift from a newly
-	// received path's start cell before we hard-snap instead of gliding.
-	resyncCells = 2.0
+	// maxCarryCells is how far the drawn position may sit from a newly
+	// received path's start before we give up on catching up smoothly and
+	// snap. Beyond a few cells the slide would be more distracting than the
+	// jump it avoids.
+	maxCarryCells = 5.0
+
+	// CatchUpFraction is how much extra speed is spent closing the gap between
+	// where the character is drawn and where the server says they are, as a
+	// fraction of walking speed. Low enough to read as walking, high enough to
+	// converge long before the drift can accumulate.
+	CatchUpFraction = 0.5
 )
 
 // cellDeltaToDirection maps a one-cell step to an RO compass direction,
@@ -119,10 +127,17 @@ func (c *Character) Path() [][2]int {
 // the way. Timing comes from WalkSpeedMs, so the walk lands on each cell at
 // the same moment the server thinks it does.
 //
-// The character's world position snaps to path[0] immediately — the server
-// is authoritative — but the *rendered* position glides on from wherever it
-// already was, so a mid-walk re-path doesn't visibly jump. A drift of more
-// than resyncCells is treated as a desync and hard-snapped instead.
+// The world position moves to path[0] at once — the server is authoritative —
+// but the drawn position does not teleport there. Whatever gap exists between
+// the two is kept as a visual offset and bled off over the following frames at
+// CatchUpFraction of walking speed.
+//
+// Without local prediction we are always a round trip behind, so this gap is
+// the normal case rather than an error. Snapping it away teleports the
+// character; folding it into the first step instead makes them sprint for one
+// cell, since that step then has to cover the gap plus a cell in one cell's
+// worth of time. Carrying it does neither. Past maxCarryCells the gap is too
+// large to walk off and we snap.
 func (c *Character) FollowPath(path [][2]int) {
 	if len(path) < 2 {
 		c.StopWalking()
@@ -133,10 +148,10 @@ func (c *Character) FollowPath(path [][2]int) {
 	c.WorldX, c.WorldZ = startX, startZ
 	c.WorldY = c.groundAt(startX, startZ)
 
-	dx := c.RenderX - startX
-	dz := c.RenderZ - startZ
-	if dx*dx+dz*dz > (resyncCells*CellSize)*(resyncCells*CellSize) {
-		c.RenderX, c.RenderY, c.RenderZ = c.WorldX, c.WorldY, c.WorldZ
+	c.offsetX = c.RenderX - startX
+	c.offsetZ = c.RenderZ - startZ
+	if c.offsetX*c.offsetX+c.offsetZ*c.offsetZ > (maxCarryCells*CellSize)*(maxCarryCells*CellSize) {
+		c.offsetX, c.offsetZ = 0, 0
 	}
 
 	c.path = path
@@ -144,18 +159,65 @@ func (c *Character) FollowPath(path [][2]int) {
 	c.segElapsed = 0
 	c.HasDestination = false
 	c.IsMoving = true
-	c.CurrentAction = ActionWalk
-	c.beginSegment(true)
+	c.beginSegment()
+}
+
+// walkUnitsPerSecond converts the ms-per-cell walk speed into a velocity.
+func (c *Character) walkUnitsPerSecond() float32 {
+	ms := c.WalkSpeedMs
+	if ms <= 0 {
+		ms = DefaultWalkSpeedMs
+	}
+	return CellSize * 1000.0 / ms
+}
+
+// decayOffset shrinks the visual offset toward zero at a bounded speed, so
+// catching up reads as walking slightly faster rather than as a jump.
+func (c *Character) decayOffset(deltaMs float32) {
+	dist := sqrtf32(c.offsetX*c.offsetX + c.offsetZ*c.offsetZ)
+	if dist < 0.01 {
+		c.offsetX, c.offsetZ = 0, 0
+		return
+	}
+
+	step := c.walkUnitsPerSecond() * CatchUpFraction * deltaMs / 1000.0
+	if step >= dist {
+		c.offsetX, c.offsetZ = 0, 0
+		return
+	}
+
+	scale := (dist - step) / dist
+	c.offsetX *= scale
+	c.offsetZ *= scale
+}
+
+// applyVisualOffset draws the character at the authoritative position plus
+// whatever is left of the offset, after bleeding some of it off.
+func (c *Character) applyVisualOffset(baseX, baseZ, deltaMs float32) {
+	c.decayOffset(deltaMs)
+	c.RenderX = baseX + c.offsetX
+	c.RenderZ = baseZ + c.offsetZ
+	c.RenderY = c.groundAt(c.RenderX, c.RenderZ)
+}
+
+// VisualOffset returns how far the drawn position currently sits from the
+// authoritative one, in world units. Exposed for diagnostics.
+func (c *Character) VisualOffset() float32 {
+	return sqrtf32(c.offsetX*c.offsetX + c.offsetZ*c.offsetZ)
 }
 
 // StopWalking abandons the current path and returns the character to idle.
+//
+// It deliberately leaves CurrentAction alone: AdvanceAnimation owns that, and
+// holds the walk cycle briefly across the gap between one server-acknowledged
+// step and the next so a character walking cell by cell doesn't flicker to
+// idle between them.
 func (c *Character) StopWalking() {
 	c.path = nil
 	c.pathIdx = 0
 	c.segElapsed = 0
 	c.segDuration = 0
 	c.IsMoving = false
-	c.CurrentAction = ActionIdle
 }
 
 // UpdateWalk advances along the active path by deltaMs. Returns true if the
@@ -175,30 +237,31 @@ func (c *Character) UpdateWalk(deltaMs float32) bool {
 		c.pathIdx++
 		if c.pathIdx >= len(c.path) {
 			c.StopWalking()
+			c.applyVisualOffset(c.WorldX, c.WorldZ, deltaMs)
 			return true
 		}
-		c.beginSegment(false)
+		c.beginSegment()
 	}
 
 	t := c.segElapsed / c.segDuration
-	c.RenderX = c.segFromX + (c.segToX-c.segFromX)*t
-	c.RenderZ = c.segFromZ + (c.segToZ-c.segFromZ)*t
-	c.RenderY = c.groundAt(c.RenderX, c.RenderZ)
+	c.applyVisualOffset(
+		c.segFromX+(c.segToX-c.segFromX)*t,
+		c.segFromZ+(c.segToZ-c.segFromZ)*t,
+		deltaMs,
+	)
 	return true
 }
 
 // beginSegment sets up the step from path[pathIdx-1] to path[pathIdx].
-// On the first segment of a path we start the visual glide from wherever the
-// character is already rendered rather than from the cell center, so a
-// re-path mid-stride stays smooth.
-func (c *Character) beginSegment(first bool) {
+//
+// Segments always run cell centre to cell centre, at exactly one cell's worth
+// of time. Any discrepancy between that and where the character is drawn lives
+// in the visual offset, so the walk itself always moves at walking speed.
+func (c *Character) beginSegment() {
 	from := c.path[c.pathIdx-1]
 	to := c.path[c.pathIdx]
 
 	c.segFromX, c.segFromZ = CellToWorld(from[0], from[1])
-	if first {
-		c.segFromX, c.segFromZ = c.RenderX, c.RenderZ
-	}
 	c.segToX, c.segToZ = CellToWorld(to[0], to[1])
 
 	dx, dy := to[0]-from[0], to[1]-from[1]
@@ -220,11 +283,12 @@ func (c *Character) beginSegment(first bool) {
 }
 
 // arriveAtSegmentEnd plants the character exactly on the cell it just
-// reached, so rounding never accumulates across a long path.
+// reached, so rounding never accumulates across a long path. The drawn
+// position is left to applyVisualOffset, which still owes any outstanding
+// correction.
 func (c *Character) arriveAtSegmentEnd() {
 	c.WorldX, c.WorldZ = c.segToX, c.segToZ
 	c.WorldY = c.groundAt(c.WorldX, c.WorldZ)
-	c.RenderX, c.RenderY, c.RenderZ = c.WorldX, c.WorldY, c.WorldZ
 }
 
 // groundAt returns the terrain altitude at a world XZ, or the current
