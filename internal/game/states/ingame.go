@@ -60,6 +60,7 @@ type InGameState struct {
 
 	// Network timing
 	lastMoveTick      uint32
+	lastMoveSent      time.Time
 	moveTickRate      time.Duration
 	lastKeepAlive     time.Time
 	keepAliveInterval time.Duration
@@ -528,6 +529,15 @@ func (s *InGameState) StepToward(dirX, dirZ float32) error {
 		return nil
 	}
 
+	// Rate-limit. IsWalkingPath only goes true once the server's ack comes
+	// back, so between sending a request and hearing about it we'd fire one
+	// per frame — 40+ walk requests a second, each restarting the walk server
+	// side so the character never finishes a step. One request per
+	// moveTickRate is plenty to walk continuously at 150ms per cell.
+	if time.Since(s.lastMoveSent) < s.moveTickRate {
+		return nil
+	}
+
 	dir := entity.CalculateDirection(dirX, dirZ)
 	dx, dy := entity.CellDeltaForDirection(dir)
 	if dx == 0 && dy == 0 {
@@ -635,6 +645,7 @@ func (s *InGameState) RequestMove(tileX, tileY int) error {
 	// back, so the route and its timing are the server's, not a guess we'd
 	// have to reconcile. The server also gets to refuse the move outright.
 	s.lastMoveTick = uint32(time.Now().UnixMilli() & 0xFFFFFFFF)
+	s.lastMoveSent = time.Now()
 	return nil
 }
 
