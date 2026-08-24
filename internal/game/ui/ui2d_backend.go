@@ -7,8 +7,10 @@ import (
 
 	"github.com/AllenDang/cimgui-go/imgui"
 	"github.com/go-gl/gl/v4.1-core/gl"
+	"go.uber.org/zap"
 
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
+	"github.com/Faultbox/midgard-ro/internal/logger"
 )
 
 // UI2DBackend implements UIBackend using the custom ui2d rendering system.
@@ -20,7 +22,6 @@ type UI2DBackend struct {
 
 	// Login screen textures (lazy-loaded)
 	loginBgTex    *TextureInfo
-	logoTex       *TextureInfo
 	loginTexTried bool // avoid repeated load attempts
 
 	// Cached widget states
@@ -195,7 +196,17 @@ func (b *UI2DBackend) DrawSceneTexture(x, y, w, h float32, textureID uint32) {
 }
 
 // loginTexBasePath is the GRF path for login screen textures.
-const loginTexBasePath = `data\texture\유저인터페이스\login_interface\`
+// RO interface art lives under the Korean "user interface" folder; the asset
+// manager handles the EUC-KR encoding of these paths.
+const (
+	uiTexBasePath    = `data\texture\유저인터페이스\`
+	loginTexBasePath = uiTexBasePath + `login_interface\`
+
+	// The login screen backdrop. Verified present in data.grf — the previous
+	// login_bg.bmp / login_logo.bmp were not in the archive at all, which is
+	// why the login screen rendered on bare black.
+	loginBackgroundTex = uiTexBasePath + `bgi_temp.bmp`
+)
 
 // loadLoginTextures lazy-loads the login background and logo.
 func (b *UI2DBackend) loadLoginTextures() {
@@ -204,14 +215,15 @@ func (b *UI2DBackend) loadLoginTextures() {
 	}
 	b.loginTexTried = true
 
-	bg, err := b.texCache.Load(loginTexBasePath + `login_bg.bmp`)
+	bg, err := b.texCache.Load(loginBackgroundTex)
 	if err == nil {
 		b.loginBgTex = bg
-	}
-
-	logo, err := b.texCache.Load(loginTexBasePath + `login_logo.bmp`)
-	if err == nil {
-		b.logoTex = logo
+	} else {
+		// Worth saying out loud. A silently swallowed miss here is what left
+		// the login screen on a black background with nobody noticing that the
+		// path had never existed.
+		logger.Warn("login background texture unavailable",
+			zap.String("path", loginBackgroundTex), zap.Error(err))
 	}
 }
 
@@ -235,21 +247,11 @@ func (b *UI2DBackend) RenderLoginUI(state LoginUIState, width, height float32) {
 
 	// Center the login window
 	windowWidth := float32(400)
-	windowHeight := float32(340)
+	// Tall enough for the contents. At 340 the trailing server label was
+	// drawn below the frame, outside the window it belongs to.
+	windowHeight := float32(400)
 	windowX := (width - windowWidth) / 2
 	windowY := (height - windowHeight) / 2
-
-	// Draw logo centered above the login window
-	if b.logoTex != nil {
-		logoW := float32(b.logoTex.Width)
-		logoH := float32(b.logoTex.Height)
-		logoX := (width - logoW) / 2
-		logoY := windowY - logoH - 16
-		if logoY < 0 {
-			logoY = 0
-		}
-		b.ctx.Renderer().DrawImage(b.logoTex.ID, logoX, logoY, logoW, logoH, ui2d.ColorWhite)
-	}
 
 	if b.ctx.BeginWindow("login", windowX, windowY, windowWidth, windowHeight, "Login to Ragnarok Online") {
 		b.ctx.Spacer(12)

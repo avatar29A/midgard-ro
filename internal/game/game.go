@@ -76,6 +76,15 @@ type Game struct {
 	// turn on to inspect player/camera/scene/network telemetry live.
 	showDebug bool
 
+	// Unattended screenshot capture (--screenshot-after / --screenshot-every),
+	// so the UI can be inspected without someone sitting at the keyboard to
+	// press F12.
+	shotAfter time.Duration
+	shotEvery time.Duration
+	shotOnce  bool
+	shotLast  time.Time
+	startedAt time.Time
+
 	// Per-phase frame cost, accumulated for the render trace.
 	costTimer   time.Time
 	costSamples int
@@ -321,6 +330,8 @@ func (g *Game) frame() {
 		g.screenshotRequested = true
 	}
 
+	g.checkTimedScreenshot()
+
 	// F3 toggles the in-game debug overlay (player/camera/scene/network).
 	if imgui.IsKeyPressedBoolV(imgui.KeyF3, false) {
 		g.showDebug = !g.showDebug
@@ -356,6 +367,34 @@ func (g *Game) frame() {
 	if g.screenshotRequested {
 		g.screenshotRequested = false
 		g.captureScreenshot()
+	}
+}
+
+// SetScreenshotTimers arms the unattended capture. A zero duration disables
+// that timer.
+func (g *Game) SetScreenshotTimers(after, every time.Duration) {
+	g.shotAfter = after
+	g.shotEvery = every
+	g.startedAt = time.Now()
+	g.shotLast = time.Now()
+}
+
+// checkTimedScreenshot fires the unattended capture timers. Both are off
+// unless asked for on the command line.
+func (g *Game) checkTimedScreenshot() {
+	if g.startedAt.IsZero() {
+		g.startedAt = time.Now()
+	}
+
+	if g.shotAfter > 0 && !g.shotOnce && time.Since(g.startedAt) >= g.shotAfter {
+		g.shotOnce = true
+		g.screenshotRequested = true
+		return
+	}
+
+	if g.shotEvery > 0 && time.Since(g.shotLast) >= g.shotEvery {
+		g.shotLast = time.Now()
+		g.screenshotRequested = true
 	}
 }
 
