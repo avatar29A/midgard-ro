@@ -32,6 +32,52 @@ var cellDeltaToDirection = [9]int{
 	DirNW, DirN, DirNE, // dy = +1 (north)
 }
 
+// serverDirDeltas mirrors rAthena's dirx/diry lookup tables (src/map/unit.cpp)
+// indexed by its `enum directions` (src/map/path.hpp):
+//
+//	DIR_NORTH=0, DIR_NORTHWEST=1, DIR_WEST=2, DIR_SOUTHWEST=3,
+//	DIR_SOUTH=4, DIR_SOUTHEAST=5, DIR_EAST=6, DIR_NORTHEAST=7
+//
+// Note this runs the opposite way around the compass from the sprite indices
+// RO art uses (S=0, SW=1, W=2, ...), so the two are never interchangeable —
+// assigning a server direction straight to a sprite direction points the
+// character the wrong way everywhere except due west and due east.
+var serverDirDeltas = [8][2]int{
+	{0, 1},   // DIR_NORTH
+	{-1, 1},  // DIR_NORTHWEST
+	{-1, 0},  // DIR_WEST
+	{-1, -1}, // DIR_SOUTHWEST
+	{0, -1},  // DIR_SOUTH
+	{1, -1},  // DIR_SOUTHEAST
+	{1, 0},   // DIR_EAST
+	{1, 1},   // DIR_NORTHEAST
+}
+
+// DirectionFromServer converts a direction as the server numbers them into the
+// sprite direction index. It goes through the same cell-delta table the walk
+// code uses, so the two can't drift apart.
+func DirectionFromServer(serverDir uint8) int {
+	if int(serverDir) >= len(serverDirDeltas) {
+		return DirS
+	}
+	d := serverDirDeltas[serverDir]
+	if dir := DirectionFromCellDelta(d[0], d[1]); dir >= 0 {
+		return dir
+	}
+	return DirS
+}
+
+// CellDeltaForDirection returns the one-cell step that moves a character in the
+// given RO direction. It is the inverse of DirectionFromCellDelta.
+func CellDeltaForDirection(dir int) (dx, dy int) {
+	for i, d := range cellDeltaToDirection {
+		if d == dir {
+			return i%3 - 1, i/3 - 1
+		}
+	}
+	return 0, 0
+}
+
 // CellToWorld returns the world XZ of a cell's center.
 func CellToWorld(cellX, cellY int) (worldX, worldZ float32) {
 	return (float32(cellX) + 0.5) * CellSize, (float32(cellY) + 0.5) * CellSize

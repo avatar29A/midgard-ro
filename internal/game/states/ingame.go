@@ -57,10 +57,6 @@ type InGameState struct {
 	TileX   int // Current tile X
 	TileY   int // Current tile Y
 
-	// Movement input
-	moveInputX float32 // -1 to 1
-	moveInputZ float32 // -1 to 1
-
 	// Network timing
 	lastMoveTick      uint32
 	moveTickRate      time.Duration
@@ -133,7 +129,10 @@ func (s *InGameState) Enter() error {
 	}
 
 	s.player = entity.NewCharacter(worldX, worldY, worldZ)
-	s.player.Direction = int(s.config.SpawnDir)
+
+	// The server numbers directions the opposite way round the compass from
+	// the sprite sheets, so this needs converting rather than assigning.
+	s.player.Direction = entity.DirectionFromServer(s.config.SpawnDir)
 
 	// Walk timing comes from the character's `speed` stat (ms per cell).
 	s.player.WalkSpeedMs = s.manager.Session.WalkSpeedMs()
@@ -301,16 +300,10 @@ func (s *InGameState) Update(dt float64) error {
 		s.lastKeepAlive = time.Now()
 	}
 
-	// Update player movement
+	// Update player movement. Walking is server-authoritative: this advances
+	// along the path the server acknowledged.
 	if s.player != nil {
-		// Handle keyboard movement input
-		if s.moveInputX != 0 || s.moveInputZ != 0 {
-			s.player.UpdateWithVelocity(s.moveInputX, s.moveInputZ, deltaMs)
-		} else {
-			// Walks the active server path, or falls through to free
-			// movement when there isn't one.
-			s.player.Update(deltaMs)
-		}
+		s.player.Update(deltaMs)
 
 		// Free movement needs a render catch-up pass; path walking already
 		// interpolates on server timing and ignores this.
@@ -474,10 +467,37 @@ func (s *InGameState) handleMapChange(data []byte) error {
 	return nil
 }
 
-// SetMoveInput sets the movement input from keyboard.
-func (s *InGameState) SetMoveInput(x, z float32) {
-	s.moveInputX = x
-	s.moveInputZ = z
+// StepToward asks the server to walk one cell in the direction of the given
+// world-space vector, which the caller has already rotated into the camera's
+// frame so "forward" means away from the viewer.
+//
+// Keyboard walking in RO is not free movement — it is a walk request per cell,
+// same as a click. Issuing one step at a time keeps us on the server's path
+// and stops the moment the key is released. Requests are skipped while a walk
+// is already in flight so we don't spam the server mid-step.
+func (s *InGameState) StepToward(dirX, dirZ float32) error {
+	if s.player == nil || s.player.IsWalkingPath() {
+		return nil
+	}
+	if dirX == 0 && dirZ == 0 {
+		return nil
+	}
+
+	dir := entity.CalculateDirection(dirX, dirZ)
+	dx, dy := entity.CellDeltaForDirection(dir)
+	if dx == 0 && dy == 0 {
+		return nil
+	}
+
+	cellX, cellY := s.player.CurrentCell()
+	targetX, targetY := cellX+dx, cellY+dy
+
+	// Don't bother the server with a step into a wall.
+	if s.pathFinder != nil && !s.pathFinder.IsWalkable(targetX, targetY) {
+		return nil
+	}
+
+	return s.RequestMove(targetX, targetY)
 }
 
 // ScreenToTile maps a screen-space click (in viewport pixels) to a tile
