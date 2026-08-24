@@ -569,6 +569,36 @@ func (g *Game) handleInGameInput(state *states.InGameState) {
 	g.lastMouseX = mouseX
 	g.lastMouseY = mouseY
 
+	// WASD walking. Movement is relative to where the camera is looking, so
+	// W always walks away from the viewer no matter how the camera is turned.
+	// Each press asks the server for one cell; StepToward ignores us while a
+	// walk is already in flight, so holding a key walks continuously.
+	if !io.WantCaptureKeyboard() {
+		var forward, strafe float32
+		if imgui.IsKeyDown(imgui.KeyW) {
+			forward++
+		}
+		if imgui.IsKeyDown(imgui.KeyS) {
+			forward--
+		}
+		if imgui.IsKeyDown(imgui.KeyD) {
+			strafe++
+		}
+		if imgui.IsKeyDown(imgui.KeyA) {
+			strafe--
+		}
+
+		if forward != 0 || strafe != 0 {
+			camDirX, camDirZ := camera.ForwardDirection()
+			camRightX, camRightZ := camera.RightDirection()
+			moveX := camDirX*forward + camRightX*strafe
+			moveZ := camDirZ*forward + camRightZ*strafe
+			if err := state.StepToward(moveX, moveZ); err != nil {
+				logger.Warn("keyboard step failed", zap.Error(err))
+			}
+		}
+	}
+
 	// Left click for click-to-move. Skip if any imgui window (HUD, minimap,
 	// chat, etc) is consuming the click; otherwise ray-cast to ground plane
 	// and dispatch a server move request.

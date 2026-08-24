@@ -2584,8 +2584,10 @@ func (mv *MapViewer) HandlePlayMovement(forward, right, _ float32) {
 		mv.Player.WorldY = mv.GetInterpolatedTerrainHeight(newX, newZ)
 	}
 
-	// Calculate 8-direction facing from movement (negate to face movement direction)
-	mv.Player.Direction = entity.CalculateDirection(-moveX, -moveZ)
+	// Face the way we're moving. This used to negate the delta to cancel out
+	// an inverted direction table in entity.CalculateDirection; that table is
+	// correct now, so the movement vector goes in as-is.
+	mv.Player.Direction = entity.CalculateDirection(moveX, moveZ)
 
 	// Set walk animation
 	mv.Player.CurrentAction = entity.ActionWalk

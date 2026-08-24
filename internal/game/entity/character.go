@@ -198,9 +198,24 @@ func (c *Character) UpdateWithVelocity(vx, vz float32, deltaMs float32) {
 	c.Direction = CalculateDirection(vx, vz)
 }
 
+// sectorToDirection maps a 45-degree sector, measured clockwise from +Z, to
+// an RO direction index.
+//
+// The world runs +X east and +Z north — that is how the terrain mesh is built
+// (internal/engine/terrain/mesh.go lays GND row y at Z = y*zoom, so low Z is
+// south) and how rAthena's own dirx/diry tables read (+y north, +x east).
+// So sector 0 (+Z) is north, and every 45 degrees clockwise from there steps
+// through NE, E, SE, S, SW, W, NW.
+var sectorToDirection = [8]int{DirN, DirNE, DirE, DirSE, DirS, DirSW, DirW, DirNW}
+
 // CalculateDirection converts a movement delta to an RO direction index.
+//
+// This used to start the table at DirS on the belief that +Z was south, which
+// pointed every facing 180 degrees the wrong way. Callers compensated by
+// negating their deltas; those negations are gone now that the table is right.
 func CalculateDirection(dx, dz float32) int {
-	// Calculate angle in radians (atan2 gives -PI to PI)
+	// Calculate angle in radians (atan2 gives -PI to PI), measured clockwise
+	// from +Z toward +X.
 	angle := gomath.Atan2(float64(dx), float64(dz))
 
 	// Convert to 0-2*PI range
@@ -215,38 +230,7 @@ func CalculateDirection(dx, dz float32) int {
 		sector = 0
 	}
 
-	// Map sectors to RO direction order
-	// angle=0 is +Z direction (South in RO terms = facing camera)
-	// Clockwise: S(0), SE(7), E(6), NE(5), N(4), NW(3), W(2), SW(1)
-	directionMap := []int{DirS, DirSE, DirE, DirNE, DirN, DirNW, DirW, DirSW}
-	return directionMap[sector]
-}
-
-// GetVisualDirection returns the direction to display, applying hysteresis
-// to prevent visual flickering when moving near direction boundaries.
-func (c *Character) GetVisualDirection() int {
-	if !c.IsMoving {
-		return c.Direction
-	}
-
-	// Apply hysteresis: keep previous direction unless significantly different
-	if c.LastVisualDir >= 0 {
-		// Calculate angular difference (handling wrap-around)
-		diff := c.Direction - c.LastVisualDir
-		if diff < 0 {
-			diff = -diff
-		}
-		if diff > 4 {
-			diff = 8 - diff // Shorter path around the circle
-		}
-		// Only change if more than 1 direction step (>45 degrees)
-		if diff <= 1 {
-			return c.LastVisualDir
-		}
-	}
-
-	c.LastVisualDir = c.Direction
-	return c.Direction
+	return sectorToDirection[sector]
 }
 
 // sqrtf32 computes the square root of a float32.
