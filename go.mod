@@ -9,6 +9,7 @@ require (
 	github.com/go-gl/gl v0.0.0-20231021071112-07e5d0ea2e71
 	github.com/gopxl/beep/v2 v2.1.1
 	github.com/sqweek/dialog v0.0.0-20240226140203-065105509627
+	github.com/tosone/minimp3 v1.0.2
 	github.com/veandco/go-sdl2 v0.4.40
 	go.uber.org/zap v1.27.1
 	golang.org/x/image v0.34.0
