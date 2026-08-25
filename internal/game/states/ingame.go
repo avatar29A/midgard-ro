@@ -9,6 +9,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/Faultbox/midgard-ro/internal/config"
 	"github.com/Faultbox/midgard-ro/internal/engine/camera"
 	"github.com/Faultbox/midgard-ro/internal/engine/charsprite"
 	"github.com/Faultbox/midgard-ro/internal/engine/picking"
@@ -183,8 +184,16 @@ func (s *InGameState) Enter() error {
 
 	// Create third-person camera following player (RO-style)
 	s.camera = camera.NewThirdPersonCamera()
-	s.camera.Distance = 145 // RO-style close distance (like grfbrowser PlayMode)
+	s.camera.Distance = DefaultCameraZoom
 	s.camera.Yaw = 0
+
+	// Pick up where the last session left the zoom, if it was remembered and
+	// is still a distance the camera accepts — a stale file should not be able
+	// to put the camera somewhere unusable.
+	if z := config.LoadUIState().CameraZoom; z >= s.camera.MinDistance && z <= s.camera.MaxDistance {
+		s.camera.Distance = z
+		logger.Debug("restored camera zoom", zap.Float32("distance", z))
+	}
 
 	// Build the player billboard renderer and load the character's sprites.
 	// A sprite failure is not fatal: the renderer keeps drawing its
@@ -293,6 +302,8 @@ func (s *InGameState) loadMap() error {
 
 // Exit is called when leaving this state.
 func (s *InGameState) Exit() error {
+	s.SaveUIState()
+
 	if s.playerRender != nil {
 		s.playerRender.Destroy()
 		s.playerRender = nil
@@ -383,6 +394,29 @@ func (s *InGameState) GetSceneTexture() uint32 {
 		return s.scene.ColorTexture()
 	}
 	return 0
+}
+
+// DefaultCameraZoom is the starting third-person distance: RO-style and close
+// in, matching grfbrowser's play mode.
+const DefaultCameraZoom = 145
+
+// CameraZoom returns the current camera distance.
+func (s *InGameState) CameraZoom() float32 {
+	if s.camera == nil {
+		return DefaultCameraZoom
+	}
+	return s.camera.Distance
+}
+
+// SaveUIState records the parts of the session worth remembering. Called on
+// the way out; a failure here is worth a line in the log and nothing more.
+func (s *InGameState) SaveUIState() {
+	if s.camera == nil {
+		return
+	}
+	if err := config.SaveUIState(config.UIState{CameraZoom: s.camera.Distance}); err != nil {
+		logger.Warn("could not save ui state", zap.Error(err))
+	}
 }
 
 // GetCamera returns the camera.
