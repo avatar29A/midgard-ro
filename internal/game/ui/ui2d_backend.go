@@ -510,7 +510,11 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 	b.ctx.Renderer().DrawRect(0, barY, width, 25, ui2d.ColorPanelBg)
 	b.ctx.Renderer().DrawText(10, barY+4, statusText, scale, ui2d.ColorTextOnDark)
 
-	posText := fmt.Sprintf("(%d, %d)", state.PlayerTileX, state.PlayerTileY)
+	// Cell position and zoom, right-aligned. Zoom is shown because it is
+	// remembered between sessions — without a readout there is no way to tell
+	// what was restored, or to get back to a distance you liked.
+	posText := fmt.Sprintf("Zoom %.0f   (%d, %d)",
+		state.CamDistance, state.PlayerTileX, state.PlayerTileY)
 	posW, _ := b.ctx.Renderer().MeasureText(posText, scale)
 	b.ctx.Renderer().DrawText(width-posW-10, barY+4, posText, scale, ui2d.ColorTextOnDark)
 }
