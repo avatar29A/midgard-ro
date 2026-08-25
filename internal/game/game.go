@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/AllenDang/cimgui-go/backend"
@@ -56,6 +57,7 @@ type Game struct {
 	// Audio
 	audioManager *audio.Manager
 	bgm          *audio.LocationPlayer
+	uiClickWarn  sync.Once
 
 	// Timing
 	lastTime   time.Time
@@ -174,6 +176,7 @@ func New(cfg *config.Config) (*Game, error) {
 		return nil, fmt.Errorf("create ui2d backend: %w", err)
 	}
 	ui2dBackend.SetAssetLoader(g.assetManager.Load)
+	g.attachUISounds(ui2dBackend)
 	g.uiBackend = ui2dBackend
 
 	logger.Info("game initialized successfully")
@@ -245,6 +248,47 @@ func (g *Game) initGameState(cfg *config.Config) error {
 	g.stateManager.Change(loginState)
 
 	return nil
+}
+
+// uiClickSound is the sound the client plays when a button is pressed. The
+// archives name it in Korean; the asset manager falls back to EUC-KR, so the
+// UTF-8 literal resolves.
+const uiClickSound = "data/wav/버튼소리.wav"
+
+// clickSounder is the part of a UI backend that can be given a press sound.
+type clickSounder interface {
+	SetClickSound(play func())
+}
+
+// attachUISounds gives the UI backend its press sound, when both the backend
+// and the audio support one.
+func (g *Game) attachUISounds(backend ui.UIBackend) {
+	sounder, ok := backend.(clickSounder)
+	if !ok || g.audioManager == nil {
+		return
+	}
+
+	sounder.SetClickSound(g.playUIClick)
+}
+
+// playUIClick plays the button press sound. A click is not worth failing or
+// spamming the log over, so a missing sound is reported once and then ignored.
+func (g *Game) playUIClick() {
+	if g.audioManager == nil {
+		return
+	}
+
+	data, err := g.assetManager.Load(uiClickSound)
+	if err == nil {
+		err = g.audioManager.PlaySFX(data)
+	}
+
+	if err != nil {
+		g.uiClickWarn.Do(func() {
+			logger.Warn("no button press sound",
+				zap.String("path", uiClickSound), zap.Error(err))
+		})
+	}
 }
 
 // initAudio brings up audio playback and the location background music.
@@ -824,6 +868,8 @@ func (g *Game) SetUIBackend(backend ui.UIBackend) {
 	if g.uiBackend != nil {
 		g.uiBackend.Close()
 	}
+
+	g.attachUISounds(backend)
 	g.uiBackend = backend
 }
 
