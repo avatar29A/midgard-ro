@@ -37,6 +37,9 @@ services:
       - ./build/rathena/tools/docker/asset/inter_conf.txt:/rathena/conf/import/inter_conf.txt
       - ./build/rathena/tools/docker/asset/char_conf.txt:/rathena/conf/import/char_conf.txt
       - ./build/rathena/tools/docker/asset/map_conf.txt:/rathena/conf/import/map_conf.txt
+      # Our own battle config overrides. Vendored here rather than edited in
+      # the clone, which `make server-rebuild` wipes.
+      - ./conf/battle_conf.txt:/rathena/conf/import/battle_conf.txt
     init: true
     tty: true
     stdin_open: true

@@ -1,0 +1,18 @@
+// Battle config overrides for the local development server.
+//
+// rAthena imports this last (conf/battle_athena.conf), so anything here wins
+// over the stock conf/battle/*.conf. Kept in the repo and mounted into the
+// container rather than edited in the clone, which `make server-rebuild`
+// wipes.
+
+// How far from a player the server reports other units, in cells.
+//
+// Stock is 14, which is much smaller than this client can see: at the default
+// zoom the camera frames roughly 45 cells, so units appeared and vanished
+// well inside the visible map and a town looked half empty. 28 covers most of
+// the default view.
+//
+// The cost is server-side: every client is told about more units, and every
+// unit's movement is relayed to more clients. Fine for one player on a local
+// server; a populated one would want this back near stock.
+area_size: 28
