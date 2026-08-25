@@ -234,6 +234,7 @@ func (g *Game) initGameState(cfg *config.Config) error {
 	// Set texture loader for states
 	g.stateManager.SetTexLoader(g.assetManager.Load)
 
+	g.stateManager.AutoPlay = config.AutoLogin()
 	loginState := states.NewLoginState(loginCfg, g.client, g.stateManager)
 	g.stateManager.Change(loginState)
 
