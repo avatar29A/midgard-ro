@@ -108,11 +108,8 @@ type Scene struct {
 	// Terrain height data
 	terrainAltitudes [][]float32
 	terrainTileZoom  float32
-
-	// How far the camera is from its subject, used to size the near plane.
-	viewDistance  float32
-	terrainTilesX int
-	terrainTilesZ int
+	terrainTilesX    int
+	terrainTilesZ    int
 
 	// GAT collision data
 	GAT *formats.GAT
@@ -314,58 +311,11 @@ func (s *Scene) extractPointLights(rsw *formats.RSW) {
 
 // Render renders the scene to the framebuffer using an OrbitCamera.
 func (s *Scene) Render(cam *camera.OrbitCamera) uint32 {
-	s.SetViewDistance(cam.Distance)
 	return s.RenderWithView(cam.ViewMatrix())
-}
-
-// Depth precision, not draw distance, is what sets the near plane.
-//
-// Perspective depth resolution falls off with the square of the view distance
-// and improves in proportion to the near plane. Pinned at 1.0 against a far
-// plane of 10000, almost the whole 24-bit buffer is spent on the first few
-// units and too little is left to separate coplanar surfaces further out —
-// wall joins in Prontera flickered at zoom 262 and were clean at 100, and a
-// 2.6x zoom is a 6.9x loss of precision, which is that threshold being
-// crossed.
-//
-// Scaling the near plane with the camera distance makes precision degrade
-// linearly with zoom rather than quadratically, so the far end of the zoom
-// range is no worse than the near end used to be. The upper clamp bounds how
-// much can be clipped out from under a camera that is a long way back.
-const (
-	nearPlaneRatio = 0.1
-	minNearPlane   = 1.0
-	// The ceiling guards against a nonsense camera distance rather than acting
-	// as a working limit: it sits at the ratio applied to
-	// ThirdPersonCamera.MaxDistance, so the whole usable zoom range keeps the
-	// full benefit. Clamping tighter leaves the far end of the zoom worse
-	// resolved than the near end was before any of this.
-	maxNearPlane        = 80.0
-	farPlane            = 10000.0
-	defaultViewDistance = 145.0
-)
-
-// nearPlaneFor returns the near plane to use for a given camera distance.
-func nearPlaneFor(viewDistance float32) float32 {
-	near := viewDistance * nearPlaneRatio
-	if near < minNearPlane {
-		return minNearPlane
-	}
-	if near > maxNearPlane {
-		return maxNearPlane
-	}
-	return near
-}
-
-// SetViewDistance tells the scene how far the camera is from what it is
-// looking at, so the projection can size its near plane accordingly.
-func (s *Scene) SetViewDistance(d float32) {
-	s.viewDistance = d
 }
 
 // RenderWithThirdPerson renders the scene using a ThirdPersonCamera following a target.
 func (s *Scene) RenderWithThirdPerson(cam *camera.ThirdPersonCamera, targetX, targetY, targetZ float32) uint32 {
-	s.SetViewDistance(cam.Distance)
 	return s.RenderWithViewExtras(cam.ViewMatrix(targetX, targetY, targetZ), nil)
 }
 
@@ -374,7 +324,6 @@ func (s *Scene) RenderWithThirdPerson(cam *camera.ThirdPersonCamera, targetX, ta
 // unbind) — use this to draw billboards/overlays that need to appear in the
 // composited scene texture.
 func (s *Scene) RenderWithThirdPersonExtras(cam *camera.ThirdPersonCamera, targetX, targetY, targetZ float32, extras func(viewProj math.Mat4)) uint32 {
-	s.SetViewDistance(cam.Distance)
 	return s.RenderWithViewExtras(cam.ViewMatrix(targetX, targetY, targetZ), extras)
 }
 
@@ -396,11 +345,7 @@ func (s *Scene) LastViewProj() math.Mat4 {
 func (s *Scene) RenderWithViewExtras(view math.Mat4, extras func(viewProj math.Mat4)) uint32 {
 	// Calculate view/projection matrices
 	aspect := float32(s.config.Width) / float32(s.config.Height)
-	viewDistance := s.viewDistance
-	if viewDistance <= 0 {
-		viewDistance = defaultViewDistance
-	}
-	proj := math.Perspective(0.785398, aspect, nearPlaneFor(viewDistance), farPlane) // 45 degrees FOV
+	proj := math.Perspective(0.785398, aspect, 1.0, 10000.0) // 45 degrees FOV
 	viewProj := proj.Mul(view)
 	s.lastViewProj = viewProj
 
