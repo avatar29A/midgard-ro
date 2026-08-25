@@ -269,8 +269,20 @@ const (
 	loginLabelMaskH = float32(15)
 	loginLabelRight = float32(83) // captions are right-aligned to here
 
-	// Matches the input fields, so captions and typed text share a baseline.
-	loginTextScale = float32(0.85)
+	// The original's UI text is around 11px. The font is 14pt, so it is scaled
+	// down to sit inside an 18px well the way the artwork expects.
+	loginTextScale = float32(0.7)
+
+	// The buttons carry their captions in the texture too. Ink spans x 10..32
+	// on both; columns 2..9 are clean face, so one of them stretches over the
+	// caption the same way the title bar does.
+	loginBtnInkX   = float32(10)
+	loginBtnInkW   = float32(23)
+	loginBtnInkY   = float32(2)
+	loginBtnInkH   = float32(16)
+	loginBtnCleanX = float32(5)
+	loginBtnTexW   = float32(42)
+	loginBtnTexH   = float32(20)
 )
 
 // loginWindowSkin holds the original login window art and its widget states.
@@ -403,7 +415,7 @@ func (b *UI2DBackend) renderNativeLoginWindow(state LoginUIState, width, height 
 
 	// The wells are painted into the window art, so the fields draw text only.
 	user, userChanged, userSubmit := b.ctx.TextInputBareAt("login_user",
-		x+loginFieldX, y+loginUserY, loginFieldW, loginFieldH, b.loginUsername)
+		x+loginFieldX, y+loginUserY, loginFieldW, loginFieldH, loginTextScale, b.loginUsername)
 	if userChanged {
 		b.loginUsername = user
 
@@ -413,7 +425,7 @@ func (b *UI2DBackend) renderNativeLoginWindow(state LoginUIState, width, height 
 	}
 
 	pass, passChanged, passSubmit := b.ctx.PasswordInputBareAt("login_pass",
-		x+loginFieldX, y+loginPassY, loginFieldW, loginFieldH, b.loginPassword)
+		x+loginFieldX, y+loginPassY, loginFieldW, loginFieldH, loginTextScale, b.loginPassword)
 	if passChanged {
 		b.loginPassword = pass
 
@@ -435,21 +447,20 @@ func (b *UI2DBackend) renderNativeLoginWindow(state LoginUIState, width, height 
 		b.loginSaveID = !b.loginSaveID
 	}
 
+	// Centered on the box rather than sitting on its top edge.
 	saveAscent := r.FontAscent(loginTextScale)
-	r.DrawText(chkX+loginChkBox+3, y+loginChkY+(loginChkBox-saveAscent)/2,
+	r.DrawText(chkX+loginChkBox+4, y+loginChkY+(loginChkBox-saveAscent)/2,
 		"Save", loginTextScale, ui2d.ColorText)
 
 	btnY := y + loginWinH - loginBtnBottom - loginBtnH
 
-	if b.ctx.ImageButtonAt("login_connect",
-		x+loginWinW-loginConnRight-loginBtnW, btnY, loginBtnW, loginBtnH,
-		skin.connect.ID, skin.connectOver.ID, skin.connectDown.ID) {
+	if b.loginSkinButton("login_connect", x+loginWinW-loginConnRight-loginBtnW, btnY,
+		skin.connect, skin.connectOver, skin.connectDown, "Connect") {
 		doLogin()
 	}
 
-	if b.ctx.ImageButtonAt("login_exit",
-		x+loginWinW-loginExitRight-loginBtnW, btnY, loginBtnW, loginBtnH,
-		skin.exit.ID, skin.exitOver.ID, skin.exitDown.ID) {
+	if b.loginSkinButton("login_exit", x+loginWinW-loginExitRight-loginBtnW, btnY,
+		skin.exit, skin.exitOver, skin.exitDown, "Exit") {
 		if state.OnExit != nil {
 			state.OnExit()
 		}
@@ -473,6 +484,34 @@ func (b *UI2DBackend) renderNativeLoginWindow(state LoginUIState, width, height 
 	}
 
 	return true
+}
+
+// loginSkinButton draws one of the window's buttons and replaces the caption
+// baked into it with an English one.
+func (b *UI2DBackend) loginSkinButton(id string, x, y float32, normal, over, down *TextureInfo, label string) bool {
+	clicked, drawn := b.ctx.ImageButtonAtEx(id, x, y, loginBtnW, loginBtnH,
+		normal.ID, over.ID, down.ID)
+
+	if drawn == 0 {
+		return clicked
+	}
+
+	r := b.ctx.Renderer()
+
+	// Cover the caption with a clean column of whichever state is showing —
+	// the three differ, so the mask has to come from the texture on screen.
+	u := loginBtnCleanX / loginBtnTexW
+	r.DrawImageUV(drawn,
+		x+loginBtnInkX, y+loginBtnInkY, loginBtnInkW, loginBtnInkH,
+		u, loginBtnInkY/loginBtnTexH,
+		u+1/loginBtnTexW, (loginBtnInkY+loginBtnInkH)/loginBtnTexH,
+		ui2d.ColorWhite)
+
+	textW, _ := r.MeasureText(label, loginTextScale)
+	ascent := r.FontAscent(loginTextScale)
+	r.DrawText(x+(loginBtnW-textW)/2, y+(loginBtnH-ascent)/2, label, loginTextScale, ui2d.ColorText)
+
+	return clicked
 }
 
 // loadLoginTextures lazy-loads the login-screen backdrop. We use
