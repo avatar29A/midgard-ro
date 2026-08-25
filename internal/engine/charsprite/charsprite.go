@@ -33,6 +33,20 @@ const (
 	// Directions is the number of facings every action provides.
 	Directions = 8
 
+	// MaxAnimationFrames bounds how much of one action is baked.
+	//
+	// Every frame becomes a full-size composited texture, which is enormously
+	// wasteful for a single-piece sprite: nothing is being composited, and the
+	// same handful of images are re-baked at different offsets. A Kafra's idle
+	// runs 99 frames, so baking it whole costs 27 MB and 1584 texture uploads
+	// in the frame she first comes into view — a visible stall.
+	//
+	// The real fix is to stop pre-compositing sprites that have nothing to
+	// composite, and draw the frames from their own images with per-frame
+	// offsets. Until then this bounds the damage, and Sheet.Dropped reports
+	// when it bites rather than leaving a shortened loop to be discovered.
+	MaxAnimationFrames = 40
+
 	// HeadStraight is the head direction for looking dead ahead. RO gives a
 	// character three head poses — turned each way and straight — which the
 	// head sprite stores as its three "frames". The server can change this
@@ -62,6 +76,10 @@ type Sheet struct {
 	Width  int
 	Height int
 	Frames map[int][]Frame
+
+	// Dropped counts frames left unbaked by MaxAnimationFrames, so a
+	// shortened animation is reported rather than silently shortened.
+	Dropped int
 }
 
 // Frame is one baked animation frame: RGBA pixels at the sheet's dimensions.
@@ -175,11 +193,33 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 		if action == ActionIdle && kind == KindPlayer {
 			return [][2]int{{headDir, headDir}}
 		}
+		if available > MaxAnimationFrames {
+			available = MaxAnimationFrames
+		}
 		pairs := make([][2]int, 0, available)
 		for i := 0; i < available; i++ {
 			pairs = append(pairs, [2]int{i, headDir})
 		}
 		return pairs
+	}
+
+	// Count what the cap leaves out, so the caller can report it. A player's
+	// unbaked idle entries do not count: those are head poses deliberately
+	// left alone, not animation that went missing.
+	dropped := 0
+	for action := 0; action < LoadedActions; action++ {
+		if action == ActionIdle && kind == KindPlayer {
+			continue
+		}
+		for dir := 0; dir < Directions; dir++ {
+			idx := action*Directions + dir
+			if idx >= len(bodyACT.Actions) {
+				continue
+			}
+			if extra := len(bodyACT.Actions[idx].Frames) - MaxAnimationFrames; extra > 0 {
+				dropped += extra
+			}
+		}
 	}
 
 	// First pass: the largest frame decides the sheet size.
@@ -207,9 +247,10 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 
 	// Second pass: bake each frame onto a canvas of that size.
 	sheet := &Sheet{
-		Width:  maxW,
-		Height: maxH,
-		Frames: make(map[int][]Frame, LoadedActions*Directions),
+		Width:   maxW,
+		Height:  maxH,
+		Frames:  make(map[int][]Frame, LoadedActions*Directions),
+		Dropped: dropped,
 	}
 
 	for action := 0; action < LoadedActions; action++ {

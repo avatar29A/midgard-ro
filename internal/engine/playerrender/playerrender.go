@@ -250,6 +250,7 @@ func (r *Renderer) unitSheet(load charsprite.Loader, spec charsprite.Spec) *shee
 			zap.String("sprite", baked.path),
 			zap.Int("frames", frames),
 			zap.Int("kb", bytes/1024),
+			zap.Int("droppedFrames", baked.dropped),
 			zap.Int("cached", len(r.units)))
 	} else {
 		trace.Emit(trace.Render, "sheet-failed",
@@ -352,6 +353,10 @@ type sheet struct {
 	width  int
 	height int
 	path   string
+
+	// dropped is how many animation frames the bake left out, from
+	// charsprite.MaxAnimationFrames.
+	dropped int
 }
 
 // newSheet uploads every frame of a baked appearance, returning nil when there
@@ -364,10 +369,11 @@ func newSheet(assets *charsprite.Assets) *sheet {
 	}
 
 	sh := &sheet{
-		frames: make(map[int][]uint32, len(assets.Sheet.Frames)),
-		width:  assets.Sheet.Width,
-		height: assets.Sheet.Height,
-		path:   assets.BodyPath,
+		frames:  make(map[int][]uint32, len(assets.Sheet.Frames)),
+		width:   assets.Sheet.Width,
+		height:  assets.Sheet.Height,
+		path:    assets.BodyPath,
+		dropped: assets.Sheet.Dropped,
 	}
 	for key, frames := range assets.Sheet.Frames {
 		textures := make([]uint32, len(frames))

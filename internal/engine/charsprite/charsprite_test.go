@@ -315,3 +315,65 @@ func TestIdleIsAnimatedForNonPlayers(t *testing.T) {
 		}
 	}
 }
+
+// TestAnimationIsCappedAndReported: every frame becomes a full-size texture,
+// so a long animation is expensive out of proportion to what it shows — a
+// Kafra's 99-frame idle costs 27 MB and 1584 uploads in the frame she appears.
+// The cap bounds that, and Dropped says when it applied, so a shortened loop
+// is reported rather than found later by eye.
+func TestAnimationIsCappedAndReported(t *testing.T) {
+	const frames = MaxAnimationFrames + 17
+
+	act := &formats.ACT{}
+	for i := 0; i < LoadedActions*Directions; i++ {
+		action := formats.Action{}
+		for f := 0; f < frames; f++ {
+			action.Frames = append(action.Frames, formats.Frame{
+				Layers:       []formats.Layer{{SpriteID: 0, ScaleX: 1, ScaleY: 1}},
+				AnchorPoints: []formats.AnchorPoint{{X: 0, Y: 0}},
+			})
+		}
+		act.Actions = append(act.Actions, action)
+	}
+	bodySPR := &formats.SPR{Images: []formats.SPRImage{makeImage(8, 8)}}
+
+	sheet := BuildSheet(bodySPR, act, nil, nil, HeadStraight, KindNPC)
+	if sheet == nil {
+		t.Fatal("BuildSheet returned nil")
+	}
+	if got := sheet.FrameCount(ActionIdle, 0); got != MaxAnimationFrames {
+		t.Errorf("baked %d idle frames, want the cap of %d", got, MaxAnimationFrames)
+	}
+
+	// Every action and direction over the cap contributes its excess.
+	want := 17 * LoadedActions * Directions
+	if sheet.Dropped != want {
+		t.Errorf("Dropped = %d, want %d", sheet.Dropped, want)
+	}
+}
+
+// TestPlayerHeadPosesAreNotCountedAsDropped: a player's idle holds three head
+// poses and only one is baked, by design. Counting the other two as dropped
+// animation would report a problem that is not there.
+func TestPlayerHeadPosesAreNotCountedAsDropped(t *testing.T) {
+	act := &formats.ACT{}
+	for i := 0; i < LoadedActions*Directions; i++ {
+		action := formats.Action{}
+		for f := 0; f < 3; f++ {
+			action.Frames = append(action.Frames, formats.Frame{
+				Layers:       []formats.Layer{{SpriteID: 0, ScaleX: 1, ScaleY: 1}},
+				AnchorPoints: []formats.AnchorPoint{{X: 0, Y: 0}},
+			})
+		}
+		act.Actions = append(act.Actions, action)
+	}
+	bodySPR := &formats.SPR{Images: []formats.SPRImage{makeImage(8, 8)}}
+
+	sheet := BuildSheet(bodySPR, act, nil, nil, HeadStraight, KindPlayer)
+	if sheet == nil {
+		t.Fatal("BuildSheet returned nil")
+	}
+	if sheet.Dropped != 0 {
+		t.Errorf("Dropped = %d, want 0; the unbaked idle entries are head poses", sheet.Dropped)
+	}
+}
