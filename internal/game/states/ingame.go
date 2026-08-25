@@ -502,18 +502,19 @@ func (s *InGameState) handlePlayerMove(data []byte) error {
 	// If this is the walk we already started ourselves, we are on it — leave
 	// it alone. Re-issuing an identical path would restart the current step
 	// and undo the point of predicting.
-	if s.hasPrediction &&
-		mv.StartX == s.predictStartX && mv.StartY == s.predictStartY &&
-		mv.EndX == s.predictEndX && mv.EndY == s.predictEndY {
+	if s.hasPrediction && s.ackMatchesPrediction(mv) {
 		s.hasPrediction = false
 		s.predictionHits++
 		trace.Emit(trace.Move, "ack-confirms-prediction",
+			zap.Int("startDelta", cellsApart(mv.StartX, mv.StartY, s.predictStartX, s.predictStartY)),
 			zap.Int("hits", s.predictionHits), zap.Int("total", s.predictions))
 		return nil
 	}
 
 	if s.hasPrediction {
 		trace.Emit(trace.Move, "ack-corrects-prediction",
+			zap.Int("startDelta", cellsApart(mv.StartX, mv.StartY, s.predictStartX, s.predictStartY)),
+			zap.Bool("endDiffers", mv.EndX != s.predictEndX || mv.EndY != s.predictEndY),
 			zap.Int("predictedStartX", s.predictStartX), zap.Int("predictedStartY", s.predictStartY),
 			zap.Int("predictedEndX", s.predictEndX), zap.Int("predictedEndY", s.predictEndY),
 			zap.Int("serverStartX", mv.StartX), zap.Int("serverStartY", mv.StartY),
@@ -832,6 +833,43 @@ func (s *InGameState) predictWalk(fromX, fromY, toX, toY int) {
 		zap.Int("fromX", fromX), zap.Int("fromY", fromY),
 		zap.Int("toX", toX), zap.Int("toY", toY),
 		zap.Int("cells", len(path)))
+}
+
+// PredictionStartTolerance is how far the server's idea of where a walk began
+// may sit from ours before the prediction counts as wrong, in cells.
+//
+// Prediction inherently runs a little ahead of the server: we set off on the
+// input, the server sets off when the packet lands, so by the time it answers
+// we have usually already taken the step it is only now starting. Measured
+// against a live server, every mismatch was exactly this — the destination
+// identical, the start out by one cell, us ahead.
+//
+// The lead does not accumulate, because both sides walk to the same
+// destination and so agree again at the end of every leg. What differs is
+// arrival time, by roughly one cell, not position. Anything further apart than
+// this is a real disagreement and the server wins.
+const PredictionStartTolerance = 1
+
+// ackMatchesPrediction reports whether an acknowledgement describes the walk we
+// already started.
+//
+// The destination has to match exactly: it is what we asked for and what
+// decides where the walk ends. The start is allowed the tolerance above.
+func (s *InGameState) ackMatchesPrediction(mv *packets.PlayerMove) bool {
+	if mv.EndX != s.predictEndX || mv.EndY != s.predictEndY {
+		return false
+	}
+	return cellsApart(mv.StartX, mv.StartY, s.predictStartX, s.predictStartY) <= PredictionStartTolerance
+}
+
+// cellsApart returns the Chebyshev distance between two cells, which is the
+// number of steps between them for eight-way movement.
+func cellsApart(ax, ay, bx, by int) int {
+	dx, dy := abs(ax-bx), abs(ay-by)
+	if dx > dy {
+		return dx
+	}
+	return dy
 }
 
 // PredictionAccuracy returns how many predicted walks the server confirmed

@@ -161,3 +161,94 @@ func TestDivergentAckDoesNotTeleport(t *testing.T) {
 		t.Errorf("drawn position jumped %.3f units on correction, want no discontinuity", jump)
 	}
 }
+
+// TestPredictionToleratesOneCellStartLead covers the case that made prediction
+// only half work in practice.
+//
+// Measured against a live server, every mismatch had an identical destination
+// and a start out by exactly one cell, with us ahead — which is prediction
+// working, not failing: we set off on the input while the server sets off when
+// the packet lands. Rejecting those threw away half the predictions and
+// restarted a step each time.
+func TestPredictionToleratesOneCellStartLead(t *testing.T) {
+	tests := []struct {
+		name                       string
+		serverStartX, serverStartY int
+		wantConfirmed              bool
+	}{
+		{"exact match", 10, 10, true},
+		{"one cell behind in x", 9, 10, true},
+		{"one cell behind in y", 10, 9, true},
+		{"one cell behind diagonally", 9, 9, true},
+		{"one cell ahead", 11, 10, true},
+		{"two cells apart is a real disagreement", 8, 10, false},
+		{"three cells apart", 10, 13, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := stateAt(10, 10)
+			s.predictWalk(10, 10, 14, 10)
+
+			// Same destination throughout; only the start moves.
+			if err := s.handlePlayerMove(
+				encodePlayerMove(tt.serverStartX, tt.serverStartY, 14, 10),
+			); err != nil {
+				t.Fatalf("handlePlayerMove: %v", err)
+			}
+
+			hits, total := s.PredictionAccuracy()
+			if total != 1 {
+				t.Fatalf("predictions = %d, want 1", total)
+			}
+			if confirmed := hits == 1; confirmed != tt.wantConfirmed {
+				t.Errorf("confirmed = %v, want %v (server start (%d,%d) vs predicted (10,10))",
+					confirmed, tt.wantConfirmed, tt.serverStartX, tt.serverStartY)
+			}
+		})
+	}
+}
+
+// TestPredictionRequiresTheDestinationToMatch: the start has slack, the
+// destination has none. Walking somewhere the server did not agree to is the
+// one failure prediction must never hide.
+func TestPredictionRequiresTheDestinationToMatch(t *testing.T) {
+	s := stateAt(10, 10)
+	s.predictWalk(10, 10, 14, 10)
+
+	// Start identical, destination different by a single cell.
+	if err := s.handlePlayerMove(encodePlayerMove(10, 10, 14, 11)); err != nil {
+		t.Fatalf("handlePlayerMove: %v", err)
+	}
+
+	if hits, _ := s.PredictionAccuracy(); hits != 0 {
+		t.Error("a different destination must never count as confirmed")
+	}
+
+	for i := 0; i < 500 && s.player.IsWalkingPath(); i++ {
+		s.player.Update(10)
+	}
+	if gotX, gotY := s.player.CurrentCell(); gotX != 14 || gotY != 11 {
+		t.Errorf("ended at (%d,%d), want the server's (14,11)", gotX, gotY)
+	}
+}
+
+func TestCellsApart(t *testing.T) {
+	tests := []struct {
+		name                 string
+		ax, ay, bx, by, want int
+	}{
+		{"same cell", 5, 5, 5, 5, 0},
+		{"one east", 6, 5, 5, 5, 1},
+		{"one diagonal", 6, 6, 5, 5, 1},
+		{"chebyshev takes the larger axis", 5, 9, 5, 5, 4},
+		{"negative direction", 5, 5, 9, 8, 4},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := cellsApart(tt.ax, tt.ay, tt.bx, tt.by); got != tt.want {
+				t.Errorf("cellsApart = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
