@@ -1,10 +1,11 @@
+package config
+
 // UI state that outlives a session but does not belong in config.yaml.
 //
 // config.yaml is written by hand and carries comments; rewriting it to record
 // a camera position would lose them and blur the line between what the user
 // configured and what the client remembered. This is the client's own scratch
 // state — small, disposable, and safe to delete.
-package config
 
 import (
 	"encoding/json"

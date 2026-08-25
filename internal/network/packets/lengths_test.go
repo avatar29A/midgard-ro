@@ -6,7 +6,7 @@ import "testing"
 // on, with the values taken from the rAthena tree the server is built from.
 //
 // The two marked entries are the ones that were wrong in the old hand-written
-// table and desynchronised the connection: every packet after them, walk
+// table and desynchronized the connection: every packet after them, walk
 // acknowledgements included, was parsed from the wrong offset.
 func TestKnownLengths(t *testing.T) {
 	tests := []struct {
@@ -40,7 +40,7 @@ func TestKnownLengths(t *testing.T) {
 
 		// Both arrive during login and are declared only in
 		// packets_struct.hpp, which the generator missed on its first pass —
-		// so the connection still desynchronised once per login until that
+		// so the connection still desynchronized once per login until that
 		// header was added as a source.
 		{"ZC_PAR_CHANGE (0x00B0)", 0x00B0, 8},
 		{"ZC_EXTEND_BODYITEM_SIZE (0x0B18)", 0x0B18, 4},

@@ -7,12 +7,12 @@ import (
 )
 
 // solidSPR builds an SPR with one opaque w x h image per entry.
-func solidSPR(count, w, h int, r, g, b byte) *formats.SPR {
+func solidSPR(count, w, h int, r, b byte) *formats.SPR {
 	spr := &formats.SPR{}
 	for i := 0; i < count; i++ {
 		px := make([]byte, w*h*4)
 		for p := 0; p < w*h; p++ {
-			px[p*4], px[p*4+1], px[p*4+2], px[p*4+3] = r, g, b, 255
+			px[p*4], px[p*4+1], px[p*4+2], px[p*4+3] = r, 0, b, 255
 		}
 		spr.Images = append(spr.Images, formats.SPRImage{
 			Width:  uint16(w),
@@ -46,8 +46,8 @@ func actWithAnchors(anchors [][2]int16) *formats.ACT {
 // correctly aligned composite is the same size either way. Ignoring one of the
 // two anchors drags the head 40px off and balloons the canvas.
 func TestCompositeAlignsChosenHeadPose(t *testing.T) {
-	bodySPR := solidSPR(1, 20, 40, 255, 0, 0)
-	headSPR := solidSPR(1, 16, 16, 0, 0, 255)
+	bodySPR := solidSPR(1, 20, 40, 255, 0)
+	headSPR := solidSPR(1, 16, 16, 0, 255)
 
 	bodyACT := actWithAnchors([][2]int16{{0, -30}, {0, -70}})
 	headACT := actWithAnchors([][2]int16{{0, -30}, {0, -70}})
@@ -68,7 +68,7 @@ func TestCompositeAlignsChosenHeadPose(t *testing.T) {
 // TestCompositeHeadOptional covers monsters and any character whose head
 // sprite is missing from the archive: the body must still render.
 func TestCompositeHeadOptional(t *testing.T) {
-	bodySPR := solidSPR(1, 20, 40, 255, 0, 0)
+	bodySPR := solidSPR(1, 20, 40, 255, 0)
 	bodyACT := actWithAnchors([][2]int16{{0, -30}})
 
 	got := CompositeSprites(bodySPR, bodyACT, nil, nil, 0, 0, 0, 0)
@@ -91,8 +91,8 @@ func TestCompositeNilBody(t *testing.T) {
 // head doesn't index past the head's frame list. This is the normal case while
 // walking: 8 body frames against 3 head poses.
 func TestCompositeFrameIndexWraps(t *testing.T) {
-	bodySPR := solidSPR(1, 20, 40, 255, 0, 0)
-	headSPR := solidSPR(1, 16, 16, 0, 0, 255)
+	bodySPR := solidSPR(1, 20, 40, 255, 0)
+	headSPR := solidSPR(1, 16, 16, 0, 255)
 
 	bodyACT := actWithAnchors([][2]int16{{0, -30}, {0, -30}, {0, -30}})
 	headACT := actWithAnchors([][2]int16{{0, -30}}) // only one head frame
@@ -105,13 +105,13 @@ func TestCompositeFrameIndexWraps(t *testing.T) {
 	}
 }
 
-// TestCompositeHeadPoseIsIndependentOfBodyFrame is the guard for the swivelling
+// TestCompositeHeadPoseIsIndependentOfBodyFrame is the guard for the swiveling
 // head: walking cycles 8 body frames against a head that must hold one pose.
 // Feeding the body's frame index to the head made it turn left/right/straight
 // on a 3-frame loop while the legs ran on an 8-frame one.
 func TestCompositeHeadPoseIsIndependentOfBodyFrame(t *testing.T) {
-	bodySPR := solidSPR(1, 20, 40, 255, 0, 0)
-	headSPR := solidSPR(2, 16, 16, 0, 0, 255)
+	bodySPR := solidSPR(1, 20, 40, 255, 0)
+	headSPR := solidSPR(2, 16, 16, 0, 255)
 
 	// Body walk cycle: anchor stays put, so the head should too.
 	bodyACT := actWithAnchors([][2]int16{{0, -30}, {0, -30}, {0, -30}})

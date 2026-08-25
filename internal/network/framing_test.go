@@ -35,7 +35,7 @@ func TestPacketLengthVariable(t *testing.T) {
 
 // TestPacketLengthVariableNeedsMoreData covers the case where the id has
 // arrived but the two length bytes behind it have not. That must read as
-// "wait", not as "unknown" — treating it as unknown would resynchronise past a
+// "wait", not as "unknown" — treating it as unknown would resynchronize past a
 // perfectly good packet.
 func TestPacketLengthVariableNeedsMoreData(t *testing.T) {
 	c := &Client{}
@@ -54,7 +54,7 @@ func TestPacketLengthUnknownID(t *testing.T) {
 
 	if _, known := c.packetLength(0xFFFF, []byte{0xFF, 0xFF, 0x40, 0x00}); known {
 		t.Error("an unknown id must not report a length — guessing one from the " +
-			"payload bytes is what desynchronised the stream")
+			"payload bytes is what desynchronized the stream")
 	}
 }
 
@@ -88,7 +88,7 @@ func TestResyncSkipsGarbageToKnownPacket(t *testing.T) {
 	}
 }
 
-// TestResyncGivesUpCleanly checks that a buffer with no recognisable packet
+// TestResyncGivesUpCleanly checks that a buffer with no recognizable packet
 // reports the whole buffer as discardable rather than looping.
 func TestResyncGivesUpCleanly(t *testing.T) {
 	buf := []byte{0xAA, 0xBB, 0xCC, 0xDD}

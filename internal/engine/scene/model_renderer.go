@@ -181,16 +181,16 @@ func (mr *ModelRenderer) LoadModels(rsw *formats.RSW, texLoader func(string) ([]
 // unlikely needs biases too large to stay invisible. Measured over five towns,
 // an eight-value hash left 11-14% of overlapping pairs sharing a bias.
 //
-// Colouring the overlap graph removes the guesswork. Overlaps are local — the
+// Coloring the overlap graph removes the guesswork. Overlaps are local — the
 // worst instance across those maps overlapped 22 others — so a greedy pass
-// needs very few colours and separates every pair by construction rather than
+// needs very few colors and separates every pair by construction rather than
 // by probability.
 func (mr *ModelRenderer) assignDepthBiases() {
-	// Instances whose centres are closer than the largest model dimension may
-	// share space. Being generous here only costs a colour or two.
+	// Instances whose centers are closer than the largest model dimension may
+	// share space. Being generous here only costs a color or two.
 	const overlapRange = 30.0
 
-	neighbours := make([][]int, len(mr.models))
+	neighbors := make([][]int, len(mr.models))
 	for a := range mr.models {
 		for b := a + 1; b < len(mr.models); b++ {
 			dx := float64(mr.models[a].position[0] - mr.models[b].position[0])
@@ -198,8 +198,8 @@ func (mr *ModelRenderer) assignDepthBiases() {
 			if gomath.Hypot(dx, dz) >= overlapRange {
 				continue
 			}
-			neighbours[a] = append(neighbours[a], b)
-			neighbours[b] = append(neighbours[b], a)
+			neighbors[a] = append(neighbors[a], b)
+			neighbors[b] = append(neighbors[b], a)
 		}
 	}
 
@@ -212,7 +212,7 @@ func (mr *ModelRenderer) assignDepthBiases() {
 		for k := range taken {
 			delete(taken, k)
 		}
-		for _, n := range neighbours[i] {
+		for _, n := range neighbors[i] {
 			if mr.models[n].depthBias >= 0 {
 				taken[mr.models[n].depthBias] = true
 			}
@@ -483,7 +483,7 @@ func (mr *ModelRenderer) uploadTexture(img *image.RGBA) uint32 {
 // coplanar surfaces grows with the slope and swamps a constant offset.
 //
 // The values cycle so a large map cannot accumulate a bias big enough to see;
-// instances that overlap are neighbours in the world file, so their indices
+// instances that overlap are neighbors in the world file, so their indices
 // differ by far less than the cycle length.
 const (
 	coplanarSlopeStep = 0.25
@@ -591,7 +591,7 @@ func (mr *ModelRenderer) Render(viewProj math.Mat4, lightDir, ambient, diffuse [
 		}
 
 		// Wrapped so a large map cannot accumulate a bias big enough to show.
-		// Instances that overlap are neighbours in the world file, so their
+		// Instances that overlap are neighbors in the world file, so their
 		// indices differ by far less than the wrap.
 		bias := float32(model.depthBias)
 		gl.PolygonOffset(bias*coplanarSlopeStep, bias*coplanarUnitsStep)

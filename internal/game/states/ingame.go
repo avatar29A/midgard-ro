@@ -75,7 +75,7 @@ type InGameState struct {
 	chainCellX, chainCellY int
 
 	// The walk we started on our own authority, so its acknowledgement can be
-	// recognised and ignored rather than restarting the walk.
+	// recognized and ignored rather than restarting the walk.
 	predictStartX, predictStartY int
 	predictEndX, predictEndY     int
 	hasPrediction                bool
@@ -739,7 +739,6 @@ func (s *InGameState) ScreenToTile(screenX, screenY, viewportW, viewportH float3
 	return cellX, cellY, true
 }
 
-// RequestMove sends a movement request to the server.
 // MaxWalkRequestCells is the furthest a single walk request may reach.
 //
 // rAthena's nominal ceiling is MAX_WALKPATH, 32 cells. The real one is lower:
@@ -835,7 +834,7 @@ func (s *InGameState) sendWalkRequest(tileX, tileY int) error {
 // agree.
 //
 // Both sides derive the route the same way — A* over the same GAT, diagonals
-// only where both neighbours are open — and walk it at the same ms per cell,
+// only where both neighbors are open — and walk it at the same ms per cell,
 // so the prediction is normally exactly what comes back. Waiting for the
 // acknowledgement instead costs a round trip on every walk, which the
 // character can never make up: it renders permanently behind the server and

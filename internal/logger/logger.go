@@ -128,7 +128,7 @@ func Sync() {
 	}
 }
 
-// The package-level helpers below all tolerate an uninitialised logger.
+// The package-level helpers below all tolerate an uninitialized logger.
 //
 // zap panics on a nil *Logger, which turns any logging call reached before
 // Init into a crash — in tests, in tooling that pulls in a package for one

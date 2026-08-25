@@ -425,7 +425,7 @@ func (c *Client) Process() (err error) {
 // Lengths come from internal/network/packets, generated from the rAthena tree
 // we build the server from (tools/packetlen/gen.py). This used to be a
 // hand-written switch that fell back to reading bytes 2-4 as a length for
-// anything it didn't recognise. That fallback is why walking broke: RO frames
+// anything it didn't recognize. That fallback is why walking broke: RO frames
 // packets by length alone, so misreading one fixed-length packet's payload as
 // a length consumed the wrong number of bytes and turned every subsequent
 // packet — the walk acknowledgements included — into garbage.
@@ -529,12 +529,4 @@ func ReadUint16(buf []byte, offset int) uint16 {
 // ReadUint32 reads a uint32 in little-endian format.
 func ReadUint32(buf []byte, offset int) uint32 {
 	return binary.LittleEndian.Uint32(buf[offset:])
-}
-
-// min returns the smaller of two ints.
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
