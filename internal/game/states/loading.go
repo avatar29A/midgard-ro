@@ -56,6 +56,8 @@ func NewLoadingState(cfg LoadingStateConfig, client *network.Client, manager *Ma
 
 // Enter is called when entering this state.
 func (s *LoadingState) Enter() error {
+	s.manager.PlayFallbackBGM()
+
 	s.startTime = time.Now()
 	s.ErrorMsg = ""
 	s.Progress = 0

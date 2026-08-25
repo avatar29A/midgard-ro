@@ -47,6 +47,8 @@ func NewConnectingState(cfg ConnectingStateConfig, client *network.Client, manag
 
 // Enter is called when entering this state.
 func (s *ConnectingState) Enter() error {
+	s.manager.PlayFallbackBGM()
+
 	s.startTime = time.Now()
 	s.connected = false
 	s.ErrorMsg = ""

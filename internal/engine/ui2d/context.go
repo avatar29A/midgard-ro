@@ -27,6 +27,11 @@ type Context struct {
 	cursorX float32
 	cursorY float32
 	rowH    float32
+
+	// clickSound is played when a widget is activated. It is a callback
+	// rather than an audio dependency because this package may only import
+	// pkg/ — see the layer rules in CLAUDE.md.
+	clickSound func()
 }
 
 // WindowState holds state for a UI window.
@@ -42,6 +47,19 @@ type WindowState struct {
 	Moving  bool
 	Dragged bool
 	Skin    *NineSlice // Per-window skin override (nil uses default)
+}
+
+// SetClickSound registers what to play when a widget is activated. Passing nil
+// turns the sound off, which is also the default.
+func (c *Context) SetClickSound(play func()) {
+	c.clickSound = play
+}
+
+// playClickSound is called by every widget that reacts to a press.
+func (c *Context) playClickSound() {
+	if c.clickSound != nil {
+		c.clickSound()
+	}
 }
 
 // NewContext creates a new UI context.
@@ -244,6 +262,8 @@ func (c *Context) Button(id string, width float32, label string) bool {
 			clicked = true // Click immediately on press
 			// Consume the click event so only one button gets it
 			c.input.MouseLeftClicked = false
+
+			c.playClickSound()
 		}
 	}
 

@@ -2,8 +2,11 @@
 package states
 
 import (
+	"go.uber.org/zap"
+
 	"github.com/Faultbox/midgard-ro/internal/engine/charsprite"
 	"github.com/Faultbox/midgard-ro/internal/game/entity"
+	"github.com/Faultbox/midgard-ro/internal/logger"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
 )
 
@@ -65,6 +68,20 @@ func (s *Session) SpriteSpec() charsprite.Spec {
 	}
 }
 
+// BGMController plays the background music of a location, or the fallback
+// track the non game screens use. It is satisfied by audio.LocationPlayer.
+type BGMController interface {
+	// PlayLocation plays a location's music on repeat, falling back to the
+	// title theme for locations it does not know.
+	PlayLocation(location string) error
+
+	// PlayFallback plays the title theme on repeat.
+	PlayFallback() error
+
+	// Track returns what is playing, for the log.
+	Track() string
+}
+
 // Manager manages game state transitions.
 type Manager struct {
 	current   State
@@ -77,6 +94,10 @@ type Manager struct {
 	// AutoPlay walks the login and character select screens without input, so
 	// anything past them can be checked unattended. Set from --autologin.
 	AutoPlay bool
+
+	// BGM is nil when audio is unavailable, which the PlayBGM helpers below
+	// tolerate so states never have to check.
+	BGM BGMController
 }
 
 // NewManager creates a new state manager.
@@ -92,6 +113,41 @@ func (m *Manager) SetTexLoader(loader TexLoaderFunc) {
 // Current returns the current state.
 func (m *Manager) Current() State {
 	return m.current
+}
+
+// PlayLocationBGM starts the background music of a map. Music is a nicety, so a
+// failure is logged rather than propagated into the state machine.
+func (m *Manager) PlayLocationBGM(location string) {
+	if m.BGM == nil {
+		return
+	}
+
+	if err := m.BGM.PlayLocation(location); err != nil {
+		logger.Warn("could not play background music",
+			zap.String("location", location), zap.Error(err))
+
+		return
+	}
+
+	logger.Info("playing background music",
+		zap.String("location", location), zap.String("track", m.BGM.Track()))
+}
+
+// PlayFallbackBGM starts the title theme, which is what the non game screens
+// play. Calling it again while it is already playing does nothing, so moving
+// between those screens does not restart the music.
+func (m *Manager) PlayFallbackBGM() {
+	if m.BGM == nil {
+		return
+	}
+
+	if err := m.BGM.PlayFallback(); err != nil {
+		logger.Warn("could not play the fallback background music", zap.Error(err))
+
+		return
+	}
+
+	logger.Info("playing background music", zap.String("track", m.BGM.Track()))
 }
 
 // Change schedules a state change.

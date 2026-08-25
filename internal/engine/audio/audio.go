@@ -4,8 +4,12 @@ package audio
 import (
 	"bytes"
 	"fmt"
-	"io"
+	"math"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gopxl/beep/v2"
@@ -16,6 +20,19 @@ import (
 
 // DefaultSampleRate is the default sample rate for audio playback.
 const DefaultSampleRate = beep.SampleRate(44100)
+
+// bufferDuration is how much audio the speaker keeps queued.
+//
+// The work behind it is cheap — decoding and resampling a track runs at well
+// over 100x realtime — so the buffer is not sized for throughput. It is sized
+// to survive the pauses between refills: the game loop shares this process, and
+// a GC cycle or a scheduler delay longer than the buffer starves the device and
+// crackles. A 33ms buffer was not enough slack next to map rendering.
+const bufferDuration = time.Second / 10
+
+// resampleQuality is beep's sinc window size. RO audio is 22.05 kHz and the
+// device runs at 44.1 kHz, so everything goes through the resampler.
+const resampleQuality = 4
 
 // Manager handles audio playback for the game.
 type Manager struct {
@@ -29,8 +46,11 @@ type Manager struct {
 	bgmStreamer beep.StreamSeekCloser
 	bgmCtrl     *beep.Ctrl
 	bgmVolume   *effects.Volume
-	bgmPlaying  bool
 	bgmPath     string
+
+	// bgmPlaying is atomic because the speaker sets it from its own thread,
+	// which must never take m.mu — see the lock order in PlayBGM.
+	bgmPlaying atomic.Bool
 
 	// Volume settings (0.0 to 1.0)
 	masterVolume float64
@@ -61,7 +81,7 @@ func (m *Manager) Init() error {
 	}
 
 	m.sampleRate = DefaultSampleRate
-	err := speaker.Init(m.sampleRate, m.sampleRate.N(time.Second/30))
+	err := speaker.Init(m.sampleRate, m.sampleRate.N(bufferDuration))
 	if err != nil {
 		return fmt.Errorf("init speaker: %w", err)
 	}
@@ -75,12 +95,13 @@ func (m *Manager) Init() error {
 
 // Close shuts down the audio system.
 func (m *Manager) Close() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.StopBGM()
 
-	m.stopBGMInternal()
 	speaker.Clear()
+
+	m.mu.Lock()
 	m.initialized = false
+	m.mu.Unlock()
 }
 
 // IsInitialized returns whether the audio system is initialized.
@@ -135,67 +156,33 @@ func (m *Manager) GetSFXVolume() float64 {
 }
 
 func (m *Manager) updateBGMVolume() {
-	if m.bgmVolume != nil {
-		// Volume uses dB scale, convert from 0-1 to dB
-		// Silent = -10, Full = 0
-		vol := m.masterVolume * m.bgmVolLevel
-		if vol <= 0 {
-			m.bgmVolume.Silent = true
-		} else {
-			m.bgmVolume.Silent = false
-			// Convert to dB scale: 0 = silent, 1 = full volume
-			m.bgmVolume.Volume = volumeToDb(vol)
-		}
+	if m.bgmVolume == nil {
+		return
 	}
-}
 
-// volumeToDb converts a 0-1 volume to decibel scale.
-func volumeToDb(vol float64) float64 {
+	vol := m.masterVolume * m.bgmVolLevel
 	if vol <= 0 {
-		return -100 // Effectively silent
+		m.bgmVolume.Silent = true
+
+		return
 	}
-	// Use log scale: vol=1 -> 0dB, vol=0.5 -> -6dB, vol=0.25 -> -12dB
-	return 20 * log10(vol)
+
+	m.bgmVolume.Silent = false
+	m.bgmVolume.Volume = volumeExponent(vol)
 }
 
-func log10(x float64) float64 {
-	if x <= 0 {
-		return -100
+// volumeExponent converts a 0-1 volume to the number effects.Volume wants.
+//
+// That field is an exponent, not decibels: the gain is Base**Volume, so with
+// Base 2 it is the base-2 logarithm of the gain we are asking for. Feeding it
+// decibels instead makes everything roughly 30 dB too quiet — 0.56 lands on a
+// gain of 0.03 rather than 0.56.
+func volumeExponent(vol float64) float64 {
+	if vol <= 0 {
+		return -100 // effectively silent, though callers set Silent instead
 	}
-	// log10(x) = ln(x) / ln(10)
-	return ln(x) / 2.302585092994046
-}
 
-func ln(x float64) float64 {
-	// Simple natural log approximation for audio purposes
-	if x <= 0 {
-		return -100
-	}
-	if x == 1 {
-		return 0
-	}
-	// Use Taylor series or math.Log if available
-	// For simplicity, use a basic approximation
-	n := 0
-	for x >= 2 {
-		x /= 2
-		n++
-	}
-	for x < 0.5 {
-		x *= 2
-		n--
-	}
-	// x is now between 0.5 and 2
-	// ln(x) ≈ 2 * (x-1)/(x+1) for x near 1
-	y := (x - 1) / (x + 1)
-	result := 2 * y
-	y2 := y * y
-	term := y
-	for i := 1; i < 10; i++ {
-		term *= y2
-		result += 2 * term / float64(2*i+1)
-	}
-	return result + float64(n)*0.693147180559945
+	return math.Log2(vol)
 }
 
 func clamp(v, min, max float64) float64 {
@@ -208,68 +195,78 @@ func clamp(v, min, max float64) float64 {
 	return v
 }
 
-// PlayBGM plays background music from WAV data.
+// PlayBGMFile plays background music from a file on disk, picking the decoder
+// from its extension. Background music is not part of the GRF archives:
+// Ragnarok clients ship it as .mp3 files in a BGM folder next to them.
 // If loop is true, the music will loop indefinitely.
-func (m *Manager) PlayBGM(data []byte, path string, loop bool) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+func (m *Manager) PlayBGMFile(path string, loop bool) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("reading background music %s: %w", path, err)
+	}
 
-	if !m.initialized {
+	return m.PlayBGM(data, path, loop)
+}
+
+// PlayBGM plays background music from encoded audio data. The path selects the
+// decoder by its extension and is reported by GetBGMPath; .mp3 and .wav are
+// supported.
+// If loop is true, the music will loop indefinitely.
+// Lock order: this method may hold m.mu and then reach for the speaker, never
+// the other way round. The speaker holds its own lock for the whole time it is
+// pulling samples, so anything in the streamer chain that grabbed m.mu from
+// that thread would deadlock against a caller doing the reverse. Nothing in the
+// chain touches m.mu, which is what makes this safe.
+func (m *Manager) PlayBGM(data []byte, path string, loop bool) error {
+	m.mu.RLock()
+	initialized, sampleRate := m.initialized, m.sampleRate
+	m.mu.RUnlock()
+
+	if !initialized {
 		return fmt.Errorf("audio not initialized")
 	}
 
-	// Stop current BGM
-	m.stopBGMInternal()
-
-	// Decode WAV
-	streamer, format, err := wav.Decode(io.NopCloser(bytes.NewReader(data)))
+	// Decoding is the slow part, so it happens before anything is locked or
+	// stopped: a failure here leaves the current track playing.
+	streamer, format, err := decode(data, path)
 	if err != nil {
-		return fmt.Errorf("decode wav: %w", err)
+		return err
 	}
 
-	// Resample if needed
-	var resampled beep.Streamer
-	if format.SampleRate != m.sampleRate {
-		resampled = beep.Resample(4, format.SampleRate, m.sampleRate, streamer)
-	} else {
-		resampled = streamer
-	}
+	// Loop before resampling. A resampler reports the end of its source once
+	// and stays ended, so looping underneath it would leave the resampler
+	// spinning at the loop point — inside the speaker's lock.
+	var source beep.Streamer = streamer
 
-	// Create looping streamer if needed
-	var finalStreamer beep.Streamer
 	if loop {
-		// For looping, we need a seekable streamer
-		finalStreamer = &loopStreamer{
-			streamer:  streamer,
-			resampled: resampled,
-			loop:      true,
+		looped, err := beep.Loop2(streamer)
+		if err != nil {
+			return fmt.Errorf("looping %s: %w", path, err)
 		}
-	} else {
-		finalStreamer = resampled
+
+		source = looped
 	}
 
-	// Create control wrapper
-	m.bgmCtrl = &beep.Ctrl{Streamer: finalStreamer, Paused: false}
-
-	// Create volume wrapper
-	m.bgmVolume = &effects.Volume{
-		Streamer: m.bgmCtrl,
-		Base:     2,
-		Volume:   0,
-		Silent:   false,
+	if format.SampleRate != sampleRate {
+		source = beep.Resample(resampleQuality, format.SampleRate, sampleRate, source)
 	}
-	m.updateBGMVolume()
 
+	ctrl := &beep.Ctrl{Streamer: source}
+	volume := &effects.Volume{Streamer: ctrl, Base: 2}
+
+	m.StopBGM()
+
+	m.mu.Lock()
 	m.bgmStreamer = streamer
+	m.bgmCtrl = ctrl
+	m.bgmVolume = volume
 	m.bgmPath = path
-	m.bgmPlaying = true
+	m.updateBGMVolume()
+	m.mu.Unlock()
 
-	// Play with callback when done
-	speaker.Play(beep.Seq(m.bgmVolume, beep.Callback(func() {
-		m.mu.Lock()
-		m.bgmPlaying = false
-		m.mu.Unlock()
-	})))
+	m.bgmPlaying.Store(true)
+
+	speaker.Play(volume)
 
 	return nil
 }
@@ -277,54 +274,60 @@ func (m *Manager) PlayBGM(data []byte, path string, loop bool) error {
 // StopBGM stops the current background music.
 func (m *Manager) StopBGM() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.stopBGMInternal()
-}
-
-func (m *Manager) stopBGMInternal() {
-	if m.bgmCtrl != nil {
-		m.bgmCtrl.Paused = true
-	}
-	speaker.Clear()
-	// Re-add SFX mixer after clearing
-	if m.initialized {
-		speaker.Play(m.sfxMixer)
-	}
-	m.bgmPlaying = false
-	if m.bgmStreamer != nil {
-		m.bgmStreamer.Close()
-		m.bgmStreamer = nil
-	}
+	streamer := m.bgmStreamer
+	sfxMixer := m.sfxMixer
+	initialized := m.initialized
+	m.bgmStreamer = nil
 	m.bgmCtrl = nil
 	m.bgmVolume = nil
 	m.bgmPath = ""
+	m.mu.Unlock()
+
+	m.bgmPlaying.Store(false)
+
+	// Clearing takes the sound effect mixer with it, so it goes back after.
+	speaker.Clear()
+
+	if initialized {
+		speaker.Play(sfxMixer)
+	}
+
+	if streamer != nil {
+		_ = streamer.Close()
+	}
 }
 
 // PauseBGM pauses the current background music.
 func (m *Manager) PauseBGM() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.bgmCtrl != nil {
-		m.bgmCtrl.Paused = true
-		m.bgmPlaying = false
-	}
+	m.setPaused(true)
 }
 
 // ResumeBGM resumes the paused background music.
 func (m *Manager) ResumeBGM() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.bgmCtrl != nil {
-		m.bgmCtrl.Paused = false
-		m.bgmPlaying = true
+	m.setPaused(false)
+}
+
+// setPaused flips the control the speaker reads, which is why the speaker's own
+// lock is taken for the write.
+func (m *Manager) setPaused(paused bool) {
+	m.mu.RLock()
+	ctrl := m.bgmCtrl
+	m.mu.RUnlock()
+
+	if ctrl == nil {
+		return
 	}
+
+	speaker.Lock()
+	ctrl.Paused = paused
+	speaker.Unlock()
+
+	m.bgmPlaying.Store(!paused)
 }
 
 // IsBGMPlaying returns whether BGM is currently playing.
 func (m *Manager) IsBGMPlaying() bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.bgmPlaying
+	return m.bgmPlaying.Load()
 }
 
 // GetBGMPath returns the path of the currently playing BGM.
@@ -345,60 +348,73 @@ func (m *Manager) PlaySFX(data []byte) error {
 		return fmt.Errorf("audio not initialized")
 	}
 
-	// Decode WAV
-	streamer, format, err := wav.Decode(io.NopCloser(bytes.NewReader(data)))
+	streamer, format, err := decode(data, ".wav")
 	if err != nil {
-		return fmt.Errorf("decode wav: %w", err)
+		return err
 	}
 
 	// Resample if needed
 	var resampled beep.Streamer
 	if format.SampleRate != m.sampleRate {
-		resampled = beep.Resample(4, format.SampleRate, m.sampleRate, streamer)
+		resampled = beep.Resample(resampleQuality, format.SampleRate, m.sampleRate, streamer)
 	} else {
 		resampled = streamer
 	}
 
-	// Apply volume
+	// Apply volume to the effect
 	volStreamer := &effects.Volume{
 		Streamer: resampled,
 		Base:     2,
-		Volume:   volumeToDb(sfxVol),
+		Volume:   volumeExponent(sfxVol),
 		Silent:   sfxVol <= 0,
 	}
 
-	// Add to mixer (concurrent playback)
+	// beep.Mixer is not synchronized, and the speaker is ranging over these
+	// same streamers on its own thread, so the mixer may only be touched under
+	// the speaker's lock.
+	speaker.Lock()
 	m.sfxMixer.Add(volStreamer)
+	speaker.Unlock()
 
 	return nil
 }
 
-// loopStreamer wraps a streamer to make it loop.
-type loopStreamer struct {
-	streamer  beep.StreamSeekCloser
-	resampled beep.Streamer
-	loop      bool
+// readSeekNopCloser gives a seekable reader the Close the decoders ask for.
+//
+// io.NopCloser would do the same job but hides Seek, and go-mp3 only indexes
+// the frames when its source is an io.Seeker. Without that index Len reports 0
+// and seeking back to the start — which is how a track loops — divides by a
+// zero frame size and panics.
+type readSeekNopCloser struct {
+	*bytes.Reader
 }
 
-func (l *loopStreamer) Stream(samples [][2]float64) (n int, ok bool) {
-	filled := 0
-	for filled < len(samples) {
-		n, ok := l.resampled.Stream(samples[filled:])
-		filled += n
-		if !ok {
-			if l.loop {
-				// Reset to beginning
-				if err := l.streamer.Seek(0); err != nil {
-					return filled, false
-				}
-				continue
-			}
-			return filled, false
+func (readSeekNopCloser) Close() error { return nil }
+
+// decode turns encoded audio into a seekable stream, choosing the decoder from
+// the path's extension. Looping needs the stream to be seekable, which is why
+// both decoders return a StreamSeekCloser.
+func decode(data []byte, path string) (beep.StreamSeekCloser, beep.Format, error) {
+	reader := readSeekNopCloser{bytes.NewReader(data)}
+
+	switch ext := strings.ToLower(filepath.Ext(path)); ext {
+	case ".mp3":
+		streamer, format, err := decodeMP3(data)
+		if err != nil {
+			return nil, beep.Format{}, fmt.Errorf("%s: %w", path, err)
 		}
-	}
-	return filled, true
-}
 
-func (l *loopStreamer) Err() error {
-	return l.streamer.Err()
+		return streamer, format, nil
+
+	case ".wav", "":
+		streamer, format, err := wav.Decode(reader)
+		if err != nil {
+			return nil, beep.Format{}, fmt.Errorf("decode wav %s: %w", path, err)
+		}
+
+		return streamer, format, nil
+
+	default:
+		return nil, beep.Format{}, fmt.Errorf("unsupported audio format %q for %s", ext, path)
+	}
 }
