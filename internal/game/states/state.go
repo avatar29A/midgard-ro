@@ -77,6 +77,9 @@ type BGMController interface {
 
 	// PlayFallback plays the title theme on repeat.
 	PlayFallback() error
+
+	// Track returns what is playing, for the log.
+	Track() string
 }
 
 // Manager manages game state transitions.
@@ -118,7 +121,12 @@ func (m *Manager) PlayLocationBGM(location string) {
 	if err := m.BGM.PlayLocation(location); err != nil {
 		logger.Warn("could not play background music",
 			zap.String("location", location), zap.Error(err))
+
+		return
 	}
+
+	logger.Info("playing background music",
+		zap.String("location", location), zap.String("track", m.BGM.Track()))
 }
 
 // PlayFallbackBGM starts the title theme, which is what the non game screens
@@ -131,7 +139,11 @@ func (m *Manager) PlayFallbackBGM() {
 
 	if err := m.BGM.PlayFallback(); err != nil {
 		logger.Warn("could not play the fallback background music", zap.Error(err))
+
+		return
 	}
+
+	logger.Info("playing background music", zap.String("track", m.BGM.Track()))
 }
 
 // Change schedules a state change.
