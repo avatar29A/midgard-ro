@@ -141,16 +141,28 @@ func (c *Context) ImageButtonAt(id string, x, y, w, h float32, normalTex, overTe
 // TextInputAt draws an editable text field at absolute coords.
 // Returns (current value, changed, submitted-on-enter).
 func (c *Context) TextInputAt(id string, x, y, w, h float32, value string) (string, bool, bool) {
-	return c.textFieldAt(id, x, y, w, h, value, false)
+	return c.textFieldAt(id, x, y, w, h, value, false, true)
 }
 
 // PasswordInputAt draws a masked text field at absolute coords.
 func (c *Context) PasswordInputAt(id string, x, y, w, h float32, value string) (string, bool, bool) {
-	return c.textFieldAt(id, x, y, w, h, value, true)
+	return c.textFieldAt(id, x, y, w, h, value, true, true)
+}
+
+// TextInputBareAt is TextInputAt without the drawn field chrome, for inputs
+// whose background is part of a skin texture — the original RO windows bake
+// their input wells into the window art.
+func (c *Context) TextInputBareAt(id string, x, y, w, h float32, value string) (string, bool, bool) {
+	return c.textFieldAt(id, x, y, w, h, value, false, false)
+}
+
+// PasswordInputBareAt is PasswordInputAt without the drawn field chrome.
+func (c *Context) PasswordInputBareAt(id string, x, y, w, h float32, value string) (string, bool, bool) {
+	return c.textFieldAt(id, x, y, w, h, value, true, false)
 }
 
 // textFieldAt is the shared implementation for TextInputAt / PasswordInputAt.
-func (c *Context) textFieldAt(id string, x, y, w, h float32, value string, masked bool) (string, bool, bool) {
+func (c *Context) textFieldAt(id string, x, y, w, h float32, value string, masked, chrome bool) (string, bool, bool) {
 	rect := Rect{x, y, w, h}
 	hovered := rect.Contains(c.input.MouseX, c.input.MouseY)
 	focused := c.activeWidget == id
@@ -185,7 +197,9 @@ func (c *Context) textFieldAt(id string, x, y, w, h float32, value string, maske
 		}
 	}
 
-	c.drawInput(x, y, w, h, focused)
+	if chrome {
+		c.drawInput(x, y, w, h, focused)
+	}
 
 	displayed := value
 	if masked {

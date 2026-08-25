@@ -22,7 +22,12 @@ type UI2DBackend struct {
 
 	// Login screen textures (lazy-loaded)
 	loginBgTex    *TextureInfo
+	loginSkin     *loginWindowSkin
 	loginTexTried bool // avoid repeated load attempts
+
+	// loginSaveID mirrors the original's "save ID" checkbox. Nothing persists
+	// it yet; it is drawn because the window art has the box.
+	loginSaveID bool
 
 	// Cached widget states
 	loginUsername string
@@ -219,6 +224,176 @@ const (
 	loginBackgroundTex = uiTexBasePath + `bgi_temp.bmp`
 )
 
+// The original login window is a single 280x120 texture with the labels and
+// input wells painted in; the client places five widgets on top at fixed
+// offsets. Those offsets are the original's, cross-checked against roBrowser's
+// transcription of the same window.
+const (
+	loginWinW = float32(280)
+	loginWinH = float32(120)
+
+	loginFieldX = float32(91)
+	loginFieldW = float32(127)
+	loginFieldH = float32(18)
+	loginUserY  = float32(29)
+	loginPassY  = float32(61)
+
+	// Buttons and the checkbox are anchored to the right and bottom edges.
+	loginBtnW      = float32(42)
+	loginBtnH      = float32(20)
+	loginBtnBottom = float32(4)
+	loginConnRight = float32(50)
+	loginExitRight = float32(5)
+
+	loginChkW     = float32(34)
+	loginChkH     = float32(10)
+	loginChkY     = float32(32)
+	loginChkRight = float32(10)
+)
+
+// loginWindowSkin holds the original login window art and its widget states.
+type loginWindowSkin struct {
+	window *TextureInfo
+
+	connect, connectOver, connectDown *TextureInfo
+	exit, exitOver, exitDown          *TextureInfo
+	saveOff, saveOn                   *TextureInfo
+}
+
+// loadLoginSkin loads the original login window art. A miss leaves the skin
+// nil and the caller falls back to the themed window, so a client running
+// against an archive without these textures still shows a usable login.
+func (b *UI2DBackend) loadLoginSkin() *loginWindowSkin {
+	if b.loginSkin != nil {
+		return b.loginSkin
+	}
+
+	const dir = loginTexBasePath
+
+	names := []string{
+		`win_login.bmp`,
+		`btn_connect.bmp`, `btn_connect_a.bmp`, `btn_connect_b.bmp`,
+		`btn_exit.bmp`, `btn_exit_a.bmp`, `btn_exit_b.bmp`,
+		`chk_saveoff.bmp`, `chk_saveon.bmp`,
+	}
+
+	loaded := make([]*TextureInfo, 0, len(names))
+
+	for _, name := range names {
+		tex, err := b.texCache.Load(dir + name)
+		if err != nil {
+			logger.Warn("login window art unavailable, falling back to the themed window",
+				zap.String("path", dir+name), zap.Error(err))
+
+			return nil
+		}
+
+		loaded = append(loaded, tex)
+	}
+
+	b.loginSkin = &loginWindowSkin{
+		window:      loaded[0],
+		connect:     loaded[1],
+		connectOver: loaded[2],
+		connectDown: loaded[3],
+		exit:        loaded[4],
+		exitOver:    loaded[5],
+		exitDown:    loaded[6],
+		saveOff:     loaded[7],
+		saveOn:      loaded[8],
+	}
+
+	return b.loginSkin
+}
+
+// renderNativeLoginWindow draws the original login window and its widgets, and
+// reports whether it handled the screen.
+func (b *UI2DBackend) renderNativeLoginWindow(state LoginUIState, width, height float32) bool {
+	skin := b.loadLoginSkin()
+	if skin == nil {
+		return false
+	}
+
+	x := float32(int((width - loginWinW) / 2))
+	y := float32(int((height - loginWinH) / 2))
+
+	r := b.ctx.Renderer()
+	r.DrawImage(skin.window.ID, x, y, loginWinW, loginWinH, ui2d.ColorWhite)
+
+	doLogin := func() {
+		if !state.IsLoading && state.OnLogin != nil {
+			state.OnLogin()
+		}
+	}
+
+	// The wells are painted into the window art, so the fields draw text only.
+	user, userChanged, userSubmit := b.ctx.TextInputBareAt("login_user",
+		x+loginFieldX, y+loginUserY, loginFieldW, loginFieldH, b.loginUsername)
+	if userChanged {
+		b.loginUsername = user
+
+		if state.OnUsernameChange != nil {
+			state.OnUsernameChange(user)
+		}
+	}
+
+	pass, passChanged, passSubmit := b.ctx.PasswordInputBareAt("login_pass",
+		x+loginFieldX, y+loginPassY, loginFieldW, loginFieldH, b.loginPassword)
+	if passChanged {
+		b.loginPassword = pass
+
+		if state.OnPasswordChange != nil {
+			state.OnPasswordChange(pass)
+		}
+	}
+
+	saveTex := skin.saveOff
+	if b.loginSaveID {
+		saveTex = skin.saveOn
+	}
+
+	if b.ctx.ImageButtonAt("login_save",
+		x+loginWinW-loginChkRight-loginChkW, y+loginChkY, loginChkW, loginChkH,
+		saveTex.ID, saveTex.ID, saveTex.ID) {
+		b.loginSaveID = !b.loginSaveID
+	}
+
+	btnY := y + loginWinH - loginBtnBottom - loginBtnH
+
+	if b.ctx.ImageButtonAt("login_connect",
+		x+loginWinW-loginConnRight-loginBtnW, btnY, loginBtnW, loginBtnH,
+		skin.connect.ID, skin.connectOver.ID, skin.connectDown.ID) {
+		doLogin()
+	}
+
+	if b.ctx.ImageButtonAt("login_exit",
+		x+loginWinW-loginExitRight-loginBtnW, btnY, loginBtnW, loginBtnH,
+		skin.exit.ID, skin.exitOver.ID, skin.exitDown.ID) {
+		if state.OnExit != nil {
+			state.OnExit()
+		}
+	}
+
+	if userSubmit || passSubmit {
+		doLogin()
+	}
+
+	// The original has no room for status text inside the window; the real
+	// client uses a separate popup. Until there is one, it goes underneath.
+	statusY := y + loginWinH + 8
+
+	switch {
+	case state.ErrorMessage != "":
+		b.ctx.LabelAtColored(x, statusY, state.ErrorMessage, ui2d.Color{R: 1, G: 0.4, B: 0.4, A: 1})
+	case state.IsLoading:
+		b.ctx.LabelAtColored(x, statusY, "Connecting...", ui2d.ColorText)
+	default:
+		b.ctx.LabelAtColored(x, statusY, "Server: "+state.ServerName, ui2d.ColorTextDim)
+	}
+
+	return true
+}
+
 // loadLoginTextures lazy-loads the login-screen backdrop. We use
 // `t_login.jpg`, the Korean RO client's title-screen art, drawn fullscreen
 // behind the dialog. Dialog chrome itself is rendered from the generic
@@ -261,6 +436,10 @@ func (b *UI2DBackend) RenderLoginUI(state LoginUIState, width, height float32) {
 	}
 	if b.loginPassword == "" && state.Password != "" {
 		b.loginPassword = state.Password
+	}
+
+	if b.renderNativeLoginWindow(state, width, height) {
+		return
 	}
 
 	// Compact dialog modeled on the original RO "Log On" — labels sit
