@@ -29,10 +29,23 @@ import (
 	"github.com/Faultbox/midgard-ro/pkg/math"
 )
 
-// SpriteScale converts sprite pixels to world units. RO character art is
-// authored around 50px wide for a 5-unit cell, so a quarter-unit per pixel
-// puts a novice at roughly a cell and a half tall.
-const SpriteScale = 0.25
+// SpriteScale converts sprite pixels to world units.
+//
+// RO sprite art is authored to be drawn at its native pixel size, so the right
+// scale is whatever makes one sprite pixel cover one screen pixel. That falls
+// out of the camera: with a 45-degree vertical field of view, the visible
+// height at the subject's depth is 2*d*tan(22.5) = 0.828*d world units, and at
+// the default distance of 145 that is 120 units spread over a 720-point
+// viewport — very close to six points per world unit.
+//
+// One sprite pixel per screen pixel is therefore 1/6 of a world unit. That
+// also lands where RO itself does: a cell comes out around 30 points wide
+// against the original client's 32, and a character stands about three cells
+// tall, which is the proportion RO has always had.
+//
+// It was 0.25, carried over from grfbrowser, which drew the character half
+// again as large as the art intends.
+const SpriteScale = 1.0 / 6.0
 
 // Renderer owns the GL state for drawing the local player as a billboard.
 type Renderer struct {
