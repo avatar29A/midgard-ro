@@ -19,6 +19,7 @@ import (
 	"unsafe"
 
 	"github.com/go-gl/gl/v4.1-core/gl"
+	"go.uber.org/zap"
 
 	"github.com/Faultbox/midgard-ro/internal/engine/character"
 	"github.com/Faultbox/midgard-ro/internal/engine/charsprite"
@@ -26,6 +27,7 @@ import (
 	"github.com/Faultbox/midgard-ro/internal/engine/shader"
 	"github.com/Faultbox/midgard-ro/internal/engine/sprite"
 	"github.com/Faultbox/midgard-ro/internal/game/entity"
+	"github.com/Faultbox/midgard-ro/internal/trace"
 	"github.com/Faultbox/midgard-ro/pkg/math"
 )
 
@@ -194,7 +196,15 @@ func (r *Renderer) RenderUnit(viewProj math.Mat4, char *entity.Character, camPos
 	if r == nil || char == nil {
 		return
 	}
-	r.draw(viewProj, char, camPosX, camPosZ, r.unitSheet(load, spec))
+
+	// No fallback marker here, unlike the player. The marker exists so you can
+	// always see yourself; drawing one per unit whose sprite will not resolve
+	// litters the map with boxes standing in for things that are not there.
+	sh := r.unitSheet(load, spec)
+	if sh == nil {
+		return
+	}
+	r.draw(viewProj, char, camPosX, camPosZ, sh)
 }
 
 // UnitFrameCount reports the animation length for an appearance, or zero when
@@ -223,10 +233,31 @@ func (r *Renderer) unitSheet(load charsprite.Loader, spec charsprite.Spec) *shee
 	}
 
 	var baked *sheet
-	if assets, err := charsprite.Load(load, spec); err == nil {
+	assets, err := charsprite.Load(load, spec)
+	if err == nil {
 		baked = newSheet(assets)
 	}
 	r.units[spec] = baked
+
+	// Reported once per appearance, not per frame, because this is where a
+	// unit silently stops being drawn: the packet arrived, the sprite did not
+	// resolve, and nothing else says so.
+	if baked != nil {
+		frames, bytes := baked.cost()
+		trace.Emit(trace.Render, "sheet",
+			zap.Int("job", spec.Job),
+			zap.Uint8("kind", uint8(spec.Kind)),
+			zap.String("sprite", baked.path),
+			zap.Int("frames", frames),
+			zap.Int("kb", bytes/1024),
+			zap.Int("cached", len(r.units)))
+	} else {
+		trace.Emit(trace.Render, "sheet-failed",
+			zap.Int("job", spec.Job),
+			zap.Uint8("kind", uint8(spec.Kind)),
+			zap.Error(err),
+			zap.Int("cached", len(r.units)))
+	}
 	return baked
 }
 
@@ -359,6 +390,20 @@ func (sh *sheet) frameCount(action, direction int) int {
 		return 0
 	}
 	return len(sh.frames[action*charsprite.Directions+direction])
+}
+
+// cost reports how many frames the sheet holds and roughly how much GPU memory
+// they take. Idle animations vary enormously — most NPCs stand on a single
+// frame, a Kafra has ninety-nine — so this is worth being able to see rather
+// than assume.
+func (sh *sheet) cost() (frames, bytes int) {
+	if sh == nil {
+		return 0, 0
+	}
+	for _, textures := range sh.frames {
+		frames += len(textures)
+	}
+	return frames, frames * sh.width * sh.height * 4
 }
 
 func (sh *sheet) release() {
