@@ -5,8 +5,10 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/Faultbox/midgard-ro/internal/engine/charsprite"
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
 	"github.com/Faultbox/midgard-ro/internal/logger"
+	"github.com/Faultbox/midgard-ro/internal/network/packets"
 )
 
 // The original character select is a single 576x342 texture with the slot
@@ -16,6 +18,13 @@ import (
 const (
 	charSelWinW = float32(576)
 	charSelWinH = float32(342)
+
+	// The sprite stands this far below the slot's top, on the shadow painted
+	// into the artwork.
+	charSelSpriteY = float32(44)
+
+	// Facing the viewer, which is the pose character select shows.
+	charSelFacing = 0
 
 	// Slots. The highlight is drawn 5px left of the slot it marks.
 	charSelSlotW      = float32(139)
@@ -202,6 +211,8 @@ func (b *UI2DBackend) drawCharSelectSlots(skin *charSelectSkin, state CharSelect
 			continue
 		}
 
+		b.drawCharSelectPortrait(state.Characters[slot], left, top)
+
 		if b.ctx.InvisibleButtonAt(fmt.Sprintf("charselect_slot_%d", slot),
 			left, top, charSelSlotW, charSelSlotH) {
 			b.charSelectIdx = slot
@@ -271,4 +282,90 @@ func (b *UI2DBackend) drawCharSelectButtons(skin *charSelectSkin, state CharSele
 	}
 
 	b.skinButton("charselect_cancel", cancelX, btnY, skin.cancel, skin.cancel, skin.cancel, "Cancel")
+}
+
+// charSelectPortrait is one character's standing frame, uploaded once.
+type charSelectPortrait struct {
+	texture       uint32
+	width, height float32
+}
+
+// portraitFor bakes a character's idle frame into a texture, once per look.
+// A character whose sprite will not load simply has an empty slot; the screen
+// stays usable, which matters more than the picture.
+func (b *UI2DBackend) portraitFor(char *packets.CharInfo) *charSelectPortrait {
+	spec := charsprite.Spec{
+		Job:       int(char.Class),
+		Female:    char.Sex == 0,
+		HairStyle: int(char.HairStyle),
+	}
+
+	if b.charSelPortraits == nil {
+		b.charSelPortraits = make(map[charsprite.Spec]*charSelectPortrait)
+	}
+
+	if portrait, ok := b.charSelPortraits[spec]; ok {
+		return portrait
+	}
+
+	// Remember the failure too, so a missing sprite is looked up once rather
+	// than every frame.
+	b.charSelPortraits[spec] = nil
+
+	if b.assetLoader == nil {
+		return nil
+	}
+
+	assets, err := charsprite.Load(b.assetLoader, spec)
+	if err != nil {
+		logger.Warn("no character sprite for the select screen",
+			zap.Int("job", spec.Job), zap.Bool("female", spec.Female), zap.Error(err))
+
+		return nil
+	}
+
+	// The idle frame facing the viewer is the pose the original shows.
+	frames := assets.Sheet.Frames[charsprite.ActionIdle*charsprite.Directions+charSelFacing]
+	if len(frames) == 0 {
+		logger.Warn("character sprite has no idle frame",
+			zap.Int("job", spec.Job), zap.String("path", assets.BodyPath))
+
+		return nil
+	}
+
+	portrait := &charSelectPortrait{
+		texture: b.ctx.Renderer().CreateTextureNearest(
+			assets.Sheet.Width, assets.Sheet.Height, frames[0].Pixels),
+		width:  float32(assets.Sheet.Width),
+		height: float32(assets.Sheet.Height),
+	}
+
+	b.charSelPortraits[spec] = portrait
+
+	return portrait
+}
+
+// drawCharSelectPortrait draws a character standing in its slot, centered over
+// the shadow the artwork paints there and scaled down if the sprite is taller
+// than the slot.
+func (b *UI2DBackend) drawCharSelectPortrait(char *packets.CharInfo, slotLeft, slotTop float32) {
+	portrait := b.portraitFor(char)
+	if portrait == nil {
+		return
+	}
+
+	w, h := portrait.width, portrait.height
+
+	if maxH := charSelSlotH - charSelSpriteY; h > maxH {
+		w *= maxH / h
+		h = maxH
+	}
+
+	if w > charSelSlotW {
+		h *= charSelSlotW / w
+		w = charSelSlotW
+	}
+
+	b.ctx.Renderer().DrawImage(portrait.texture,
+		slotLeft+(charSelSlotW-w)/2, slotTop+charSelSpriteY, w, h, ui2d.ColorWhite)
 }
