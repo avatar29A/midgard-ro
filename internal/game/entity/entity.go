@@ -48,6 +48,7 @@ type Entity struct {
 	HeadTop      int // Headgear top
 	HeadMid      int // Headgear mid
 	HeadBottom   int // Headgear bottom
+	Robe         int // Garment/robe
 	HairStyle    int // Hair style
 	HairColor    int // Hair color
 	ClothesColor int // Clothes color
@@ -90,6 +91,12 @@ type Entity struct {
 	IsVisible    bool
 	IsTargetable bool
 	IsDead       bool
+
+	// Body carries position, facing and animation for entities that are drawn
+	// on the map, and is nil for those that are not. It is a separate type
+	// because walking is the same problem for every unit — cell paths, step
+	// timing, terrain following — and the local player already solves it.
+	Body *Character
 }
 
 // NewEntity creates a new entity.
