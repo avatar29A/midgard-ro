@@ -160,10 +160,7 @@ func (s *InGameState) Enter() error {
 
 	// Let the character follow the ground as it walks.
 	if s.scene != nil && s.MapLoaded {
-		scn := s.scene
-		s.player.TerrainHeight = func(x, z float32) float32 {
-			return scn.GetTerrainHeight(x, z)
-		}
+		s.player.TerrainHeight = s.terrainHeight
 	}
 
 	logger.Info("player walk speed",
@@ -365,8 +362,15 @@ func (s *InGameState) Update(dt float64) error {
 
 	// Update all entities
 	s.entityManager.Update(dt)
+	updateUnits(s.entityManager, deltaMs, s.unitFrameCount)
 
 	return nil
+}
+
+// unitFrameCount reports a unit's animation length. Until remote sprites are
+// loaded there is nothing to count, so every unit parks on frame 0.
+func (s *InGameState) unitFrameCount(_ *entity.Entity, _, _ int) int {
+	return 0
 }
 
 // Render is called every frame to draw the state.
@@ -455,8 +459,10 @@ func (s *InGameState) HandleInput(event interface{}) error {
 }
 
 func (s *InGameState) registerPacketHandlers() {
-	s.client.RegisterHandler(packets.ZC_NOTIFY_STANDENTRY, s.handleEntitySpawn)
+	s.client.RegisterHandler(packets.ZC_NOTIFY_STANDENTRY, s.handleEntityIdle)
+	s.client.RegisterHandler(packets.ZC_NOTIFY_NEWENTRY, s.handleEntitySpawn)
 	s.client.RegisterHandler(packets.ZC_NOTIFY_MOVEENTRY, s.handleEntityMove)
+	s.client.RegisterHandler(packets.ZC_NOTIFY_VANISH, s.handleEntityVanish)
 	s.client.RegisterHandler(packets.ZC_NPCACK_MAPMOVE, s.handleMapChange)
 	s.client.RegisterHandler(packets.ZC_NOTIFY_PLAYERMOVE, s.handlePlayerMove)
 	s.client.RegisterHandler(packets.ZC_NOTIFY_TIME, s.handleServerTick)
@@ -615,15 +621,104 @@ func (s *InGameState) handlePlayerMove(data []byte) error {
 	return nil
 }
 
+// handleEntityIdle handles a unit standing still (ZC_NOTIFY_STANDENTRY).
+func (s *InGameState) handleEntityIdle(data []byte) error {
+	return s.applyUnit(packets.DecodeEntityIdle(data), "idle")
+}
+
+// handleEntitySpawn handles a unit appearing (ZC_NOTIFY_NEWENTRY).
 func (s *InGameState) handleEntitySpawn(data []byte) error {
-	// Parse entity spawn packet (simplified)
-	// Full implementation would extract entity ID, type, position, etc.
+	return s.applyUnit(packets.DecodeEntitySpawn(data), "spawn")
+}
+
+// handleEntityMove handles a unit that is walking (ZC_NOTIFY_MOVEENTRY).
+func (s *InGameState) handleEntityMove(data []byte) error {
+	return s.applyUnit(packets.DecodeEntityWalk(data), "walk")
+}
+
+// handleEntityVanish removes a unit that has left our view, died, logged out,
+// teleported or is playing dead.
+func (s *InGameState) handleEntityVanish(data []byte) error {
+	aid, reason, ok := packets.DecodeEntityVanish(data)
+	if !ok {
+		return nil
+	}
+	if aid == s.selfAID() {
+		// The server reports our own death and teleports through this packet
+		// too. Removing ourselves would delete the character being played, so
+		// only note it.
+		trace.Emit(trace.Net, "vanish-self", zap.Uint8("reason", reason))
+		return nil
+	}
+
+	removeUnit(s.entityManager, aid)
+	trace.Emit(trace.Net, "vanish",
+		zap.Uint32("aid", aid),
+		zap.Uint8("reason", reason),
+		zap.Int("units", s.entityManager.Count()))
 	return nil
 }
 
-func (s *InGameState) handleEntityMove(data []byte) error {
-	// Parse entity movement packet
+// applyUnit folds one decoded unit report into the entity registry.
+//
+// Reports about our own character are dropped: the local player is driven by
+// its own prediction and acknowledgement path, and letting a unit report move
+// it would fight that.
+func (s *InGameState) applyUnit(u *packets.Entity, kind string) error {
+	if u == nil {
+		return nil
+	}
+	if u.AID == s.selfAID() {
+		return nil
+	}
+
+	e := upsertUnit(s.entityManager, u, s.unitPath)
+	if e == nil {
+		return nil
+	}
+	if e.Body != nil {
+		e.Body.TerrainHeight = s.terrainHeight
+	}
+
+	trace.Emit(trace.Net, "unit",
+		zap.String("kind", kind),
+		zap.Uint32("aid", u.AID),
+		zap.Uint8("objectType", uint8(u.Kind)),
+		zap.String("name", u.Name),
+		zap.Int("x", u.X), zap.Int("y", u.Y),
+		zap.Bool("moving", u.Moving),
+		zap.Int("units", s.entityManager.Count()))
 	return nil
+}
+
+// selfAID returns our own account id, which is what identifies our character
+// among the units the server reports.
+func (s *InGameState) selfAID() uint32 {
+	if s.client == nil {
+		return 0
+	}
+	accountID, _, _, _ := s.client.Session()
+	return accountID
+}
+
+// terrainHeight returns the ground altitude at a world position, so units
+// follow the terrain as they walk rather than sinking through hills. Returns
+// zero before the map is loaded, which is what a flat map would give.
+func (s *InGameState) terrainHeight(worldX, worldZ float32) float32 {
+	if s.scene == nil || !s.MapLoaded {
+		return 0
+	}
+	return s.scene.GetTerrainHeight(worldX, worldZ)
+}
+
+// unitPath reproduces the route a unit walks. The server sends only the
+// endpoints, so units have to be walked over the same cells the server thinks
+// they are walking or the two drift apart around obstacles.
+func (s *InGameState) unitPath(fromX, fromY, toX, toY int) [][2]int {
+	if s.pathFinder == nil {
+		return nil
+	}
+	return s.pathFinder.FindPath(fromX, fromY, toX, toY)
 }
 
 func (s *InGameState) handleMapChange(data []byte) error {
