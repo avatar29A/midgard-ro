@@ -33,6 +33,12 @@ type UI2DBackend struct {
 	loginWinX, loginWinY float32
 	loginWinPlaced       bool
 
+	// Character select art, and where its window has been dragged to.
+	charSelSkin        *charSelectSkin
+	charSelTried       bool
+	charSelX, charSelY float32
+	charSelPlaced      bool
+
 	// Cached widget states
 	loginUsername string
 	loginPassword string
@@ -284,11 +290,11 @@ const (
 	// The buttons carry their captions in the texture too. Ink spans x 10..32
 	// on both; columns 2..9 are clean face, so one of them stretches over the
 	// caption the same way the title bar does.
-	loginBtnInkX   = float32(10)
-	loginBtnInkW   = float32(23)
+	loginBtnInkX   = float32(3)
+	loginBtnInkW   = float32(36)
 	loginBtnInkY   = float32(2)
 	loginBtnInkH   = float32(16)
-	loginBtnCleanX = float32(5)
+	loginBtnCleanX = float32(39)
 	loginBtnTexW   = float32(42)
 	loginBtnTexH   = float32(20)
 )
@@ -462,12 +468,12 @@ func (b *UI2DBackend) renderNativeLoginWindow(state LoginUIState, width, height 
 
 	btnY := y + loginWinH - loginBtnBottom - loginBtnH
 
-	if b.loginSkinButton("login_connect", x+loginWinW-loginConnRight-loginBtnW, btnY,
+	if b.skinButton("login_connect", x+loginWinW-loginConnRight-loginBtnW, btnY,
 		skin.connect, skin.connectOver, skin.connectDown, "Ok") {
 		doLogin()
 	}
 
-	if b.loginSkinButton("login_exit", x+loginWinW-loginExitRight-loginBtnW, btnY,
+	if b.skinButton("login_exit", x+loginWinW-loginExitRight-loginBtnW, btnY,
 		skin.exit, skin.exitOver, skin.exitDown, "Exit") {
 		if state.OnExit != nil {
 			state.OnExit()
@@ -494,9 +500,9 @@ func (b *UI2DBackend) renderNativeLoginWindow(state LoginUIState, width, height 
 	return true
 }
 
-// loginSkinButton draws one of the window's buttons and replaces the caption
+// skinButton draws one of RO's 42x20 buttons and replaces the caption
 // baked into it with an English one.
-func (b *UI2DBackend) loginSkinButton(id string, x, y float32, normal, over, down *TextureInfo, label string) bool {
+func (b *UI2DBackend) skinButton(id string, x, y float32, normal, over, down *TextureInfo, label string) bool {
 	clicked, drawn := b.ctx.ImageButtonAtEx(id, x, y, loginBtnW, loginBtnH,
 		normal.ID, over.ID, down.ID)
 
@@ -683,6 +689,10 @@ func (b *UI2DBackend) RenderCharSelectUI(state CharSelectUIState, width, height 
 	b.loadLoginTextures()
 	if b.loginBgTex != nil {
 		b.ctx.Renderer().DrawImage(b.loginBgTex.ID, 0, 0, width, height, ui2d.ColorWhite)
+	}
+
+	if b.renderNativeCharSelect(state, width, height) {
+		return
 	}
 
 	windowWidth := float32(420)
