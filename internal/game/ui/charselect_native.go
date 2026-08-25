@@ -19,9 +19,14 @@ const (
 	charSelWinW = float32(576)
 	charSelWinH = float32(342)
 
-	// The sprite stands this far below the slot's top, on the shadow painted
-	// into the artwork.
-	charSelSpriteY = float32(44)
+	// Where the character stands: the center of the shadow ellipse painted
+	// into the slot, measured off the texture. It sits a few pixels left of
+	// the slot's own center, which is why centering on the slot looked off.
+	charSelShadowX = float32(63.5)
+	charSelShadowY = float32(119)
+
+	// Keeps a tall sprite inside the slot frame rather than over its border.
+	charSelSlotInset = float32(6)
 
 	// Facing the viewer, which is the pose character select shows.
 	charSelFacing = 0
@@ -345,9 +350,13 @@ func (b *UI2DBackend) portraitFor(char *packets.CharInfo) *charSelectPortrait {
 	return portrait
 }
 
-// drawCharSelectPortrait draws a character standing in its slot, centered over
-// the shadow the artwork paints there and scaled down if the sprite is taller
-// than the slot.
+// drawCharSelectPortrait stands a character on the shadow painted in its slot.
+//
+// charsprite pads every frame horizontally centered and bottom aligned, so the
+// character's feet are the bottom edge of the quad and its middle is the quad's
+// center. Placing that bottom edge on the shadow puts the character on the
+// ground rather than at a fixed offset from the slot's top, which left it
+// hanging below the shadow.
 func (b *UI2DBackend) drawCharSelectPortrait(char *packets.CharInfo, slotLeft, slotTop float32) {
 	portrait := b.portraitFor(char)
 	if portrait == nil {
@@ -356,16 +365,18 @@ func (b *UI2DBackend) drawCharSelectPortrait(char *packets.CharInfo, slotLeft, s
 
 	w, h := portrait.width, portrait.height
 
-	if maxH := charSelSlotH - charSelSpriteY; h > maxH {
+	// A sprite taller than the room above the shadow is scaled to fit, keeping
+	// its proportions so it still stands on the same spot.
+	if maxH := charSelShadowY - charSelSlotInset; h > maxH {
 		w *= maxH / h
 		h = maxH
 	}
 
-	if w > charSelSlotW {
-		h *= charSelSlotW / w
-		w = charSelSlotW
+	if maxW := charSelSlotW - 2*charSelSlotInset; w > maxW {
+		h *= maxW / w
+		w = maxW
 	}
 
 	b.ctx.Renderer().DrawImage(portrait.texture,
-		slotLeft+(charSelSlotW-w)/2, slotTop+charSelSpriteY, w, h, ui2d.ColorWhite)
+		slotLeft+charSelShadowX-w/2, slotTop+charSelShadowY-h, w, h, ui2d.ColorWhite)
 }
