@@ -1,5 +1,8 @@
 package ui2d
 
+// defaultInputTextScale keeps body text comfortably inside a 22-28px field.
+const defaultInputTextScale = float32(0.85)
+
 // Absolute-positioning widget API.
 //
 // Classic RO dialogs are hand-laid out: each window is a fixed-size BMP with
@@ -107,6 +110,15 @@ func (c *Context) ButtonAt(id string, x, y, w, h float32, label string) bool {
 // texture. Returns true on click. The texture is drawn 1:1 over the
 // (x, y, w, h) rect with white tint.
 func (c *Context) ImageButtonAt(id string, x, y, w, h float32, normalTex, overTex, pressedTex uint32) bool {
+	clicked, _ := c.ImageButtonAtEx(id, x, y, w, h, normalTex, overTex, pressedTex)
+
+	return clicked
+}
+
+// ImageButtonAtEx is ImageButtonAt that also reports the texture it drew.
+// Callers that need to paint over artwork baked into the button — a caption in
+// the wrong language — need to know which of the three states is on screen.
+func (c *Context) ImageButtonAtEx(id string, x, y, w, h float32, normalTex, overTex, pressedTex uint32) (bool, uint32) {
 	rect := Rect{x, y, w, h}
 	hovered := rect.Contains(c.input.MouseX, c.input.MouseY)
 	clicked := false
@@ -135,34 +147,35 @@ func (c *Context) ImageButtonAt(id string, x, y, w, h float32, normalTex, overTe
 	if tex != 0 {
 		c.renderer.DrawImage(tex, x, y, w, h, ColorWhite)
 	}
-	return clicked
+
+	return clicked, tex
 }
 
 // TextInputAt draws an editable text field at absolute coords.
 // Returns (current value, changed, submitted-on-enter).
 func (c *Context) TextInputAt(id string, x, y, w, h float32, value string) (string, bool, bool) {
-	return c.textFieldAt(id, x, y, w, h, value, false, true)
+	return c.textFieldAt(id, x, y, w, h, value, false, true, defaultInputTextScale)
 }
 
 // PasswordInputAt draws a masked text field at absolute coords.
 func (c *Context) PasswordInputAt(id string, x, y, w, h float32, value string) (string, bool, bool) {
-	return c.textFieldAt(id, x, y, w, h, value, true, true)
+	return c.textFieldAt(id, x, y, w, h, value, true, true, defaultInputTextScale)
 }
 
 // TextInputBareAt is TextInputAt without the drawn field chrome, for inputs
 // whose background is part of a skin texture — the original RO windows bake
 // their input wells into the window art.
-func (c *Context) TextInputBareAt(id string, x, y, w, h float32, value string) (string, bool, bool) {
-	return c.textFieldAt(id, x, y, w, h, value, false, false)
+func (c *Context) TextInputBareAt(id string, x, y, w, h, scale float32, value string) (string, bool, bool) {
+	return c.textFieldAt(id, x, y, w, h, value, false, false, scale)
 }
 
 // PasswordInputBareAt is PasswordInputAt without the drawn field chrome.
-func (c *Context) PasswordInputBareAt(id string, x, y, w, h float32, value string) (string, bool, bool) {
-	return c.textFieldAt(id, x, y, w, h, value, true, false)
+func (c *Context) PasswordInputBareAt(id string, x, y, w, h, scale float32, value string) (string, bool, bool) {
+	return c.textFieldAt(id, x, y, w, h, value, true, false, scale)
 }
 
 // textFieldAt is the shared implementation for TextInputAt / PasswordInputAt.
-func (c *Context) textFieldAt(id string, x, y, w, h float32, value string, masked, chrome bool) (string, bool, bool) {
+func (c *Context) textFieldAt(id string, x, y, w, h float32, value string, masked, chrome bool, scale float32) (string, bool, bool) {
 	rect := Rect{x, y, w, h}
 	hovered := rect.Contains(c.input.MouseX, c.input.MouseY)
 	focused := c.activeWidget == id
@@ -213,7 +226,6 @@ func (c *Context) textFieldAt(id string, x, y, w, h float32, value string, maske
 	// at scale=1.0 cap-height was visually too tall for a 22-28px input.
 	// Center on cap-height (ascent) for optical centering rather than the
 	// line-height that includes leading + descender padding.
-	scale := float32(0.85)
 	ascent := c.renderer.FontAscent(scale)
 	textY := y + (h-ascent)/2
 	c.renderer.DrawText(x+4, textY, displayed, scale, ColorText)
