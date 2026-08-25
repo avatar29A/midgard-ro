@@ -167,6 +167,14 @@ func (b *UI2DBackend) End() {
 func (b *UI2DBackend) SetAssetLoader(loadFunc func(string) ([]byte, error)) {
 	b.texCache = NewTextureCache(b.ctx.Renderer(), loadFunc)
 
+	// Prefer the original window chrome; the nine-sliced skin stays as the
+	// fallback for archives that lack it.
+	if frame, err := LoadNativeWindowFrame(b.texCache); err == nil {
+		b.ctx.SetWindowFrame(frame)
+	} else {
+		logger.Warn("native window chrome unavailable, using the themed skin", zap.Error(err))
+	}
+
 	// Try to load window skin
 	skin, err := LoadWindowSkin(b.texCache)
 	if err == nil && skin.Frame != nil {
@@ -647,7 +655,8 @@ func (b *UI2DBackend) RenderConnectingUI(state ConnectingUIState, width, height 
 	windowX := (width - windowWidth) / 2
 	windowY := (height - windowHeight) / 2
 
-	if b.ctx.BeginWindow("connecting", windowX, windowY, windowWidth, windowHeight, "Connecting") {
+	if b.ctx.BeginWindowEx("connecting", windowX, windowY, windowWidth, windowHeight,
+		"Connecting", ui2d.WindowOptions{}) {
 		var rows []ui2d.Element
 		if state.StatusMessage != "" {
 			rows = append(rows, ui2d.LabelCenteredEl(state.StatusMessage))
@@ -681,7 +690,8 @@ func (b *UI2DBackend) RenderCharSelectUI(state CharSelectUIState, width, height 
 	windowX := (width - windowWidth) / 2
 	windowY := (height - windowHeight) / 2
 
-	if b.ctx.BeginWindow("charselect", windowX, windowY, windowWidth, windowHeight, "Character Selection") {
+	if b.ctx.BeginWindowEx("charselect", windowX, windowY, windowWidth, windowHeight,
+		"Character Selection", ui2d.WindowOptions{}) {
 		// Auto-select first row when characters arrive.
 		if state.IsReady && b.charSelectIdx < 0 && len(state.Characters) > 0 {
 			b.charSelectIdx = 0

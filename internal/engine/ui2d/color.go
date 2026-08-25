@@ -55,6 +55,10 @@ var (
 	// The RO accent (rgb 53,93,204) is too saturated for thin glyphs at
 	// 14px; this is a deeper navy that reads as a window-chrome label.
 	ColorTitleText = Color{0.10, 0.18, 0.40, 1}
+
+	// ColorWindowBody is the near-white the original fills its window bodies
+	// with, under whatever the window itself draws.
+	ColorWindowBody = Color{1, 1, 1, 1}
 )
 
 // RGBA creates a color from 8-bit RGBA values (0-255).
