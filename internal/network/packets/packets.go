@@ -52,10 +52,17 @@ const (
 	CZ_NOTIFY_ACTORINIT uint16 = 0x007D // Loading complete
 
 	// Map Server -> Client
-	ZC_ACCEPT_ENTER      uint16 = 0x0073 // Map enter accepted (old)
-	ZC_ACCEPT_ENTER2     uint16 = 0x02EB // Map enter accepted (modern rAthena)
-	ZC_NOTIFY_STANDENTRY uint16 = 0x0078 // Entity spawn (standing)
-	ZC_NOTIFY_MOVEENTRY  uint16 = 0x007B // Entity spawn (moving)
+	ZC_ACCEPT_ENTER  uint16 = 0x0073 // Map enter accepted (old)
+	ZC_ACCEPT_ENTER2 uint16 = 0x02EB // Map enter accepted (modern rAthena)
+	// Unit appearance and movement. These ids move with the packet version:
+	// what older clients know as 0x0078 and 0x007B does not exist at
+	// PACKETVER 20211103, so handlers registered against those never fire and
+	// an arriving packet would be treated as unknown and resynchronized past.
+	// See rAthena's idle_unitType / spawn_unitType / unit_walkingType.
+	ZC_NOTIFY_STANDENTRY uint16 = 0x09FF // Unit standing still
+	ZC_NOTIFY_NEWENTRY   uint16 = 0x09FE // Unit appearing
+	ZC_NOTIFY_MOVEENTRY  uint16 = 0x09FD // Unit walking
+	ZC_NOTIFY_VANISH     uint16 = 0x0080 // Unit removed
 	ZC_NOTIFY_PLAYERMOVE uint16 = 0x0087 // Own player walk-OK (start_tick + packed positions)
 	ZC_NOTIFY_ACT        uint16 = 0x008A // Entity action
 	ZC_NPCACK_MAPMOVE    uint16 = 0x0091 // Map change (server-driven warp)
@@ -588,12 +595,7 @@ func DecodePlayerMove(data []byte) *PlayerMove {
 	}
 	tick := uint32(data[2]) | uint32(data[3])<<8 | uint32(data[4])<<16 | uint32(data[5])<<24
 
-	// Unpack 6-byte position pair (rAthena RBUFPOS2 layout)
-	b := data[6:12]
-	x0 := int(b[0])<<2 | int(b[1])>>6
-	y0 := (int(b[1])&0x3F)<<4 | int(b[2])>>4
-	x1 := (int(b[2])&0x0F)<<6 | int(b[3])>>2
-	y1 := (int(b[3])&0x03)<<8 | int(b[4])
+	x0, y0, x1, y1, _, _ := DecodePos2(data[6:12])
 
 	return &PlayerMove{
 		StartTick: tick,
