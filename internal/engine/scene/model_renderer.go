@@ -404,11 +404,27 @@ func (mr *ModelRenderer) uploadTexture(img *image.RGBA) uint32 {
 }
 
 // Render renders all visible models.
-// coplanarBiasSteps is how many distinct depth biases are cycled through when
-// drawing model instances, in units of the depth buffer's smallest resolvable
-// step. Large enough that overlapping neighbours always differ, small enough
-// that the deepest bias is still invisible.
-const coplanarBiasSteps = 64
+// Depth bias applied per model instance, to break ties between map geometry
+// that is exactly coplanar.
+//
+// glPolygonOffset computes factor*m + r*units, where m is the polygon's
+// screen-space depth slope and r is the smallest resolvable depth step. Both
+// halves are needed. The units term separates surfaces seen face-on; the
+// factor term scales with slope, which is what covers them at grazing angles.
+//
+// Biasing on units alone left the joins stable while walking and glitching
+// across every segment while turning, because turning is what sweeps these
+// walls through grazing angles, where the interpolation error between two
+// coplanar surfaces grows with the slope and swamps a constant offset.
+//
+// The values cycle so a large map cannot accumulate a bias big enough to see;
+// instances that overlap are neighbours in the world file, so their indices
+// differ by far less than the cycle length.
+const (
+	coplanarBiasSteps = 8
+	coplanarSlopeStep = 0.25
+	coplanarUnitsStep = 2.0
+)
 
 func (mr *ModelRenderer) Render(viewProj math.Mat4, lightDir, ambient, diffuse [3]float32,
 	shadowsEnabled bool, lightViewProj math.Mat4, shadowMap *shadow.Map,
@@ -498,10 +514,9 @@ func (mr *ModelRenderer) Render(viewProj math.Mat4, lightDir, ambient, diffuse [
 	// No amount of depth precision fixes that; there is nothing to resolve.
 	// More precision makes it worse, by resolving the noise itself.
 	//
-	// A per-instance depth bias breaks the tie deterministically instead. The
-	// unit is the depth buffer's own smallest resolvable step, so a handful of
-	// them is far too little to shift anything visibly, but enough that two
-	// coplanar instances can never compare equal.
+	// A per-instance depth bias breaks the tie deterministically instead, on
+	// both the constant and the slope-dependent term — see the constants above
+	// for why the slope term matters.
 	gl.Enable(gl.POLYGON_OFFSET_FILL)
 	defer gl.Disable(gl.POLYGON_OFFSET_FILL)
 	defer gl.PolygonOffset(0, 0)
@@ -514,7 +529,8 @@ func (mr *ModelRenderer) Render(viewProj math.Mat4, lightDir, ambient, diffuse [
 		// Wrapped so a large map cannot accumulate a bias big enough to show.
 		// Instances that overlap are neighbours in the world file, so their
 		// indices differ by far less than the wrap.
-		gl.PolygonOffset(0, float32(i%coplanarBiasSteps))
+		bias := float32(i % coplanarBiasSteps)
+		gl.PolygonOffset(bias*coplanarSlopeStep, bias*coplanarUnitsStep)
 
 		// Build model matrix
 		modelMatrix := mr.buildModelMatrix(model, offsetX, offsetZ)
