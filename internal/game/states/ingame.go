@@ -431,7 +431,7 @@ func (s *InGameState) renderUnits(viewProj math.Mat4) {
 			continue
 		}
 		drawn++
-		s.playerRender.RenderUnit(viewProj, e.Body, s.camera.PosX, s.camera.PosZ, load, unitSpec(e))
+		s.playerRender.RenderUnit(viewProj, e.Body, s.camera.PosX, s.camera.PosZ, load, unitSpec(e), e.Alpha())
 	}
 
 	s.traceUnitStats(tracked, drawn)

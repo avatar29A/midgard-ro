@@ -93,6 +93,11 @@ type Entity struct {
 	IsTargetable bool
 	IsDead       bool
 
+	// Leaving marks a unit the server has removed but which is still fading
+	// out, and FadeMs is how far through the current fade it is.
+	Leaving bool
+	FadeMs  float32
+
 	// Body carries position, facing and animation for entities that are drawn
 	// on the map, and is nil for those that are not. It is a separate type
 	// because walking is the same problem for every unit — cell paths, step
@@ -134,6 +139,58 @@ func NewEntity(id uint32, entityType Type) *Entity {
 	}
 
 	return e
+}
+
+// FadeDurationMs is how long a unit takes to fade in when it appears and out
+// when it leaves.
+//
+// The server only tells us about units within its area_size, so they cross
+// that boundary abruptly as the player moves — which reads as units blinking
+// in and out of nothing. The boundary is the server's to move; what the client
+// can do is stop the crossing being instant.
+const FadeDurationMs = 220.0
+
+// Alpha is how opaque the entity should be drawn, ramping in as it appears and
+// out as it leaves.
+func (e *Entity) Alpha() float32 {
+	progress := e.FadeMs / FadeDurationMs
+	if progress > 1 {
+		progress = 1
+	}
+	if progress < 0 {
+		progress = 0
+	}
+	if e.Leaving {
+		return 1 - progress
+	}
+	return progress
+}
+
+// FadedOut reports whether a leaving entity has finished fading and can be
+// dropped.
+func (e *Entity) FadedOut() bool {
+	return e.Leaving && e.FadeMs >= FadeDurationMs
+}
+
+// BeginLeaving starts the fade out, from however opaque the entity is now, so
+// a unit that leaves while still fading in does not jump to fully visible
+// first.
+func (e *Entity) BeginLeaving() {
+	if e.Leaving {
+		return
+	}
+	e.FadeMs = (1 - e.Alpha()) * FadeDurationMs
+	e.Leaving = true
+}
+
+// CancelLeaving returns an entity the server has mentioned again to fading in,
+// picking up from its current opacity.
+func (e *Entity) CancelLeaving() {
+	if !e.Leaving {
+		return
+	}
+	e.FadeMs = e.Alpha() * FadeDurationMs
+	e.Leaving = false
 }
 
 // SetPosition sets the entity position.
