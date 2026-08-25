@@ -369,19 +369,22 @@ func (s *InGameState) Update(dt float64) error {
 
 	// Update all entities
 	s.entityManager.Update(dt)
-	updateUnits(s.entityManager, deltaMs, s.unitFrameCount)
+	updateUnits(s.entityManager, deltaMs, s.unitAnim)
 
 	return nil
 }
 
-// unitFrameCount reports a unit's animation length, so its walk cycle loops at
-// the length of its own sprite rather than the player's. Zero until the sheet
-// for that appearance has been baked, which parks it on frame 0.
-func (s *InGameState) unitFrameCount(e *entity.Entity, action, direction int) int {
+// unitAnim reports a unit's animation length and frame rate, so it loops at
+// the length of its own sprite and runs at the rate its own ACT specifies
+// rather than the player's fixed one. Zero until the sheet for that appearance
+// has been baked, which parks it on frame 0.
+func (s *InGameState) unitAnim(e *entity.Entity, action, direction int) (int, float32) {
 	if s.playerRender == nil || !unitIsDrawable(e) {
-		return 0
+		return 0, 0
 	}
-	return s.playerRender.UnitFrameCount(unitSpec(e), action, direction)
+	spec := unitSpec(e)
+	return s.playerRender.UnitFrameCount(spec, action, direction),
+		s.playerRender.UnitFrameInterval(spec, action)
 }
 
 // Render is called every frame to draw the state.
