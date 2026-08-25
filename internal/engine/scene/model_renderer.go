@@ -404,6 +404,12 @@ func (mr *ModelRenderer) uploadTexture(img *image.RGBA) uint32 {
 }
 
 // Render renders all visible models.
+// coplanarBiasSteps is how many distinct depth biases are cycled through when
+// drawing model instances, in units of the depth buffer's smallest resolvable
+// step. Large enough that overlapping neighbours always differ, small enough
+// that the deepest bias is still invisible.
+const coplanarBiasSteps = 64
+
 func (mr *ModelRenderer) Render(viewProj math.Mat4, lightDir, ambient, diffuse [3]float32,
 	shadowsEnabled bool, lightViewProj math.Mat4, shadowMap *shadow.Map,
 	pointLightsEnabled bool, pointLights []PointLight, pointLightIntensity float32,
@@ -481,10 +487,34 @@ func (mr *ModelRenderer) Render(viewProj math.Mat4, lightDir, ambient, diffuse [
 	offsetX := mr.mapWidth / 2
 	offsetZ := mr.mapHeight / 2
 
-	for _, model := range mr.models {
+	// Map data places model instances that are exactly coplanar with each
+	// other. Prontera's wall is built from a 30-unit segment repeated every
+	// 28.3 units at identical height and rotation, so each adjacent pair
+	// shares a 1.7-unit strip lying in the same plane.
+	//
+	// Surfaces in the same plane have no depth difference to resolve, so which
+	// one is in front is decided by floating-point noise in each instance's
+	// transform, and it flips as the camera moves — the flicker at wall joins.
+	// No amount of depth precision fixes that; there is nothing to resolve.
+	// More precision makes it worse, by resolving the noise itself.
+	//
+	// A per-instance depth bias breaks the tie deterministically instead. The
+	// unit is the depth buffer's own smallest resolvable step, so a handful of
+	// them is far too little to shift anything visibly, but enough that two
+	// coplanar instances can never compare equal.
+	gl.Enable(gl.POLYGON_OFFSET_FILL)
+	defer gl.Disable(gl.POLYGON_OFFSET_FILL)
+	defer gl.PolygonOffset(0, 0)
+
+	for i, model := range mr.models {
 		if model == nil || !model.Visible || model.vao == 0 {
 			continue
 		}
+
+		// Wrapped so a large map cannot accumulate a bias big enough to show.
+		// Instances that overlap are neighbours in the world file, so their
+		// indices differ by far less than the wrap.
+		gl.PolygonOffset(0, float32(i%coplanarBiasSteps))
 
 		// Build model matrix
 		modelMatrix := mr.buildModelMatrix(model, offsetX, offsetZ)
