@@ -23,6 +23,13 @@ import (
 	"github.com/Faultbox/midgard-ro/pkg/math"
 )
 
+// ModelAnimStepMs is how often an animated map model is rebuilt.
+//
+// Rebuilding is CPU work and a buffer upload, and these animations are slow
+// enough that doing it every frame is pure waste — 30 times a second is
+// already far finer than a windmill turning once every 32 seconds.
+const ModelAnimStepMs = 33.0
+
 // MapModel represents a placed RSM model in the scene.
 type MapModel struct {
 	vao        uint32
@@ -51,6 +58,18 @@ type MapModel struct {
 	// depthBias separates this instance from any it may overlap. See
 	// assignDepthBiases.
 	depthBias int
+
+	// Animation state, set only for models that have any. The source and its
+	// build options are kept so the mesh can be rebuilt at a new time, and the
+	// centering offset so every rebuild lands where the first one did — the
+	// bounds move as the model animates, so recentering per frame would make
+	// it wander.
+	rsm          *formats.RSM
+	buildOpts    rsmmodel.BuildOptions
+	animLengthMs float32
+	animTimeMs   float32
+	centerX      float32
+	centerZ      float32
 }
 
 // ModelRenderer handles rendering of RSM models.
@@ -93,6 +112,9 @@ type ModelRenderer struct {
 
 	// Force all faces to render as two-sided
 	ForceAllTwoSided bool
+
+	// animPending accumulates time between model animation rebuilds.
+	animPending float32
 
 	// Cull counters from the last Render, reported on the render trace.
 	drawnModels    int
@@ -199,17 +221,22 @@ func (mr *ModelRenderer) computeWorldBounds() {
 		if model == nil {
 			continue
 		}
-		matrix := mr.buildModelMatrix(model, offsetX, offsetZ)
-		model.worldCenter = matrix.TransformPoint(model.localCenter)
-
-		maxScale := float32(0)
-		for _, axis := range model.scale {
-			if s := float32(gomath.Abs(float64(axis))); s > maxScale {
-				maxScale = s
-			}
-		}
-		model.worldRadius = model.localRadius * maxScale
+		mr.updateWorldBounds(model, offsetX, offsetZ)
 	}
+}
+
+// updateWorldBounds places one model's bounding sphere in world space.
+func (mr *ModelRenderer) updateWorldBounds(model *MapModel, offsetX, offsetZ float32) {
+	matrix := mr.buildModelMatrix(model, offsetX, offsetZ)
+	model.worldCenter = matrix.TransformPoint(model.localCenter)
+
+	maxScale := float32(0)
+	for _, axis := range model.scale {
+		if s := float32(gomath.Abs(float64(axis))); s > maxScale {
+			maxScale = s
+		}
+	}
+	model.worldRadius = model.localRadius * maxScale
 }
 
 // CullStats returns how many models were drawn and how many were skipped by
@@ -282,10 +309,6 @@ func (mr *ModelRenderer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, 
 		return nil
 	}
 
-	var vertices []rsmmodel.Vertex
-	var indices []uint32
-	texGroups := make(map[int][]uint32)
-
 	// Load model textures
 	modelTextures := make([]uint32, len(rsm.Textures))
 	for i, texName := range rsm.Textures {
@@ -303,157 +326,29 @@ func (mr *ModelRenderer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, 
 		modelTextures[i] = mr.uploadTexture(img)
 	}
 
-	// Track bounding box
-	var minX, minY, minZ float32 = 1e10, 1e10, 1e10
-	var maxX, maxY, maxZ float32 = -1e10, -1e10, -1e10
-
-	// Process each node
-	reverseWinding := ref.Scale[0]*ref.Scale[1]*ref.Scale[2] < 0
-
-	for i := range rsm.Nodes {
-		node := &rsm.Nodes[i]
-		nodeMatrix := rsmmodel.BuildNodeMatrix(node, rsm, 0)
-
-		for _, face := range node.Faces {
-			if len(face.VertexIDs) < 3 {
-				continue
-			}
-
-			// Bounds check
-			validFace := true
-			for _, vid := range face.VertexIDs {
-				if int(vid) >= len(node.Vertices) {
-					validFace = false
-					break
-				}
-			}
-			if !validFace {
-				continue
-			}
-
-			// Calculate normal
-			v0 := node.Vertices[face.VertexIDs[0]]
-			v1 := node.Vertices[face.VertexIDs[1]]
-			v2 := node.Vertices[face.VertexIDs[2]]
-			e1 := [3]float32{v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]}
-			e2 := [3]float32{v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]}
-			normalVec := rsmmodel.Cross(e1, e2)
-
-			normalMag := float32(gomath.Sqrt(float64(normalVec[0]*normalVec[0] + normalVec[1]*normalVec[1] + normalVec[2]*normalVec[2])))
-			if normalMag < 1e-5 {
-				continue
-			}
-			normal := [3]float32{normalVec[0] / normalMag, normalVec[1] / normalMag, normalVec[2] / normalMag}
-
-			addFaceVertices := func(reverseOrder bool, flipNormal bool) uint32 {
-				faceBaseIdx := uint32(len(vertices))
-				faceNormal := normal
-				if flipNormal {
-					faceNormal = [3]float32{-normal[0], -normal[1], -normal[2]}
-				}
-
-				var vertIDs, texIDs [3]uint16
-				if reverseOrder {
-					vertIDs = [3]uint16{face.VertexIDs[2], face.VertexIDs[1], face.VertexIDs[0]}
-					texIDs = [3]uint16{face.TexCoordIDs[2], face.TexCoordIDs[1], face.TexCoordIDs[0]}
-				} else {
-					vertIDs = face.VertexIDs
-					texIDs = face.TexCoordIDs
-				}
-
-				for j := 0; j < 3; j++ {
-					vid := vertIDs[j]
-					v := node.Vertices[vid]
-					pos := rsmmodel.TransformPoint(nodeMatrix, v)
-					pos[1] = -pos[1]
-
-					// Track bounds
-					if pos[0] < minX {
-						minX = pos[0]
-					}
-					if pos[0] > maxX {
-						maxX = pos[0]
-					}
-					if pos[1] < minY {
-						minY = pos[1]
-					}
-					if pos[1] > maxY {
-						maxY = pos[1]
-					}
-					if pos[2] < minZ {
-						minZ = pos[2]
-					}
-					if pos[2] > maxZ {
-						maxZ = pos[2]
-					}
-
-					var uv [2]float32
-					if int(texIDs[j]) < len(node.TexCoords) {
-						tc := node.TexCoords[texIDs[j]]
-						uv = [2]float32{tc.U, tc.V}
-					}
-
-					vertices = append(vertices, rsmmodel.Vertex{
-						Position: pos,
-						Normal:   faceNormal,
-						TexCoord: uv,
-					})
-				}
-				return faceBaseIdx
-			}
-
-			faceBaseIdx := addFaceVertices(reverseWinding, false)
-			globalTexIdx := 0
-			if int(face.TextureID) < len(node.TextureIDs) {
-				globalTexIdx = int(node.TextureIDs[face.TextureID])
-			}
-			texGroups[globalTexIdx] = append(texGroups[globalTexIdx], faceBaseIdx, faceBaseIdx+1, faceBaseIdx+2)
-
-			// Add back face for two-sided
-			if face.TwoSide != 0 || mr.ForceAllTwoSided {
-				backFaceBaseIdx := addFaceVertices(!reverseWinding, true)
-				texGroups[globalTexIdx] = append(texGroups[globalTexIdx], backFaceBaseIdx, backFaceBaseIdx+1, backFaceBaseIdx+2)
-			}
-		}
+	// Mesh building is shared with the model viewer in cmd/grfbrowser, where
+	// animated models already worked. The scene had its own copy of the same
+	// walk, passing a fixed animation time of zero, which is why every
+	// windmill and clock tower on the map stood still.
+	opts := rsmmodel.BuildOptions{
+		ReverseWinding:   ref.Scale[0]*ref.Scale[1]*ref.Scale[2] < 0,
+		ForceAllTwoSided: mr.ForceAllTwoSided,
 	}
 
-	if len(vertices) == 0 {
+	mesh := rsmmodel.BuildMesh(rsm, opts)
+	if mesh == nil {
 		return nil
 	}
 
-	// Center model
-	centerX := (minX + maxX) / 2
-	centerZ := (minZ + maxZ) / 2
-	for i := range vertices {
-		vertices[i].Position[0] -= centerX
-		vertices[i].Position[2] -= centerZ
-	}
+	centerX, centerZ := rsmmodel.CenterMeshXZ(mesh.Vertices, &mesh.Bounds)
 
 	// Derive the bounding sphere from the same vertices that get uploaded, so
 	// it cannot drift from the geometry the way a separately tracked box can.
-	localCenter, localRadius := boundingSphere(vertices)
+	localCenter, localRadius := boundingSphere(mesh.Vertices)
 
-	// Build texture groups
-	var groups []rsmmodel.TextureGroup
-	for texIdx, idxs := range texGroups {
-		if len(idxs) == 0 {
-			continue
-		}
-		groups = append(groups, rsmmodel.TextureGroup{
-			TextureIdx: texIdx,
-			StartIndex: int32(len(indices)),
-			IndexCount: int32(len(idxs)),
-		})
-		indices = append(indices, idxs...)
-	}
-
-	// Smooth normals
-	rsmmodel.SmoothNormals(vertices)
-
-	// Create GPU resources
 	model := &MapModel{
 		textures:    modelTextures,
-		texGroups:   groups,
+		texGroups:   mesh.Groups,
 		position:    ref.Position,
 		rotation:    ref.Rotation,
 		scale:       ref.Scale,
@@ -463,10 +358,34 @@ func (mr *ModelRenderer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, 
 		localRadius: localRadius,
 	}
 
-	// Upload mesh
-	mr.uploadMesh(model, vertices, indices)
+	// Only an animated model keeps hold of its source. Rebuilding the mesh
+	// every frame is what animation costs here, and it is worth paying for the
+	// few that move: of Prontera's 1304 instances, 7 animate.
+	if animLen := animationLengthMs(rsm); animLen > 0 {
+		model.rsm = rsm
+		model.buildOpts = opts
+		model.animLengthMs = animLen
+		model.centerX, model.centerZ = centerX, centerZ
+	}
+
+	mr.uploadMesh(model, mesh.Vertices, mesh.Indices)
 
 	return model
+}
+
+// animationLengthMs returns how long a model's animation runs, or zero when it
+// has none. Keyframe lookup clamps at the last key rather than wrapping, so
+// the caller has to fold time back into this range itself.
+func animationLengthMs(rsm *formats.RSM) float32 {
+	if rsm.AnimLength <= 0 {
+		return 0
+	}
+	for i := range rsm.Nodes {
+		if len(rsm.Nodes[i].RotKeys) > 0 || len(rsm.Nodes[i].ScaleKeys) > 0 {
+			return float32(rsm.AnimLength)
+		}
+	}
+	return 0
 }
 
 // boundingSphere returns the center and radius of a sphere enclosing every
@@ -533,6 +452,86 @@ func (mr *ModelRenderer) uploadMesh(model *MapModel, vertices []rsmmodel.Vertex,
 
 	model.indexCount = int32(len(indices))
 	gl.BindVertexArray(0)
+}
+
+// refreshMesh replaces an already uploaded mesh in place.
+//
+// Deliberately not uploadMesh: that generates a vertex array and two buffers
+// every time, so re-running it each frame would leak all three per frame per
+// animated model. Reusing the buffers also lets the driver orphan the old
+// storage rather than reallocate.
+func (mr *ModelRenderer) refreshMesh(model *MapModel, vertices []rsmmodel.Vertex, indices []uint32) {
+	if model.vao == 0 || len(vertices) == 0 || len(indices) == 0 {
+		return
+	}
+
+	gl.BindVertexArray(model.vao)
+
+	vertexSize := int(unsafe.Sizeof(rsmmodel.Vertex{}))
+	gl.BindBuffer(gl.ARRAY_BUFFER, model.vbo)
+	gl.BufferData(gl.ARRAY_BUFFER, len(vertices)*vertexSize, unsafe.Pointer(&vertices[0]), gl.DYNAMIC_DRAW)
+
+	gl.BindBuffer(gl.ELEMENT_ARRAY_BUFFER, model.ebo)
+	gl.BufferData(gl.ELEMENT_ARRAY_BUFFER, len(indices)*4, unsafe.Pointer(&indices[0]), gl.DYNAMIC_DRAW)
+
+	model.indexCount = int32(len(indices))
+	gl.BindVertexArray(0)
+}
+
+// Advance moves map model animation forward by deltaMs and rebuilds the models
+// that have any.
+//
+// Must be called on the GL thread — it re-uploads vertex data.
+func (mr *ModelRenderer) Advance(deltaMs float32) {
+	if deltaMs <= 0 {
+		return
+	}
+
+	// Rebuilding is per-frame work that buys nothing at frame rate: the
+	// shortest animation on a town map runs 16 seconds and the longest over
+	// twelve minutes, so a step this size is still far finer than the motion.
+	mr.animPending += deltaMs
+	if mr.animPending < ModelAnimStepMs {
+		return
+	}
+	step := mr.animPending
+	mr.animPending = 0
+
+	offsetX := mr.mapWidth / 2
+	offsetZ := mr.mapHeight / 2
+
+	for _, model := range mr.models {
+		if model == nil || model.rsm == nil || model.animLengthMs <= 0 {
+			continue
+		}
+
+		// Keyframe lookup clamps at the last key, so time has to be folded
+		// back into the animation's own length or every model would freeze on
+		// its final pose.
+		model.animTimeMs = float32(gomath.Mod(float64(model.animTimeMs+step), float64(model.animLengthMs)))
+
+		opts := model.buildOpts
+		opts.AnimTimeMs = model.animTimeMs
+		mesh := rsmmodel.BuildMesh(model.rsm, opts)
+		if mesh == nil {
+			continue
+		}
+
+		// Reuse the centering from the first build. The bounds move as the
+		// model animates, so recentering each time would walk it off its spot.
+		for i := range mesh.Vertices {
+			mesh.Vertices[i].Position[0] -= model.centerX
+			mesh.Vertices[i].Position[2] -= model.centerZ
+		}
+
+		mr.refreshMesh(model, mesh.Vertices, mesh.Indices)
+		model.texGroups = mesh.Groups
+
+		// A turning blade can reach past the sphere the base pose gave, so the
+		// cull bounds move with it.
+		model.localCenter, model.localRadius = boundingSphere(mesh.Vertices)
+		mr.updateWorldBounds(model, offsetX, offsetZ)
+	}
 }
 
 func (mr *ModelRenderer) decodeTexture(data []byte, path string) (*image.RGBA, error) {
