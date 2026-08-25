@@ -7,15 +7,18 @@ import (
 	"image"
 	gomath "math"
 	"strings"
+	"time"
 	"unsafe"
 
 	"github.com/go-gl/gl/v4.1-core/gl"
+	"go.uber.org/zap"
 
 	rsmmodel "github.com/Faultbox/midgard-ro/internal/engine/model"
 	"github.com/Faultbox/midgard-ro/internal/engine/scene/shaders"
 	"github.com/Faultbox/midgard-ro/internal/engine/shader"
 	"github.com/Faultbox/midgard-ro/internal/engine/shadow"
 	"github.com/Faultbox/midgard-ro/internal/engine/texture"
+	"github.com/Faultbox/midgard-ro/internal/trace"
 	"github.com/Faultbox/midgard-ro/pkg/formats"
 	"github.com/Faultbox/midgard-ro/pkg/math"
 )
@@ -33,6 +36,17 @@ type MapModel struct {
 	scale      [3]float32
 	modelName  string
 	Visible    bool
+
+	// Bounding sphere around the mesh as uploaded, before the instance's own
+	// transform is applied.
+	localCenter [3]float32
+	localRadius float32
+
+	// The same sphere in world space, for frustum culling. Models never move
+	// once loaded, so this is computed once by computeWorldBounds rather than
+	// rebuilt per frame.
+	worldCenter [3]float32
+	worldRadius float32
 
 	// depthBias separates this instance from any it may overlap. See
 	// assignDepthBiases.
@@ -79,6 +93,11 @@ type ModelRenderer struct {
 
 	// Force all faces to render as two-sided
 	ForceAllTwoSided bool
+
+	// Cull counters from the last Render, reported on the render trace.
+	drawnModels    int
+	culledModels   int
+	cullTraceTimer time.Time
 }
 
 // NewModelRenderer creates a new model renderer.
@@ -162,8 +181,41 @@ func (mr *ModelRenderer) LoadModels(rsw *formats.RSW, texLoader func(string) ([]
 	}
 
 	mr.assignDepthBiases()
+	mr.computeWorldBounds()
 
 	return nil
+}
+
+// computeWorldBounds places each model's bounding sphere in world space.
+//
+// Rotation cannot change a sphere's radius, so only the scale matters, and a
+// non-uniform scale stretches by at most its largest axis. Taking that largest
+// axis keeps the sphere conservative — never smaller than the geometry.
+func (mr *ModelRenderer) computeWorldBounds() {
+	offsetX := mr.mapWidth / 2
+	offsetZ := mr.mapHeight / 2
+
+	for _, model := range mr.models {
+		if model == nil {
+			continue
+		}
+		matrix := mr.buildModelMatrix(model, offsetX, offsetZ)
+		model.worldCenter = matrix.TransformPoint(model.localCenter)
+
+		maxScale := float32(0)
+		for _, axis := range model.scale {
+			if s := float32(gomath.Abs(float64(axis))); s > maxScale {
+				maxScale = s
+			}
+		}
+		model.worldRadius = model.localRadius * maxScale
+	}
+}
+
+// CullStats returns how many models were drawn and how many were skipped by
+// the last Render.
+func (mr *ModelRenderer) CullStats() (drawn, culled int) {
+	return mr.drawnModels, mr.culledModels
 }
 
 // assignDepthBiases gives every model instance a depth bias such that no two
@@ -377,6 +429,10 @@ func (mr *ModelRenderer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, 
 		vertices[i].Position[2] -= centerZ
 	}
 
+	// Derive the bounding sphere from the same vertices that get uploaded, so
+	// it cannot drift from the geometry the way a separately tracked box can.
+	localCenter, localRadius := boundingSphere(vertices)
+
 	// Build texture groups
 	var groups []rsmmodel.TextureGroup
 	for texIdx, idxs := range texGroups {
@@ -396,19 +452,60 @@ func (mr *ModelRenderer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, 
 
 	// Create GPU resources
 	model := &MapModel{
-		textures:  modelTextures,
-		texGroups: groups,
-		position:  ref.Position,
-		rotation:  ref.Rotation,
-		scale:     ref.Scale,
-		modelName: ref.ModelName,
-		Visible:   true,
+		textures:    modelTextures,
+		texGroups:   groups,
+		position:    ref.Position,
+		rotation:    ref.Rotation,
+		scale:       ref.Scale,
+		modelName:   ref.ModelName,
+		Visible:     true,
+		localCenter: localCenter,
+		localRadius: localRadius,
 	}
 
 	// Upload mesh
 	mr.uploadMesh(model, vertices, indices)
 
 	return model
+}
+
+// boundingSphere returns the center and radius of a sphere enclosing every
+// vertex. The center is the midpoint of the axis-aligned bounds and the radius
+// the farthest vertex from it, which is tighter than taking the box diagonal
+// and still encloses everything.
+func boundingSphere(vertices []rsmmodel.Vertex) (center [3]float32, radius float32) {
+	if len(vertices) == 0 {
+		return center, 0
+	}
+
+	minP := vertices[0].Position
+	maxP := vertices[0].Position
+	for _, v := range vertices[1:] {
+		for axis := 0; axis < 3; axis++ {
+			if v.Position[axis] < minP[axis] {
+				minP[axis] = v.Position[axis]
+			}
+			if v.Position[axis] > maxP[axis] {
+				maxP[axis] = v.Position[axis]
+			}
+		}
+	}
+
+	for axis := 0; axis < 3; axis++ {
+		center[axis] = (minP[axis] + maxP[axis]) / 2
+	}
+
+	var maxSq float32
+	for _, v := range vertices {
+		dx := v.Position[0] - center[0]
+		dy := v.Position[1] - center[1]
+		dz := v.Position[2] - center[2]
+		if sq := dx*dx + dy*dy + dz*dz; sq > maxSq {
+			maxSq = sq
+		}
+	}
+
+	return center, float32(gomath.Sqrt(float64(maxSq)))
 }
 
 func (mr *ModelRenderer) uploadMesh(model *MapModel, vertices []rsmmodel.Vertex, indices []uint32) {
@@ -585,10 +682,23 @@ func (mr *ModelRenderer) Render(viewProj math.Mat4, lightDir, ambient, diffuse [
 	defer gl.Disable(gl.POLYGON_OFFSET_FILL)
 	defer gl.PolygonOffset(0, 0)
 
+	// Most of a town is behind the camera or off to the sides at any moment,
+	// and scene rendering is nearly all of the frame. Testing a bounding
+	// sphere against the six clip planes costs a handful of dot products and
+	// skips the matrix build, uniform uploads and draw calls behind it.
+	frustum := FrustumFromViewProj(viewProj)
+	mr.drawnModels, mr.culledModels = 0, 0
+
 	for _, model := range mr.models {
 		if model == nil || !model.Visible || model.vao == 0 {
 			continue
 		}
+
+		if !frustum.ContainsSphere(model.worldCenter, model.worldRadius) {
+			mr.culledModels++
+			continue
+		}
+		mr.drawnModels++
 
 		// Wrapped so a large map cannot accumulate a bias big enough to show.
 		// Instances that overlap are neighbors in the world file, so their
@@ -617,6 +727,30 @@ func (mr *ModelRenderer) Render(viewProj math.Mat4, lightDir, ambient, diffuse [
 	}
 
 	gl.BindVertexArray(0)
+
+	mr.traceCullStats()
+}
+
+// traceCullStats reports how much of the map the camera is skipping. Rate
+// limited to once a second so the trace can be left on while playing, matching
+// how frame costs are reported.
+func (mr *ModelRenderer) traceCullStats() {
+	if !trace.On(trace.Render) || time.Since(mr.cullTraceTimer) < time.Second {
+		return
+	}
+	mr.cullTraceTimer = time.Now()
+
+	total := mr.drawnModels + mr.culledModels
+	var fraction float64
+	if total > 0 {
+		fraction = float64(mr.culledModels) / float64(total)
+	}
+
+	trace.Emit(trace.Render, "cull",
+		zap.Int("drawn", mr.drawnModels),
+		zap.Int("culled", mr.culledModels),
+		zap.Int("total", total),
+		zap.Float64("culledFraction", fraction))
 }
 
 func (mr *ModelRenderer) buildModelMatrix(model *MapModel, offsetX, offsetZ float32) math.Mat4 {
@@ -643,6 +777,12 @@ func (mr *ModelRenderer) buildModelMatrix(model *MapModel, offsetX, offsetZ floa
 }
 
 // RenderShadow renders all models to the shadow map.
+//
+// Deliberately not frustum culled. The shadow pass is drawn from the light,
+// not the camera, and a building standing behind the camera can still cast
+// onto ground that is in view — culling here by the camera's frustum would
+// delete those shadows. Culling it would need the light's own frustum, which
+// on a directional light covers the whole map and so saves little.
 func (mr *ModelRenderer) RenderShadow(shadowProgram uint32, locModel int32) {
 	offsetX := mr.mapWidth / 2
 	offsetZ := mr.mapHeight / 2
