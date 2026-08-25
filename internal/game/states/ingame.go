@@ -367,6 +367,11 @@ func (s *InGameState) Update(dt float64) error {
 		s.TileX, s.TileY = s.player.CurrentCell()
 	}
 
+	// Map models with animation — windmills, clock towers — are rebuilt here.
+	if s.scene != nil && s.MapLoaded {
+		s.scene.AdvanceModels(deltaMs)
+	}
+
 	// Update all entities
 	s.entityManager.Update(dt)
 	updateUnits(s.entityManager, deltaMs, s.unitAnim)

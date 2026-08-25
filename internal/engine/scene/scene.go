@@ -336,6 +336,17 @@ func (s *Scene) RenderWithView(view math.Mat4) uint32 {
 	return s.RenderWithViewExtras(view, nil)
 }
 
+// AdvanceModels moves map model animation forward by deltaMs.
+//
+// Must be called on the GL thread: animated models are rebuilt and re-uploaded
+// here rather than skinned on the GPU, because so few of them move that the
+// simpler path costs less than the machinery to avoid it.
+func (s *Scene) AdvanceModels(deltaMs float32) {
+	if s.modelRenderer != nil {
+		s.modelRenderer.Advance(deltaMs)
+	}
+}
+
 // LastViewProj returns the most recently used view-projection matrix.
 // Useful for screen-to-world ray casting (picking).
 func (s *Scene) LastViewProj() math.Mat4 {
