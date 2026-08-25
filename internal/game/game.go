@@ -22,6 +22,7 @@ import (
 	"github.com/Faultbox/midgard-ro/internal/game/ui"
 	"github.com/Faultbox/midgard-ro/internal/logger"
 	"github.com/Faultbox/midgard-ro/internal/network"
+	"github.com/Faultbox/midgard-ro/internal/trace"
 )
 
 // koreanGlyphRanges defines the Unicode ranges for Korean text rendering.
@@ -74,6 +75,24 @@ type Game struct {
 	// Debug overlay toggle (F3). Default off so the HUD isn't cluttered;
 	// turn on to inspect player/camera/scene/network telemetry live.
 	showDebug bool
+
+	// Unattended screenshot capture (--screenshot-after / --screenshot-every),
+	// so the UI can be inspected without someone sitting at the keyboard to
+	// press F12.
+	shotAfter time.Duration
+	shotEvery time.Duration
+	shotOnce  bool
+	shotLast  time.Time
+	startedAt time.Time
+
+	// Per-phase frame cost, accumulated for the render trace.
+	costTimer   time.Time
+	costSamples int
+	costUpdate  float64
+	costScene   float64
+	costUI      float64
+	costTotal   float64
+	costWorst   float64
 }
 
 // New creates a new game instance with ImGui windowing (backward compatible).
@@ -311,9 +330,23 @@ func (g *Game) frame() {
 		g.screenshotRequested = true
 	}
 
+	g.checkTimedScreenshot()
+
 	// F3 toggles the in-game debug overlay (player/camera/scene/network).
 	if imgui.IsKeyPressedBoolV(imgui.KeyF3, false) {
 		g.showDebug = !g.showDebug
+	}
+
+	// F4 hides map objects, leaving bare terrain. Anything still wrong on
+	// screen with the models gone belongs to the terrain mesh — otherwise the
+	// two are hard to tell apart where objects sit flush against the ground.
+	if imgui.IsKeyPressedBoolV(imgui.KeyF4, false) {
+		if inGame, ok := g.stateManager.Current().(*states.InGameState); ok {
+			if sc := inGame.GetScene(); sc != nil {
+				sc.HideModels = !sc.HideModels
+				logger.Info("models toggled", zap.Bool("hidden", sc.HideModels))
+			}
+		}
 	}
 
 	// Handle camera controls when in InGameState
@@ -322,23 +355,119 @@ func (g *Game) frame() {
 	}
 
 	// Update state machine
+	updateStart := time.Now()
 	if err := g.stateManager.Update(g.dt); err != nil {
 		logger.Error("state update error", zap.Error(err))
 	}
+	updateMs := msSince(updateStart)
 
 	// Render 3D scene (if applicable)
+	sceneStart := time.Now()
 	if err := g.stateManager.Render(); err != nil {
 		logger.Error("state render error", zap.Error(err))
 	}
+	sceneMs := msSince(sceneStart)
 
 	// Render UI based on current state
+	uiStart := time.Now()
 	g.renderUI()
+	uiMs := msSince(uiStart)
+
+	g.recordFrameCost(updateMs, sceneMs, uiMs)
 
 	// Capture screenshot AFTER rendering (from back buffer before swap)
 	if g.screenshotRequested {
 		g.screenshotRequested = false
 		g.captureScreenshot()
 	}
+}
+
+// SetScreenshotTimers arms the unattended capture. A zero duration disables
+// that timer.
+func (g *Game) SetScreenshotTimers(after, every time.Duration) {
+	g.shotAfter = after
+	g.shotEvery = every
+	g.startedAt = time.Now()
+	g.shotLast = time.Now()
+}
+
+// checkTimedScreenshot fires the unattended capture timers. Both are off
+// unless asked for on the command line.
+func (g *Game) checkTimedScreenshot() {
+	if g.startedAt.IsZero() {
+		g.startedAt = time.Now()
+	}
+
+	if g.shotAfter > 0 && !g.shotOnce && time.Since(g.startedAt) >= g.shotAfter {
+		g.shotOnce = true
+		g.screenshotRequested = true
+		return
+	}
+
+	if g.shotEvery > 0 && time.Since(g.shotLast) >= g.shotEvery {
+		g.shotLast = time.Now()
+		g.screenshotRequested = true
+	}
+}
+
+// msSince returns elapsed milliseconds as a float.
+func msSince(t time.Time) float64 {
+	return float64(time.Since(t).Microseconds()) / 1000
+}
+
+// recordFrameCost accumulates per-phase timings and reports them once a
+// second on the render trace channel.
+//
+// The phases are measured separately because they fail differently: a slow
+// scene means draw calls or fill rate, a slow UI means our 2D batching, and a
+// frame that is slow while every phase is fast means we are blocked in the
+// buffer swap waiting on vsync — which caps at exact divisors of the refresh
+// rate, so being a hair over budget drops you straight from 60 to 30.
+func (g *Game) recordFrameCost(updateMs, sceneMs, uiMs float64) {
+	if !trace.On(trace.Render) {
+		return
+	}
+
+	g.costSamples++
+	g.costUpdate += updateMs
+	g.costScene += sceneMs
+	g.costUI += uiMs
+	total := updateMs + sceneMs + uiMs
+	g.costTotal += total
+	if total > g.costWorst {
+		g.costWorst = total
+	}
+
+	if time.Since(g.costTimer) < time.Second {
+		return
+	}
+
+	n := float64(g.costSamples)
+	if n > 0 {
+		trace.Emit(trace.Render, "frame",
+			zap.Float64("fps", g.fps),
+			zap.Float64("avgWorkMs", g.costTotal/n),
+			zap.Float64("worstWorkMs", g.costWorst),
+			zap.Float64("updateMs", g.costUpdate/n),
+			zap.Float64("sceneMs", g.costScene/n),
+			zap.Float64("uiMs", g.costUI/n),
+			// Whatever is left of the frame budget is spent blocked in the
+			// swap. A large value here with small phase times means vsync.
+			zap.Float64("blockedMs", frameBudgetMs(g.fps)-g.costTotal/n))
+	}
+
+	g.costSamples = 0
+	g.costUpdate, g.costScene, g.costUI, g.costTotal, g.costWorst = 0, 0, 0, 0, 0
+	g.costTimer = time.Now()
+}
+
+// frameBudgetMs is how long each frame actually took, derived from the
+// measured frame rate.
+func frameBudgetMs(fps float64) float64 {
+	if fps <= 0 {
+		return 0
+	}
+	return 1000 / fps
 }
 
 // renderUI renders the appropriate UI for the current state.
@@ -554,10 +683,19 @@ func (g *Game) handleInGameInput(state *states.InGameState) {
 		camera.HandleZoom(scroll * 2)
 	}
 
-	// Get current mouse position
-	mousePos := imgui.MousePos()
-	mouseX := mousePos.X
-	mouseY := mousePos.Y
+	// Get current mouse position, in the same point space we render into.
+	//
+	// cimgui-go's SDL backend reports the cursor in *global screen* points,
+	// not relative to the window, so the window's screen position has to come
+	// off first — exactly the correction UI2DBackend.syncInputFromImGui makes
+	// for widget hit-testing. Click-to-move was missing it, so every ray was
+	// cast from a point offset by wherever the window happened to sit on the
+	// desktop; the further from the top-left corner, the further the character
+	// walked from where you clicked.
+	winPos := imgui.MainViewport().Pos()
+	rawMouse := imgui.MousePos()
+	mouseX := rawMouse.X - winPos.X
+	mouseY := rawMouse.Y - winPos.Y
 
 	// Right mouse button drag for camera rotation
 	if imgui.IsMouseDragging(imgui.MouseButtonRight) {
@@ -569,15 +707,54 @@ func (g *Game) handleInGameInput(state *states.InGameState) {
 	g.lastMouseX = mouseX
 	g.lastMouseY = mouseY
 
+	// WASD walking. Movement is relative to where the camera is looking, so
+	// W always walks away from the viewer no matter how the camera is turned.
+	// Each press asks the server for one cell; StepToward ignores us while a
+	// walk is already in flight, so holding a key walks continuously.
+	if !io.WantCaptureKeyboard() {
+		var forward, strafe float32
+		if imgui.IsKeyDown(imgui.KeyW) {
+			forward++
+		}
+		if imgui.IsKeyDown(imgui.KeyS) {
+			forward--
+		}
+		if imgui.IsKeyDown(imgui.KeyD) {
+			strafe++
+		}
+		if imgui.IsKeyDown(imgui.KeyA) {
+			strafe--
+		}
+
+		if forward != 0 || strafe != 0 {
+			camDirX, camDirZ := camera.ForwardDirection()
+			camRightX, camRightZ := camera.RightDirection()
+			moveX := camDirX*forward + camRightX*strafe
+			moveZ := camDirZ*forward + camRightZ*strafe
+			if err := state.StepToward(moveX, moveZ); err != nil {
+				logger.Warn("keyboard step failed", zap.Error(err))
+			}
+		}
+	}
+
 	// Left click for click-to-move. Skip if any imgui window (HUD, minimap,
 	// chat, etc) is consuming the click; otherwise ray-cast to ground plane
 	// and dispatch a server move request.
 	if imgui.IsMouseClickedBool(imgui.MouseButtonLeft) && !io.WantCaptureMouse() {
 		viewportW, viewportH := g.uiBackend.GetScreenSize()
+
+		trace.Emit(trace.Pick, "click",
+			zap.Float32("rawX", rawMouse.X), zap.Float32("rawY", rawMouse.Y),
+			zap.Float32("windowX", winPos.X), zap.Float32("windowY", winPos.Y),
+			zap.Float32("mouseX", mouseX), zap.Float32("mouseY", mouseY),
+			zap.Float32("viewportW", viewportW), zap.Float32("viewportH", viewportH))
+
 		if tileX, tileY, ok := state.ScreenToTile(mouseX, mouseY, viewportW, viewportH); ok {
 			if err := state.RequestMove(tileX, tileY); err != nil {
 				logger.Warn("click-to-move RequestMove failed", zap.Error(err))
 			}
+		} else {
+			trace.Emit(trace.Pick, "miss")
 		}
 	}
 }

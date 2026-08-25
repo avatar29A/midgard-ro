@@ -4,65 +4,75 @@ import (
 	gomath "math"
 )
 
-// CalculateVisualDirection determines the sprite direction to display based on
-// camera angle, player facing direction, and applies hysteresis to prevent flickering.
+// CalculateVisualDirection returns which of the eight sprite facings to draw.
 //
-// cameraAngle: angle from player to camera (radians, from atan2)
-// playerDirection: player's facing direction (0-7, RO direction index)
-// lastVisualSector: previous frame's sector (-1 if none)
+// RO sprite sheets are authored for one canonical camera, sitting due south of
+// the character. Under that camera the sprite index is simply the character's
+// compass direction: a character facing south (0) is drawn facing the viewer,
+// one facing north (4) is drawn from behind. Move the camera and the same
+// character has to be drawn from a different side, shifted by however many 45°
+// sectors the camera has swung away from south:
 //
-// Returns the visual direction (0-7) and the new sector for hysteresis.
-func CalculateVisualDirection(cameraAngle float32, playerDirection int, lastVisualSector int) (visualDir int, newSector int) {
-	// Player facing angle
-	playerAngle := float32(playerDirection) * (gomath.Pi / 4.0)
+//	sprite = (facing + 4 - cameraSector) mod 8
+//
+// cameraSector is the bearing from character to camera in 45° units, north
+// being 0 and south 4. Substituting the canonical camera (sector 4) leaves
+// sprite = facing, as it should.
+//
+// This previously computed (8 - (cameraSector + facing)) mod 8, which negates
+// the facing instead of offsetting it — a mirror image. Under the default
+// camera it made a character walking north show their face and one walking
+// south show their back, i.e. exactly inverted.
+//
+// cameraAngle is the bearing from the player to the camera, as returned by
+// CameraAngleToPlayer. lastCameraSector is the previous frame's sector, or -1
+// on the first frame; pass the returned sector back in to keep the hysteresis
+// working.
+func CalculateVisualDirection(cameraAngle float32, playerDirection, lastCameraSector int) (visualDir, cameraSector int) {
+	cameraSector = cameraSectorFromAngle(cameraAngle, lastCameraSector)
+	visualDir = mod8(playerDirection + 4 - cameraSector)
+	return visualDir, cameraSector
+}
 
-	// Combine camera and player angles
-	combinedAngle := cameraAngle + playerAngle
+// cameraSectorFromAngle rounds a bearing to a 45° sector, keeping the previous
+// sector while the angle stays within it plus a dead zone. A camera parked on a
+// sector boundary would otherwise flip between two sprites every frame.
+func cameraSectorFromAngle(angle float32, last int) int {
+	const twoPi = 2 * gomath.Pi
 
-	// Normalize to 0-2π
-	for combinedAngle < 0 {
-		combinedAngle += 2 * gomath.Pi
+	for angle < 0 {
+		angle += twoPi
 	}
-	for combinedAngle >= 2*gomath.Pi {
-		combinedAngle -= 2 * gomath.Pi
+	for angle >= twoPi {
+		angle -= twoPi
 	}
 
-	// Calculate new sector with standard boundaries
-	sectorSize := float32(gomath.Pi / 4)   // 45° per sector
-	sectorOffset := float32(gomath.Pi / 8) // 22.5° offset
-	newSector = int((combinedAngle + sectorOffset) / sectorSize)
-	if newSector >= 8 {
-		newSector = 0
-	}
+	sector := int((angle+SectorSize/2)/SectorSize) % 8
 
-	// Hysteresis: only change direction if we're past the dead zone
-	// This prevents flickering at sector boundaries
-	hysteresis := float32(gomath.Pi / 16) // ~11° dead zone on each side of boundary
-
-	// Check if we should keep the previous direction (within dead zone)
-	if lastVisualSector >= 0 {
-		// Calculate the center angle of the current visual direction's sector
-		currentSectorCenter := float32(lastVisualSector) * sectorSize
-
-		// Distance from current sector center
-		angleDiff := combinedAngle - currentSectorCenter
-		// Normalize to -π to π
-		for angleDiff > gomath.Pi {
-			angleDiff -= 2 * gomath.Pi
+	if last >= 0 && last < 8 && sector != last {
+		// How far the bearing sits from the previous sector's center, wrapped
+		// to ±π so the comparison works across the 0/2π seam.
+		diff := angle - float32(last)*SectorSize
+		for diff > gomath.Pi {
+			diff -= twoPi
 		}
-		for angleDiff < -gomath.Pi {
-			angleDiff += 2 * gomath.Pi
+		for diff < -gomath.Pi {
+			diff += twoPi
 		}
-
-		// If within the extended range (half sector + hysteresis), keep current direction
-		if angleDiff > -(sectorSize/2+hysteresis) && angleDiff < (sectorSize/2+hysteresis) {
-			newSector = lastVisualSector
+		if diff > -(SectorSize/2+HysteresisAngle) && diff < SectorSize/2+HysteresisAngle {
+			sector = last
 		}
 	}
 
-	// Map sector to RO direction index
-	visualDir = SectorToDirection[newSector]
-	return visualDir, newSector
+	return sector
+}
+
+func mod8(v int) int {
+	v %= 8
+	if v < 0 {
+		v += 8
+	}
+	return v
 }
 
 // CameraAngleToPlayer calculates the angle from player to camera.
@@ -99,12 +109,6 @@ func BillboardVectors(cameraX, cameraZ, playerX, playerZ float32) (right, up [3]
 	up = [3]float32{0, 1, 0}
 	return right, up
 }
-
-// SectorToDirection maps sector index to RO direction index.
-var SectorToDirection = [8]int{0, 7, 6, 5, 4, 3, 2, 1}
-
-// DirectionToSector maps RO direction index to sector index.
-var DirectionToSector = [8]int{0, 7, 6, 5, 4, 3, 2, 1}
 
 // HysteresisAngle is the dead zone angle (~11°) to prevent flickering at boundaries.
 const HysteresisAngle = float32(gomath.Pi / 16)

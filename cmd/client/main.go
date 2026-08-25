@@ -13,6 +13,7 @@ import (
 	"github.com/Faultbox/midgard-ro/internal/config"
 	"github.com/Faultbox/midgard-ro/internal/game"
 	"github.com/Faultbox/midgard-ro/internal/logger"
+	"github.com/Faultbox/midgard-ro/internal/trace"
 )
 
 func main() {
@@ -33,6 +34,9 @@ func main() {
 	}
 	defer logger.Sync()
 
+	// Opt-in tracing (--trace=move,pick,net or --trace=all). Off by default.
+	trace.Enable(config.TraceSpec())
+
 	logger.Info("=== Midgard RO Client ===")
 	logger.Sugar.Debugf("Config: %+v", cfg)
 
@@ -43,6 +47,10 @@ func main() {
 		os.Exit(1)
 	}
 	defer g.Close()
+
+	// Unattended screenshot capture, for inspecting the UI without someone at
+	// the keyboard.
+	g.SetScreenshotTimers(config.ScreenshotAfter(), config.ScreenshotEvery())
 
 	// Run the game loop
 	if err := g.Run(); err != nil {
