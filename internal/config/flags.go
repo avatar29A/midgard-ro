@@ -1,6 +1,9 @@
 package config
 
-import "flag"
+import (
+	"flag"
+	"time"
+)
 
 var (
 	flagConfig     = flag.String("config", "", "Path to config file")
@@ -10,7 +13,9 @@ var (
 	flagFullscreen = flag.Bool("fullscreen", false, "Run in fullscreen mode")
 	flagWidth      = flag.Int("width", 0, "Window width")
 	flagHeight     = flag.Int("height", 0, "Window height")
-	flagTrace      = flag.String("trace", "", "Comma-separated trace channels (move, pick, net, or all)")
+	flagTrace      = flag.String("trace", "", "Comma-separated trace channels (move, pick, net, render, or all)")
+	flagShotAfter  = flag.Duration("screenshot-after", 0, "Capture a screenshot this long after startup, then keep running (QA aid)")
+	flagShotEvery  = flag.Duration("screenshot-every", 0, "Capture a screenshot on this interval (QA aid)")
 )
 
 // ParseFlags parses command-line flags. Call this early in main().
@@ -21,6 +26,16 @@ func ParseFlags() {
 // TraceSpec returns the --trace channel list, empty when tracing is off.
 func TraceSpec() string {
 	return *flagTrace
+}
+
+// ScreenshotAfter returns the one-shot screenshot delay, zero when unset.
+func ScreenshotAfter() time.Duration {
+	return *flagShotAfter
+}
+
+// ScreenshotEvery returns the repeating screenshot interval, zero when unset.
+func ScreenshotEvery() time.Duration {
+	return *flagShotEvery
 }
 
 // ConfigPath returns the explicit config path if provided via --config flag.

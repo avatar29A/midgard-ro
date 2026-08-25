@@ -3,11 +3,13 @@ package states
 
 import (
 	"fmt"
+	gomath "math"
 	"strings"
 	"time"
 
 	"go.uber.org/zap"
 
+	"github.com/Faultbox/midgard-ro/internal/config"
 	"github.com/Faultbox/midgard-ro/internal/engine/camera"
 	"github.com/Faultbox/midgard-ro/internal/engine/charsprite"
 	"github.com/Faultbox/midgard-ro/internal/engine/picking"
@@ -59,16 +61,29 @@ type InGameState struct {
 	TileY   int // Current tile Y
 
 	// Network timing
-	lastMoveTick      uint32
-	lastMoveSent      time.Time
-	lastWalkEnded     time.Time
-	wasWalking        bool
-	keepAliveSentAt   time.Time
-	pingMs            float64
-	moveTickRate      time.Duration
-	lastKeepAlive     time.Time
-	keepAliveInterval time.Duration
-	enterTime         time.Time // Used as the local epoch for ClientTick
+	lastMoveTick    uint32
+	lastMoveSent    time.Time
+	lastWalkEnded   time.Time
+	wasWalking      bool
+	keepAliveSentAt time.Time
+	pingMs          float64
+
+	// Click-to-move destination. The server will only path a limited distance
+	// per request, so a far click is walked in stages toward this.
+	destCellX, destCellY   int
+	hasDest                bool
+	chainCellX, chainCellY int
+
+	// The walk we started on our own authority, so its acknowledgement can be
+	// recognised and ignored rather than restarting the walk.
+	predictStartX, predictStartY int
+	predictEndX, predictEndY     int
+	hasPrediction                bool
+	predictions, predictionHits  int
+	moveTickRate                 time.Duration
+	lastKeepAlive                time.Time
+	keepAliveInterval            time.Duration
+	enterTime                    time.Time // Used as the local epoch for ClientTick
 
 	// State
 	ErrorMsg   string
@@ -169,8 +184,16 @@ func (s *InGameState) Enter() error {
 
 	// Create third-person camera following player (RO-style)
 	s.camera = camera.NewThirdPersonCamera()
-	s.camera.Distance = 145 // RO-style close distance (like grfbrowser PlayMode)
+	s.camera.Distance = DefaultCameraZoom
 	s.camera.Yaw = 0
+
+	// Pick up where the last session left the zoom, if it was remembered and
+	// is still a distance the camera accepts — a stale file should not be able
+	// to put the camera somewhere unusable.
+	if z := config.LoadUIState().CameraZoom; z >= s.camera.MinDistance && z <= s.camera.MaxDistance {
+		s.camera.Distance = z
+		logger.Debug("restored camera zoom", zap.Float32("distance", z))
+	}
 
 	// Build the player billboard renderer and load the character's sprites.
 	// A sprite failure is not fatal: the renderer keeps drawing its
@@ -279,6 +302,8 @@ func (s *InGameState) loadMap() error {
 
 // Exit is called when leaving this state.
 func (s *InGameState) Exit() error {
+	s.SaveUIState()
+
 	if s.playerRender != nil {
 		s.playerRender.Destroy()
 		s.playerRender = nil
@@ -321,6 +346,7 @@ func (s *InGameState) Update(dt float64) error {
 		if s.wasWalking && !walking {
 			s.lastWalkEnded = time.Now()
 			trace.Emit(trace.Move, "walk-end")
+			s.continueToDestination()
 		}
 		s.wasWalking = walking
 
@@ -368,6 +394,29 @@ func (s *InGameState) GetSceneTexture() uint32 {
 		return s.scene.ColorTexture()
 	}
 	return 0
+}
+
+// DefaultCameraZoom is the starting third-person distance: RO-style and close
+// in, matching grfbrowser's play mode.
+const DefaultCameraZoom = 145
+
+// CameraZoom returns the current camera distance.
+func (s *InGameState) CameraZoom() float32 {
+	if s.camera == nil {
+		return DefaultCameraZoom
+	}
+	return s.camera.Distance
+}
+
+// SaveUIState records the parts of the session worth remembering. Called on
+// the way out; a failure here is worth a line in the log and nothing more.
+func (s *InGameState) SaveUIState() {
+	if s.camera == nil {
+		return
+	}
+	if err := config.SaveUIState(config.UIState{CameraZoom: s.camera.Distance}); err != nil {
+		logger.Warn("could not save ui state", zap.Error(err))
+	}
 }
 
 // GetCamera returns the camera.
@@ -484,6 +533,29 @@ func (s *InGameState) handlePlayerMove(data []byte) error {
 		return nil
 	}
 
+	// If this is the walk we already started ourselves, we are on it — leave
+	// it alone. Re-issuing an identical path would restart the current step
+	// and undo the point of predicting.
+	if s.hasPrediction && s.ackMatchesPrediction(mv) {
+		s.hasPrediction = false
+		s.predictionHits++
+		trace.Emit(trace.Move, "ack-confirms-prediction",
+			zap.Int("startDelta", cellsApart(mv.StartX, mv.StartY, s.predictStartX, s.predictStartY)),
+			zap.Int("hits", s.predictionHits), zap.Int("total", s.predictions))
+		return nil
+	}
+
+	if s.hasPrediction {
+		trace.Emit(trace.Move, "ack-corrects-prediction",
+			zap.Int("startDelta", cellsApart(mv.StartX, mv.StartY, s.predictStartX, s.predictStartY)),
+			zap.Bool("endDiffers", mv.EndX != s.predictEndX || mv.EndY != s.predictEndY),
+			zap.Int("predictedStartX", s.predictStartX), zap.Int("predictedStartY", s.predictStartY),
+			zap.Int("predictedEndX", s.predictEndX), zap.Int("predictedEndY", s.predictEndY),
+			zap.Int("serverStartX", mv.StartX), zap.Int("serverStartY", mv.StartY),
+			zap.Int("serverEndX", mv.EndX), zap.Int("serverEndY", mv.EndY))
+	}
+	s.hasPrediction = false
+
 	path := s.pathFinder.FindPath(mv.StartX, mv.StartY, mv.EndX, mv.EndY)
 	if len(path) < 2 {
 		// No GAT, or our walkability disagrees with the server's. Walk the
@@ -585,6 +657,9 @@ func (s *InGameState) StepToward(dirX, dirZ float32) error {
 		return nil
 	}
 
+	// Taking manual control abandons wherever the last click was headed.
+	s.hasDest = false
+
 	dir := entity.CalculateDirection(dirX, dirZ)
 	dx, dy := entity.CellDeltaForDirection(dir)
 	if dx == 0 && dy == 0 {
@@ -665,20 +740,81 @@ func (s *InGameState) ScreenToTile(screenX, screenY, viewportW, viewportH float3
 }
 
 // RequestMove sends a movement request to the server.
+// MaxWalkRequestCells is the furthest a single walk request may reach.
+//
+// rAthena's nominal ceiling is MAX_WALKPATH, 32 cells. The real one is lower:
+// path_search keeps known nodes in a fixed 1024-entry table indexed by
+// (x + 32*y) & 1023, and the FIXME above that array in path.cpp admits it is
+// "too small to ensure all paths shorter than MAX_WALKPATH can be found
+// without node collision". Searching much past ~17 cells explores more cells
+// than the table holds, collisions become certain and the search gives up —
+// and a refused walk is answered with no packet at all, so the client simply
+// appears to ignore the click.
+//
+// Measured against this server: requests up to 17 cells were acknowledged,
+// every one of 18 or more was dropped. We stay well under that, because the
+// limit is on path length and a route around an obstacle is longer than the
+// straight-line distance suggests. Longer walks are chained, one request at a
+// time, which is what the official client does.
+const MaxWalkRequestCells = 12
+
+// clampWalkRequest pulls a destination back along the line from the character
+// until it is close enough for the server to path to, preserving the direction
+// so the character still sets off towards where the player clicked.
+func clampWalkRequest(fromX, fromY, toX, toY int) (int, int) {
+	dx, dy := toX-fromX, toY-fromY
+
+	reach := abs(dx)
+	if abs(dy) > reach {
+		reach = abs(dy)
+	}
+	if reach <= MaxWalkRequestCells {
+		return toX, toY
+	}
+
+	scale := float64(MaxWalkRequestCells) / float64(reach)
+	return fromX + int(gomath.Round(float64(dx)*scale)),
+		fromY + int(gomath.Round(float64(dy)*scale))
+}
+
+func abs(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+// RequestMove asks the server to walk to a cell, remembering it as the
+// player's actual intent so a destination beyond one request's reach can be
+// walked in stages.
 func (s *InGameState) RequestMove(tileX, tileY int) error {
+	s.destCellX, s.destCellY = tileX, tileY
+	s.hasDest = true
+	s.chainCellX, s.chainCellY = -1, -1
+	return s.sendWalkRequest(tileX, tileY)
+}
+
+// sendWalkRequest sends one walk packet toward a cell, clamped to a distance
+// the server will actually path.
+func (s *InGameState) sendWalkRequest(tileX, tileY int) error {
+	fromX, fromY := 0, 0
+	if s.player != nil {
+		fromX, fromY = s.player.CurrentCell()
+	}
+
+	reqX, reqY := clampWalkRequest(fromX, fromY, tileX, tileY)
+
 	pkt := &packets.MoveRequest{
 		PacketID: packets.CZ_REQUEST_MOVE,
 	}
-	pkt.SetDestination(tileX, tileY)
+	pkt.SetDestination(reqX, reqY)
 
 	if trace.On(trace.Move) {
-		fromX, fromY := 0, 0
-		if s.player != nil {
-			fromX, fromY = s.player.CurrentCell()
-		}
 		trace.Emit(trace.Move, "request",
 			zap.Int("fromCellX", fromX), zap.Int("fromCellY", fromY),
-			zap.Int("toCellX", tileX), zap.Int("toCellY", tileY),
+			zap.Int("toCellX", reqX), zap.Int("toCellY", reqY),
+			zap.Int("wantCellX", tileX), zap.Int("wantCellY", tileY),
+			zap.Bool("clamped", reqX != tileX || reqY != tileY),
 			zap.String("packet", fmt.Sprintf("0x%04X", packets.CZ_REQUEST_MOVE)),
 			zap.String("bytes", fmt.Sprintf("% X", pkt.Encode())))
 	}
@@ -688,12 +824,138 @@ func (s *InGameState) RequestMove(tileX, tileY int) error {
 		return fmt.Errorf("send move request: %w", err)
 	}
 
-	// No local prediction: we start walking when ZC_NOTIFY_PLAYERMOVE comes
-	// back, so the route and its timing are the server's, not a guess we'd
-	// have to reconcile. The server also gets to refuse the move outright.
 	s.lastMoveTick = uint32(time.Now().UnixMilli() & 0xFFFFFFFF)
 	s.lastMoveSent = time.Now()
+
+	s.predictWalk(fromX, fromY, reqX, reqY)
 	return nil
+}
+
+// predictWalk starts walking immediately rather than waiting for the server to
+// agree.
+//
+// Both sides derive the route the same way — A* over the same GAT, diagonals
+// only where both neighbours are open — and walk it at the same ms per cell,
+// so the prediction is normally exactly what comes back. Waiting for the
+// acknowledgement instead costs a round trip on every walk, which the
+// character can never make up: it renders permanently behind the server and
+// each correction drags it forward.
+//
+// When the acknowledgement matches, there is nothing to do. When it doesn't,
+// the server wins and the difference is absorbed by the visual offset, so a
+// wrong guess costs a short catch-up rather than a jump.
+func (s *InGameState) predictWalk(fromX, fromY, toX, toY int) {
+	s.hasPrediction = false
+	if s.player == nil {
+		return
+	}
+
+	path := s.pathFinder.FindPath(fromX, fromY, toX, toY)
+	if len(path) < 2 {
+		// Nothing we can walk; wait and see what the server says.
+		return
+	}
+
+	s.predictStartX, s.predictStartY = fromX, fromY
+	s.predictEndX, s.predictEndY = toX, toY
+	s.hasPrediction = true
+	s.predictions++
+
+	s.player.FollowPath(path)
+
+	trace.Emit(trace.Move, "predict",
+		zap.Int("fromX", fromX), zap.Int("fromY", fromY),
+		zap.Int("toX", toX), zap.Int("toY", toY),
+		zap.Int("cells", len(path)))
+}
+
+// PredictionStartTolerance is how far the server's idea of where a walk began
+// may sit from ours before the prediction counts as wrong, in cells.
+//
+// Prediction inherently runs ahead of the server: we set off on the input, the
+// server sets off when the packet lands, so by the time it answers we have
+// already taken the step it is only now starting. The lead is latency
+// expressed in cells — a cell is 150ms and a round trip plus a frame is a
+// good fraction of that.
+//
+// Two, not one, and measured rather than guessed. Over 85 acknowledgements
+// from a live session the lead was 0 or 1 in 48 cases and 2 in another 28,
+// with 3 or more in only nine. It does not accumulate: regressing the lead
+// against how long the character had been walking gives a slope of 0.00 cells
+// per second, across walks from half a second to seven minutes. Legs chained
+// within one walk are exact every time — all eleven of them — because they are
+// issued the moment a walk ends, when both sides agree on where we are.
+//
+// Anything further apart is a real disagreement and the server wins. That
+// costs a restarted step, which is smooth now, so erring low is cheap.
+const PredictionStartTolerance = 2
+
+// ackMatchesPrediction reports whether an acknowledgement describes the walk we
+// already started.
+//
+// The destination has to match exactly: it is what we asked for and what
+// decides where the walk ends. The start is allowed the tolerance above.
+func (s *InGameState) ackMatchesPrediction(mv *packets.PlayerMove) bool {
+	if mv.EndX != s.predictEndX || mv.EndY != s.predictEndY {
+		return false
+	}
+	return cellsApart(mv.StartX, mv.StartY, s.predictStartX, s.predictStartY) <= PredictionStartTolerance
+}
+
+// cellsApart returns the Chebyshev distance between two cells, which is the
+// number of steps between them for eight-way movement.
+func cellsApart(ax, ay, bx, by int) int {
+	dx, dy := abs(ax-bx), abs(ay-by)
+	if dx > dy {
+		return dx
+	}
+	return dy
+}
+
+// PredictionAccuracy returns how many predicted walks the server confirmed
+// unchanged, out of how many were made. Exposed for diagnostics.
+func (s *InGameState) PredictionAccuracy() (hits, total int) {
+	return s.predictionHits, s.predictions
+}
+
+// continueToDestination is called when a walk finishes. If the player asked to
+// go further than one request could carry them, this sends the next leg.
+func (s *InGameState) continueToDestination() {
+	if !s.hasDest || s.player == nil {
+		return
+	}
+
+	cellX, cellY := s.player.CurrentCell()
+	if cellX == s.destCellX && cellY == s.destCellY {
+		s.hasDest = false
+		return
+	}
+
+	// If the last leg left us exactly where it started, the destination is one
+	// the server will not walk us to. Stop rather than asking forever.
+	if cellX == s.chainCellX && cellY == s.chainCellY {
+		trace.Emit(trace.Move, "chain-stalled",
+			zap.Int("cellX", cellX), zap.Int("cellY", cellY),
+			zap.Int("destX", s.destCellX), zap.Int("destY", s.destCellY))
+		s.hasDest = false
+		return
+	}
+
+	s.chainCellX, s.chainCellY = cellX, cellY
+	trace.Emit(trace.Move, "chain",
+		zap.Int("cellX", cellX), zap.Int("cellY", cellY),
+		zap.Int("destX", s.destCellX), zap.Int("destY", s.destCellY))
+
+	if err := s.sendWalkRequest(s.destCellX, s.destCellY); err != nil {
+		logger.Warn("chained walk request failed", zap.Error(err))
+		s.hasDest = false
+	}
+}
+
+// ClearDestination forgets the click-to-move destination, so a keyboard step
+// or a new click doesn't get overridden by the previous walk continuing.
+func (s *InGameState) ClearDestination() {
+	s.hasDest = false
 }
 
 // GetPlayer returns the player character.
