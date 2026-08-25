@@ -22,6 +22,10 @@ type Context struct {
 
 	// Default window skin (nine-slice frame texture)
 	defaultSkin *NineSlice
+
+	// Chrome the original client draws its windows from. Nil falls back to
+	// defaultSkin, and then to a plain themed panel.
+	windowFrame *WindowFrame
 	// Default input skin (nine-slice; nil falls back to procedural sunken bevel)
 	defaultInputSkin *NineSlice
 
@@ -49,6 +53,16 @@ type WindowState struct {
 	Moving  bool
 	Dragged bool
 	Skin    *NineSlice // Per-window skin override (nil uses default)
+
+	// Options says which chrome this window carries.
+	Options WindowOptions
+
+	// Resized, like Dragged, freezes the caller's size once the user has set
+	// their own.
+	Resized bool
+
+	// Minimized collapses the window to its title bar.
+	Minimized bool
 }
 
 // SetClickSound registers what to play when a widget is activated. Passing nil
@@ -132,6 +146,12 @@ func (c *Context) End() {
 // BeginWindow starts a new window.
 // Returns false if the window is closed.
 func (c *Context) BeginWindow(id string, x, y, w, h float32, title string) bool {
+	return c.BeginWindowEx(id, x, y, w, h, title, DefaultWindowOptions())
+}
+
+// BeginWindowEx is BeginWindow with the chrome spelled out. Blocking screens
+// pass a zero WindowOptions so they cannot be closed out from under the player.
+func (c *Context) BeginWindowEx(id string, x, y, w, h float32, title string, opts WindowOptions) bool {
 	// Get or create window state
 	ws, ok := c.windows[id]
 	if !ok {
@@ -149,13 +169,18 @@ func (c *Context) BeginWindow(id string, x, y, w, h float32, title string) bool 
 		// initial hint: once the user drags the window we stop overwriting
 		// X/Y so the new position survives drop. Without this the window
 		// snaps back to the caller's center-of-screen each frame.
-		ws.W = w
-		ws.H = h
+		if !ws.Resized {
+			ws.W = w
+			ws.H = h
+		}
+
 		if !ws.Moving && !ws.Dragged {
 			ws.X = x
 			ws.Y = y
 		}
 	}
+
+	ws.Options = opts
 
 	if !ws.Open {
 		return false
@@ -163,8 +188,7 @@ func (c *Context) BeginWindow(id string, x, y, w, h float32, title string) bool 
 
 	c.currentWindow = ws
 
-	// Handle window dragging (title bar is top 25 pixels)
-	titleBarH := float32(25)
+	titleBarH := c.frameTitleBarH()
 	titleBarRect := Rect{ws.X, ws.Y, ws.W, titleBarH}
 
 	if c.input.MouseLeftPressed && titleBarRect.Contains(c.input.MouseX, c.input.MouseY) {
@@ -183,6 +207,26 @@ func (c *Context) BeginWindow(id string, x, y, w, h float32, title string) bool 
 		if c.activeWidget == id+"_titlebar" {
 			c.activeWidget = ""
 		}
+	}
+
+	if c.windowFrame != nil {
+		if !c.drawWindowFrame(ws, title) {
+			c.currentWindow = nil
+
+			return false
+		}
+
+		if ws.Minimized {
+			c.currentWindow = nil
+
+			return false
+		}
+
+		c.cursorX = ws.X + 8
+		c.cursorY = ws.Y + FrameTitleH + 8
+		c.rowH = 0
+
+		return true
 	}
 
 	// Draw window background
@@ -248,10 +292,7 @@ func (c *Context) CurrentWindowContentRect() Rect {
 	}
 	ws := c.currentWindow
 	pad := float32(8)
-	titleBarH := float32(25)
-	if c.defaultSkin != nil && c.defaultSkin.Top > 0 {
-		titleBarH = float32(c.defaultSkin.Top)
-	}
+	titleBarH := c.frameTitleBarH()
 	return Rect{
 		X: ws.X + pad,
 		Y: ws.Y + titleBarH + pad,
