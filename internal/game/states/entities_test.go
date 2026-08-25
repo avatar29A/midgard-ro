@@ -359,3 +359,59 @@ func TestUpdateUnitsUsesFrameCounts(t *testing.T) {
 		t.Errorf("asked for %d frame counts, want 2 (idle and walk)", asked)
 	}
 }
+
+func TestUnitSpecFollowsAppearance(t *testing.T) {
+	m := entity.NewManager()
+	u := standingAt(2000042, 5, 5)
+	u.Job = 4054
+	u.HairStyle = 12
+	u.Sex = 0 // rAthena sends 0 for female
+
+	e := upsertUnit(m, u, nil)
+	spec := unitSpec(e)
+
+	if spec.Job != 4054 || spec.HairStyle != 12 || !spec.Female {
+		t.Errorf("spec = job %d hair %d female %v, want 4054 / 12 / true",
+			spec.Job, spec.HairStyle, spec.Female)
+	}
+
+	u.Sex = 1
+	spec = unitSpec(upsertUnit(m, u, nil))
+	if spec.Female {
+		t.Error("sex 1 should select the male sprite")
+	}
+}
+
+// TestOnlyHumanoidUnitsAreDrawn: an unrecognized job silently resolves to a
+// Novice, so drawing monsters and NPCs through the character pipeline would
+// put a person on screen wherever a Poring is standing.
+func TestOnlyHumanoidUnitsAreDrawn(t *testing.T) {
+	m := entity.NewManager()
+
+	tests := []struct {
+		kind packets.EntityKind
+		want bool
+	}{
+		{packets.EntityPlayer, true},
+		{packets.EntityDisguised, true},
+		{packets.EntityMob, false},
+		{packets.EntityNPC, false},
+		{packets.EntityItem, false},
+		{packets.EntityWalkingNPC, false},
+	}
+
+	for i, tt := range tests {
+		u := standingAt(uint32(1000+i), 5, 5)
+		u.Kind = tt.kind
+		if got := unitIsDrawable(upsertUnit(m, u, nil)); got != tt.want {
+			t.Errorf("kind 0x%X drawable = %v, want %v", tt.kind, got, tt.want)
+		}
+	}
+
+	if unitIsDrawable(nil) {
+		t.Error("a nil entity is not drawable")
+	}
+	if unitIsDrawable(entity.NewEntity(1, entity.TypePlayer)) {
+		t.Error("an entity with no body has nothing to draw")
+	}
+}

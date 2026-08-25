@@ -41,18 +41,19 @@ type Entity struct {
 	State     State
 
 	// Visual
-	SpriteID     int // Base sprite ID (job ID for players, monster ID for mobs)
-	HeadSprite   int // Head sprite for players
-	Weapon       int // Weapon sprite
-	Shield       int // Shield sprite
-	HeadTop      int // Headgear top
-	HeadMid      int // Headgear mid
-	HeadBottom   int // Headgear bottom
-	Robe         int // Garment/robe
-	HairStyle    int // Hair style
-	HairColor    int // Hair color
-	ClothesColor int // Clothes color
-	BodyPalette  int // Body palette
+	SpriteID     int  // Base sprite ID (job ID for players, monster ID for mobs)
+	HeadSprite   int  // Head sprite for players
+	Weapon       int  // Weapon sprite
+	Shield       int  // Shield sprite
+	HeadTop      int  // Headgear top
+	HeadMid      int  // Headgear mid
+	HeadBottom   int  // Headgear bottom
+	Robe         int  // Garment/robe
+	Female       bool // Selects the sprite folder and filename suffix
+	HairStyle    int  // Hair style
+	HairColor    int  // Hair color
+	ClothesColor int  // Clothes color
+	BodyPalette  int  // Body palette
 
 	// Display properties
 	ShowHP      bool       // Whether to show HP bar
