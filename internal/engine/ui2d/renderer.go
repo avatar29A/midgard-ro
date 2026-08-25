@@ -703,7 +703,7 @@ func (r *Renderer) createSceneBuffers() error {
 	return nil
 }
 
-// CreateTextureNearest uploads RGBA pixels with nearest-neighbour filtering.
+// CreateTextureNearest uploads RGBA pixels with nearest-neighbor filtering.
 //
 // RO's interface art is pixel art authored for 1:1 display. We lay the UI out
 // in points and stretch it across the full framebuffer, so on a 2x display

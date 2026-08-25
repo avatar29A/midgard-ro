@@ -517,7 +517,7 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 		width, height, state.CamDistance, state.PlayerTileX, state.PlayerTileY)
 	posW, textH := b.ctx.Renderer().MeasureText(posText, scale)
 
-	// Centre both ends on the bar rather than offsetting by a fixed few
+	// Center both ends on the bar rather than offsetting by a fixed few
 	// pixels: text height depends on the font and the display's pixel density,
 	// so a constant only happens to look right on one machine.
 	textY := barY + (barHeight-textH)/2

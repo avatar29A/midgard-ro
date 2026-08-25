@@ -108,7 +108,7 @@ func TestDepthBiasStaysSmall(t *testing.T) {
 		}
 	}
 
-	// Greedy colouring never needs more than the worst overlap count plus one.
+	// Greedy coloring never needs more than the worst overlap count plus one.
 	if maxBias >= len(positions) {
 		t.Errorf("largest bias %d, which is no better than giving every instance its own",
 			maxBias)

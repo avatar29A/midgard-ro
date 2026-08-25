@@ -254,7 +254,7 @@ func (c *Character) UpdateWalk(deltaMs float32) bool {
 
 // beginSegment sets up the step from path[pathIdx-1] to path[pathIdx].
 //
-// Segments always run cell centre to cell centre, at exactly one cell's worth
+// Segments always run cell center to cell center, at exactly one cell's worth
 // of time. Any discrepancy between that and where the character is drawn lives
 // in the visual offset, so the walk itself always moves at walking speed.
 func (c *Character) beginSegment() {

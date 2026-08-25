@@ -23,9 +23,11 @@ func openGAT(size int) *formats.GAT {
 }
 
 // stateAt returns an in-game state with a pathfinder and a character standing
-// on the given cell. No network: the tests drive predictWalk and
-// handlePlayerMove directly.
-func stateAt(cellX, cellY int) *InGameState {
+// on a fixed cell, well inside the map so paths in any direction are
+// available. No network: the tests drive predictWalk and handlePlayerMove
+// directly.
+func stateAt() *InGameState {
+	const cellX, cellY = 10, 10
 	gat := openGAT(64)
 	x, z := entity.CellToWorld(cellX, cellY)
 
@@ -73,7 +75,7 @@ func decodeForTest(data []byte) [4]int {
 // TestPredictionStartsWalkingImmediately is the point of the whole exercise:
 // the character sets off on the click, not a round trip later.
 func TestPredictionStartsWalkingImmediately(t *testing.T) {
-	s := stateAt(10, 10)
+	s := stateAt()
 
 	s.predictWalk(10, 10, 14, 10)
 
@@ -81,7 +83,7 @@ func TestPredictionStartsWalkingImmediately(t *testing.T) {
 		t.Fatal("character is not walking after a predicted move")
 	}
 	if !s.hasPrediction {
-		t.Error("prediction was not recorded, so the matching ack cannot be recognised")
+		t.Error("prediction was not recorded, so the matching ack cannot be recognized")
 	}
 }
 
@@ -90,7 +92,7 @@ func TestPredictionStartsWalkingImmediately(t *testing.T) {
 // step, so the walk would take longer than it should and stutter on every
 // acknowledgement — undoing the point of predicting.
 func TestMatchingAckDoesNotRestartTheWalk(t *testing.T) {
-	s := stateAt(10, 10)
+	s := stateAt()
 	s.predictWalk(10, 10, 14, 10)
 
 	// Get partway into the first step.
@@ -121,7 +123,7 @@ func TestMatchingAckDoesNotRestartTheWalk(t *testing.T) {
 
 // TestDivergentAckCorrects: when the server disagrees, it wins.
 func TestDivergentAckCorrects(t *testing.T) {
-	s := stateAt(10, 10)
+	s := stateAt()
 	s.predictWalk(10, 10, 14, 10)
 	s.player.Update(50)
 
@@ -145,9 +147,9 @@ func TestDivergentAckCorrects(t *testing.T) {
 }
 
 // TestDivergentAckDoesNotTeleport: correcting must still be walked off, not
-// snapped, or prediction trades one visible artefact for another.
+// snapped, or prediction trades one visible artifact for another.
 func TestDivergentAckDoesNotTeleport(t *testing.T) {
-	s := stateAt(10, 10)
+	s := stateAt()
 	s.predictWalk(10, 10, 14, 10)
 	s.player.Update(120)
 
@@ -189,7 +191,7 @@ func TestPredictionToleratesTheServerLagBehind(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := stateAt(10, 10)
+			s := stateAt()
 			s.predictWalk(10, 10, 14, 10)
 
 			// Same destination throughout; only the start moves.
@@ -215,7 +217,7 @@ func TestPredictionToleratesTheServerLagBehind(t *testing.T) {
 // destination has none. Walking somewhere the server did not agree to is the
 // one failure prediction must never hide.
 func TestPredictionRequiresTheDestinationToMatch(t *testing.T) {
-	s := stateAt(10, 10)
+	s := stateAt()
 	s.predictWalk(10, 10, 14, 10)
 
 	// Start identical, destination different by a single cell.

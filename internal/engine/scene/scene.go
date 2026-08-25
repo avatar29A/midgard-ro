@@ -110,7 +110,7 @@ type Scene struct {
 	terrainTileZoom  float32
 
 	// HideModels suppresses map objects, leaving only the terrain. A
-	// diagnostic aid for telling terrain artefacts from model ones.
+	// diagnostic aid for telling terrain artifacts from model ones.
 	HideModels    bool
 	terrainTilesX int
 	terrainTilesZ int
