@@ -1,27 +1,25 @@
 package audio
 
 import (
+	"math"
 	"testing"
 )
 
-func TestVolumeConversion(t *testing.T) {
-	// Test volume to dB conversion
-	tests := []struct {
-		vol float64
-		min float64
-		max float64
-	}{
-		{1.0, -1, 1},     // Full volume should be ~0dB
-		{0.5, -8, -4},    // Half volume should be around -6dB
-		{0.25, -14, -10}, // Quarter volume should be around -12dB
-		{0.0, -200, -90}, // Zero volume should be very negative
+// effects.Volume computes the gain as Base**Volume, so what we hand it has to
+// come back out as the volume that was asked for. Passing decibels instead —
+// which is what this used to do — turns 0.56 into a gain of 0.03.
+func TestVolumeExponentRoundTrips(t *testing.T) {
+	for _, vol := range []float64{1.0, 0.8, 0.7, 0.56, 0.5, 0.25, 0.01} {
+		gain := math.Pow(2, volumeExponent(vol))
+		if math.Abs(gain-vol) > 1e-9 {
+			t.Errorf("volumeExponent(%v) gives gain %v, want %v", vol, gain, vol)
+		}
 	}
 
-	for _, tt := range tests {
-		db := volumeToDb(tt.vol)
-		if db < tt.min || db > tt.max {
-			t.Errorf("volumeToDb(%f) = %f, want between %f and %f", tt.vol, db, tt.min, tt.max)
-		}
+	// Silence has no logarithm; callers set Silent, but the value must stay
+	// finite and far below audible.
+	if got := volumeExponent(0); got > -50 || math.IsInf(got, 0) {
+		t.Errorf("volumeExponent(0) = %v, want a finite value well below -50", got)
 	}
 }
 

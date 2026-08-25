@@ -13,6 +13,10 @@ audio:
   master_volume: 0.8
   music_volume: 0.7
   sfx_volume: 0.8
+  # Background music is NOT inside the GRF archives. RO clients ship it as
+  # .mp3 files in a BGM folder next to them, which is where the client looks
+  # when this is empty. Set it if yours lives somewhere else.
+  # bgm_dir: "/CHANGE/ME/path/to/BGM"
 
 network:
   # Local rAthena server (see docker/rathena/ + docs/QUICKSTART.md).
