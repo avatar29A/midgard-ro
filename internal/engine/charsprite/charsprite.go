@@ -33,6 +33,11 @@ const (
 	// Directions is the number of facings every action provides.
 	Directions = 8
 
+	// ActIntervalTickMs converts an ACT's stored animation interval into
+	// milliseconds. RO records the interval in ticks of 25ms, so the 4.0 that
+	// nearly every sprite carries means 100ms a frame.
+	ActIntervalTickMs = 25.0
+
 	// MaxAnimationFrames bounds how much of one action is baked.
 	//
 	// Every frame becomes a full-size composited texture, which is enormously
@@ -76,6 +81,11 @@ type Sheet struct {
 	Width  int
 	Height int
 	Frames map[int][]Frame
+
+	// IntervalMs is how long each frame of an action is held, taken from the
+	// ACT. Zero means the file did not say and the caller should fall back to
+	// its own rate.
+	IntervalMs [LoadedActions]float32
 
 	// Dropped counts frames left unbaked by MaxAnimationFrames, so a
 	// shortened animation is reported rather than silently shortened.
@@ -251,6 +261,15 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 		Height:  maxH,
 		Frames:  make(map[int][]Frame, LoadedActions*Directions),
 		Dropped: dropped,
+	}
+
+	// Every direction of an action shares one interval, so the first is the
+	// action's rate.
+	for action := 0; action < LoadedActions; action++ {
+		idx := action * Directions
+		if idx < len(bodyACT.Intervals) {
+			sheet.IntervalMs[action] = bodyACT.Intervals[idx] * ActIntervalTickMs
+		}
 	}
 
 	for action := 0; action < LoadedActions; action++ {

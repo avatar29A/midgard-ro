@@ -149,6 +149,16 @@ func (r *Renderer) LoadCharacter(load charsprite.Loader, spec charsprite.Spec) e
 
 	r.player.release()
 	r.player = baked
+
+	frames, bytes := baked.cost()
+	trace.Emit(trace.Render, "sheet",
+		zap.String("for", "player"),
+		zap.Int("job", spec.Job),
+		zap.String("sprite", baked.path),
+		zap.Int("width", baked.width),
+		zap.Int("height", baked.height),
+		zap.Int("frames", frames),
+		zap.Int("kb", bytes/1024))
 	return nil
 }
 
@@ -216,6 +226,20 @@ func (r *Renderer) UnitFrameCount(spec charsprite.Spec, action, direction int) i
 	return r.units[spec].frameCount(action, direction)
 }
 
+// UnitFrameInterval reports how long one frame of an action is held for an
+// appearance, in milliseconds, or zero when its sheet has not been baked or
+// its ACT did not say.
+func (r *Renderer) UnitFrameInterval(spec charsprite.Spec, action int) float32 {
+	if r == nil {
+		return 0
+	}
+	sh := r.units[spec]
+	if sh == nil || action < 0 || action >= len(sh.intervals) {
+		return 0
+	}
+	return sh.intervals[action]
+}
+
 // CachedUnitSheets reports how many distinct appearances are held in memory.
 func (r *Renderer) CachedUnitSheets() int {
 	if r == nil {
@@ -245,9 +269,12 @@ func (r *Renderer) unitSheet(load charsprite.Loader, spec charsprite.Spec) *shee
 	if baked != nil {
 		frames, bytes := baked.cost()
 		trace.Emit(trace.Render, "sheet",
+			zap.String("for", "unit"),
 			zap.Int("job", spec.Job),
 			zap.Uint8("kind", uint8(spec.Kind)),
 			zap.String("sprite", baked.path),
+			zap.Int("width", baked.width),
+			zap.Int("height", baked.height),
 			zap.Int("frames", frames),
 			zap.Int("kb", bytes/1024),
 			zap.Int("droppedFrames", baked.dropped),
@@ -349,10 +376,11 @@ func uploadRGBA(pixels []byte, w, h int) uint32 {
 // already on the GPU. Several units can share one.
 type sheet struct {
 	// frames is keyed by action*Directions+direction, as charsprite bakes it.
-	frames map[int][]uint32
-	width  int
-	height int
-	path   string
+	frames    map[int][]uint32
+	width     int
+	height    int
+	path      string
+	intervals [charsprite.LoadedActions]float32
 
 	// dropped is how many animation frames the bake left out, from
 	// charsprite.MaxAnimationFrames.
@@ -369,11 +397,12 @@ func newSheet(assets *charsprite.Assets) *sheet {
 	}
 
 	sh := &sheet{
-		frames:  make(map[int][]uint32, len(assets.Sheet.Frames)),
-		width:   assets.Sheet.Width,
-		height:  assets.Sheet.Height,
-		path:    assets.BodyPath,
-		dropped: assets.Sheet.Dropped,
+		frames:    make(map[int][]uint32, len(assets.Sheet.Frames)),
+		width:     assets.Sheet.Width,
+		height:    assets.Sheet.Height,
+		path:      assets.BodyPath,
+		dropped:   assets.Sheet.Dropped,
+		intervals: assets.Sheet.IntervalMs,
 	}
 	for key, frames := range assets.Sheet.Frames {
 		textures := make([]uint32, len(frames))

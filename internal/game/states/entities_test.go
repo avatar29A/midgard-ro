@@ -344,15 +344,15 @@ func TestUpdateUnitsUsesFrameCounts(t *testing.T) {
 	e := upsertUnit(m, standingAt(2000042, 5, 5), nil)
 
 	asked := 0
-	frames := func(unit *entity.Entity, action, _ int) int {
+	frames := func(unit *entity.Entity, action, _ int) (int, float32) {
 		if unit != e {
 			t.Errorf("asked for frame counts of an entity that is not the unit")
 		}
 		asked++
 		if action == entity.ActionWalk {
-			return 8
+			return 8, 70
 		}
-		return 1
+		return 1, 100
 	}
 
 	updateUnits(m, 16, frames)

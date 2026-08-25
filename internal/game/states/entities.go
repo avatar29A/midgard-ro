@@ -190,9 +190,10 @@ func removeUnit(m *entity.Manager, aid uint32) {
 	m.Remove(aid)
 }
 
-// UnitFrameCountFunc reports how many animation frames a unit's sprite has for
-// an action and facing, so the animation can loop at the right length.
-type UnitFrameCountFunc func(e *entity.Entity, action, direction int) int
+// UnitAnimFunc reports how a unit's sprite animates for an action and facing:
+// how many frames it has, so the loop is the right length, and how long each
+// is held, so it runs at the rate its own ACT specifies.
+type UnitAnimFunc func(e *entity.Entity, action, direction int) (frames int, intervalMs float32)
 
 // updateUnits advances every remote unit's walk and animation by one frame.
 //
@@ -200,9 +201,9 @@ type UnitFrameCountFunc func(e *entity.Entity, action, direction int) int
 // updated on its own path, because it alone has prediction and acknowledgement
 // to reconcile.
 //
-// A nil frameCounts parks every unit on frame 0, which is what happens before
-// any sprites have loaded.
-func updateUnits(m *entity.Manager, deltaMs float32, frameCounts UnitFrameCountFunc) {
+// A nil anim parks every unit on frame 0, which is what happens before any
+// sprites have loaded.
+func updateUnits(m *entity.Manager, deltaMs float32, anim UnitAnimFunc) {
 	if m == nil {
 		return
 	}
@@ -216,9 +217,11 @@ func updateUnits(m *entity.Manager, deltaMs float32, frameCounts UnitFrameCountF
 		e.Body.UpdateRenderPosition(deltaMs)
 
 		idle, walk := 0, 0
-		if frameCounts != nil {
-			idle = frameCounts(e, entity.ActionIdle, e.Body.Direction)
-			walk = frameCounts(e, entity.ActionWalk, e.Body.Direction)
+		if anim != nil {
+			var idleMs, walkMs float32
+			idle, idleMs = anim(e, entity.ActionIdle, e.Body.Direction)
+			walk, walkMs = anim(e, entity.ActionWalk, e.Body.Direction)
+			e.Body.AnimIntervalMs = [2]float32{idleMs, walkMs}
 		}
 		e.Body.AdvanceAnimation(deltaMs, idle, walk)
 	}

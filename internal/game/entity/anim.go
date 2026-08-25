@@ -25,12 +25,26 @@ const (
 	WalkHoldMs = 120.0
 )
 
-// AnimIntervalMs returns the frame duration for an action.
+// AnimIntervalMs returns the default frame duration for an action.
 func AnimIntervalMs(action int) float32 {
 	if action == ActionWalk {
 		return WalkAnimIntervalMs
 	}
 	return IdleAnimIntervalMs
+}
+
+// frameIntervalMs is how long this character holds one frame of an action.
+//
+// The fixed rates above are right for players, whose idle is a single frame
+// and whose walk the official client also drives at a fixed rate. They are
+// wrong for anything else: a monster or NPC has a real idle animation with a
+// rate stored in its own ACT, and holding those frames for a quarter second
+// each turns a Kafra's idle into a ten-second crawl.
+func (c *Character) frameIntervalMs(action int) float32 {
+	if action >= 0 && action < len(c.AnimIntervalMs) && c.AnimIntervalMs[action] > 0 {
+		return c.AnimIntervalMs[action]
+	}
+	return AnimIntervalMs(action)
 }
 
 // AdvanceAnimation moves the sprite animation forward by deltaMs, choosing the
@@ -70,7 +84,7 @@ func (c *Character) AdvanceAnimation(deltaMs float32, idleFrames, walkFrames int
 		return
 	}
 
-	interval := AnimIntervalMs(c.CurrentAction)
+	interval := c.frameIntervalMs(c.CurrentAction)
 	c.FrameTime += deltaMs
 	for c.FrameTime >= interval {
 		c.FrameTime -= interval

@@ -72,6 +72,10 @@ type Character struct {
 	DestZ          float32 // Target Z position
 	HasDestination bool    // Whether moving to a destination
 
+	// AnimIntervalMs overrides the default frame duration per action, taken
+	// from the sprite's own ACT. Zero for an action means use the default.
+	AnimIntervalMs [2]float32
+
 	// Animation state
 	CurrentAction    int     // 0=Idle, 1=Walk
 	CurrentFrame     int     // Current frame within action
