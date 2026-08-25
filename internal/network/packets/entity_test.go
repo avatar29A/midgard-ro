@@ -239,12 +239,12 @@ func TestDecodeEntityVanish(t *testing.T) {
 	putU32(b, 2, 110000123)
 	b[6] = 2 // logged out
 
-	gid, reason, ok := DecodeEntityVanish(b)
+	aid, reason, ok := DecodeEntityVanish(b)
 	if !ok {
 		t.Fatal("DecodeEntityVanish rejected a well-formed packet")
 	}
-	if gid != 110000123 {
-		t.Errorf("gid = %d, want 110000123", gid)
+	if aid != 110000123 {
+		t.Errorf("aid = %d, want 110000123", aid)
 	}
 	if reason != 2 {
 		t.Errorf("reason = %d, want 2", reason)

@@ -106,8 +106,14 @@ func (k EntityKind) IsCharacter() bool {
 // Entity is one unit the server has told us about.
 type Entity struct {
 	Kind EntityKind
-	AID  uint32
-	GID  uint32
+
+	// AID is the server's block-list id and the only field that identifies
+	// every unit: rAthena fills GID with the character id, which is zero for
+	// monsters and NPCs. Key units by AID, never by GID.
+	AID uint32
+
+	// GID is the character id for players and zero for everything else.
+	GID uint32
 
 	// SpeedMs is milliseconds per cell, the same units as a character's own
 	// walk speed.
@@ -221,7 +227,11 @@ func DecodeEntityWalk(data []byte) *Entity {
 // DecodeEntityVanish parses ZC_NOTIFY_VANISH (0x0080), which removes a unit.
 // The reason distinguishes walking out of sight (0) from dying (1), logging
 // out (2), teleporting (3) and playing dead (4).
-func DecodeEntityVanish(data []byte) (gid uint32, reason uint8, ok bool) {
+//
+// The id is the block-list id, matching Entity.AID — rAthena names the field
+// GID here, but passes bl->id into it, which is not the char id that the unit
+// packets call GID.
+func DecodeEntityVanish(data []byte) (aid uint32, reason uint8, ok bool) {
 	if len(data) < 7 {
 		return 0, 0, false
 	}
