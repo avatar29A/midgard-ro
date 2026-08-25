@@ -29,6 +29,10 @@ type UI2DBackend struct {
 	// it yet; it is drawn because the window art has the box.
 	loginSaveID bool
 
+	// Where the login window has been dragged to.
+	loginWinX, loginWinY float32
+	loginWinPlaced       bool
+
 	// Cached widget states
 	loginUsername string
 	loginPassword string
@@ -245,10 +249,28 @@ const (
 	loginConnRight = float32(50)
 	loginExitRight = float32(5)
 
-	loginChkW     = float32(34)
-	loginChkH     = float32(10)
-	loginChkY     = float32(32)
-	loginChkRight = float32(10)
+	// The checkbox art that ships with the window has its Korean caption
+	// baked in, so the plain 12x12 box is used and the caption drawn.
+	loginChkBox   = float32(12)
+	loginChkY     = float32(31)
+	loginChkRight = float32(44)
+
+	// The window art is Korean. Its captions are painted over and redrawn in
+	// English: the body behind them is flat white, and the title bar is a
+	// vertical gradient that is uniform across its width, so a clean column
+	// of it stretches over the title without a seam.
+	loginTitleX     = float32(16) // Korean title glyphs span x 16..50
+	loginTitleY     = float32(1)
+	loginTitleW     = float32(35)
+	loginTitleH     = float32(12)
+	loginCleanColX  = float32(200) // title-bar column with no text or icon
+	loginLabelMaskX = float32(30)  // captions sit within x 30..86
+	loginLabelMaskW = float32(56)
+	loginLabelMaskH = float32(15)
+	loginLabelRight = float32(83) // captions are right-aligned to here
+
+	// Matches the input fields, so captions and typed text share a baseline.
+	loginTextScale = float32(0.85)
 )
 
 // loginWindowSkin holds the original login window art and its widget states.
@@ -258,6 +280,53 @@ type loginWindowSkin struct {
 	connect, connectOver, connectDown *TextureInfo
 	exit, exitOver, exitDown          *TextureInfo
 	saveOff, saveOn                   *TextureInfo
+}
+
+// loginWindowPos returns the window's top-left, centering it the first time
+// and honoring wherever it has since been dragged.
+func (b *UI2DBackend) loginWindowPos(width, height float32) (float32, float32) {
+	if !b.loginWinPlaced {
+		b.loginWinX = float32(int((width - loginWinW) / 2))
+		b.loginWinY = float32(int((height - loginWinH) / 2))
+		b.loginWinPlaced = true
+	}
+
+	return b.loginWinX, b.loginWinY
+}
+
+// drawLoginCaptions paints over the window's Korean captions and redraws them
+// in English.
+func (b *UI2DBackend) drawLoginCaptions(skin *loginWindowSkin, x, y float32) {
+	r := b.ctx.Renderer()
+
+	// Title: stretch a clean column of the gradient across the glyphs, then
+	// write over it. The icon to the left of them is left alone.
+	u := loginCleanColX / loginWinW
+	v0 := loginTitleY / loginWinH
+	v1 := (loginTitleY + loginTitleH) / loginWinH
+	r.DrawImageUV(skin.window.ID,
+		x+loginTitleX, y+loginTitleY, loginTitleW, loginTitleH,
+		u, v0, u+1/loginWinW, v1, ui2d.ColorWhite)
+
+	ascent := r.FontAscent(loginTextScale)
+	r.DrawText(x+loginTitleX, y+loginTitleY+(loginTitleH-ascent)/2,
+		"Login", loginTextScale, ui2d.ColorText)
+
+	// Captions: the body behind them is flat white.
+	for _, caption := range []struct {
+		text string
+		y    float32
+	}{
+		{"ID", loginUserY},
+		{"Password", loginPassY},
+	} {
+		maskY := y + caption.y + (loginFieldH-loginLabelMaskH)/2
+		r.DrawRect(x+loginLabelMaskX, maskY, loginLabelMaskW, loginLabelMaskH, ui2d.ColorWhite)
+
+		textW, _ := r.MeasureText(caption.text, loginTextScale)
+		r.DrawText(x+loginLabelRight-textW, y+caption.y+(loginFieldH-ascent)/2,
+			caption.text, loginTextScale, ui2d.ColorText)
+	}
 }
 
 // loadLoginSkin loads the original login window art. A miss leaves the skin
@@ -274,7 +343,7 @@ func (b *UI2DBackend) loadLoginSkin() *loginWindowSkin {
 		`win_login.bmp`,
 		`btn_connect.bmp`, `btn_connect_a.bmp`, `btn_connect_b.bmp`,
 		`btn_exit.bmp`, `btn_exit_a.bmp`, `btn_exit_b.bmp`,
-		`chk_saveoff.bmp`, `chk_saveon.bmp`,
+		`checkbox_off.bmp`, `checkbox_on.bmp`,
 	}
 
 	loaded := make([]*TextureInfo, 0, len(names))
@@ -314,11 +383,17 @@ func (b *UI2DBackend) renderNativeLoginWindow(state LoginUIState, width, height 
 		return false
 	}
 
-	x := float32(int((width - loginWinW) / 2))
-	y := float32(int((height - loginWinH) / 2))
+	x, y := b.loginWindowPos(width, height)
+
+	// Draggable by the title bar, as the original is. Done before the widgets
+	// so a drag that starts on the bar keeps them from reacting.
+	b.ctx.DragHandle("login_titlebar",
+		ui2d.Rect{X: x, Y: y, W: loginWinW, H: loginTitleH + loginTitleY}, &b.loginWinX, &b.loginWinY)
+	x, y = b.loginWinX, b.loginWinY
 
 	r := b.ctx.Renderer()
 	r.DrawImage(skin.window.ID, x, y, loginWinW, loginWinH, ui2d.ColorWhite)
+	b.drawLoginCaptions(skin, x, y)
 
 	doLogin := func() {
 		if !state.IsLoading && state.OnLogin != nil {
@@ -352,11 +427,17 @@ func (b *UI2DBackend) renderNativeLoginWindow(state LoginUIState, width, height 
 		saveTex = skin.saveOn
 	}
 
+	chkX := x + loginWinW - loginChkRight - loginChkBox
+
 	if b.ctx.ImageButtonAt("login_save",
-		x+loginWinW-loginChkRight-loginChkW, y+loginChkY, loginChkW, loginChkH,
+		chkX, y+loginChkY, loginChkBox, loginChkBox,
 		saveTex.ID, saveTex.ID, saveTex.ID) {
 		b.loginSaveID = !b.loginSaveID
 	}
+
+	saveAscent := r.FontAscent(loginTextScale)
+	r.DrawText(chkX+loginChkBox+3, y+loginChkY+(loginChkBox-saveAscent)/2,
+		"Save", loginTextScale, ui2d.ColorText)
 
 	btnY := y + loginWinH - loginBtnBottom - loginBtnH
 

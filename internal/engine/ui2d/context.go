@@ -820,6 +820,31 @@ func (c *Context) LabelCentered(text string) {
 	}
 }
 
+// DragHandle moves the position at x/y while the mouse drags inside handle.
+//
+// Windows drawn from a skin texture are not BeginWindow windows, so they need
+// the dragging behavior on its own. Grabbing anywhere in handle — the title
+// bar, conventionally — takes the widget slot for id until the button is
+// released, which stops widgets underneath from reacting mid-drag.
+func (c *Context) DragHandle(id string, handle Rect, x, y *float32) {
+	if c.input.MouseLeftPressed && handle.Contains(c.input.MouseX, c.input.MouseY) {
+		c.activeWidget = id
+	}
+
+	if c.activeWidget != id {
+		return
+	}
+
+	if c.input.MouseLeftDown {
+		*x += c.input.MouseDeltaX
+		*y += c.input.MouseDeltaY
+	}
+
+	if c.input.MouseLeftReleased {
+		c.activeWidget = ""
+	}
+}
+
 // GetScreenSize returns the current screen dimensions.
 func (c *Context) GetScreenSize() (float32, float32) {
 	w, h := c.renderer.GetScreenSize()
