@@ -30,10 +30,13 @@ var (
 	// white highlight registers against it; highlight on top/left, dark
 	// shadow on bottom/right. Border is the fallback outline if a caller
 	// renders without bevels. Hover/active tint blue (RO accent rgb 53,93,204).
-	ColorButtonNormal  = Color{0.84, 0.84, 0.86, 1}
-	ColorButtonHover   = Color{0.78, 0.84, 0.95, 1}
-	ColorButtonActive  = Color{0.55, 0.70, 0.90, 1}
-	ColorButtonBorder  = Color{0.40, 0.40, 0.45, 1}
+	// Buttons read as glossy raised widgets via gradient + drop shadow + inner
+	// highlight (see Context.Button). The base tints carry a slight blue
+	// undertone (RO accent) so they don't look like flat OS chrome.
+	ColorButtonNormal  = Color{0.78, 0.82, 0.92, 1}
+	ColorButtonHover   = Color{0.65, 0.76, 0.95, 1}
+	ColorButtonActive  = Color{0.48, 0.62, 0.88, 1}
+	ColorButtonBorder  = Color{0.18, 0.25, 0.45, 1}
 	ColorButtonBevelHi = Color{1.00, 1.00, 1.00, 1}
 	ColorButtonBevelLo = Color{0.30, 0.30, 0.35, 1}
 	// Input fields: white fill on the white BMP body, recessed bevel
@@ -48,6 +51,10 @@ var (
 	ColorTextOnDark = Color{0.9, 0.9, 0.9, 1}
 	ColorTextDim    = Color{0.4, 0.4, 0.5, 1}
 	ColorHighlight  = Color{0.2, 0.6, 0.9, 1}
+	// ColorTitleText is used on the win_msgbox light-blue title bar.
+	// The RO accent (rgb 53,93,204) is too saturated for thin glyphs at
+	// 14px; this is a deeper navy that reads as a window-chrome label.
+	ColorTitleText = Color{0.10, 0.18, 0.40, 1}
 )
 
 // RGBA creates a color from 8-bit RGBA values (0-255).
