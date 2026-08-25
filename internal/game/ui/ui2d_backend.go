@@ -455,7 +455,7 @@ func (b *UI2DBackend) renderNativeLoginWindow(state LoginUIState, width, height 
 	btnY := y + loginWinH - loginBtnBottom - loginBtnH
 
 	if b.loginSkinButton("login_connect", x+loginWinW-loginConnRight-loginBtnW, btnY,
-		skin.connect, skin.connectOver, skin.connectDown, "Connect") {
+		skin.connect, skin.connectOver, skin.connectDown, "Ok") {
 		doLogin()
 	}
 
