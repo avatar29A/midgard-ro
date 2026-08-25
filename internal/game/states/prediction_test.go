@@ -162,15 +162,15 @@ func TestDivergentAckDoesNotTeleport(t *testing.T) {
 	}
 }
 
-// TestPredictionToleratesOneCellStartLead covers the case that made prediction
-// only half work in practice.
+// TestPredictionToleratesTheServerLagBehind covers the case that made
+// prediction only half work in practice.
 //
-// Measured against a live server, every mismatch had an identical destination
-// and a start out by exactly one cell, with us ahead — which is prediction
-// working, not failing: we set off on the input while the server sets off when
-// the packet lands. Rejecting those threw away half the predictions and
-// restarted a step each time.
-func TestPredictionToleratesOneCellStartLead(t *testing.T) {
+// Measured against a live server, mismatches had an identical destination and
+// a start one or two cells back, with us ahead — which is prediction working,
+// not failing: we set off on the input while the server sets off when the
+// packet lands. Rejecting those threw away half the predictions and restarted
+// a step each time.
+func TestPredictionToleratesTheServerLagBehind(t *testing.T) {
 	tests := []struct {
 		name                       string
 		serverStartX, serverStartY int
@@ -181,8 +181,10 @@ func TestPredictionToleratesOneCellStartLead(t *testing.T) {
 		{"one cell behind in y", 10, 9, true},
 		{"one cell behind diagonally", 9, 9, true},
 		{"one cell ahead", 11, 10, true},
-		{"two cells apart is a real disagreement", 8, 10, false},
-		{"three cells apart", 10, 13, false},
+		{"two cells apart is still ordinary lead", 8, 10, true},
+		{"two cells diagonally", 12, 12, true},
+		{"three cells apart is a real disagreement", 13, 10, false},
+		{"four cells apart", 10, 14, false},
 	}
 
 	for _, tt := range tests {
