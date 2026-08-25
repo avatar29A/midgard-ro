@@ -838,17 +838,23 @@ func (s *InGameState) predictWalk(fromX, fromY, toX, toY int) {
 // PredictionStartTolerance is how far the server's idea of where a walk began
 // may sit from ours before the prediction counts as wrong, in cells.
 //
-// Prediction inherently runs a little ahead of the server: we set off on the
-// input, the server sets off when the packet lands, so by the time it answers
-// we have usually already taken the step it is only now starting. Measured
-// against a live server, every mismatch was exactly this — the destination
-// identical, the start out by one cell, us ahead.
+// Prediction inherently runs ahead of the server: we set off on the input, the
+// server sets off when the packet lands, so by the time it answers we have
+// already taken the step it is only now starting. The lead is latency
+// expressed in cells — a cell is 150ms and a round trip plus a frame is a
+// good fraction of that.
 //
-// The lead does not accumulate, because both sides walk to the same
-// destination and so agree again at the end of every leg. What differs is
-// arrival time, by roughly one cell, not position. Anything further apart than
-// this is a real disagreement and the server wins.
-const PredictionStartTolerance = 1
+// Two, not one, and measured rather than guessed. Over 85 acknowledgements
+// from a live session the lead was 0 or 1 in 48 cases and 2 in another 28,
+// with 3 or more in only nine. It does not accumulate: regressing the lead
+// against how long the character had been walking gives a slope of 0.00 cells
+// per second, across walks from half a second to seven minutes. Legs chained
+// within one walk are exact every time — all eleven of them — because they are
+// issued the moment a walk ends, when both sides agree on where we are.
+//
+// Anything further apart is a real disagreement and the server wins. That
+// costs a restarted step, which is smooth now, so erring low is cheap.
+const PredictionStartTolerance = 2
 
 // ackMatchesPrediction reports whether an acknowledgement describes the walk we
 // already started.
