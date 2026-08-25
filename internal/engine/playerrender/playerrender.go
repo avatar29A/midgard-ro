@@ -189,7 +189,7 @@ func (r *Renderer) FrameCount(action, direction int) int {
 // camPosX/Z are the camera world XZ — used both to orient the billboard and to
 // choose which of the 8 sprite facings to show.
 func (r *Renderer) Render(viewProj math.Mat4, char *entity.Character, camPosX, camPosZ float32) {
-	r.draw(viewProj, char, camPosX, camPosZ, r.player)
+	r.draw(viewProj, char, camPosX, camPosZ, r.player, 1)
 }
 
 // RenderUnit draws another unit on the map, baking and caching the sheet for
@@ -201,9 +201,9 @@ func (r *Renderer) Render(viewProj math.Mat4, char *entity.Character, camPosX, c
 // appearance walks into view; every unit that looks the same after that is
 // free.
 func (r *Renderer) RenderUnit(viewProj math.Mat4, char *entity.Character, camPosX, camPosZ float32,
-	load charsprite.Loader, spec charsprite.Spec) {
+	load charsprite.Loader, spec charsprite.Spec, alpha float32) {
 
-	if r == nil || char == nil {
+	if r == nil || char == nil || alpha <= 0 {
 		return
 	}
 
@@ -214,7 +214,7 @@ func (r *Renderer) RenderUnit(viewProj math.Mat4, char *entity.Character, camPos
 	if sh == nil {
 		return
 	}
-	r.draw(viewProj, char, camPosX, camPosZ, sh)
+	r.draw(viewProj, char, camPosX, camPosZ, sh, alpha)
 }
 
 // UnitFrameCount reports the animation length for an appearance, or zero when
@@ -291,7 +291,7 @@ func (r *Renderer) unitSheet(load charsprite.Loader, spec charsprite.Spec) *shee
 
 // draw puts one character on screen using the given sheet, falling back to the
 // procedural marker when there is none.
-func (r *Renderer) draw(viewProj math.Mat4, char *entity.Character, camPosX, camPosZ float32, sh *sheet) {
+func (r *Renderer) draw(viewProj math.Mat4, char *entity.Character, camPosX, camPosZ float32, sh *sheet, alpha float32) {
 	if r == nil || char == nil || r.program == 0 || r.vao == 0 {
 		return
 	}
@@ -311,7 +311,7 @@ func (r *Renderer) draw(viewProj math.Mat4, char *entity.Character, camPosX, cam
 	gl.UniformMatrix4fv(r.locViewProj, 1, false, &viewProj[0])
 	gl.Uniform3f(r.locWorldPos, char.RenderX, char.RenderY, char.RenderZ)
 	gl.Uniform2f(r.locSpriteSize, spriteW, spriteH)
-	gl.Uniform4f(r.locTint, 1.0, 1.0, 1.0, 1.0)
+	gl.Uniform4f(r.locTint, 1.0, 1.0, 1.0, alpha)
 	gl.Uniform3f(r.locCamRight, right[0], right[1], right[2])
 	gl.Uniform3f(r.locCamUp, up[0], up[1], up[2])
 

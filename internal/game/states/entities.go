@@ -48,6 +48,7 @@ func upsertUnit(m *entity.Manager, u *packets.Entity, path PathFunc) *entity.Ent
 		e = entity.NewEntity(u.AID, unitType(u.Kind))
 		m.Add(e)
 	}
+	e.CancelLeaving()
 
 	e.Type = unitType(u.Kind)
 	e.Name = u.Name
@@ -182,12 +183,18 @@ func unitIsDrawable(e *entity.Entity) bool {
 	}
 }
 
-// removeUnit drops a unit the server says is gone.
+// removeUnit starts a unit the server says is gone fading out. It is dropped
+// once the fade finishes, in updateUnits.
+//
+// Not removed outright: the server drops units the moment they cross its
+// area_size, so removing on the packet makes them vanish mid-stride.
 func removeUnit(m *entity.Manager, aid uint32) {
 	if m == nil || aid == 0 || aid == m.PlayerID() {
 		return
 	}
-	m.Remove(aid)
+	if e := m.Get(aid); e != nil {
+		e.BeginLeaving()
+	}
 }
 
 // UnitAnimFunc reports how a unit's sprite animates for an action and facing:
@@ -209,6 +216,12 @@ func updateUnits(m *entity.Manager, deltaMs float32, anim UnitAnimFunc) {
 	}
 
 	for _, e := range m.All() {
+		e.FadeMs += deltaMs
+		if e.FadedOut() {
+			m.Remove(e.ID)
+			continue
+		}
+
 		if e.Body == nil {
 			continue
 		}

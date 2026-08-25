@@ -294,14 +294,78 @@ func TestRemoveUnitKeepsPlayer(t *testing.T) {
 	m.SetPlayer(player)
 	upsertUnit(m, standingAt(110000001, 5, 5), nil)
 
+	// Removal starts a fade rather than dropping the unit outright, so it is
+	// still there until updateUnits retires it.
 	removeUnit(m, 110000001)
+	if m.Count() != 2 {
+		t.Errorf("manager holds %d entities, want 2 while the unit fades", m.Count())
+	}
+	updateUnits(m, entity.FadeDurationMs+1, nil)
 	if m.Count() != 1 {
-		t.Errorf("manager holds %d entities, want 1 after removing the other", m.Count())
+		t.Errorf("manager holds %d entities, want 1 once the fade finished", m.Count())
 	}
 
 	removeUnit(m, 2000042)
+	updateUnits(m, entity.FadeDurationMs+1, nil)
 	if m.Player() == nil || m.Count() != 1 {
 		t.Error("a vanish packet for our own id removed the local player")
+	}
+}
+
+// TestUnitsFadeInAndOut covers the reason the fade exists: the server drops
+// units the moment they cross its area_size, so appearing and leaving are both
+// instant, and units blink in and out of nothing as the player moves.
+func TestUnitsFadeInAndOut(t *testing.T) {
+	m := entity.NewManager()
+	e := upsertUnit(m, standingAt(110000001, 5, 5), nil)
+
+	if got := e.Alpha(); got != 0 {
+		t.Errorf("a unit starts at alpha %v, want 0 so it fades in", got)
+	}
+
+	updateUnits(m, entity.FadeDurationMs/2, nil)
+	if got := e.Alpha(); got <= 0 || got >= 1 {
+		t.Errorf("alpha = %v halfway through the fade, want between 0 and 1", got)
+	}
+
+	updateUnits(m, entity.FadeDurationMs, nil)
+	if got := e.Alpha(); got != 1 {
+		t.Errorf("alpha = %v once the fade finished, want 1", got)
+	}
+
+	removeUnit(m, 110000001)
+	updateUnits(m, entity.FadeDurationMs/2, nil)
+	if got := e.Alpha(); got <= 0 || got >= 1 {
+		t.Errorf("alpha = %v halfway out, want between 0 and 1", got)
+	}
+	if m.Count() != 1 {
+		t.Error("the unit was dropped before it finished fading out")
+	}
+
+	updateUnits(m, entity.FadeDurationMs, nil)
+	if m.Count() != 0 {
+		t.Errorf("manager holds %d entities, want 0 once the fade finished", m.Count())
+	}
+}
+
+// TestReappearingUnitResumesFromWhereItWas: a unit that crosses the boundary
+// twice in quick succession should not snap to fully visible, nor restart from
+// nothing.
+func TestReappearingUnitResumesFromWhereItWas(t *testing.T) {
+	m := entity.NewManager()
+	e := upsertUnit(m, standingAt(110000001, 5, 5), nil)
+	updateUnits(m, entity.FadeDurationMs, nil) // fully visible
+
+	removeUnit(m, 110000001)
+	updateUnits(m, entity.FadeDurationMs/2, nil)
+	half := e.Alpha()
+
+	upsertUnit(m, standingAt(110000001, 5, 5), nil)
+	if e.Leaving {
+		t.Error("a unit the server mentioned again is still leaving")
+	}
+	if got := e.Alpha(); got < half-0.01 || got > half+0.01 {
+		t.Errorf("alpha = %v on reappearing, want to resume from %v", got, half)
 	}
 }
 
