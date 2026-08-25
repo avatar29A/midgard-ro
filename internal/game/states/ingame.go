@@ -762,6 +762,9 @@ func (s *InGameState) applyUnit(u *packets.Entity, kind string) error {
 		zap.String("kind", kind),
 		zap.Uint32("aid", u.AID),
 		zap.Uint8("objectType", uint8(u.Kind)),
+		// The job id is what names the sprite, so it is the first thing needed
+		// when a unit turns up undrawable.
+		zap.Int16("job", u.Job),
 		zap.String("name", u.Name),
 		zap.Int("x", u.X), zap.Int("y", u.Y),
 		zap.Bool("moving", u.Moving),
