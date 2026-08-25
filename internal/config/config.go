@@ -33,6 +33,11 @@ type AudioConfig struct {
 	MusicVolume  float32 `yaml:"music_volume"`
 	SFXVolume    float32 `yaml:"sfx_volume"`
 	Muted        bool    `yaml:"muted"`
+
+	// BGMDir holds the .mp3 background music. Ragnarok clients ship it in a
+	// BGM folder next to the GRF archives, which is where it is looked for
+	// when this is empty.
+	BGMDir string `yaml:"bgm_dir"`
 }
 
 // NetworkConfig holds server connection settings.

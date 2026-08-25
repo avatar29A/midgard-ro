@@ -18,6 +18,7 @@ import (
 
 	"github.com/Faultbox/midgard-ro/internal/assets"
 	"github.com/Faultbox/midgard-ro/internal/config"
+	"github.com/Faultbox/midgard-ro/internal/engine/audio"
 	"github.com/Faultbox/midgard-ro/internal/game/states"
 	"github.com/Faultbox/midgard-ro/internal/game/ui"
 	"github.com/Faultbox/midgard-ro/internal/logger"
@@ -51,6 +52,10 @@ type Game struct {
 
 	// Assets
 	assetManager *assets.Manager
+
+	// Audio
+	audioManager *audio.Manager
+	bgm          *audio.LocationPlayer
 
 	// Timing
 	lastTime   time.Time
@@ -234,10 +239,55 @@ func (g *Game) initGameState(cfg *config.Config) error {
 	// Set texture loader for states
 	g.stateManager.SetTexLoader(g.assetManager.Load)
 
+	g.initAudio(cfg)
+
 	loginState := states.NewLoginState(loginCfg, g.client, g.stateManager)
 	g.stateManager.Change(loginState)
 
 	return nil
+}
+
+// initAudio brings up audio playback and the location background music.
+// Sound is a nicety: when the device or the music is unavailable the game runs
+// on in silence.
+func (g *Game) initAudio(cfg *config.Config) {
+	manager := audio.New()
+	if err := manager.Init(); err != nil {
+		logger.Warn("audio unavailable, continuing without sound", zap.Error(err))
+
+		return
+	}
+
+	master := float64(cfg.Audio.MasterVolume)
+	if cfg.Audio.Muted {
+		master = 0
+	}
+
+	manager.SetMasterVolume(master)
+	manager.SetBGMVolume(float64(cfg.Audio.MusicVolume))
+	manager.SetSFXVolume(float64(cfg.Audio.SFXVolume))
+
+	// The name table says which track belongs to which map. Without it every
+	// location falls back to the title theme, which is still better than
+	// silence.
+	table, err := audio.LoadNameTable(g.assetManager)
+	if err != nil {
+		logger.Warn("no background music name table, every map will use the fallback track",
+			zap.Error(err))
+	}
+
+	bgmDir := cfg.Audio.BGMDir
+	if bgmDir == "" && len(cfg.Data.GRFPaths) > 0 {
+		bgmDir = audio.DefaultBGMDir(cfg.Data.GRFPaths[0])
+	}
+
+	logger.Info("audio initialized",
+		zap.String("bgmDir", bgmDir),
+		zap.Int("bgmTracks", len(table)))
+
+	g.audioManager = manager
+	g.bgm = audio.NewLocationPlayer(manager, table, bgmDir)
+	g.stateManager.BGM = g.bgm
 }
 
 // loadKoreanFont loads a font with Korean glyph support.
@@ -591,6 +641,10 @@ func (g *Game) Close() {
 
 	if g.client != nil {
 		g.client.Disconnect()
+	}
+
+	if g.audioManager != nil {
+		g.audioManager.Close()
 	}
 
 	if g.assetManager != nil {

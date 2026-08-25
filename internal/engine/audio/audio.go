@@ -5,11 +5,15 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/gopxl/beep/v2"
 	"github.com/gopxl/beep/v2/effects"
+	"github.com/gopxl/beep/v2/mp3"
 	"github.com/gopxl/beep/v2/speaker"
 	"github.com/gopxl/beep/v2/wav"
 )
@@ -208,7 +212,22 @@ func clamp(v, min, max float64) float64 {
 	return v
 }
 
-// PlayBGM plays background music from WAV data.
+// PlayBGMFile plays background music from a file on disk, picking the decoder
+// from its extension. Background music is not part of the GRF archives:
+// Ragnarok clients ship it as .mp3 files in a BGM folder next to them.
+// If loop is true, the music will loop indefinitely.
+func (m *Manager) PlayBGMFile(path string, loop bool) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("reading background music %s: %w", path, err)
+	}
+
+	return m.PlayBGM(data, path, loop)
+}
+
+// PlayBGM plays background music from encoded audio data. The path selects the
+// decoder by its extension and is reported by GetBGMPath; .mp3 and .wav are
+// supported.
 // If loop is true, the music will loop indefinitely.
 func (m *Manager) PlayBGM(data []byte, path string, loop bool) error {
 	m.mu.Lock()
@@ -221,10 +240,9 @@ func (m *Manager) PlayBGM(data []byte, path string, loop bool) error {
 	// Stop current BGM
 	m.stopBGMInternal()
 
-	// Decode WAV
-	streamer, format, err := wav.Decode(io.NopCloser(bytes.NewReader(data)))
+	streamer, format, err := decode(data, path)
 	if err != nil {
-		return fmt.Errorf("decode wav: %w", err)
+		return err
 	}
 
 	// Resample if needed
@@ -359,7 +377,7 @@ func (m *Manager) PlaySFX(data []byte) error {
 		resampled = streamer
 	}
 
-	// Apply volume
+	// Apply volume to the effect
 	volStreamer := &effects.Volume{
 		Streamer: resampled,
 		Base:     2,
@@ -371,6 +389,34 @@ func (m *Manager) PlaySFX(data []byte) error {
 	m.sfxMixer.Add(volStreamer)
 
 	return nil
+}
+
+// decode turns encoded audio into a seekable stream, choosing the decoder from
+// the path's extension. Looping needs the stream to be seekable, which is why
+// both decoders return a StreamSeekCloser.
+func decode(data []byte, path string) (beep.StreamSeekCloser, beep.Format, error) {
+	reader := io.NopCloser(bytes.NewReader(data))
+
+	switch ext := strings.ToLower(filepath.Ext(path)); ext {
+	case ".mp3":
+		streamer, format, err := mp3.Decode(reader)
+		if err != nil {
+			return nil, beep.Format{}, fmt.Errorf("decode mp3 %s: %w", path, err)
+		}
+
+		return streamer, format, nil
+
+	case ".wav", "":
+		streamer, format, err := wav.Decode(reader)
+		if err != nil {
+			return nil, beep.Format{}, fmt.Errorf("decode wav %s: %w", path, err)
+		}
+
+		return streamer, format, nil
+
+	default:
+		return nil, beep.Format{}, fmt.Errorf("unsupported audio format %q for %s", ext, path)
+	}
 }
 
 // loopStreamer wraps a streamer to make it loop.
