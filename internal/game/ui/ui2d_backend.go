@@ -165,6 +165,11 @@ func (b *UI2DBackend) SetAssetLoader(loadFunc func(string) ([]byte, error)) {
 	}
 }
 
+// SetClickSound wires the sound played when a button is pressed.
+func (b *UI2DBackend) SetClickSound(play func()) {
+	b.ctx.SetClickSound(play)
+}
+
 // Close releases backend resources.
 func (b *UI2DBackend) Close() {
 	if b.texCache != nil {

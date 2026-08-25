@@ -369,8 +369,12 @@ func (m *Manager) PlaySFX(data []byte) error {
 		Silent:   sfxVol <= 0,
 	}
 
-	// Add to mixer (concurrent playback)
+	// beep.Mixer is not synchronized, and the speaker is ranging over these
+	// same streamers on its own thread, so the mixer may only be touched under
+	// the speaker's lock.
+	speaker.Lock()
 	m.sfxMixer.Add(volStreamer)
+	speaker.Unlock()
 
 	return nil
 }
