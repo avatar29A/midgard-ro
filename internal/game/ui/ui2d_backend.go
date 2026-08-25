@@ -9,6 +9,7 @@ import (
 	"github.com/go-gl/gl/v4.1-core/gl"
 	"go.uber.org/zap"
 
+	"github.com/Faultbox/midgard-ro/internal/engine/charsprite"
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
 	"github.com/Faultbox/midgard-ro/internal/logger"
 )
@@ -32,6 +33,13 @@ type UI2DBackend struct {
 	// Where the login window has been dragged to.
 	loginWinX, loginWinY float32
 	loginWinPlaced       bool
+
+	// Raw archive reader, for assets that are not textures — character
+	// sprites are composited from SPR and ACT before they can be uploaded.
+	assetLoader func(string) ([]byte, error)
+
+	// Character portraits for the select screen, keyed by sprite spec.
+	charSelPortraits map[charsprite.Spec]*charSelectPortrait
 
 	// Character select art, and where its window has been dragged to.
 	charSelSkin        *charSelectSkin
@@ -172,6 +180,7 @@ func (b *UI2DBackend) End() {
 // This enables loading RO textures for window skins and login screen.
 func (b *UI2DBackend) SetAssetLoader(loadFunc func(string) ([]byte, error)) {
 	b.texCache = NewTextureCache(b.ctx.Renderer(), loadFunc)
+	b.assetLoader = loadFunc
 
 	// Prefer the original window chrome; the nine-sliced skin stays as the
 	// fallback for archives that lack it.
