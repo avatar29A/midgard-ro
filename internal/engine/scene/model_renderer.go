@@ -404,6 +404,28 @@ func (mr *ModelRenderer) uploadTexture(img *image.RGBA) uint32 {
 }
 
 // Render renders all visible models.
+// Depth bias applied per model instance, to break ties between map geometry
+// that is exactly coplanar.
+//
+// glPolygonOffset computes factor*m + r*units, where m is the polygon's
+// screen-space depth slope and r is the smallest resolvable depth step. Both
+// halves are needed. The units term separates surfaces seen face-on; the
+// factor term scales with slope, which is what covers them at grazing angles.
+//
+// Biasing on units alone left the joins stable while walking and glitching
+// across every segment while turning, because turning is what sweeps these
+// walls through grazing angles, where the interpolation error between two
+// coplanar surfaces grows with the slope and swamps a constant offset.
+//
+// The values cycle so a large map cannot accumulate a bias big enough to see;
+// instances that overlap are neighbours in the world file, so their indices
+// differ by far less than the cycle length.
+const (
+	coplanarBiasSteps = 8
+	coplanarSlopeStep = 0.25
+	coplanarUnitsStep = 2.0
+)
+
 func (mr *ModelRenderer) Render(viewProj math.Mat4, lightDir, ambient, diffuse [3]float32,
 	shadowsEnabled bool, lightViewProj math.Mat4, shadowMap *shadow.Map,
 	pointLightsEnabled bool, pointLights []PointLight, pointLightIntensity float32,
@@ -481,10 +503,34 @@ func (mr *ModelRenderer) Render(viewProj math.Mat4, lightDir, ambient, diffuse [
 	offsetX := mr.mapWidth / 2
 	offsetZ := mr.mapHeight / 2
 
-	for _, model := range mr.models {
+	// Map data places model instances that are exactly coplanar with each
+	// other. Prontera's wall is built from a 30-unit segment repeated every
+	// 28.3 units at identical height and rotation, so each adjacent pair
+	// shares a 1.7-unit strip lying in the same plane.
+	//
+	// Surfaces in the same plane have no depth difference to resolve, so which
+	// one is in front is decided by floating-point noise in each instance's
+	// transform, and it flips as the camera moves — the flicker at wall joins.
+	// No amount of depth precision fixes that; there is nothing to resolve.
+	// More precision makes it worse, by resolving the noise itself.
+	//
+	// A per-instance depth bias breaks the tie deterministically instead, on
+	// both the constant and the slope-dependent term — see the constants above
+	// for why the slope term matters.
+	gl.Enable(gl.POLYGON_OFFSET_FILL)
+	defer gl.Disable(gl.POLYGON_OFFSET_FILL)
+	defer gl.PolygonOffset(0, 0)
+
+	for i, model := range mr.models {
 		if model == nil || !model.Visible || model.vao == 0 {
 			continue
 		}
+
+		// Wrapped so a large map cannot accumulate a bias big enough to show.
+		// Instances that overlap are neighbours in the world file, so their
+		// indices differ by far less than the wrap.
+		bias := float32(i % coplanarBiasSteps)
+		gl.PolygonOffset(bias*coplanarSlopeStep, bias*coplanarUnitsStep)
 
 		// Build model matrix
 		modelMatrix := mr.buildModelMatrix(model, offsetX, offsetZ)
