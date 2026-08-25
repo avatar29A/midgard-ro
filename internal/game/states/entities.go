@@ -1,6 +1,7 @@
 package states
 
 import (
+	"github.com/Faultbox/midgard-ro/internal/engine/charsprite"
 	"github.com/Faultbox/midgard-ro/internal/game/entity"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
 )
@@ -52,6 +53,8 @@ func upsertUnit(m *entity.Manager, u *packets.Entity, path PathFunc) *entity.Ent
 	e.Name = u.Name
 	e.Job = int(u.Job)
 	e.SpriteID = int(u.Job)
+	// rAthena sends 0 for female and 1 for male.
+	e.Female = u.Sex == 0
 	e.HairStyle = int(u.HairStyle)
 	e.HairColor = int(u.HairColor)
 	e.ClothesColor = int(u.ClothesColor)
@@ -132,6 +135,26 @@ func walkSpeedOf(u *packets.Entity) float32 {
 		return entity.DefaultWalkSpeedMs
 	}
 	return speed
+}
+
+// unitSpec describes which sprites to draw for a unit.
+func unitSpec(e *entity.Entity) charsprite.Spec {
+	return charsprite.Spec{
+		Job:       e.Job,
+		Female:    e.Female,
+		HairStyle: e.HairStyle,
+	}
+}
+
+// unitIsDrawable reports whether we can draw a unit truthfully.
+//
+// Only humanoid units qualify. Monster and NPC sprites live under different
+// archive names, keyed by tables that ship as compiled Lua in the GRF, so
+// there is nothing to look them up with yet — and an unknown job silently
+// resolves to a Novice, which would draw every Poring on the map as a person.
+// Better to leave them undrawn than to draw them as something they are not.
+func unitIsDrawable(e *entity.Entity) bool {
+	return e != nil && e.Body != nil && e.Type == entity.TypePlayer
 }
 
 // removeUnit drops a unit the server says is gone.

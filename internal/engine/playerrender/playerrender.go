@@ -64,14 +64,15 @@ type Renderer struct {
 	vao uint32
 	vbo uint32
 
-	// Baked character sheet: action*8+direction -> one texture per frame.
-	// Empty until LoadCharacter succeeds.
-	frames  map[int][]uint32
-	sheetW  int
-	sheetH  int
-	loaded  bool
-	scale   float32
-	sprPath string
+	// The local player's baked sheet, nil until LoadCharacter succeeds.
+	player *sheet
+
+	// Sheets for the other units on the map, keyed by appearance. Many units
+	// look alike — a town full of Novices needs one sheet between them — so
+	// they are cached rather than baked per unit.
+	units map[charsprite.Spec]*sheet
+
+	scale float32
 
 	// Procedural fallback, used until (or unless) a sheet loads.
 	fallbackTex          uint32
@@ -83,7 +84,7 @@ type Renderer struct {
 // Must be called on the GL thread (creates shader program + VAO + texture).
 func New() (*Renderer, error) {
 	r := &Renderer{
-		frames:        make(map[int][]uint32),
+		units:         make(map[charsprite.Spec]*sheet),
 		scale:         SpriteScale,
 		fallbackScale: sprite.DefaultProceduralScale,
 	}
@@ -139,54 +140,99 @@ func (r *Renderer) LoadCharacter(load charsprite.Loader, spec charsprite.Spec) e
 		return err
 	}
 
-	r.releaseFrames()
-	r.frames = make(map[int][]uint32, len(assets.Sheet.Frames))
-	r.sheetW = assets.Sheet.Width
-	r.sheetH = assets.Sheet.Height
-	r.sprPath = assets.BodyPath
-
-	for key, frames := range assets.Sheet.Frames {
-		textures := make([]uint32, len(frames))
-		for i, f := range frames {
-			textures[i] = uploadRGBA(f.Pixels, r.sheetW, r.sheetH)
-		}
-		r.frames[key] = textures
-	}
-	r.loaded = len(r.frames) > 0
-
-	if !r.loaded {
+	baked := newSheet(assets)
+	if baked == nil {
 		return fmt.Errorf("sprite sheet for %q produced no frames", assets.BodyPath)
 	}
+
+	r.player.release()
+	r.player = baked
 	return nil
 }
 
 // HasSprites reports whether real character sprites are loaded (as opposed to
 // the procedural fallback).
 func (r *Renderer) HasSprites() bool {
-	return r != nil && r.loaded
+	return r != nil && r.player != nil
 }
 
 // SpritePath returns the archive path the loaded body sprite came from.
 func (r *Renderer) SpritePath() string {
-	if r == nil {
+	if r == nil || r.player == nil {
 		return ""
 	}
-	return r.sprPath
+	return r.player.path
 }
 
 // FrameCount returns how many animation frames the given action/direction has,
 // or 0 when no sheet is loaded.
 func (r *Renderer) FrameCount(action, direction int) int {
-	if r == nil || !r.loaded {
+	if r == nil {
 		return 0
 	}
-	return len(r.frames[action*charsprite.Directions+direction])
+	return r.player.frameCount(action, direction)
 }
 
 // Render draws the player billboard at the character's render position.
 // camPosX/Z are the camera world XZ — used both to orient the billboard and to
 // choose which of the 8 sprite facings to show.
 func (r *Renderer) Render(viewProj math.Mat4, char *entity.Character, camPosX, camPosZ float32) {
+	r.draw(viewProj, char, camPosX, camPosZ, r.player)
+}
+
+// RenderUnit draws another unit on the map, baking and caching the sheet for
+// spec the first time that appearance is seen.
+//
+// Loading happens here rather than when the unit is first reported because
+// uploading textures has to be on the GL thread, and this is the only place
+// that is guaranteed to be. The cost is a hitch the first time a new
+// appearance walks into view; every unit that looks the same after that is
+// free.
+func (r *Renderer) RenderUnit(viewProj math.Mat4, char *entity.Character, camPosX, camPosZ float32,
+	load charsprite.Loader, spec charsprite.Spec) {
+
+	if r == nil || char == nil {
+		return
+	}
+	r.draw(viewProj, char, camPosX, camPosZ, r.unitSheet(load, spec))
+}
+
+// UnitFrameCount reports the animation length for an appearance, or zero when
+// its sheet has not been baked yet.
+func (r *Renderer) UnitFrameCount(spec charsprite.Spec, action, direction int) int {
+	if r == nil {
+		return 0
+	}
+	return r.units[spec].frameCount(action, direction)
+}
+
+// CachedUnitSheets reports how many distinct appearances are held in memory.
+func (r *Renderer) CachedUnitSheets() int {
+	if r == nil {
+		return 0
+	}
+	return len(r.units)
+}
+
+// unitSheet returns the cached sheet for an appearance, baking it on first
+// use. A failure is cached as a nil sheet so a sprite that cannot be resolved
+// is not retried every frame; the unit falls back to the procedural marker.
+func (r *Renderer) unitSheet(load charsprite.Loader, spec charsprite.Spec) *sheet {
+	if cached, ok := r.units[spec]; ok {
+		return cached
+	}
+
+	var baked *sheet
+	if assets, err := charsprite.Load(load, spec); err == nil {
+		baked = newSheet(assets)
+	}
+	r.units[spec] = baked
+	return baked
+}
+
+// draw puts one character on screen using the given sheet, falling back to the
+// procedural marker when there is none.
+func (r *Renderer) draw(viewProj math.Mat4, char *entity.Character, camPosX, camPosZ float32, sh *sheet) {
 	if r == nil || char == nil || r.program == 0 || r.vao == 0 {
 		return
 	}
@@ -194,7 +240,7 @@ func (r *Renderer) Render(viewProj math.Mat4, char *entity.Character, camPosX, c
 	// The quad turns to face the camera so the sprite is never seen edge-on.
 	right, up := character.BillboardVectors(camPosX, camPosZ, char.RenderX, char.RenderZ)
 
-	texture, spriteW, spriteH := r.selectFrame(char, camPosX, camPosZ)
+	texture, spriteW, spriteH := r.selectFrame(char, camPosX, camPosZ, sh)
 	if texture == 0 {
 		return
 	}
@@ -223,8 +269,8 @@ func (r *Renderer) Render(viewProj math.Mat4, char *entity.Character, camPosX, c
 
 // selectFrame picks the texture for the character's current action, camera-
 // relative facing and animation frame, along with the quad size to draw it at.
-func (r *Renderer) selectFrame(char *entity.Character, camPosX, camPosZ float32) (texture uint32, w, h float32) {
-	if !r.loaded {
+func (r *Renderer) selectFrame(char *entity.Character, camPosX, camPosZ float32, sh *sheet) (texture uint32, w, h float32) {
+	if sh == nil {
 		return r.fallbackTex,
 			float32(r.fallbackW) * r.fallbackScale,
 			float32(r.fallbackH) * r.fallbackScale
@@ -237,18 +283,18 @@ func (r *Renderer) selectFrame(char *entity.Character, camPosX, camPosZ float32)
 	visualDir, camSector := character.CalculateVisualDirection(camAngle, char.Direction, char.LastCameraSector)
 	char.LastCameraSector = camSector
 
-	frames := r.frames[char.CurrentAction*charsprite.Directions+visualDir]
+	frames := sh.frames[char.CurrentAction*charsprite.Directions+visualDir]
 	if len(frames) == 0 {
 		// Fall back to idle for this facing rather than dropping the draw.
-		frames = r.frames[visualDir]
+		frames = sh.frames[visualDir]
 		if len(frames) == 0 {
 			return 0, 0, 0
 		}
 	}
 
 	return frames[char.CurrentFrame%len(frames)],
-		float32(r.sheetW) * r.scale,
-		float32(r.sheetH) * r.scale
+		float32(sh.width) * r.scale,
+		float32(sh.height) * r.scale
 }
 
 // uploadRGBA creates a nearest-filtered texture from RGBA pixels. RO art is
@@ -267,16 +313,66 @@ func uploadRGBA(pixels []byte, w, h int) uint32 {
 	return tex
 }
 
-func (r *Renderer) releaseFrames() {
-	for _, textures := range r.frames {
+// sheet is one baked appearance: every frame of every action and facing,
+// already on the GPU. Several units can share one.
+type sheet struct {
+	// frames is keyed by action*Directions+direction, as charsprite bakes it.
+	frames map[int][]uint32
+	width  int
+	height int
+	path   string
+}
+
+// newSheet uploads every frame of a baked appearance, returning nil when there
+// was nothing to upload.
+//
+// Must be called on the GL thread.
+func newSheet(assets *charsprite.Assets) *sheet {
+	if assets == nil || len(assets.Sheet.Frames) == 0 {
+		return nil
+	}
+
+	sh := &sheet{
+		frames: make(map[int][]uint32, len(assets.Sheet.Frames)),
+		width:  assets.Sheet.Width,
+		height: assets.Sheet.Height,
+		path:   assets.BodyPath,
+	}
+	for key, frames := range assets.Sheet.Frames {
+		textures := make([]uint32, len(frames))
+		for i, f := range frames {
+			textures[i] = uploadRGBA(f.Pixels, sh.width, sh.height)
+		}
+		sh.frames[key] = textures
+	}
+
+	if len(sh.frames) == 0 {
+		return nil
+	}
+	return sh
+}
+
+// frameCount is nil-safe so callers can ask about an appearance that has not
+// been baked, which parks the animation on frame 0 rather than failing.
+func (sh *sheet) frameCount(action, direction int) int {
+	if sh == nil {
+		return 0
+	}
+	return len(sh.frames[action*charsprite.Directions+direction])
+}
+
+func (sh *sheet) release() {
+	if sh == nil {
+		return
+	}
+	for _, textures := range sh.frames {
 		for i := range textures {
 			if textures[i] != 0 {
 				gl.DeleteTextures(1, &textures[i])
 			}
 		}
 	}
-	r.frames = make(map[int][]uint32)
-	r.loaded = false
+	sh.frames = nil
 }
 
 // Destroy releases all GL resources owned by the renderer.
@@ -284,7 +380,12 @@ func (r *Renderer) Destroy() {
 	if r == nil {
 		return
 	}
-	r.releaseFrames()
+	r.player.release()
+	r.player = nil
+	for spec, sh := range r.units {
+		sh.release()
+		delete(r.units, spec)
+	}
 	if r.fallbackTex != 0 {
 		gl.DeleteTextures(1, &r.fallbackTex)
 		r.fallbackTex = 0

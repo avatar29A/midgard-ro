@@ -367,10 +367,14 @@ func (s *InGameState) Update(dt float64) error {
 	return nil
 }
 
-// unitFrameCount reports a unit's animation length. Until remote sprites are
-// loaded there is nothing to count, so every unit parks on frame 0.
-func (s *InGameState) unitFrameCount(_ *entity.Entity, _, _ int) int {
-	return 0
+// unitFrameCount reports a unit's animation length, so its walk cycle loops at
+// the length of its own sprite rather than the player's. Zero until the sheet
+// for that appearance has been baked, which parks it on frame 0.
+func (s *InGameState) unitFrameCount(e *entity.Entity, action, direction int) int {
+	if s.playerRender == nil || !unitIsDrawable(e) {
+		return 0
+	}
+	return s.playerRender.UnitFrameCount(unitSpec(e), action, direction)
 }
 
 // Render is called every frame to draw the state.
@@ -385,11 +389,29 @@ func (s *InGameState) Render() error {
 	// Use the extras hook so the player billboard composites into the
 	// scene framebuffer (after world rendering, before unbind).
 	s.scene.RenderWithThirdPersonExtras(s.camera, x, y, z, func(viewProj math.Mat4) {
-		if s.playerRender != nil {
-			s.playerRender.Render(viewProj, s.player, s.camera.PosX, s.camera.PosZ)
+		if s.playerRender == nil {
+			return
 		}
+		s.playerRender.Render(viewProj, s.player, s.camera.PosX, s.camera.PosZ)
+		s.renderUnits(viewProj)
 	})
 	return nil
+}
+
+// renderUnits draws the other units on the map, sharing the player's billboard
+// renderer and its sheet cache.
+func (s *InGameState) renderUnits(viewProj math.Mat4) {
+	if s.entityManager == nil || s.manager == nil {
+		return
+	}
+
+	load := charsprite.Loader(s.manager.TexLoader)
+	for _, e := range s.entityManager.All() {
+		if !unitIsDrawable(e) {
+			continue
+		}
+		s.playerRender.RenderUnit(viewProj, e.Body, s.camera.PosX, s.camera.PosZ, load, unitSpec(e))
+	}
 }
 
 // GetSceneTexture returns the rendered scene texture ID for display.
@@ -680,6 +702,14 @@ func (s *InGameState) applyUnit(u *packets.Entity, kind string) error {
 		e.Body.TerrainHeight = s.terrainHeight
 	}
 
+	// sheets says whether the appearance actually baked, which is what
+	// separates "the packet never arrived" from "it arrived and nothing was
+	// drawn" when a unit is missing from the map.
+	sheets := 0
+	if s.playerRender != nil {
+		sheets = s.playerRender.CachedUnitSheets()
+	}
+
 	trace.Emit(trace.Net, "unit",
 		zap.String("kind", kind),
 		zap.Uint32("aid", u.AID),
@@ -687,7 +717,9 @@ func (s *InGameState) applyUnit(u *packets.Entity, kind string) error {
 		zap.String("name", u.Name),
 		zap.Int("x", u.X), zap.Int("y", u.Y),
 		zap.Bool("moving", u.Moving),
-		zap.Int("units", s.entityManager.Count()))
+		zap.Bool("drawable", unitIsDrawable(e)),
+		zap.Int("units", s.entityManager.Count()),
+		zap.Int("sheets", sheets))
 	return nil
 }
 
