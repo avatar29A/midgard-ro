@@ -34,15 +34,19 @@ func LoadWindowSkin(tc *TextureCache) (*WindowSkin, error) {
 	// icons), so stretching it across the whole title bar gives us a blank
 	// canvas to render our own title text on.
 	frame := &ui2d.NineSlice{
-		TextureID:      info.ID,
-		TexWidth:       info.Width,
-		TexHeight:      info.Height,
-		Left:           6,
-		Right:          6,
-		Top:            24,
-		Bottom:         12,
-		TitleStripSrcX: info.Width - 6,
-		TitleStripSrcW: 6,
+		TextureID: info.ID,
+		TexWidth:  info.Width,
+		TexHeight: info.Height,
+		Left:      6,
+		Right:     6,
+		Top:       24,
+		Bottom:    12,
+		// Sample a single column, not a band. The strip is stretched across the
+		// whole title bar, so any horizontal variation inside the sampled
+		// region gets magnified from a few pixels to a few hundred — which is
+		// what split the bar into two visibly different shades.
+		TitleStripSrcX: info.Width - 2,
+		TitleStripSrcW: 1,
 	}
 
 	return &WindowSkin{Frame: frame}, nil

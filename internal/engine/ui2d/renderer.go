@@ -60,6 +60,11 @@ type Renderer struct {
 
 	// Font for text rendering
 	font *Font
+
+	// pixelDensity is framebuffer pixels per layout point (2.0 on retina).
+	// The glyph atlas is rasterized at this density so text is drawn at
+	// native resolution rather than magnified.
+	pixelDensity float32
 }
 
 // New creates a new 2D UI renderer.
@@ -70,6 +75,7 @@ func New(width, height int) (*Renderer, error) {
 		solidVertices: make([]float32, 0, 4096),
 		textVertices:  make([]float32, 0, 4096),
 		imageVertices: make([]float32, 0, 4096),
+		pixelDensity:  1,
 	}
 
 	// Create solid color shader
@@ -118,7 +124,7 @@ func New(width, height int) (*Renderer, error) {
 	}
 
 	// Create font
-	r.font = NewFont()
+	r.font = NewFont(r.pixelDensity)
 
 	return r, nil
 }
@@ -335,6 +341,24 @@ func (r *Renderer) addTexturedQuad(x, y, w, h float32, u0, v0, u1, v1 float32, c
 	)
 }
 
+// SetPixelDensity tells the renderer how many framebuffer pixels there are
+// per layout point, rebuilding the glyph atlas when it changes. Call it when
+// the window moves between displays or the backing scale changes; it is a
+// no-op when the density is unchanged.
+func (r *Renderer) SetPixelDensity(density float32) {
+	if density <= 0 {
+		density = 1
+	}
+	if density == r.pixelDensity && r.font != nil {
+		return
+	}
+	r.pixelDensity = density
+	if r.font != nil {
+		r.font.Close()
+	}
+	r.font = NewFont(density)
+}
+
 // DrawText draws text starting at the given top-left position. Y is the
 // top of the line; the renderer adds the font's ascent internally to land
 // glyphs on the baseline. Variable-width glyphs are positioned by their
@@ -346,6 +370,12 @@ func (r *Renderer) DrawText(x, y float32, text string, scale float32, color Colo
 	f := r.font
 	lineH := f.LineHeight() * scale
 	ascent := f.Ascent() * scale
+
+	// Glyph metrics are in atlas pixels. On a 2x display the atlas is
+	// rasterized at 2x, so each glyph must be drawn at half its pixel size to
+	// land one texel per physical pixel — that is what keeps text sharp
+	// instead of magnified.
+	px := scale / f.Density()
 
 	cursorX := x
 	yLine := y
@@ -360,15 +390,15 @@ func (r *Renderer) DrawText(x, y float32, text string, scale float32, color Colo
 			continue
 		}
 		if g.Width > 0 && g.Height > 0 {
-			gx := cursorX + g.BearingX*scale
-			gy := yLine + ascent + g.BearingY*scale
+			gx := cursorX + g.BearingX*px
+			gy := yLine + ascent + g.BearingY*px
 			r.addTexturedQuad(
 				gx, gy,
-				float32(g.Width)*scale, float32(g.Height)*scale,
+				float32(g.Width)*px, float32(g.Height)*px,
 				g.U0, g.V0, g.U1, g.V1, color,
 			)
 		}
-		cursorX += g.Advance * scale
+		cursorX += g.Advance * px
 	}
 }
 
@@ -673,14 +703,28 @@ func (r *Renderer) createSceneBuffers() error {
 	return nil
 }
 
+// CreateTextureNearest uploads RGBA pixels with nearest-neighbor filtering.
+//
+// RO's interface art is pixel art authored for 1:1 display. We lay the UI out
+// in points and stretch it across the full framebuffer, so on a 2x display
+// every one of these is magnified — linear filtering turns the window frame's
+// one-pixel bevels into grey smears. Nearest keeps the edges hard.
+func (r *Renderer) CreateTextureNearest(width, height int, pixels []byte) uint32 {
+	return r.createTexture(width, height, pixels, gl.NEAREST)
+}
+
 // CreateTexture uploads RGBA pixel data to the GPU and returns a texture ID.
 func (r *Renderer) CreateTexture(width, height int, pixels []byte) uint32 {
+	return r.createTexture(width, height, pixels, gl.LINEAR)
+}
+
+func (r *Renderer) createTexture(width, height int, pixels []byte, filter int32) uint32 {
 	var texID uint32
 	gl.GenTextures(1, &texID)
 	gl.BindTexture(gl.TEXTURE_2D, texID)
 
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
-	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter)
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
 

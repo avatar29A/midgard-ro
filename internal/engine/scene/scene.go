@@ -108,8 +108,12 @@ type Scene struct {
 	// Terrain height data
 	terrainAltitudes [][]float32
 	terrainTileZoom  float32
-	terrainTilesX    int
-	terrainTilesZ    int
+
+	// HideModels suppresses map objects, leaving only the terrain. A
+	// diagnostic aid for telling terrain artifacts from model ones.
+	HideModels    bool
+	terrainTilesX int
+	terrainTilesZ int
 
 	// GAT collision data
 	GAT *formats.GAT
@@ -387,11 +391,16 @@ func (s *Scene) RenderWithViewExtras(view math.Mat4, extras func(viewProj math.M
 		s.PointLightsEnabled, s.PointLights, s.PointLightIntensity,
 		s.FogEnabled, s.FogNear, s.FogFar, s.FogColor)
 
-	// Render models
-	s.modelRenderer.Render(viewProj, s.LightDir, s.AmbientColor, s.DiffuseColor,
-		s.ShadowsEnabled, s.lightViewProj, s.shadowMap,
-		s.PointLightsEnabled, s.PointLights, s.PointLightIntensity,
-		s.FogEnabled, s.FogNear, s.FogFar, s.FogColor)
+	// Render models. Skipping them is a diagnostic aid: with the models gone,
+	// anything still wrong on screen belongs to the terrain mesh, which
+	// otherwise takes a lot of guessing to tell apart from map objects sitting
+	// flush against it.
+	if !s.HideModels {
+		s.modelRenderer.Render(viewProj, s.LightDir, s.AmbientColor, s.DiffuseColor,
+			s.ShadowsEnabled, s.lightViewProj, s.shadowMap,
+			s.PointLightsEnabled, s.PointLights, s.PointLightIntensity,
+			s.FogEnabled, s.FogNear, s.FogFar, s.FogColor)
+	}
 
 	// Render water
 	if s.waterRenderer.HasWater() {

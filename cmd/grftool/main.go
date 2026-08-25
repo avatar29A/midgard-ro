@@ -9,8 +9,23 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Faultbox/midgard-ro/pkg/encoding"
 	"github.com/Faultbox/midgard-ro/pkg/grf"
 )
+
+// resolvePath returns the in-archive path for a UTF-8 input, falling back
+// to EUC-KR encoding if the verbatim path doesn't exist (RO GRFs store
+// Korean directory names — like 유저인터페이스 — as raw EUC-KR bytes, so a
+// UTF-8 path with the same logical Korean characters won't find anything).
+func resolvePath(a *grf.Archive, path string) (string, bool) {
+	if a.Contains(path) {
+		return path, true
+	}
+	if euckr := string(encoding.UTF8ToEUCKR(path)); euckr != path && a.Contains(euckr) {
+		return euckr, true
+	}
+	return path, false
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -185,12 +200,13 @@ func cmdExtract(args []string) {
 	}
 
 	// Single file extraction
-	if !archive.Contains(filePath) {
+	resolved, ok := resolvePath(archive, filePath)
+	if !ok {
 		fmt.Fprintf(os.Stderr, "File not found: %s\n", filePath)
 		os.Exit(1)
 	}
 
-	data, err := archive.Read(filePath)
+	data, err := archive.Read(resolved)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error reading file: %v\n", err)
 		os.Exit(1)

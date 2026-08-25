@@ -40,6 +40,10 @@ func normalizePath(path string) string {
 
 // Load loads (or returns cached) a texture from the given GRF path.
 // Applies magenta key transparency for BMP/TGA images.
+//
+// UI art loads with nearest filtering: these are pixel-art BMPs that get
+// magnified when the UI is stretched across a HiDPI framebuffer, and linear
+// filtering blurs their one-pixel borders and bevels into mush.
 func (tc *TextureCache) Load(grfPath string) (*TextureInfo, error) {
 	key := normalizePath(grfPath)
 
@@ -61,7 +65,7 @@ func (tc *TextureCache) Load(grfPath string) (*TextureInfo, error) {
 	rgba := texture.ImageToRGBA(img, true)
 	bounds := rgba.Bounds()
 
-	texID := tc.renderer.CreateTexture(bounds.Dx(), bounds.Dy(), rgba.Pix)
+	texID := tc.renderer.CreateTextureNearest(bounds.Dx(), bounds.Dy(), rgba.Pix)
 
 	info := &TextureInfo{
 		ID:     texID,

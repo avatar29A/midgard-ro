@@ -12,13 +12,29 @@ type CompositeResult struct {
 	Height int    // Image height
 }
 
-// CompositeSprites creates a single RGBA image by compositing body and head sprites.
-// It uses anchor points to correctly position the head relative to the body.
+// CompositeSprites creates a single RGBA image by compositing body and head
+// sprites. It uses anchor points to correctly position the head relative to
+// the body.
+//
+// bodyFrame and headFrame are indexed independently because they mean
+// different things. The body's frames are animation; the head sprite's three
+// frames are RO's head *directions* (straight, and turned each way), which the
+// player holds steady rather than cycling. Passing the body's frame index for
+// both makes the head swivel on its own — constantly while standing, and out
+// of step with the legs while walking.
+//
+// headSPR/headACT may both be nil, in which case only the body is drawn —
+// monster and NPC sprites are single-piece, and a character whose head sprite
+// is missing from the archive should still render.
 func CompositeSprites(
 	bodySPR *formats.SPR, bodyACT *formats.ACT,
 	headSPR *formats.SPR, headACT *formats.ACT,
-	action, direction, frame int,
+	action, direction, bodyFrame, headFrame int,
 ) CompositeResult {
+	if bodySPR == nil || bodyACT == nil || len(bodyACT.Actions) == 0 {
+		return CompositeResult{}
+	}
+
 	// Get body action/frame
 	bodyActionIdx := action*8 + direction
 	if bodyActionIdx >= len(bodyACT.Actions) {
@@ -28,27 +44,32 @@ func CompositeSprites(
 	if len(bodyAction.Frames) == 0 {
 		return CompositeResult{}
 	}
-	bodyFrameIdx := frame % len(bodyAction.Frames)
-	bodyFrame := &bodyAction.Frames[bodyFrameIdx]
+	bodyFrameIdx := bodyFrame % len(bodyAction.Frames)
+	bodyFrameData := &bodyAction.Frames[bodyFrameIdx]
 
-	// Get head action/frame (always use frame 0 for stability)
-	headActionIdx := action*8 + direction
-	if headActionIdx >= len(headACT.Actions) {
-		headActionIdx = direction % len(headACT.Actions)
+	// Get head action/frame. The caller chooses which head pose to use; see
+	// the note on headFrame above.
+	hasHead := headSPR != nil && headACT != nil && len(headACT.Actions) > 0
+	var headFrameData *formats.Frame
+	if hasHead {
+		headActionIdx := action*8 + direction
+		if headActionIdx >= len(headACT.Actions) {
+			headActionIdx = direction % len(headACT.Actions)
+		}
+		headAction := &headACT.Actions[headActionIdx]
+		if len(headAction.Frames) == 0 {
+			hasHead = false
+		} else {
+			headFrameData = &headAction.Frames[headFrame%len(headAction.Frames)]
+		}
 	}
-	headAction := &headACT.Actions[headActionIdx]
-	if len(headAction.Frames) == 0 {
-		return CompositeResult{}
-	}
-	// Always use frame 0 for head - it has the matching anchor points
-	headFrame := &headAction.Frames[0]
 
 	// Find body layer bounds
 	var bodyMinX, bodyMinY, bodyMaxX, bodyMaxY int
 	bodyMinX, bodyMinY = 10000, 10000
 	bodyMaxX, bodyMaxY = -10000, -10000
 
-	for _, layer := range bodyFrame.Layers {
+	for _, layer := range bodyFrameData.Layers {
 		if layer.SpriteID < 0 || int(layer.SpriteID) >= len(bodySPR.Images) {
 			continue
 		}
@@ -78,16 +99,16 @@ func CompositeSprites(
 
 	// Get body anchor point (where head attaches)
 	var bodyAnchorX, bodyAnchorY int
-	if len(bodyFrame.AnchorPoints) > 0 {
-		bodyAnchorX = int(bodyFrame.AnchorPoints[0].X)
-		bodyAnchorY = int(bodyFrame.AnchorPoints[0].Y)
+	if len(bodyFrameData.AnchorPoints) > 0 {
+		bodyAnchorX = int(bodyFrameData.AnchorPoints[0].X)
+		bodyAnchorY = int(bodyFrameData.AnchorPoints[0].Y)
 	}
 
 	// Get head anchor point
 	var headAnchorX, headAnchorY int
-	if len(headFrame.AnchorPoints) > 0 {
-		headAnchorX = int(headFrame.AnchorPoints[0].X)
-		headAnchorY = int(headFrame.AnchorPoints[0].Y)
+	if hasHead && len(headFrameData.AnchorPoints) > 0 {
+		headAnchorX = int(headFrameData.AnchorPoints[0].X)
+		headAnchorY = int(headFrameData.AnchorPoints[0].Y)
 	}
 
 	// Calculate head offset: head anchor aligns with body anchor
@@ -99,7 +120,7 @@ func CompositeSprites(
 	headMinX, headMinY = 10000, 10000
 	headMaxX, headMaxY = -10000, -10000
 
-	for _, layer := range headFrame.Layers {
+	for _, layer := range headLayers(hasHead, headFrameData) {
 		if layer.SpriteID < 0 || int(layer.SpriteID) >= len(headSPR.Images) {
 			continue
 		}
@@ -222,14 +243,14 @@ func CompositeSprites(
 	}
 
 	// Draw body layers first (bottom)
-	for _, layer := range bodyFrame.Layers {
+	for _, layer := range bodyFrameData.Layers {
 		if layer.SpriteID >= 0 {
 			blitLayer(bodySPR, &layer, 0, 0)
 		}
 	}
 
 	// Draw head layers on top
-	for _, layer := range headFrame.Layers {
+	for _, layer := range headLayers(hasHead, headFrameData) {
 		if layer.SpriteID >= 0 {
 			blitLayer(headSPR, &layer, headOffsetX, headOffsetY)
 		}
@@ -240,6 +261,15 @@ func CompositeSprites(
 		Width:  width,
 		Height: height,
 	}
+}
+
+// headLayers returns the head frame's layers, or nothing when the sprite has
+// no separate head (monsters, or a character whose head is missing).
+func headLayers(hasHead bool, headFrame *formats.Frame) []formats.Layer {
+	if !hasHead || headFrame == nil {
+		return nil
+	}
+	return headFrame.Layers
 }
 
 // GetActionFrameCount returns the number of frames for an action/direction combo.

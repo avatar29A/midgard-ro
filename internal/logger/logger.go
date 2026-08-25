@@ -57,7 +57,7 @@ func InitWithFileConfig(level string, fileCfg FileConfig, consoleOutput bool) er
 			LevelKey:         "level",
 			MessageKey:       "msg",
 			CallerKey:        "caller",
-			EncodeTime:       zapcore.TimeEncoderOfLayout("15:04:05"),
+			EncodeTime:       zapcore.TimeEncoderOfLayout("15:04:05.000"),
 			EncodeLevel:      zapcore.CapitalColorLevelEncoder,
 			EncodeCaller:     zapcore.ShortCallerEncoder,
 			ConsoleSeparator: " ",
@@ -128,27 +128,50 @@ func Sync() {
 	}
 }
 
+// The package-level helpers below all tolerate an uninitialized logger.
+//
+// zap panics on a nil *Logger, which turns any logging call reached before
+// Init into a crash — in tests, in tooling that pulls in a package for one
+// helper, and in any startup path that fails before logging is up. A dropped
+// log line is a far better outcome than a segfault, and the panic tends to
+// mask whatever was actually being diagnosed.
+
 // Debug logs a debug message.
 func Debug(msg string, fields ...zap.Field) {
+	if Log == nil {
+		return
+	}
 	Log.Debug(msg, fields...)
 }
 
 // Info logs an info message.
 func Info(msg string, fields ...zap.Field) {
+	if Log == nil {
+		return
+	}
 	Log.Info(msg, fields...)
 }
 
 // Warn logs a warning message.
 func Warn(msg string, fields ...zap.Field) {
+	if Log == nil {
+		return
+	}
 	Log.Warn(msg, fields...)
 }
 
 // Error logs an error message.
 func Error(msg string, fields ...zap.Field) {
+	if Log == nil {
+		return
+	}
 	Log.Error(msg, fields...)
 }
 
 // Fatal logs a fatal message and exits.
 func Fatal(msg string, fields ...zap.Field) {
+	if Log == nil {
+		os.Exit(1)
+	}
 	Log.Fatal(msg, fields...)
 }
