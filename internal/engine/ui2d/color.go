@@ -59,6 +59,11 @@ var (
 	// ColorWindowBody is the near-white the original fills its window bodies
 	// with, under whatever the window itself draws.
 	ColorWindowBody = Color{1, 1, 1, 1}
+
+	// ColorSkinHover and ColorSkinPressed shade a skinned button that has no
+	// hover or pressed artwork of its own.
+	ColorSkinHover   = Color{1, 1, 1, 0.22}
+	ColorSkinPressed = Color{0, 0, 0, 0.14}
 )
 
 // RGBA creates a color from 8-bit RGBA values (0-255).
