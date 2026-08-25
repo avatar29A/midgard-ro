@@ -337,6 +337,18 @@ func (g *Game) frame() {
 		g.showDebug = !g.showDebug
 	}
 
+	// F4 hides map objects, leaving bare terrain. Anything still wrong on
+	// screen with the models gone belongs to the terrain mesh — otherwise the
+	// two are hard to tell apart where objects sit flush against the ground.
+	if imgui.IsKeyPressedBoolV(imgui.KeyF4, false) {
+		if inGame, ok := g.stateManager.Current().(*states.InGameState); ok {
+			if sc := inGame.GetScene(); sc != nil {
+				sc.HideModels = !sc.HideModels
+				logger.Info("models toggled", zap.Bool("hidden", sc.HideModels))
+			}
+		}
+	}
+
 	// Handle camera controls when in InGameState
 	if inGameState, ok := g.stateManager.Current().(*states.InGameState); ok {
 		g.handleInGameInput(inGameState)
