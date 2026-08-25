@@ -138,23 +138,48 @@ func walkSpeedOf(u *packets.Entity) float32 {
 }
 
 // unitSpec describes which sprites to draw for a unit.
+//
+// Players are composited from a body and a head chosen by job, sex and hair.
+// Everything else is a single sprite named by the client's own table, where
+// the job id is the whole of the identity.
 func unitSpec(e *entity.Entity) charsprite.Spec {
-	return charsprite.Spec{
-		Job:       e.Job,
-		Female:    e.Female,
-		HairStyle: e.HairStyle,
+	switch e.Type {
+	case entity.TypeMonster:
+		return charsprite.Spec{Kind: charsprite.KindMonster, Job: e.Job}
+	case entity.TypeNPC:
+		return charsprite.Spec{Kind: charsprite.KindNPC, Job: e.Job}
+	default:
+		return charsprite.Spec{
+			Job:       e.Job,
+			Female:    e.Female,
+			HairStyle: e.HairStyle,
+		}
 	}
 }
 
 // unitIsDrawable reports whether we can draw a unit truthfully.
 //
-// Only humanoid units qualify. Monster and NPC sprites live under different
-// archive names, keyed by tables that ship as compiled Lua in the GRF, so
-// there is nothing to look them up with yet — and an unknown job silently
-// resolves to a Novice, which would draw every Poring on the map as a person.
-// Better to leave them undrawn than to draw them as something they are not.
+// A player always resolves, falling back to a Novice at worst. Monsters and
+// NPCs are drawn only when the client's own table names their sprite: an
+// unknown job would otherwise fall through to the player path and put a
+// person on screen wherever a Poring stands.
+//
+// Dropped items are excluded outright. They are named by a different table
+// under a different directory, so a job id that happens to match a monster
+// would draw the wrong thing rather than nothing.
 func unitIsDrawable(e *entity.Entity) bool {
-	return e != nil && e.Body != nil && e.Type == entity.TypePlayer
+	if e == nil || e.Body == nil {
+		return false
+	}
+	switch e.Type {
+	case entity.TypePlayer:
+		return true
+	case entity.TypeMonster, entity.TypeNPC:
+		_, known := charsprite.SpriteName(e.Job)
+		return known
+	default:
+		return false
+	}
 }
 
 // removeUnit drops a unit the server says is gone.

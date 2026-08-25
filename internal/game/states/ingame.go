@@ -60,6 +60,9 @@ type InGameState struct {
 	TileX   int // Current tile X
 	TileY   int // Current tile Y
 
+	// unitTraceAt rate limits the unit render statistics.
+	unitTraceAt time.Time
+
 	// Network timing
 	lastMoveTick    uint32
 	lastMoveSent    time.Time
@@ -406,12 +409,45 @@ func (s *InGameState) renderUnits(viewProj math.Mat4) {
 	}
 
 	load := charsprite.Loader(s.manager.TexLoader)
+	tracked, drawn := 0, 0
 	for _, e := range s.entityManager.All() {
+		if e.Body == nil {
+			continue
+		}
+		tracked++
 		if !unitIsDrawable(e) {
 			continue
 		}
+		drawn++
 		s.playerRender.RenderUnit(viewProj, e.Body, s.camera.PosX, s.camera.PosZ, load, unitSpec(e))
 	}
+
+	s.traceUnitStats(tracked, drawn)
+}
+
+// traceUnitStats reports how many units we hold against how many we draw, once
+// a second.
+//
+// The gap between the two is the only way to tell a unit we failed to draw
+// from one the server never mentioned: it only sends what is within its
+// area_size — 14 cells by default — while the camera can see several times
+// that. A town looking sparse is usually that limit, not a bug, and these two
+// numbers are what distinguish them.
+func (s *InGameState) traceUnitStats(tracked, drawn int) {
+	if !trace.On(trace.Render) || time.Since(s.unitTraceAt) < time.Second {
+		return
+	}
+	s.unitTraceAt = time.Now()
+
+	sheets := 0
+	if s.playerRender != nil {
+		sheets = s.playerRender.CachedUnitSheets()
+	}
+	trace.Emit(trace.Render, "units",
+		zap.Int("tracked", tracked),
+		zap.Int("drawn", drawn),
+		zap.Int("undrawable", tracked-drawn),
+		zap.Int("sheets", sheets))
 }
 
 // GetSceneTexture returns the rendered scene texture ID for display.

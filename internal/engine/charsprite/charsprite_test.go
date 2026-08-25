@@ -121,7 +121,7 @@ func TestBuildSheetPadsFramesToUniformSize(t *testing.T) {
 		})
 	}
 
-	sheet := BuildSheet(bodySPR, act, nil, nil, HeadStraight)
+	sheet := BuildSheet(bodySPR, act, nil, nil, HeadStraight, KindPlayer)
 	if sheet == nil {
 		t.Fatal("BuildSheet returned nil")
 	}
@@ -151,7 +151,7 @@ func TestBuildSheetCoversAllDirections(t *testing.T) {
 		})
 	}
 
-	sheet := BuildSheet(bodySPR, act, nil, nil, HeadStraight)
+	sheet := BuildSheet(bodySPR, act, nil, nil, HeadStraight, KindPlayer)
 	if sheet == nil {
 		t.Fatal("BuildSheet returned nil")
 	}
@@ -169,7 +169,7 @@ func TestBuildSheetCoversAllDirections(t *testing.T) {
 }
 
 func TestBuildSheetNilBody(t *testing.T) {
-	if got := BuildSheet(nil, nil, nil, nil, HeadStraight); got != nil {
+	if got := BuildSheet(nil, nil, nil, nil, HeadStraight, KindPlayer); got != nil {
 		t.Error("BuildSheet with no body should return nil")
 	}
 }
@@ -187,4 +187,131 @@ func makeImage(w, h int) formats.SPRImage {
 		px[i*4+3] = 255
 	}
 	return formats.SPRImage{Width: uint16(w), Height: uint16(h), Pixels: px}
+}
+
+// TestSpriteNameTableIsPopulated guards the generated table against being
+// regenerated into nothing. It is produced by walking Lua bytecode, and a
+// change in that format fails by yielding a handful of entries rather than by
+// erroring, which would quietly stop every monster and NPC from being drawn.
+func TestSpriteNameTableIsPopulated(t *testing.T) {
+	if len(spriteNames) < 1500 {
+		t.Errorf("sprite name table has %d entries; the client's own table has "+
+			"about 2000, so this has probably been regenerated wrong", len(spriteNames))
+	}
+
+	// A few well-known ids, spread across the ranges the table covers.
+	tests := []struct {
+		job  int
+		want string
+	}{
+		{1002, "Poring"},
+		{1113, "DROPS"},
+		{45, "1_ETC_01"}, // warp portal
+	}
+
+	for _, tt := range tests {
+		got, ok := SpriteName(tt.job)
+		if !ok {
+			t.Errorf("job %d is not in the table", tt.job)
+			continue
+		}
+		if got != tt.want {
+			t.Errorf("SpriteName(%d) = %q, want %q", tt.job, got, tt.want)
+		}
+	}
+}
+
+func TestSpriteNameReportsUnknown(t *testing.T) {
+	if _, ok := SpriteName(999999); ok {
+		t.Error("an id with no sprite must report unknown, not a wrong name")
+	}
+}
+
+// TestMonsterAndNPCPathsTryBothDirectories: the archive does not separate the
+// two cleanly — the same sprite can appear under either, and some monsters
+// live only under the NPC directory — so both are tried, expected one first.
+func TestMonsterAndNPCPathsTryBothDirectories(t *testing.T) {
+	monster := Spec{Kind: KindMonster, Job: 1002}.BodyPathCandidates()
+	if len(monster) != 2 {
+		t.Fatalf("monster gave %d candidates, want 2", len(monster))
+	}
+	if !strings.Contains(monster[0][0], `몬스터`) {
+		t.Errorf("monster tries %q first, want the monster directory", monster[0][0])
+	}
+	if !strings.Contains(monster[1][0], `npc`) {
+		t.Errorf("monster falls back to %q, want the npc directory", monster[1][0])
+	}
+
+	npc := Spec{Kind: KindNPC, Job: 1002}.BodyPathCandidates()
+	if len(npc) != 2 {
+		t.Fatalf("npc gave %d candidates, want 2", len(npc))
+	}
+	if !strings.Contains(npc[0][0], `npc`) {
+		t.Errorf("npc tries %q first, want the npc directory", npc[0][0])
+	}
+
+	// Both must ask for a matching .spr and .act.
+	for _, candidate := range append(monster, npc...) {
+		if !strings.HasSuffix(candidate[0], ".spr") || !strings.HasSuffix(candidate[1], ".act") {
+			t.Errorf("candidate %v is not an spr/act pair", candidate)
+		}
+	}
+}
+
+func TestUnknownMonsterHasNoCandidates(t *testing.T) {
+	if got := (Spec{Kind: KindMonster, Job: 999999}).BodyPathCandidates(); got != nil {
+		t.Errorf("candidates = %v, want none; guessing would resolve to a player sprite", got)
+	}
+}
+
+// TestNonPlayersHaveNoHead: monsters and NPCs are one whole sprite, and asking
+// for a head would composite a hairstyle onto a Poring.
+func TestNonPlayersHaveNoHead(t *testing.T) {
+	for _, kind := range []Kind{KindMonster, KindNPC} {
+		spr, act := Spec{Kind: kind, Job: 1002}.HeadPaths()
+		if spr != "" || act != "" {
+			t.Errorf("kind %d asked for a head sprite (%q, %q)", kind, spr, act)
+		}
+	}
+}
+
+// TestIdleIsAnimatedForNonPlayers is the difference between a town that moves
+// and one that is frozen. A player's idle action holds three head poses rather
+// than an animation, so only one is baked; a monster or NPC has no head to
+// pose and its idle is a real animation, so all of it is baked.
+func TestIdleIsAnimatedForNonPlayers(t *testing.T) {
+	const idleFrames = 5
+
+	act := &formats.ACT{}
+	for i := 0; i < LoadedActions*Directions; i++ {
+		action := formats.Action{}
+		for f := 0; f < idleFrames; f++ {
+			action.Frames = append(action.Frames, formats.Frame{
+				Layers:       []formats.Layer{{SpriteID: 0, ScaleX: 1, ScaleY: 1}},
+				AnchorPoints: []formats.AnchorPoint{{X: 0, Y: 0}},
+			})
+		}
+		act.Actions = append(act.Actions, action)
+	}
+	bodySPR := &formats.SPR{Images: []formats.SPRImage{makeImage(8, 8)}}
+
+	player := BuildSheet(bodySPR, act, nil, nil, HeadStraight, KindPlayer)
+	if player == nil {
+		t.Fatal("player sheet is nil")
+	}
+	if got := player.FrameCount(ActionIdle, 0); got != 1 {
+		t.Errorf("player idle baked %d frames, want 1; the extra entries are head "+
+			"poses, and cycling them swivels a standing character's head", got)
+	}
+
+	for _, kind := range []Kind{KindMonster, KindNPC} {
+		sheet := BuildSheet(bodySPR, act, nil, nil, HeadStraight, kind)
+		if sheet == nil {
+			t.Fatalf("kind %d sheet is nil", kind)
+		}
+		if got := sheet.FrameCount(ActionIdle, 0); got != idleFrames {
+			t.Errorf("kind %d idle baked %d frames, want %d; standing still is a "+
+				"real animation for anything without a head", kind, got, idleFrames)
+		}
+	}
 }

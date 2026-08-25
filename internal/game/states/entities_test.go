@@ -3,6 +3,7 @@ package states
 import (
 	"testing"
 
+	"github.com/Faultbox/midgard-ro/internal/engine/charsprite"
 	"github.com/Faultbox/midgard-ro/internal/game/entity"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
 )
@@ -382,30 +383,37 @@ func TestUnitSpecFollowsAppearance(t *testing.T) {
 	}
 }
 
-// TestOnlyHumanoidUnitsAreDrawn: an unrecognized job silently resolves to a
-// Novice, so drawing monsters and NPCs through the character pipeline would
-// put a person on screen wherever a Poring is standing.
-func TestOnlyHumanoidUnitsAreDrawn(t *testing.T) {
+// TestDrawableNeedsANamedSprite: a player always resolves, but a monster or
+// NPC is only drawn when the client's own table names its sprite. Without that
+// check an unknown job falls through to the player path and puts a person on
+// screen wherever a Poring stands.
+func TestDrawableNeedsANamedSprite(t *testing.T) {
 	m := entity.NewManager()
 
 	tests := []struct {
+		name string
 		kind packets.EntityKind
+		job  int16
 		want bool
 	}{
-		{packets.EntityPlayer, true},
-		{packets.EntityDisguised, true},
-		{packets.EntityMob, false},
-		{packets.EntityNPC, false},
-		{packets.EntityItem, false},
-		{packets.EntityWalkingNPC, false},
+		{"player", packets.EntityPlayer, 0, true},
+		{"disguised player", packets.EntityDisguised, 0, true},
+		{"poring", packets.EntityMob, 1002, true},
+		{"warp portal", packets.EntityNPC, 45, true},
+		{"monster with no sprite name", packets.EntityMob, 30000, false},
+		{"npc with no sprite name", packets.EntityNPC, 30000, false},
+		{"dropped item", packets.EntityItem, 1002, false},
 	}
 
 	for i, tt := range tests {
-		u := standingAt(uint32(1000+i), 5, 5)
-		u.Kind = tt.kind
-		if got := unitIsDrawable(upsertUnit(m, u, nil)); got != tt.want {
-			t.Errorf("kind 0x%X drawable = %v, want %v", tt.kind, got, tt.want)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			u := standingAt(uint32(1000+i), 5, 5)
+			u.Kind = tt.kind
+			u.Job = tt.job
+			if got := unitIsDrawable(upsertUnit(m, u, nil)); got != tt.want {
+				t.Errorf("drawable = %v, want %v", got, tt.want)
+			}
+		})
 	}
 
 	if unitIsDrawable(nil) {
@@ -413,5 +421,33 @@ func TestOnlyHumanoidUnitsAreDrawn(t *testing.T) {
 	}
 	if unitIsDrawable(entity.NewEntity(1, entity.TypePlayer)) {
 		t.Error("an entity with no body has nothing to draw")
+	}
+}
+
+// TestUnitSpecPicksTheSpriteFamily: a player is composited from a body and a
+// head, everything else is one whole sprite, and asking for the wrong family
+// resolves to a different unit rather than to nothing.
+func TestUnitSpecPicksTheSpriteFamily(t *testing.T) {
+	m := entity.NewManager()
+
+	tests := []struct {
+		name string
+		kind packets.EntityKind
+		want charsprite.Kind
+	}{
+		{"player", packets.EntityPlayer, charsprite.KindPlayer},
+		{"monster", packets.EntityMob, charsprite.KindMonster},
+		{"npc", packets.EntityNPC, charsprite.KindNPC},
+	}
+
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			u := standingAt(uint32(2000+i), 5, 5)
+			u.Kind = tt.kind
+			u.Job = 1002
+			if got := unitSpec(upsertUnit(m, u, nil)).Kind; got != tt.want {
+				t.Errorf("spec kind = %d, want %d", got, tt.want)
+			}
+		})
 	}
 }

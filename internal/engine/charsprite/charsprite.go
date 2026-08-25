@@ -42,6 +42,9 @@ const (
 
 // Spec identifies which character sprites to load.
 type Spec struct {
+	// Kind selects the sprite family. The zero value is a player.
+	Kind Kind
+
 	Job       int  // rAthena job/class id
 	Female    bool // sex M/F selects the sprite folder and filename suffix
 	HairStyle int  // head sprite number
@@ -92,11 +95,27 @@ func (s *Sheet) FrameCount(action, direction int) int {
 // bakes the composite sheet. A missing head is not fatal — the body renders
 // on its own — but a missing body is.
 func Load(load Loader, spec Spec) (*Assets, error) {
-	bodySPRPath, bodyACTPath := spec.BodyPaths()
+	candidates := spec.BodyPathCandidates()
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("no sprite known for job %d", spec.Job)
+	}
 
-	bodySPR, bodyACT, err := loadPair(load, bodySPRPath, bodyACTPath)
+	var (
+		bodySPR      *formats.SPR
+		bodyACT      *formats.ACT
+		bodySPRPath  string
+		err          error
+		firstAttempt = candidates[0][0]
+	)
+	for _, candidate := range candidates {
+		bodySPR, bodyACT, err = loadPair(load, candidate[0], candidate[1])
+		if err == nil {
+			bodySPRPath = candidate[0]
+			break
+		}
+	}
 	if err != nil {
-		return nil, fmt.Errorf("body sprite %q: %w", bodySPRPath, err)
+		return nil, fmt.Errorf("body sprite %q: %w", firstAttempt, err)
 	}
 
 	a := &Assets{
@@ -114,7 +133,7 @@ func Load(load Loader, spec Spec) (*Assets, error) {
 		a.HeadPath = headSPRPath
 	}
 
-	a.Sheet = BuildSheet(a.BodySPR, a.BodyACT, a.HeadSPR, a.HeadACT, spec.HeadDirection)
+	a.Sheet = BuildSheet(a.BodySPR, a.BodyACT, a.HeadSPR, a.HeadACT, spec.HeadDirection, spec.Kind)
 	if a.Sheet == nil {
 		return nil, fmt.Errorf("body sprite %q produced no frames", bodySPRPath)
 	}
@@ -130,12 +149,18 @@ func Load(load Loader, spec Spec) (*Assets, error) {
 //
 // headDir picks which of the three head poses to bake in (see HeadStraight).
 //
-// Standing still is a single frame, not three. RO's "idle" action stores one
-// entry per head direction rather than an animation — the body art is
-// identical across all three, only the head turns — so cycling them makes a
-// standing character swivel their head forever. Walking is a real 8-frame
-// animation, and its head stays on the chosen pose while the legs cycle.
-func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR, headACT *formats.ACT, headDir int) *Sheet {
+// What "standing still" means depends on the kind. For a player it is a single
+// frame, not three: RO's idle action stores one entry per head direction
+// rather than an animation — the body art is identical across all three, only
+// the head turns — so cycling them makes a standing character swivel their
+// head forever. Walking is a real animation, and its head stays on the chosen
+// pose while the legs cycle.
+//
+// A monster or NPC has no head to pose, and its idle action is a real
+// animation: a Kafra has 99 idle frames of her standing and shifting. Baking
+// only the first leaves every one of them frozen, which is what treating them
+// like players did.
+func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR, headACT *formats.ACT, headDir int, kind Kind) *Sheet {
 	if bodySPR == nil || bodyACT == nil || len(bodyACT.Actions) == 0 {
 		return nil
 	}
@@ -144,10 +169,10 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 	}
 
 	// frameIndices returns the (bodyFrame, headFrame) pairs to bake for an
-	// action. Idle indexes the body by head direction too, because the body's
-	// neck anchor moves with the head pose.
+	// action. A player's idle indexes the body by head direction too, because
+	// the body's neck anchor moves with the head pose.
 	frameIndices := func(action, available int) [][2]int {
-		if action == ActionIdle {
+		if action == ActionIdle && kind == KindPlayer {
 			return [][2]int{{headDir, headDir}}
 		}
 		pairs := make([][2]int, 0, available)
