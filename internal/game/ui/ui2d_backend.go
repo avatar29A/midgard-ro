@@ -506,17 +506,24 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 		statusText = state.StatusMessage
 	}
 	scale := float32(1.0)
-	barY := height - 25
-	b.ctx.Renderer().DrawRect(0, barY, width, 25, ui2d.ColorPanelBg)
-	b.ctx.Renderer().DrawText(10, barY+4, statusText, scale, ui2d.ColorTextOnDark)
+	const barHeight = 25
+	barY := height - barHeight
+	b.ctx.Renderer().DrawRect(0, barY, width, barHeight, ui2d.ColorPanelBg)
 
-	// Cell position and zoom, right-aligned. Zoom is shown because it is
-	// remembered between sessions — without a readout there is no way to tell
-	// what was restored, or to get back to a distance you liked.
-	posText := fmt.Sprintf("Zoom %.0f   (%d, %d)",
-		state.CamDistance, state.PlayerTileX, state.PlayerTileY)
-	posW, _ := b.ctx.Renderer().MeasureText(posText, scale)
-	b.ctx.Renderer().DrawText(width-posW-10, barY+4, posText, scale, ui2d.ColorTextOnDark)
+	// Viewport size, zoom and cell position, right-aligned. Zoom is shown
+	// because it is remembered between sessions — without a readout there is
+	// no way to tell what was restored, or to get back to a distance you liked.
+	posText := fmt.Sprintf("%.0fx%.0f   Zoom %.0f   (%d, %d)",
+		width, height, state.CamDistance, state.PlayerTileX, state.PlayerTileY)
+	posW, textH := b.ctx.Renderer().MeasureText(posText, scale)
+
+	// Centre both ends on the bar rather than offsetting by a fixed few
+	// pixels: text height depends on the font and the display's pixel density,
+	// so a constant only happens to look right on one machine.
+	textY := barY + (barHeight-textH)/2
+
+	b.ctx.Renderer().DrawText(10, textY, statusText, scale, ui2d.ColorTextOnDark)
+	b.ctx.Renderer().DrawText(width-posW-10, textY, posText, scale, ui2d.ColorTextOnDark)
 }
 
 // RenderFPSOverlay renders an FPS counter.
