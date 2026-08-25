@@ -140,6 +140,10 @@ func (s *InGameState) Enter() error {
 	// where a walk starts and ends, so we re-derive the cells in between.
 	s.pathFinder = world.NewPathFinder(s.gat)
 
+	// The map is up, so its background music replaces the title theme and
+	// repeats until the player leaves for another map.
+	s.manager.PlayLocationBGM(s.MapName)
+
 	// Create player character at the spawn cell's center.
 	worldX, worldZ := entity.CellToWorld(s.config.SpawnX, s.config.SpawnY)
 

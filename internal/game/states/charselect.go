@@ -59,6 +59,8 @@ func NewCharSelectState(cfg CharSelectStateConfig, client *network.Client, manag
 
 // Enter is called when entering this state.
 func (s *CharSelectState) Enter() error {
+	s.manager.PlayFallbackBGM()
+
 	s.enterTime = time.Now()
 	s.ErrorMsg = ""
 	s.IsLoading = true

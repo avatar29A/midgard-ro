@@ -47,6 +47,8 @@ func NewLoginState(cfg LoginStateConfig, client *network.Client, manager *Manage
 
 // Enter is called when entering this state.
 func (s *LoginState) Enter() error {
+	s.manager.PlayFallbackBGM()
+
 	s.ErrorMsg = ""
 	s.IsLoading = false
 	s.connected = false
