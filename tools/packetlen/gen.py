@@ -48,6 +48,11 @@ def build_env(packetver: int) -> dict:
 
 def evaluate(expr: str, env: dict) -> bool:
     """Evaluate a C preprocessor conditional expression."""
+    # rAthena annotates several version guards inline, e.g.
+    #   #if PACKETVER >= 20130000 /* not sure date */
+    # Left in place these fail to parse, and a guard that cannot be evaluated
+    # is treated as false, silently dropping the struct behind it.
+    expr = re.sub(r"/\*.*?\*/", " ", expr)
     expr = expr.split("//")[0].strip()
 
     def defined(match):
@@ -146,7 +151,26 @@ VARIABLE = -1
 
 
 def parse_structs(path, env):
-    """Collect struct definitions and their packet ids, honouring #if guards."""
+    """Packet id -> wire length for every struct in the file."""
+    structs, ids, consts = collect_structs(path, env)
+
+    lengths = {}
+    for name, pid in ids.items():
+        if name not in structs:
+            continue
+        size = struct_size(structs[name], structs, consts)
+        if size is not None:
+            lengths[pid] = size
+    return lengths
+
+
+def collect_structs(path, env):
+    """Collect struct definitions, their packet ids and any array-bound
+    constants, honouring #if guards.
+
+    Kept separate from parse_structs so tools that need the field layout — not
+    just the total size — can walk the same resolved definitions.
+    """
     structs = {}
     ids = {}
     consts = dict(ARRAY_CONSTS)
@@ -218,14 +242,7 @@ def parse_structs(path, env):
             if field:
                 fields.append((field.group(1), field.group(2), field.group(3)))
 
-    lengths = {}
-    for name, pid in ids.items():
-        if name not in structs:
-            continue
-        size = struct_size(structs[name], structs, consts)
-        if size is not None:
-            lengths[pid] = size
-    return lengths
+    return structs, ids, consts
 
 
 def parse(path: str, env: dict) -> dict:
