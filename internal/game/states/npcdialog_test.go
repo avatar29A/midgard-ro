@@ -50,7 +50,7 @@ func sayPacket(npcID uint32, message string) []byte {
 	return buf
 }
 
-// TestDialogTextAccumulates pins the behaviour that makes a conversation
+// TestDialogTextAccumulates pins the behavior that makes a conversation
 // readable: the original keeps one box per conversation and appends to it, so
 // a script saying three things in a row reads as three paragraphs instead of
 // replacing itself twice before the player can read them.
