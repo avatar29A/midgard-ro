@@ -113,6 +113,9 @@ The server pushes each value as it changes; there is no "give me my stats" reque
 |--------|----|-----------|--------|
 | `ZC_PAR_CHANGE` | `0x00B0` — `<var id>.W <value>.L`, 8 bytes | S→C | `docker/rathena/build/rathena/src/map/clif.cpp:3547` |
 | `ZC_LONGPAR_CHANGE` | `0x00B1` — same shape, for values that outgrow a short | S→C | `clif.cpp:3558` |
+| `ZC_LONGLONGPAR_CHANGE` | `0x0ACB` — `<var id>.W <value>.Q`, 12 bytes | S→C | `clif.cpp:3621`, struct at `packets_struct.hpp:399` |
+
+**Correction (Step 1).** The plan had only the first two. At `PACKETVER >= 20170830` — ours is 20211103 — `clif_updatestatus` sends all four experience values through `0x0ACB` instead (`clif.cpp:3735`), because the totals no longer fit in 32 bits. A client handling only `0x00B0` and `0x00B1` receives no experience at all, which would have left Step 4's bars empty with nothing obviously wrong. `0x0ACB` was already in the generated length table at 12 bytes, so the framing was never affected — only the reading.
 
 Var ids come from `enum _sp` in `docker/rathena/build/rathena/src/map/map.hpp:497`:
 
@@ -124,7 +127,17 @@ Var ids come from `enum _sp` in `docker/rathena/build/rathena/src/map/map.hpp:49
 | `SP_MAXSP` | 8 | | `SP_NEXTBASEEXP` | 22 |
 | `SP_ZENY` | 20 | | `SP_WEIGHT` / `SP_MAXWEIGHT` | 24 / 25 |
 
-`clif_updatestatus` (`clif.cpp:3635`) is the dispatcher that decides which of the two packets carries a given parameter.
+`clif_updatestatus` (`clif.cpp:3635`) is the dispatcher that decides which of the three packets carries a given parameter.
+
+### The CharInfo layout, resolved
+
+`struct CHARACTER_INFO` (`src/common/packets.hpp:31`) is version-dependent, and the branch that matters is `PACKETVER_RE_NUM >= 20211103`, which the server satisfies: `hp`, `maxhp`, `sp` and `maxsp` are each `int64`. That is what makes the record **175 bytes** — so `CharInfoSize = 175` was right, but for the wrong reason (it was labelled "eAthena"), and the offsets inside it were wrong. Before 20211103 the same fields are `int32/int32/int16/int16` and the record is 155, which is where `CharInfoSizeRathena` came from.
+
+The header of `HC_ACCEPT_ENTER` is `2 + 2 + 1 + 1 + 1 + 20 = 27`, confirming the existing `charDataStart`.
+
+The old offsets were guessed from a capture, and were wrong in the way that survives inspection: `hp` was read at 66, which is where `sp` lives, and `maxhp` at 74, which is `maxsp`. A character with 40 HP and 11 SP therefore read back as **11 HP and 40 SP** — two real numbers in each other's places. `class` was read at 50, the low bytes of `hp`, giving `Job 40`; `level` at 90, which is `weapon`, giving `Lv. 0`. All three symptoms had one cause.
+
+Fixed offsets are pinned as named constants in `packets.go` and asserted field-by-field in `TestCharInfoDecode`.
 
 ## Step 0 — Prerequisites & tooling
 
@@ -154,11 +167,27 @@ Var ids come from `enum _sp` in `docker/rathena/build/rathena/src/map/map.hpp:49
 
 ## Steps
 
-### Step 1 — Parse status packets, verify the CharInfo layout, keep the player's stats
-- **Changes:** `internal/network/packets` (constants + struct), `internal/game/states/ingame.go` (handler), `internal/game/player_stats.go` (the live store replaces `statsFromChar` as the source)
+### Step 1 — Parse status packets, verify the CharInfo layout, keep the player's stats ✅
+- **Changes:** `internal/network/packets/status.go` (new), `packets.go` (CharInfo offsets), `internal/game/states/player_stats.go` (new — the live store), `ingame.go` (handler)
 - **Done when:** `--trace=status` prints `status.change` with sensible ids and values on login and when taking damage; F3 shows HP/SP/levels matching the server
-- **Proved by:** `go test ./internal/network/packets/` (round-trips), F3 screenshot, UC-305
+- **Proved by:** `go test ./internal/network/packets/ ./internal/game/states/`, F3 screenshot, UC-305
 - **Reference:** Protocol table above
+
+Both sources now agree, which is the check that matters — `CharInfo` and the server's own pushes independently report the same numbers:
+
+```
+status.initial {"source":"charinfo","hp":40,"maxHP":40,"sp":11,"maxSP":11,"baseLevel":1,"jobLevel":1,"class":0}
+status.change  {"varID":5,"value":40}   # SP_HP
+status.change  {"varID":6,"value":40}   # SP_MAXHP
+status.change  {"varID":7,"value":11}   # SP_SP
+status.change  {"varID":8,"value":11}   # SP_MAXSP
+status.change  {"varID":22,"value":548} # SP_NEXTBASEEXP, over 0x0ACB
+status.change  {"varID":25,"value":20300}
+```
+
+The untracked ids are reported once each and turn out to be exactly what they should be: 41–53 are the combat stats, 225–233 the fourth-job ones, 12 is the skill point. Nothing we want is going missing.
+
+`PlayerStats` already carries weight, Zeny and the four experience values, so Step 4 needs no further protocol work.
 
   **Layout investigation (per review).** Character select reports `Job 40`,
   `Lv. 0` and `HP 11/11` next to `SP 40/40` for the test account. 40 is not a
@@ -228,6 +257,11 @@ _All three from the first round are answered — see the Revision log. One follo
 
 ## Revision log
 
+- 2026-08-26 — **Step 1 done.** Status packets parsed and the player's stats
+  kept live. Two corrections to the plan: experience arrives over `0x0ACB`
+  (`ZC_LONGLONGPAR_CHANGE`), which the plan did not list, and the `CharInfo`
+  offsets were wrong in a way that swapped HP with SP — both now pinned to
+  rAthena's struct with a field-by-field test.
 - 2026-08-26 — **Step 0 done.** `status` trace channel with a `status.initial`
   baseline; the six stat fields wired through `InGameUIState` into the F3
   overlay, sourced from CharInfo until Step 1 replaces it; `--debug-overlay` so
