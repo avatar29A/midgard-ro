@@ -9,21 +9,23 @@ Finish the in-game HUD so Prontera is playable rather than just walkable: a
 minimap in the corner, chat along the bottom, a hotkey bar, an ESC menu that can
 actually quit or go back to character select, and the four menu buttons opening
 the windows they promise — **Info (stats), Skills, Items, Map**. Plus the green
-target square RO puts under the cursor, so a click has somewhere to land.
+target square RO puts under the cursor, and the pair of HP/SP bars the original
+draws under the character's feet.
 
 Advances the MVP's **UI** item and closes most of #53's Track D.
 
 ## A note on size
 
 This is bigger than one feature normally is — four windows, four panels and a
-cursor effect, which comes out at eleven steps rather than the four to eight a
+cursor effect, which comes out at twelve steps rather than the four to eight a
 feature usually takes. It is planned as one PR because that is what was asked
 for, and the pieces do share the same foundations (window chrome, packet
 handlers, the `hud` trace channel).
 
-If it proves unwieldy in review, the natural cut is after **Step 5**: steps 1–5
-are the always-on HUD (minimap, chat, hotkey bar, click marker) and steps 6–10
-are the windows behind the menu buttons. Each half stands alone.
+If it proves unwieldy in review, the natural cut is after **Step 6**: steps 1–6
+are the always-on HUD (minimap, chat, click marker, the bars under the
+character, hotkey bar, ESC menu) and steps 7–11 are the windows behind the menu
+buttons. Each half stands alone.
 
 ## What #87 already did — and deliberately did not
 
@@ -72,6 +74,23 @@ widgets and adds no new ImGui; it does not claim to remove the dependency.
 
 ## Reference (original client)
 
+### Screenshots (real client)
+
+![ref-01 — rAthena client, full screen: HUD in all four corners plus NPC dialog](./ref-01-kafra-fullscreen.jpg)
+
+1. **Basic Info panel** top-left — what #87 already builds.
+2. **Minimap** top-right, with its buttons beneath.
+3. **Chat box** bottom-left, with its input bar below the scrollback.
+4. **NPC dialog + menu** centre — #86's territory, shown here only for placement.
+
+![ref-02 — two entities' bars, cropped from the same session at native size](./ref-02-entity-bars.png)
+
+5. **The player's bars** (left) — a **green** HP bar with a **blue** SP bar
+   directly beneath it, at the feet, roughly a sprite wide.
+6. **Another entity's bar** (right) — near-white fill in a dark blue border, and
+   no second bar. Bar colour identifies what you are looking at, and an entity
+   with no SP shows one bar rather than two.
+
 ### Assets extracted from `data.grf`
 
 ![grf-statwin_bg — the status window background, 280×103](./grf-statwin_bg.png)
@@ -79,32 +98,30 @@ widgets and adds no new ImGui; it does not claim to remove the dependency.
 ![grf-grid — the click target square, 32×32 TGA with alpha](./grf-grid.png)
 ![grf-prontera — Prontera's pre-rendered minimap, 512×512](./grf-prontera.png)
 
-1. **Status window** — `basic_interface/statwin_bg.bmp`, **280×103**. Siblings
+7. **Status window** — `basic_interface/statwin_bg.bmp`, **280×103**. Siblings
    `statwin0/1/2_bg.bmp` are the tab variants.
-2. **Hotkey bar** — `basic_interface/shortcut_bg.bmp`, **280×29**. One strip; the
+8. **Hotkey bar** — `basic_interface/shortcut_bg.bmp`, **280×29**. One strip; the
    slots are drawn into it.
-3. **Click target** — `data/texture/grid.tga`, **32×32** with alpha. This is the
+9. **Click target** — `data/texture/grid.tga`, **32×32** with alpha. This is the
    green square, and it is a *texture on the ground*, not a cursor state —
    roBrowser draws it the same way (`Renderer/Map/GridSelector.js:103`).
-4. **Minimap** — `data/texture/유저인터페이스/map/prontera.bmp`, **512×512**,
+10. **Minimap** — `data/texture/유저인터페이스/map/prontera.bmp`, **512×512**,
    pre-rendered. RO does **not** derive the minimap from the GAT at runtime, which
    is what our dead `Minimap` does. There is also `map/pprontera.bmp`, the
    overlay variant.
-5. **Menu buttons** — `btn_status_*`, `btn_skill_*`, `btn_items_*`, `btn_map_*`,
+11. **Menu buttons** — `btn_status_*`, `btn_skill_*`, `btn_items_*`, `btn_map_*`,
    each with `_on` / `_off` / `_dis`. Already extracted and drawn by #87.
 
-**No in-situ screenshot of the original HUD.** As with #86, a web search turned up
-gameplay shots rather than clean UI captures. The bitmaps above are exact, but
-placement and spacing are inferred — see Open question 1.
+The GRF bitmaps below are exact sizes; the captures above are what places them.
 
 ### Current state (ours)
 
 ![current-hud — Prontera fountain: Basic Info panel and menu grid from #87, nothing else](./current-hud.jpg)
 
-6. **Basic Info panel + menu grid** — from #87, top-left. Buttons draw and hover
+12. **Basic Info panel + menu grid** — from #87, top-left. Buttons draw and hover
    but open nothing.
-7. **No minimap, no chat, no hotkey bar.** The corners are empty.
-8. **Clicking the ground walks with no feedback** — no target square, no
+13. **No minimap, no chat, no hotkey bar.** The corners are empty.
+14. **Clicking the ground walks with no feedback** — no target square, no
    indication the click registered until the character starts moving.
 
 ## What exists today
@@ -241,21 +258,46 @@ Two traps, both the same shape as ones already hit:
 - **Proved by:** screenshot scenario with the cursor over a cell; UC-208.
 - **Reference:** grf-grid ③
 
-### Step 4 — Hotkey bar
+### Step 4 — HP/SP bars under the character
+- **Changes:** `internal/game/ui/hud_entity_bars.go`, `internal/game/states/ingame.go`
+- **Done when:** a green HP bar with a blue SP bar under it follows the player's
+  feet, tracking the camera, and both shorten as the values drop.
+- **Drawn, not skinned.** roBrowser fills these procedurally
+  (`Renderer/Entity/EntityLife.js:79-119`) and the capture agrees, so this does
+  **not** use the `gzered`/`gzeblue` art — that is the HUD panel's gauge skin and
+  is the wrong size and shape here. Exact geometry from that source:
+
+  | Piece | Value |
+  |-------|-------|
+  | Size | 60 × 5, or **60 × 9** when SP is shown |
+  | Border | `#10189C` filling the whole rect |
+  | Empty | `#424242`, inset 1px |
+  | HP fill | `#10EF21`, or `#FF0000` below 25% — 3px tall at y=1 |
+  | SP separator | `#10189C`, 1px at y=4 |
+  | SP fill | `#1863DE` — 3px tall at y=5 |
+
+  Mobs and pets use different HP colours (`#FF00E7` and `#FFE7E7`), which is why
+  the second entity in ref-02 looks nothing like the player's.
+- **No new packets.** The player's HP/SP are already live in `PlayerStats` from
+  #87 — this is a rendering step over a model that exists.
+- **Proved by:** screenshot scenario; UC-208. Bar width against value is a table test.
+- **Reference:** ref-02 ⑤⑥
+
+### Step 5 — Hotkey bar
 - **Changes:** `internal/game/ui/hud_hotkeys.go`
 - **Done when:** the bar draws along the bottom with its slots; slots are empty
   but present and the bar sits where the original puts it.
 - **Proved by:** screenshot scenario; UC-208.
 - **Reference:** grf-shortcut_bg ②
 
-### Step 5 — ESC menu
+### Step 6 — ESC menu
 - **Changes:** `internal/game/ui/hud_escmenu.go`, `internal/network/packets/hud.go`, `internal/game/states/`
 - **Done when:** ESC toggles a menu with Return to character select, Quit and
   Cancel; both leave the game cleanly through the right packet.
 - **Proved by:** UC-210 — each button lands you where it says, with no hang and
   no orphaned connection.
 
-### Step 6 — Stats window (Info)
+### Step 7 — Stats window (Info)
 - **Changes:** `internal/network/packets/hud.go`, `internal/game/states/player_stats.go`, `internal/game/ui/win_stats.go`
 - **Done when:** the Info button opens a window showing STR/AGI/VIT/INT/DEX/LUK
   with their bonuses, updating live as stat packets arrive.
@@ -266,24 +308,24 @@ Two traps, both the same shape as ones already hit:
   Packet tests for `0x00BD`/`0x0141`.
 - **Reference:** grf-statwin_bg ①
 
-### Step 7 — Skills window
+### Step 8 — Skills window
 - **Changes:** `internal/network/packets/hud.go`, `internal/game/ui/win_skills.go`
 - **Done when:** the Skills button lists the character's skills with names and
   levels, from `ZC_SKILLINFO_LIST` (`0x0B32`).
 - **Proved by:** UC-209. A Novice shows Basic Skill at its level.
 
-### Step 8 — Items window
+### Step 9 — Items window
 - **Changes:** `internal/network/packets/hud.go`, `internal/game/ui/win_items.go`
 - **Done when:** the Items button lists inventory contents with counts.
 - **Proved by:** UC-209.
 
-### Step 9 — Map window
+### Step 10 — Map window
 - **Changes:** `internal/game/ui/win_map.go`
 - **Done when:** the Map button opens the full-size map image with the player
   marked — the minimap enlarged, sharing its loader.
 - **Proved by:** UC-209.
 
-### Step 10 — Delete the deprecated ImGui widgets, and docs
+### Step 11 — Delete the deprecated ImGui widgets, and docs
 - **Changes:** remove `internal/game/ui/{imgui_backend,ingame_ui,minimap,chatbox,charselect_ui,login_ui,loading_ui,connecting_ui,debug_overlay,statusbar}.go`
 - **Done when:** every ImGui *widget* file is gone, the build is clean, and the
   only remaining ImGui use is the platform layer named above.
@@ -299,6 +341,7 @@ Two traps, both the same shape as ones already hit:
 - Minimap, chat, hotkey bar and Basic Info panel are all on screen at once and
   readable at 1280×720 and 1920×1080
 - A green square follows the cursor and animates when you click to move
+- A green HP bar and a blue SP bar sit under the character's feet and follow it
 - Each of the four menu buttons opens and closes its window, and the button
   shows which state it is in
 - The stats window updates live as the server sends stat changes
@@ -311,7 +354,12 @@ Two traps, both the same shape as ones already hit:
   and command parsing.
 - Assigning skills or items to hotkey slots — the bar draws, the slots stay empty.
 - Item icons and skill icons (needs the item sprite table, its own feature).
-- Party, guild, storage, equipment windows; entity HP bars.
+- Party, guild, storage, equipment windows.
+- **HP bars over other entities.** The spawn packets already carry their HP and
+  MaxHP, so drawing one is nearly free — but that value is a snapshot, and
+  nothing updates it until the combat packets land in Track F. A bar frozen at
+  full health is worse than no bar. The player's own bars are in scope precisely
+  because #87 already keeps those live.
 - Settings inside the ESC menu beyond volume — no keybinding UI.
 - **Removing the ImGui dependency.** The dead widgets go (Step 10), but the SDL
   platform backend and the input/DPI calls the native UI makes stay. Replacing
@@ -319,8 +367,10 @@ Two traps, both the same shape as ones already hit:
 
 ## Open questions
 
-1. **No in-situ HUD screenshot.** Bitmaps are exact; placement and spacing are
-   inferred from roBrowser. A real capture would settle the corners.
+1. ~~No in-situ HUD screenshot.~~ **Answered** — ref-01 and ref-02 are real
+   client captures, so placement is measured rather than inferred. What they do
+   not settle is exact pixel offsets at our resolution, since ref-01 is a small
+   capture; expect to nudge spacing once each element is on screen.
 2. **Minimap for maps with no image?** Prontera has one. If a map ships none, is
    an empty corner right, or should it fall back to sampling the GAT the way the
    dead `Minimap` does?
@@ -343,5 +393,8 @@ Two traps, both the same shape as ones already hit:
 
 - 2026-08-26 — created
 - 2026-08-26 — ImGui declared deprecated: deleting the dead widget files became
-  Step 10 rather than an open question, and the platform layer it still provides
-  was recorded as a separate feature (per direction)
+  the final step rather than an open question, and the platform layer it still
+  provides was recorded as a separate feature (per direction)
+- 2026-08-26 — added the HP/SP bars under the character as Step 4, with real
+  client captures (ref-01, ref-02) taken from #86's ref-03; Open question 1
+  answered by them (per request)
