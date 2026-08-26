@@ -2,6 +2,7 @@
 package ui
 
 import (
+	"github.com/Faultbox/midgard-ro/internal/engine/cursor"
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
 )
@@ -25,6 +26,9 @@ type UIBackend interface {
 	// MouseCaptured reports whether the pointer is over the interface, so a
 	// click on a panel is not also a click on the world behind it.
 	MouseCaptured() bool
+
+	// SetCursorState switches which of the original's cursors is drawn.
+	SetCursorState(state cursor.State)
 
 	// Input returns the input state for the current frame.
 	// Note: This returns the ui2d InputState; ImGui backends should provide

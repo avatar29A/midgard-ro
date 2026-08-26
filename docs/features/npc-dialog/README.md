@@ -273,7 +273,7 @@ costs nothing, but do not expect `packets.Length()` to know them.
       is legitimate: the server sends a fake id for scripts with no unit near
       the player) and the menu size. A stuck conversation is diagnosable from a
       single screenshot. `DialogPhase` lives in `states/npcdialog.go`; the
-      transitions arrive with Steps 3–5.
+      transitions arrive with Steps 4–6.
 - [x] **Screenshot scenario:** `./midgard --config config.yaml --autologin --no-bgm --debug-overlay --trace=npc,net --screenshot-every 4s`.
       `latest.png` must show the dialog window over the map with the NPC's
       greeting in it. **Set `vsync: false` in the local `config.yaml`** — with
@@ -282,13 +282,13 @@ costs nothing, but do not expect `packets.Length()` to know them.
       a hang (learned in #85).
 - [ ] **Logs:** a menu index outside 1..n must be refused client-side and logged
       at **warn** with the index and the item count — never sent. Getting kicked
-      by our own packet is the failure this prevents. *(Step 5 — there is no
+      by our own packet is the failure this prevents. *(Step 6 — there is no
       menu to bound yet.)*
 - [ ] **Tests:** `internal/network/packets/npc_test.go` — round-trip each packet
       against bytes written by hand from the layout table, and a menu-splitting
       table (empty, one item, trailing colon, embedded newlines, 255-cancel).
       *(Step 1.)* `internal/game/states/npcdialog_test.go` exists and covers the
-      phase type; the transitions it will drive arrive with Steps 3–5.
+      phase type; the transitions it will drive arrive with Steps 4–6.
 - [x] **Use cases:** UC-207 (talk and close), UC-208 (menu choice), UC-209
       (cancel and out-of-range refusal).
 
@@ -338,7 +338,7 @@ over-selects at the corners, which is the forgiving direction for something you
 are trying to click. The box matches the drawn quad — `playerrender.UnitQuadSize`
 reports it — and stands on the unit's feet, because the quad does.
 
-**Two things worth knowing before Step 3 tests anything.**
+**Two things worth knowing before Step 4 tests anything.**
 
 `--trace=npc` now emits a `candidate` line per eligible unit, with its world
 position **and where it projects on screen**. That last field is what turned a
@@ -352,10 +352,33 @@ And **most NPCs near the Prontera spawn are not talkers**. `prt05`, `prt07` and
 friends are warps — contacting one is valid and silent. `Amatsu Trader#nin`
 answers `CZ_CONTACTNPC` with **`0x00C4`** (`ZC_SELECT_DEALTYPE`, the buy/sell
 prompt), because it is a shop. Both prove the round trip; neither produces a
-`ZC_SAY_DIALOG`. Step 3 needs an NPC whose script actually calls `mes` — the
+`ZC_SAY_DIALOG`. Step 4 needs an NPC whose script actually calls `mes` — the
 Kafra is the obvious one.
 
-### Step 3 — Show what the NPC says
+### Step 3 — The cursor says an NPC is there ✅
+- **Changes:** `internal/game/states/npcpick.go`, `internal/game/game.go`, `internal/game/ui/`
+- **Done when:** the pointer over an NPC becomes the original's talk cursor and
+  goes back to the arrow when it leaves; the pointer over the interface stays
+  an arrow.
+- **Proved by:** screenshot scenario with the pointer parked on an NPC.
+- **Reference:** the cursor sprite's own action 1, `StateTalk`
+
+Added at Boris's request, and it costs almost nothing now that Step 2 can
+answer "what is under the pointer". It also puts #83 to work: `SetCursorState`
+has existed since that PR and **nothing has ever called it**, so every state
+the cursor sprite carries beyond the arrow has been dead.
+
+Two things to get right. The hover test runs every frame, so it must not emit
+the per-candidate trace that a click does — that would flood the log at 60
+lines a second. And a warp is an NPC to us: `prt05` and friends are
+`TypeNPC` entities, so they get the talk cursor too. The original shows its
+warp cursor there instead, but nothing in the entity tells us which is which,
+so that waits for something that does.
+
+Verified by parking the pointer on an NPC and screenshotting: the speech
+bubble appears, and moving off it brings the arrow back.
+
+### Step 4 — Show what the NPC says
 - **Changes:** `internal/game/states/npcdialog.go`, `internal/game/ui/`
 - **Done when:** the greeting appears in a window over the map, with its own
   line breaks intact, scrolling when longer than the box, and `^RRGGBB` codes
@@ -366,7 +389,7 @@ Kafra is the obvious one.
 - **Chrome:** a plain panel — 278 × 178, 1px `#c5c5c5` border, `#f7f7f7` fill —
   **not** `BeginWindow`, which would give it a title bar it does not have.
 
-### Step 4 — Next and Close
+### Step 5 — Next and Close
 - **Changes:** `internal/game/states/npcdialog.go`, `internal/game/ui/`
 - **Done when:** `ZC_WAIT_DIALOG` shows a Next button that advances the script;
   `ZC_CLOSE_DIALOG` shows Close, which ends the conversation and returns control.
@@ -375,7 +398,7 @@ Kafra is the obvious one.
 - **Reference:** grf-btn-close ①, grf-btn-next ②, ref-02 for placement — the
   button sits at the bottom right *inside* the text window.
 
-### Step 5 — Menus
+### Step 6 — Menus
 - **Changes:** `internal/game/states/npcdialog.go`, `internal/game/ui/`
 - **Done when:** `ZC_MENU_LIST` shows the choices; picking one sends its 1-based
   index and the script branches; cancel sends 255.
@@ -383,7 +406,7 @@ Kafra is the obvious one.
   branches correctly, and cancel closes without a kick.
 - **Reference:** roBrowser `NpcMenu.css` measurements
 
-### Step 6 — Docs
+### Step 7 — Docs
 - [ ] `docs/ENGINE_FEATURES.md` if a package was added
 - [ ] Session log `docs/sessions/2026-08-DD-npc-dialog.md`
 - [ ] Close #54's **E3** checklist items
@@ -429,11 +452,17 @@ Kafra is the obvious one.
 
 ## Revision log
 
+- 2026-08-26 — **Step 3 added and done** (per review): the pointer becomes the
+  talk cursor over an NPC. Cheap now that Step 2 can say what is under it, and
+  it puts #83 to work — `SetCursorState` had existed since that PR with nothing
+  ever calling it, so every cursor state past the arrow was dead. Steps 3–6
+  renumbered to 4–7.
+
 - 2026-08-26 — **Step 2 done.** Clicking an NPC contacts it and does not walk
   you there. Added `playerrender.UnitQuadSize` so the hit box matches the drawn
   quad, and a `candidate` trace that projects each eligible unit to screen —
   which is what found that the misses were bad aim rather than bad geometry.
-  Also learned that the NPCs nearest the spawn are warps and shops, so Step 3
+  Also learned that the NPCs nearest the spawn are warps and shops, so Step 4
   must pick a scripted one to test against.
 
 - 2026-08-26 — **Step 1 done.** The eight conversation packets encode and

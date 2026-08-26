@@ -21,6 +21,7 @@ import (
 	"github.com/Faultbox/midgard-ro/internal/assets"
 	"github.com/Faultbox/midgard-ro/internal/config"
 	"github.com/Faultbox/midgard-ro/internal/engine/audio"
+	"github.com/Faultbox/midgard-ro/internal/engine/cursor"
 	"github.com/Faultbox/midgard-ro/internal/game/states"
 	"github.com/Faultbox/midgard-ro/internal/game/ui"
 	"github.com/Faultbox/midgard-ro/internal/logger"
@@ -907,6 +908,11 @@ func (g *Game) handleInGameInput(state *states.InGameState) {
 		}
 	}
 
+	// The pointer changes over an NPC, the way the original tells you a thing
+	// can be talked to before you click it. Runs every frame, so it uses the
+	// pick that does not trace.
+	g.updateCursor(state, io, mouseX, mouseY)
+
 	// Left click for click-to-move. Skip if any imgui window (HUD, minimap,
 	// chat, etc) is consuming the click; otherwise ray-cast to ground plane
 	// and dispatch a server move request.
@@ -1088,4 +1094,29 @@ func parseHostPort(addr string) (string, int) {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// updateCursor picks the cursor for whatever the pointer is over.
+//
+// The original signals a talkable NPC before you click it, which is the only
+// way to tell scenery from something with a script behind it. Warps come out
+// of this as talkable too — they are NPC entities like any other, and nothing
+// in what the server sends distinguishes them — so they get the same cursor
+// until something does.
+func (g *Game) updateCursor(state *states.InGameState, io *imgui.IO, mouseX, mouseY float32) {
+	if g.uiBackend == nil {
+		return
+	}
+
+	want := cursor.StateDefault
+
+	// Over the interface the pointer belongs to the interface.
+	if !io.WantCaptureMouse() && !g.uiBackend.MouseCaptured() {
+		viewportW, viewportH := g.uiBackend.GetScreenSize()
+		if state.HoverEntity(mouseX, mouseY, viewportW, viewportH) != nil {
+			want = cursor.StateTalk
+		}
+	}
+
+	g.uiBackend.SetCursorState(want)
 }
