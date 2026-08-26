@@ -701,6 +701,7 @@ func (g *Game) renderUI() {
 			ShowDebugInfo:   g.showDebug,
 			ToggleBasicInfo: g.toggleBasicInfo,
 			FPS:             g.fps,
+			DialogMessage:   dialog.Message,
 			DialogPhase:     dialog.Phase.String(),
 			DialogNPCID:     dialog.NPCID,
 			DialogNPCName:   dialog.Name,

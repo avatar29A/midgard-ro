@@ -1,6 +1,14 @@
 package states
 
-import "fmt"
+import (
+	"fmt"
+
+	"go.uber.org/zap"
+
+	"github.com/Faultbox/midgard-ro/internal/logger"
+	"github.com/Faultbox/midgard-ro/internal/network/packets"
+	"github.com/Faultbox/midgard-ro/internal/trace"
+)
 
 // DialogPhase is where a conversation with an NPC has got to.
 //
@@ -61,6 +69,51 @@ type NPCDialog struct {
 	// MenuItems is how many choices the last menu offered, kept so an
 	// out-of-range selection can be refused before it is sent.
 	MenuItems int
+
+	// Message is what the NPC last said, exactly as the script wrote it —
+	// color codes and line breaks included. Interpreting it belongs to
+	// whatever draws it.
+	Message string
+}
+
+// handleSayDialog shows what the NPC said.
+//
+// The npc id comes from the packet and is not looked up: rAthena sends a fake
+// one for scripts whose owner is not a unit near the player, so there may be
+// nothing in the entity manager to match it.
+func (s *InGameState) handleSayDialog(data []byte) error {
+	say := packets.DecodeSayDialog(data)
+	if say == nil {
+		logger.Warn("malformed NPC dialog packet", zap.Int("bytes", len(data)))
+		return nil
+	}
+
+	s.dialog.Phase = DialogText
+	s.dialog.NPCID = say.NPCID
+	s.dialog.Message = say.Message
+	s.dialog.MenuItems = 0
+	s.dialog.Name = s.entityName(say.NPCID)
+
+	trace.Emit(trace.NPC, "say",
+		zap.Uint32("npcID", say.NPCID),
+		zap.Int("bytes", len(data)),
+		zap.Int("chars", len(say.Message)))
+
+	return nil
+}
+
+// entityName is the unit's name if we happen to know it. Empty is normal and
+// not an error — see handleSayDialog.
+func (s *InGameState) entityName(npcID uint32) string {
+	if s.entityManager == nil {
+		return ""
+	}
+
+	if e := s.entityManager.Get(npcID); e != nil {
+		return e.Name
+	}
+
+	return ""
 }
 
 // Dialog returns the conversation in progress. The zero value is idle, so a

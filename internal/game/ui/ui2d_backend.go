@@ -868,6 +868,7 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 	}
 
 	b.renderBasicInfo(state)
+	b.renderNPCDialog(state, width, height)
 
 	// Debug overlay (top-left)
 	if state.ShowDebugInfo {
