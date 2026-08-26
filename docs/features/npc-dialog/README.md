@@ -1,6 +1,6 @@
 # Feature: NPC dialog and interaction
 
-**Branch:** `feature/npc-dialog` · **Issue:** _(filled after creation)_ · **Parent:** #49 (MVP scope), #54 (Track E, task **E3**)
+**Branch:** `feature/npc-dialog` · **Issue:** #86 · **Parent:** #49 (MVP scope), #54 (Track E, task **E3**)
 **Status:** Planned · **Created:** 2026-08-26
 
 ## Goal
