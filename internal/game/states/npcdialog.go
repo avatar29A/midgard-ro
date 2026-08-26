@@ -88,9 +88,18 @@ func (s *InGameState) handleSayDialog(data []byte) error {
 		return nil
 	}
 
+	// The original keeps one box per conversation and appends to it, so a
+	// script that says three things in a row reads as three paragraphs rather
+	// than replacing itself twice before you can read it. A message from a
+	// different NPC, or after a close, starts fresh.
+	if s.dialog.Phase == DialogIdle || s.dialog.NPCID != say.NPCID {
+		s.dialog.Message = say.Message
+	} else {
+		s.dialog.Message += "\n" + say.Message
+	}
+
 	s.dialog.Phase = DialogText
 	s.dialog.NPCID = say.NPCID
-	s.dialog.Message = say.Message
 	s.dialog.MenuItems = 0
 	s.dialog.Name = s.entityName(say.NPCID)
 
@@ -100,6 +109,81 @@ func (s *InGameState) handleSayDialog(data []byte) error {
 		zap.Int("chars", len(say.Message)))
 
 	return nil
+}
+
+// handleWaitDialog is the server asking for a Next button.
+func (s *InGameState) handleWaitDialog(data []byte) error {
+	return s.setDialogPhase(data, DialogWaitingNext, "wait")
+}
+
+// handleCloseDialog is the server asking for a Close button. It does not end
+// the conversation — the player has to press it, and the script is still
+// waiting until they do.
+func (s *InGameState) handleCloseDialog(data []byte) error {
+	return s.setDialogPhase(data, DialogWaitingClose, "close-offered")
+}
+
+// setDialogPhase handles the two packets that carry nothing but an npc id.
+func (s *InGameState) setDialogPhase(data []byte, phase DialogPhase, event string) error {
+	npcID, ok := packets.DecodeDialogNPCID(data)
+	if !ok {
+		logger.Warn("malformed NPC dialog packet", zap.Int("bytes", len(data)))
+		return nil
+	}
+
+	s.dialog.Phase = phase
+	s.dialog.NPCID = npcID
+
+	if s.dialog.Name == "" {
+		s.dialog.Name = s.entityName(npcID)
+	}
+
+	trace.Emit(trace.NPC, event, zap.Uint32("npcID", npcID))
+
+	return nil
+}
+
+// AdvanceDialog asks the script to carry on, which the Next button does.
+func (s *InGameState) AdvanceDialog() {
+	if s == nil || s.client == nil || s.dialog.Phase != DialogWaitingNext {
+		return
+	}
+
+	npcID := s.dialog.NPCID
+
+	if err := s.client.Send(packets.RequestNextScript(npcID)); err != nil {
+		logger.Warn("could not advance NPC dialog", zap.Uint32("npcID", npcID), zap.Error(err))
+		return
+	}
+
+	// Back to plain text until the server says what it wants next. Without
+	// this the button stays on screen and a second press sends a second
+	// request the script is not waiting for.
+	s.dialog.Phase = DialogText
+
+	trace.Emit(trace.NPC, "next", zap.Uint32("npcID", npcID))
+}
+
+// EndDialog closes the conversation, which the Close button does.
+func (s *InGameState) EndDialog() {
+	if s == nil || s.dialog.Phase == DialogIdle {
+		return
+	}
+
+	npcID := s.dialog.NPCID
+
+	if s.client != nil {
+		if err := s.client.Send(packets.CloseDialogPacket(npcID)); err != nil {
+			logger.Warn("could not close NPC dialog", zap.Uint32("npcID", npcID), zap.Error(err))
+		}
+	}
+
+	// Cleared whether or not the send worked: leaving a window the player has
+	// dismissed on screen is worse than the server thinking we are still
+	// talking, which its own timeout resolves.
+	s.dialog = NPCDialog{}
+
+	trace.Emit(trace.NPC, "close", zap.Uint32("npcID", npcID))
 }
 
 // entityName is the unit's name if we happen to know it. Empty is normal and

@@ -417,14 +417,39 @@ shops (see Step 2). Move the character next to a talker first —
 beside `Guide#05prontera`, and `--trace=npc` then lists every NPC on screen
 with its projected position.
 
-### Step 5 — Next and Close
-- **Changes:** `internal/game/states/npcdialog.go`, `internal/game/ui/`
+### Step 5 — Next and Close 🟡 built, not yet driven
+- **Changes:** `internal/game/states/npcdialog.go`, `internal/game/ui/npcdialog.go`
 - **Done when:** `ZC_WAIT_DIALOG` shows a Next button that advances the script;
   `ZC_CLOSE_DIALOG` shows Close, which ends the conversation and returns control.
 - **Proved by:** UC-207 end to end against Prontera's Guide; `npc` trace shows
   the full sequence and a clean `npc.close`.
-- **Reference:** grf-btn-close ①, grf-btn-next ②, ref-02 for placement — the
-  button sits at the bottom right *inside* the text window.
+- **Reference:** ref-02 for placement — the button sits at the bottom right
+  *inside* the text window.
+
+**The asset table was wrong about both buttons.** roBrowser's `NpcBox.html`
+names them with no folder prefix — `btn_next.bmp`, `btn_next_a.bmp`,
+`btn_next_b.bmp` and the same for close — which resolves to the **root** of
+`유저인터페이스\`, not to `login_interface\` or `basic_interface\`. Those
+subfolders contain different buttons that happen to share the names, and it is
+the `login_interface` one that has no hover art. The root pair has all six
+bitmaps, 42×20 each, so both buttons get real hover and pressed states.
+
+Three behaviours worth stating:
+
+- **Text accumulates.** A second message from the same NPC is appended rather
+  than replacing the first, as the original does — a script that says three
+  things in a row would otherwise overwrite itself twice before it could be
+  read. A different NPC, or a close, starts fresh.
+- **That is what makes scrolling matter**, and it is now handled the way a
+  conversation wants: when the text outgrows the box the *end* is shown, not
+  the beginning. No scrollbar; the last thing said is what you want to read.
+- **Being offered Close does not end the conversation.** The script is still
+  waiting until the player presses it. `EndDialog` clears the window even if
+  the send fails, because leaving a dismissed window on screen is worse than
+  the server briefly thinking we are still talking — its own timeout resolves
+  that.
+
+Not yet driven end to end in the client.
 
 ### Step 6 — Menus
 - **Changes:** `internal/game/states/npcdialog.go`, `internal/game/ui/`
@@ -479,6 +504,13 @@ with its projected position.
   declared with `parseable_packet(...)`.
 
 ## Revision log
+
+- 2026-08-26 — **Step 5 built.** Next and Close handled, drawn and wired. The
+  asset table was wrong about both buttons: roBrowser names them unprefixed, so
+  they come from the root of the interface folder, where a full six-bitmap set
+  exists — the `login_interface` button the plan named is a different one that
+  genuinely lacks hover art. Text now accumulates across Next, and an
+  overgrown box shows its end rather than its beginning.
 
 - 2026-08-26 — **Step 4 built.** `ZC_SAY_DIALOG` handled and drawn in a plain
   bordered panel with no title bar, color codes parsed into runs, script line

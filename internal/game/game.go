@@ -702,6 +702,14 @@ func (g *Game) renderUI() {
 			ToggleBasicInfo: g.toggleBasicInfo,
 			FPS:             g.fps,
 			DialogMessage:   dialog.Message,
+			DialogShowNext:  dialog.Phase == states.DialogWaitingNext,
+			DialogShowClose: dialog.Phase == states.DialogWaitingClose,
+			OnDialogNext: func() {
+				g.pendingAction = state.AdvanceDialog
+			},
+			OnDialogClose: func() {
+				g.pendingAction = state.EndDialog
+			},
 			DialogPhase:     dialog.Phase.String(),
 			DialogNPCID:     dialog.NPCID,
 			DialogNPCName:   dialog.Name,
