@@ -378,8 +378,8 @@ so that waits for something that does.
 Verified by parking the pointer on an NPC and screenshotting: the speech
 bubble appears, and moving off it brings the arrow back.
 
-### Step 4 — Show what the NPC says
-- **Changes:** `internal/game/states/npcdialog.go`, `internal/game/ui/`
+### Step 4 — Show what the NPC says 🟡 built, not yet seen
+- **Changes:** `internal/game/states/npcdialog.go`, `internal/game/ui/npcdialog.go`, `npctext.go`
 - **Done when:** the greeting appears in a window over the map, with its own
   line breaks intact, scrolling when longer than the box, and `^RRGGBB` codes
   parsed out rather than printed.
@@ -388,6 +388,33 @@ bubble appears, and moving off it brings the arrow back.
 - **Reference:** ref-01 ⑦⑧, ref-02, measurements above
 - **Chrome:** a plain panel — 278 × 178, 1px `#c5c5c5` border, `#f7f7f7` fill —
   **not** `BeginWindow`, which would give it a title bar it does not have.
+
+`ZC_SAY_DIALOG` is handled, the message is kept on the conversation, and the
+window draws it: color codes parsed into runs, the script's own line breaks
+kept, the rest wrapped on spaces to the 260px field. The window swallows clicks
+so talking to an NPC does not also walk you into the scenery behind it.
+
+**Not confirmed on screen yet.** The parser and the wrapper have table tests,
+but nobody has watched an NPC say something. Everything up to that point is
+verified — `npc.say` will appear on the trace — but the drawing has not been.
+
+Two decisions the tests pinned down. The default text color is **exactly
+black**, because scripts return to the default with `^000000` and any softer
+near-black would make that a visible color change rather than a return — the
+test caught this. And a word wider than the field overflows rather than being
+broken mid-word: rare, and a split word reads worse than one that runs on.
+
+**Scrolling is not implemented.** Lines past the bottom of the field are
+dropped. The original scrolls, and roBrowser accumulates successive messages in
+one box — but a message only grows past the box once `Next` starts appending to
+it, which is Step 5. Doing it here would be building for a case that cannot yet
+arise.
+
+**How to test this at all:** the NPCs near the default spawn are warps and
+shops (see Step 2). Move the character next to a talker first —
+`UPDATE \`char\` SET last_map='prontera', last_x=152, last_y=322 …` puts it
+beside `Guide#05prontera`, and `--trace=npc` then lists every NPC on screen
+with its projected position.
 
 ### Step 5 — Next and Close
 - **Changes:** `internal/game/states/npcdialog.go`, `internal/game/ui/`
@@ -451,6 +478,12 @@ bubble appears, and moving off it brings the arrow back.
   declared with `parseable_packet(...)`.
 
 ## Revision log
+
+- 2026-08-26 — **Step 4 built.** `ZC_SAY_DIALOG` handled and drawn in a plain
+  bordered panel with no title bar, color codes parsed into runs, script line
+  breaks kept and the rest wrapped. Parser and wrapper have table tests; the
+  window itself has not been seen on screen yet. Scrolling deliberately left
+  until Step 5, which is what can make a message outgrow the box.
 
 - 2026-08-26 — **Step 3 added and done** (per review): the pointer becomes the
   talk cursor over an NPC. Cheap now that Step 2 can say what is under it, and

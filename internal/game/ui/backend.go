@@ -168,6 +168,9 @@ type InGameUIState struct {
 	StatusMessage string
 	ErrorMessage  string
 
+	// What the NPC said, as the script wrote it — color codes and all.
+	DialogMessage string
+
 	// The conversation in progress, for the debug overlay.
 	DialogPhase     string
 	DialogNPCID     uint32
