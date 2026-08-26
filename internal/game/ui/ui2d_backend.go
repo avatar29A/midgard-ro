@@ -9,6 +9,7 @@ import (
 	"github.com/go-gl/gl/v4.1-core/gl"
 	"go.uber.org/zap"
 
+	"github.com/Faultbox/midgard-ro/internal/engine/charsprite"
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
 	"github.com/Faultbox/midgard-ro/internal/logger"
 )
@@ -32,6 +33,19 @@ type UI2DBackend struct {
 	// Where the login window has been dragged to.
 	loginWinX, loginWinY float32
 	loginWinPlaced       bool
+
+	// Raw archive reader, for assets that are not textures — character
+	// sprites are composited from SPR and ACT before they can be uploaded.
+	assetLoader func(string) ([]byte, error)
+
+	// Character portraits for the select screen, keyed by sprite spec.
+	charSelPortraits map[charsprite.Spec]*charSelectPortrait
+
+	// Character select art, and where its window has been dragged to.
+	charSelSkin        *charSelectSkin
+	charSelTried       bool
+	charSelX, charSelY float32
+	charSelPlaced      bool
 
 	// Cached widget states
 	loginUsername string
@@ -166,6 +180,15 @@ func (b *UI2DBackend) End() {
 // This enables loading RO textures for window skins and login screen.
 func (b *UI2DBackend) SetAssetLoader(loadFunc func(string) ([]byte, error)) {
 	b.texCache = NewTextureCache(b.ctx.Renderer(), loadFunc)
+	b.assetLoader = loadFunc
+
+	// Prefer the original window chrome; the nine-sliced skin stays as the
+	// fallback for archives that lack it.
+	if frame, err := LoadNativeWindowFrame(b.texCache); err == nil {
+		b.ctx.SetWindowFrame(frame)
+	} else {
+		logger.Warn("native window chrome unavailable, using the themed skin", zap.Error(err))
+	}
 
 	// Try to load window skin
 	skin, err := LoadWindowSkin(b.texCache)
@@ -276,11 +299,11 @@ const (
 	// The buttons carry their captions in the texture too. Ink spans x 10..32
 	// on both; columns 2..9 are clean face, so one of them stretches over the
 	// caption the same way the title bar does.
-	loginBtnInkX   = float32(10)
-	loginBtnInkW   = float32(23)
+	loginBtnInkX   = float32(3)
+	loginBtnInkW   = float32(36)
 	loginBtnInkY   = float32(2)
 	loginBtnInkH   = float32(16)
-	loginBtnCleanX = float32(5)
+	loginBtnCleanX = float32(39)
 	loginBtnTexW   = float32(42)
 	loginBtnTexH   = float32(20)
 )
@@ -454,12 +477,12 @@ func (b *UI2DBackend) renderNativeLoginWindow(state LoginUIState, width, height 
 
 	btnY := y + loginWinH - loginBtnBottom - loginBtnH
 
-	if b.loginSkinButton("login_connect", x+loginWinW-loginConnRight-loginBtnW, btnY,
+	if b.skinButton("login_connect", x+loginWinW-loginConnRight-loginBtnW, btnY,
 		skin.connect, skin.connectOver, skin.connectDown, "Ok") {
 		doLogin()
 	}
 
-	if b.loginSkinButton("login_exit", x+loginWinW-loginExitRight-loginBtnW, btnY,
+	if b.skinButton("login_exit", x+loginWinW-loginExitRight-loginBtnW, btnY,
 		skin.exit, skin.exitOver, skin.exitDown, "Exit") {
 		if state.OnExit != nil {
 			state.OnExit()
@@ -486,9 +509,9 @@ func (b *UI2DBackend) renderNativeLoginWindow(state LoginUIState, width, height 
 	return true
 }
 
-// loginSkinButton draws one of the window's buttons and replaces the caption
+// skinButton draws one of RO's 42x20 buttons and replaces the caption
 // baked into it with an English one.
-func (b *UI2DBackend) loginSkinButton(id string, x, y float32, normal, over, down *TextureInfo, label string) bool {
+func (b *UI2DBackend) skinButton(id string, x, y float32, normal, over, down *TextureInfo, label string) bool {
 	clicked, drawn := b.ctx.ImageButtonAtEx(id, x, y, loginBtnW, loginBtnH,
 		normal.ID, over.ID, down.ID)
 
@@ -647,7 +670,8 @@ func (b *UI2DBackend) RenderConnectingUI(state ConnectingUIState, width, height 
 	windowX := (width - windowWidth) / 2
 	windowY := (height - windowHeight) / 2
 
-	if b.ctx.BeginWindow("connecting", windowX, windowY, windowWidth, windowHeight, "Connecting") {
+	if b.ctx.BeginWindowEx("connecting", windowX, windowY, windowWidth, windowHeight,
+		"Connecting", ui2d.WindowOptions{}) {
 		var rows []ui2d.Element
 		if state.StatusMessage != "" {
 			rows = append(rows, ui2d.LabelCenteredEl(state.StatusMessage))
@@ -676,12 +700,17 @@ func (b *UI2DBackend) RenderCharSelectUI(state CharSelectUIState, width, height 
 		b.ctx.Renderer().DrawImage(b.loginBgTex.ID, 0, 0, width, height, ui2d.ColorWhite)
 	}
 
+	if b.renderNativeCharSelect(state, width, height) {
+		return
+	}
+
 	windowWidth := float32(420)
 	windowHeight := float32(420)
 	windowX := (width - windowWidth) / 2
 	windowY := (height - windowHeight) / 2
 
-	if b.ctx.BeginWindow("charselect", windowX, windowY, windowWidth, windowHeight, "Character Selection") {
+	if b.ctx.BeginWindowEx("charselect", windowX, windowY, windowWidth, windowHeight,
+		"Character Selection", ui2d.WindowOptions{}) {
 		// Auto-select first row when characters arrive.
 		if state.IsReady && b.charSelectIdx < 0 && len(state.Characters) > 0 {
 			b.charSelectIdx = 0

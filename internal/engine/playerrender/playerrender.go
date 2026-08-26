@@ -47,8 +47,33 @@ import (
 // again as large as the art intends.
 const SpriteScale = 1.0 / 6.0
 
+// The character stands on a soft shadow, as it does on the select screen and
+// in the original client.
+const (
+	// shadowWidthRatio sizes the shadow against the sprite it belongs to, so
+	// it stays right whatever the character's dimensions are. It is half the
+	// quad's width: a character's sheet is 50x94px, which at SpriteScale is a
+	// quad 8.3 units wide, so this puts the shadow at 5 units — one tile,
+	// about the width of the character's stance.
+	shadowWidthRatio = 0.30
+
+	// shadowOpacity is darker than the shared default, which was chosen for
+	// the map viewer's lighting. On a bright stone street the softer value
+	// disappeared.
+	shadowOpacity = 0.4
+
+	// shadowLift keeps the shadow off the ground plane it is drawn on;
+	// coplanar quads z-fight.
+	shadowLift = 0.1
+)
+
 // Renderer owns the GL state for drawing the local player as a billboard.
 type Renderer struct {
+	// The shadow the character stands on: its own texture and flat quad.
+	shadowTex uint32
+	shadowVAO uint32
+	shadowVBO uint32
+
 	// Shader program + uniform locations (mirror scene.SpriteRenderer's setup,
 	// kept independent so we can render with our own VAO/draw pattern).
 	program       uint32
@@ -103,6 +128,10 @@ func New() (*Renderer, error) {
 	r.locTint = shader.GetUniform(prog, "uTint")
 
 	// VAO/VBO: foot-anchored quad (Y=0 at feet, Y=1 at head), TRIANGLE_STRIP.
+	if err := r.createShadow(); err != nil {
+		return nil, err
+	}
+
 	gl.GenVertexArrays(1, &r.vao)
 	gl.GenBuffers(1, &r.vbo)
 	gl.BindVertexArray(r.vao)
@@ -199,6 +228,8 @@ func (r *Renderer) Render(viewProj math.Mat4, char *entity.Character, camPosX, c
 		return
 	}
 
+	r.renderShadow(viewProj, char, spriteW)
+
 	gl.Enable(gl.BLEND)
 	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 	gl.UseProgram(r.program)
@@ -219,6 +250,81 @@ func (r *Renderer) Render(viewProj math.Mat4, char *entity.Character, camPosX, c
 	gl.BindVertexArray(0)
 
 	gl.Disable(gl.BLEND)
+}
+
+// createShadow builds the soft circle the character stands on and the flat
+// quad it is drawn with.
+func (r *Renderer) createShadow() error {
+	pixels := sprite.GenerateCircularShadow(sprite.DefaultShadowSize, shadowOpacity)
+
+	gl.GenTextures(1, &r.shadowTex)
+	gl.BindTexture(gl.TEXTURE_2D, r.shadowTex)
+	gl.TexImage2D(gl.TEXTURE_2D, 0, gl.RGBA8,
+		int32(sprite.DefaultShadowSize), int32(sprite.DefaultShadowSize), 0,
+		gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(pixels))
+
+	// The shadow is a soft gradient rather than pixel art, so it takes linear
+	// filtering where the character sprite takes nearest.
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+	gl.BindTexture(gl.TEXTURE_2D, 0)
+
+	gl.GenVertexArrays(1, &r.shadowVAO)
+	gl.GenBuffers(1, &r.shadowVBO)
+	gl.BindVertexArray(r.shadowVAO)
+	gl.BindBuffer(gl.ARRAY_BUFFER, r.shadowVBO)
+
+	// A unit quad: the size comes from uSpriteSize at draw time, so one buffer
+	// serves characters of any size.
+	verts := sprite.GenerateShadowQuadVertices(1)
+	gl.BufferData(gl.ARRAY_BUFFER, len(verts)*4, unsafe.Pointer(&verts[0]), gl.STATIC_DRAW)
+	gl.VertexAttribPointerWithOffset(0, 2, gl.FLOAT, false, 4*4, 0)
+	gl.EnableVertexAttribArray(0)
+	gl.VertexAttribPointerWithOffset(1, 2, gl.FLOAT, false, 4*4, 2*4)
+	gl.EnableVertexAttribArray(1)
+	gl.BindVertexArray(0)
+
+	return nil
+}
+
+// renderShadow lays the shadow flat on the ground under the character.
+//
+// It reuses the sprite shader: pointing its billboard vectors along X and Z
+// instead of at the camera turns the same quad from upright to flat, so the
+// shadow needs no shader of its own.
+func (r *Renderer) renderShadow(viewProj math.Mat4, char *entity.Character, spriteW float32) {
+	if r.shadowVAO == 0 || r.shadowTex == 0 {
+		return
+	}
+
+	size := spriteW * shadowWidthRatio
+
+	gl.Enable(gl.BLEND)
+	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+
+	// The shadow darkens the ground rather than hiding what is behind it, so
+	// it blends without writing depth.
+	gl.DepthMask(false)
+
+	gl.UseProgram(r.program)
+	gl.UniformMatrix4fv(r.locViewProj, 1, false, &viewProj[0])
+	gl.Uniform3f(r.locWorldPos, char.RenderX, char.RenderY+shadowLift, char.RenderZ)
+	gl.Uniform2f(r.locSpriteSize, size, size)
+	gl.Uniform4f(r.locTint, 1, 1, 1, 1)
+	gl.Uniform3f(r.locCamRight, 1, 0, 0)
+	gl.Uniform3f(r.locCamUp, 0, 0, 1)
+
+	gl.ActiveTexture(gl.TEXTURE0)
+	gl.BindTexture(gl.TEXTURE_2D, r.shadowTex)
+	gl.Uniform1i(r.locTexture, 0)
+
+	gl.BindVertexArray(r.shadowVAO)
+	gl.DrawArrays(gl.TRIANGLE_STRIP, 0, 4)
+	gl.BindVertexArray(0)
+
+	gl.DepthMask(true)
 }
 
 // selectFrame picks the texture for the character's current action, camera-
@@ -285,6 +391,22 @@ func (r *Renderer) Destroy() {
 		return
 	}
 	r.releaseFrames()
+
+	if r.shadowTex != 0 {
+		gl.DeleteTextures(1, &r.shadowTex)
+		r.shadowTex = 0
+	}
+
+	if r.shadowVBO != 0 {
+		gl.DeleteBuffers(1, &r.shadowVBO)
+		r.shadowVBO = 0
+	}
+
+	if r.shadowVAO != 0 {
+		gl.DeleteVertexArrays(1, &r.shadowVAO)
+		r.shadowVAO = 0
+	}
+
 	if r.fallbackTex != 0 {
 		gl.DeleteTextures(1, &r.fallbackTex)
 		r.fallbackTex = 0

@@ -73,3 +73,45 @@ func LoadWindowSkin(tc *TextureCache) (*WindowSkin, error) {
 
 	return &WindowSkin{Frame: frame}, nil
 }
+
+// basicInterfacePath holds the chrome the original assembles its windows from.
+const basicInterfacePath = skinBasePath + `basic_interface\`
+
+// LoadNativeWindowFrame loads the original window chrome. A missing texture
+// returns nil, which leaves windows on the themed skin rather than half-drawn.
+func LoadNativeWindowFrame(tc *TextureCache) (*ui2d.WindowFrame, error) {
+	ids := make(map[string]uint32)
+
+	for _, name := range []string{
+		"titlebar_left.bmp", "titlebar_mid.bmp", "titlebar_right.bmp",
+		"sys_mini_off.bmp", "sys_mini_on.bmp",
+		"sys_close_off.bmp", "sys_close_on.bmp",
+		"btnbar_mid2.bmp",
+	} {
+		info, err := tc.Load(basicInterfacePath + name)
+		if err != nil {
+			return nil, fmt.Errorf("loading window chrome %s: %w", name, err)
+		}
+
+		ids[name] = info.ID
+	}
+
+	// The grip sits beside the interface folder rather than inside
+	// basic_interface, unlike everything else here.
+	grip, err := tc.Load(skinBasePath + `btn_resize.bmp`)
+	if err != nil {
+		return nil, fmt.Errorf("loading resize grip: %w", err)
+	}
+
+	return &ui2d.WindowFrame{
+		TitleLeft:   ids["titlebar_left.bmp"],
+		TitleMid:    ids["titlebar_mid.bmp"],
+		TitleRight:  ids["titlebar_right.bmp"],
+		SysMiniOff:  ids["sys_mini_off.bmp"],
+		SysMiniOn:   ids["sys_mini_on.bmp"],
+		SysCloseOff: ids["sys_close_off.bmp"],
+		SysCloseOn:  ids["sys_close_on.bmp"],
+		FooterMid:   ids["btnbar_mid2.bmp"],
+		Grip:        grip.ID,
+	}, nil
+}
