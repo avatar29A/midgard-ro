@@ -95,7 +95,11 @@ func (s *InGameState) handleSayDialog(data []byte) error {
 	if s.dialog.Phase == DialogIdle || s.dialog.NPCID != say.NPCID {
 		s.dialog.Message = say.Message
 	} else {
-		s.dialog.Message += "\n" + say.Message
+		// A blank line between messages. Each is a separate thing the script
+		// chose to say — usually starting with the speaker's name again — and
+		// running them together makes one wall of text out of what were meant
+		// to be paragraphs.
+		s.dialog.Message += "\n\n" + say.Message
 	}
 
 	s.dialog.Phase = DialogText

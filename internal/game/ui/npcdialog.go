@@ -34,7 +34,13 @@ const (
 
 	// Line spacing, and the lift that turns a cap position into the line box
 	// DrawText actually places.
-	npcLineHeight = float32(13)
+	//
+	// 21 is measured, not chosen: in ref-01 the text baselines fall on rows
+	// 138, 159, 180, 201 and 222 — an exact 21px pitch — with glyphs 9 to 11
+	// px tall. Our glyphs are about the same size, so the original is nearly
+	// double-spaced and 13 was cramped. It fits six or seven lines in this
+	// window, which is what ref-01 shows.
+	npcLineHeight = float32(21)
 	npcTextLift   = charSelTextLift
 
 	// The button sits at the bottom right inside the window, which is where
