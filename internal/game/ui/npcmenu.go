@@ -30,9 +30,6 @@ const (
 	// The buttons sit along the bottom right, cancel outermost.
 	npcMenuBtnGap    = float32(6)
 	npcMenuBtnBottom = float32(6)
-
-	// The scrollbar, when the list is longer than the box.
-	npcMenuBarW = float32(6)
 )
 
 var (
@@ -40,7 +37,6 @@ var (
 	// band that runs the full width of the row in ref-01.
 	npcMenuSelectedColor = ui2d.Color{R: 0.804, G: 0.878, B: 1, A: 1}
 	npcMenuListColor     = ui2d.Color{R: 0.976, G: 0.976, B: 0.976, A: 1}
-	npcMenuBarColor      = ui2d.Color{R: 0.75, G: 0.75, B: 0.75, A: 1}
 )
 
 // renderNPCMenu draws the choices, and reports whether it drew anything.
@@ -77,7 +73,11 @@ func (b *UI2DBackend) renderNPCMenu(state InGameUIState, width, height float32) 
 
 	b.scrollMenu(state, listX, listY, listW, listH)
 	b.drawMenuRows(state, listX, listY, listW)
-	b.drawMenuScrollbar(len(state.DialogMenu), listX+listW, listY, listH)
+	if maxScroll := len(state.DialogMenu) - npcMenuVisibleRows; maxScroll > 0 {
+		b.npcMenuScroll = b.scrollbar("npc_menu_scroll",
+			listX+listW-scrollW, listY, listH,
+			b.npcMenuScroll, maxScroll, npcMenuVisibleRows)
+	}
 	b.drawNPCMenuButtons(state, x, y)
 
 	b.ctx.CaptureMouse(ui2d.Rect{X: x, Y: y, W: npcMenuW, H: npcMenuH})
@@ -180,23 +180,6 @@ func (b *UI2DBackend) drawMenuRows(state InGameUIState, listX, listY, listW floa
 
 func menuRowID(index int) string {
 	return "npc_menu_row_" + string(rune('a'+index%26)) + string(rune('0'+index/26))
-}
-
-// drawMenuScrollbar shows where you are in a list too long to fit. It is a
-// track and a thumb — the original also has arrow buttons at each end, which
-// are not here; the wheel does the same job.
-func (b *UI2DBackend) drawMenuScrollbar(count int, x, y, height float32) {
-	if count <= npcMenuVisibleRows {
-		return
-	}
-
-	b.fillNPCRect(x, y, npcMenuBarW, height, npcMenuListColor)
-
-	thumbH := height * float32(npcMenuVisibleRows) / float32(count)
-	maxScroll := float32(count - npcMenuVisibleRows)
-	thumbY := y + (height-thumbH)*float32(b.npcMenuScroll)/maxScroll
-
-	b.fillNPCRect(x, thumbY, npcMenuBarW, thumbH, npcMenuBarColor)
 }
 
 // drawNPCMenuButtons draws OK and cancel along the bottom right.

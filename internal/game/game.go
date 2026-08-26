@@ -864,8 +864,12 @@ func (g *Game) handleInGameInput(state *states.InGameState) {
 
 	// Scroll wheel for zoom - use small multiplier for smooth zooming
 	// Each scroll tick changes distance by ~20% (sensitivity 0.1 * delta 2 = 20%)
+	//
+	// The interface gets the wheel first. A dialog long enough to scroll is
+	// exactly when the player reaches for it, and zooming the camera instead
+	// makes the scrollbar look broken.
 	scroll := io.MouseWheel()
-	if scroll != 0 {
+	if scroll != 0 && !io.WantCaptureMouse() && !g.uiBackend.MouseCaptured() {
 		camera.HandleZoom(scroll * 2)
 	}
 

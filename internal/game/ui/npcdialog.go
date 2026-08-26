@@ -151,7 +151,7 @@ func (b *UI2DBackend) renderNPCDialog(state InGameUIState, width, height float32
 
 	textX := x + npcTextInset
 	textY := y + npcTextInset
-	textW := npcWinW - 2*npcTextInset
+	textW := npcWinW - 2*npcTextInset - scrollW
 	textBottom := y + npcWinH - npcTextInset
 
 	measure := func(s string) float32 {
@@ -192,9 +192,12 @@ func (b *UI2DBackend) renderNPCDialog(state InGameUIState, width, height float32
 		b.npcTextScroll = 0
 	}
 
-	if len(lines) > fits {
+	if maxScroll > 0 {
+		b.npcTextScroll = b.scrollbar("npc_text_scroll",
+			textX+textW-scrollW, textY, float32(fits)*npcLineHeight,
+			b.npcTextScroll, maxScroll, fits)
+
 		lines = lines[b.npcTextScroll : b.npcTextScroll+fits]
-		b.drawNPCTextScrollbar(len(lines), maxScroll, textX+textW, textY, float32(fits)*npcLineHeight)
 	}
 
 	for _, line := range lines {
@@ -267,16 +270,4 @@ func (b *UI2DBackend) scrollNPCText(maxScroll int, x, y float32) {
 	}
 
 	b.npcTextScroll -= int(in.ScrollY)
-}
-
-// drawNPCTextScrollbar shows where the view sits in a longer conversation.
-func (b *UI2DBackend) drawNPCTextScrollbar(visible, maxScroll int, x, y, height float32) {
-	total := visible + maxScroll
-
-	b.fillNPCRect(x, y, npcMenuBarW, height, npcMenuListColor)
-
-	thumbH := height * float32(visible) / float32(total)
-	thumbY := y + (height-thumbH)*float32(b.npcTextScroll)/float32(maxScroll)
-
-	b.fillNPCRect(x, thumbY, npcMenuBarW, thumbH, npcMenuBarColor)
 }

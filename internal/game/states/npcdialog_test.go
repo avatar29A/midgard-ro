@@ -70,9 +70,11 @@ func TestDialogTextAccumulates(t *testing.T) {
 	if err := s.handleSayDialog(sayPacket(42, "Second.")); err != nil {
 		t.Fatalf("handleSayDialog: %v", err)
 	}
-	// A blank line between them: each message is its own paragraph.
-	if s.dialog.Message != "First.\n\nSecond." {
-		t.Errorf("Message = %q, want both lines separated by a blank one", s.dialog.Message)
+	// Consecutive lines of one page are just lines: every `mes` arrives as
+	// its own packet, so a blank line here would double-space everything,
+	// including between a speaker's name and what they say.
+	if s.dialog.Message != "First.\nSecond." {
+		t.Errorf("Message = %q, want both lines with no blank between", s.dialog.Message)
 	}
 
 	// A different NPC is a different conversation and starts over.
@@ -237,5 +239,38 @@ func TestCancelWithoutAClientLeavesTheDialogAlone(t *testing.T) {
 
 	if s.dialog.Phase != DialogMenu {
 		t.Errorf("phase = %v, want the menu still open when nothing was sent", s.dialog.Phase)
+	}
+}
+
+// TestParagraphBreakFollowsNext pins where the blank line goes: between pages,
+// not between the lines of one. Every `mes` is its own packet, so putting it
+// between messages would double-space the whole conversation — and separate a
+// speaker's name from what they then say.
+func TestParagraphBreakFollowsNext(t *testing.T) {
+	var s InGameState
+
+	for _, line := range []string{"[Guide]", "Welcome."} {
+		if err := s.handleSayDialog(sayPacket(42, line)); err != nil {
+			t.Fatalf("handleSayDialog: %v", err)
+		}
+	}
+
+	if s.dialog.Message != "[Guide]\nWelcome." {
+		t.Fatalf("Message = %q, want the name and its line together", s.dialog.Message)
+	}
+
+	// The player pressed Next: what comes back starts a new block.
+	s.dialog.newParagraph = true
+
+	if err := s.handleSayDialog(sayPacket(42, "[Guide]")); err != nil {
+		t.Fatalf("handleSayDialog: %v", err)
+	}
+	if err := s.handleSayDialog(sayPacket(42, "More.")); err != nil {
+		t.Fatalf("handleSayDialog: %v", err)
+	}
+
+	want := "[Guide]\nWelcome.\n\n[Guide]\nMore."
+	if s.dialog.Message != want {
+		t.Errorf("Message = %q, want %q", s.dialog.Message, want)
 	}
 }
