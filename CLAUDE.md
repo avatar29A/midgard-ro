@@ -124,6 +124,10 @@ func helper() {...}
 4. **Test**: Run `go test ./...`
 5. **Document**: Update docs if needed
 
+### Planning a Feature
+
+Run `/feature <topic>` (skill in `.claude/skills/feature/`) before implementing anything non-trivial. It investigates the code, grfbrowser and the reference clients, gathers original-client screenshots, plans prerequisite refactoring + debug tooling as Step 0, writes `docs/features/<slug>/README.md` and QA use cases, and opens a `feature` issue on a `feature/<slug>` branch. Boris reviews on GitHub; `/feature revise <issue#>` applies his comments. One feature = one issue = one branch = one PR.
+
 ### Common Tasks
 
 #### Adding a new file format parser (pkg/formats/):
