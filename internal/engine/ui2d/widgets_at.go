@@ -137,15 +137,35 @@ func (c *Context) ImageButtonAtEx(id string, x, y, w, h float32, normalTex, over
 		c.activeWidget = ""
 	}
 
+	// Not every button in the archive ships hover and pressed art —
+	// btn_connect does, btn_ok does not. Where it is missing the state is
+	// shaded instead, so every button reacts the same way.
 	tex := normalTex
+	overlay := Color{}
+
 	switch {
-	case c.activeWidget == id && pressedTex != 0:
-		tex = pressedTex
-	case hovered && overTex != 0:
-		tex = overTex
+	case c.activeWidget == id:
+		if pressedTex != 0 && pressedTex != normalTex {
+			tex = pressedTex
+		} else {
+			overlay = ColorSkinPressed
+		}
+	case hovered:
+		if overTex != 0 && overTex != normalTex {
+			tex = overTex
+		} else {
+			overlay = ColorSkinHover
+		}
 	}
+
 	if tex != 0 {
 		c.renderer.DrawImage(tex, x, y, w, h, ColorWhite)
+	}
+
+	// Solids draw over images and under text, so this shades the button
+	// without touching its caption.
+	if overlay.A > 0 {
+		c.renderer.DrawRect(x, y, w, h, overlay)
 	}
 
 	return clicked, tex
@@ -237,6 +257,29 @@ func (c *Context) textFieldAt(id string, x, y, w, h float32, value string, maske
 	}
 
 	return value, changed, submitted
+}
+
+// InvisibleButtonAt is a hit area with no drawing of its own, for regions whose
+// appearance comes from a skin texture — a character slot painted into the
+// window it sits in.
+func (c *Context) InvisibleButtonAt(id string, x, y, w, h float32) bool {
+	rect := Rect{x, y, w, h}
+	if !rect.Contains(c.input.MouseX, c.input.MouseY) {
+		return false
+	}
+
+	c.hotWidget = id
+
+	if !c.input.MouseLeftPressed && !c.input.MouseLeftClicked {
+		return false
+	}
+
+	c.activeWidget = id
+	c.input.MouseLeftClicked = false
+
+	c.playClickSound()
+
+	return true
 }
 
 // SelectableAt draws a list-row entry at absolute coords. Returns true on
