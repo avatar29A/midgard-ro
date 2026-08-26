@@ -4,11 +4,14 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/AllenDang/cimgui-go/imgui"
 	"github.com/go-gl/gl/v4.1-core/gl"
 	"go.uber.org/zap"
 
+	"github.com/Faultbox/midgard-ro/internal/engine/charsprite"
+	"github.com/Faultbox/midgard-ro/internal/engine/cursor"
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
 	"github.com/Faultbox/midgard-ro/internal/logger"
 )
@@ -22,7 +25,33 @@ type UI2DBackend struct {
 
 	// Login screen textures (lazy-loaded)
 	loginBgTex    *TextureInfo
+	loginSkin     *loginWindowSkin
 	loginTexTried bool // avoid repeated load attempts
+
+	// loginSaveID mirrors the original's "save ID" checkbox. Nothing persists
+	// it yet; it is drawn because the window art has the box.
+	loginSaveID bool
+
+	// Where the login window has been dragged to.
+	loginWinX, loginWinY float32
+	loginWinPlaced       bool
+
+	// The game's own mouse cursor, drawn over everything else.
+	cursor     *cursor.Cursor
+	cursorTick time.Time
+
+	// Raw archive reader, for assets that are not textures — character
+	// sprites are composited from SPR and ACT before they can be uploaded.
+	assetLoader func(string) ([]byte, error)
+
+	// Character portraits for the select screen, keyed by sprite spec.
+	charSelPortraits map[charsprite.Spec]*charSelectPortrait
+
+	// Character select art, and where its window has been dragged to.
+	charSelSkin        *charSelectSkin
+	charSelTried       bool
+	charSelX, charSelY float32
+	charSelPlaced      bool
 
 	// Cached widget states
 	loginUsername string
@@ -150,18 +179,75 @@ func (b *UI2DBackend) syncViewportSize() {
 
 // End finishes the UI frame.
 func (b *UI2DBackend) End() {
+	// The cursor is drawn last so it sits over every window, which is where a
+	// cursor belongs.
+	b.drawCursor()
+
 	b.ctx.End()
+}
+
+// SetCursorState switches which cursor is shown.
+func (b *UI2DBackend) SetCursorState(state cursor.State) {
+	b.cursor.SetState(state)
+}
+
+// drawCursor advances the cursor's animation and draws it under the pointer.
+func (b *UI2DBackend) drawCursor() {
+	if b.cursor == nil {
+		return
+	}
+
+	now := time.Now()
+	b.cursor.Update(now.Sub(b.cursorTick))
+	b.cursorTick = now
+
+	frame, ok := b.cursor.Frame()
+	if !ok {
+		return
+	}
+
+	in := b.ctx.Input()
+
+	// The sprite's origin is the point being pointed at, and the frame's
+	// offset says where its top-left sits relative to that.
+	b.ctx.Renderer().DrawImage(frame.Texture,
+		in.MouseX+frame.OffsetX, in.MouseY+frame.OffsetY,
+		frame.Width, frame.Height, ui2d.ColorWhite)
 }
 
 // SetAssetLoader wires the GRF asset loader into the UI backend.
 // This enables loading RO textures for window skins and login screen.
 func (b *UI2DBackend) SetAssetLoader(loadFunc func(string) ([]byte, error)) {
 	b.texCache = NewTextureCache(b.ctx.Renderer(), loadFunc)
+	b.assetLoader = loadFunc
+
+	// The cursor comes from the archives like everything else, so it can only
+	// be built once there is something to read them with.
+	if c, err := cursor.Load(loadFunc, b.ctx.Renderer().CreateTextureNearest); err != nil {
+		logger.Warn("no game cursor, leaving the system one", zap.Error(err))
+	} else {
+		b.cursor = c
+		b.cursorTick = time.Now()
+	}
+
+	// Prefer the original window chrome; the nine-sliced skin stays as the
+	// fallback for archives that lack it.
+	if frame, err := LoadNativeWindowFrame(b.texCache); err == nil {
+		b.ctx.SetWindowFrame(frame)
+	} else {
+		logger.Warn("native window chrome unavailable, using the themed skin", zap.Error(err))
+	}
 
 	// Try to load window skin
 	skin, err := LoadWindowSkin(b.texCache)
 	if err == nil && skin.Frame != nil {
 		b.ctx.SetDefaultWindowSkin(skin.Frame)
+	}
+
+	// Try to load input skin (RO `name-edit.bmp`). If the asset is missing
+	// the inputs fall back to drawSunkenInput's procedural bevel.
+	if inputSkin, err := LoadInputSkin(b.texCache); err == nil && inputSkin != nil {
+		b.ctx.SetDefaultInputSkin(inputSkin)
 	}
 }
 
@@ -213,7 +299,298 @@ const (
 	loginBackgroundTex = uiTexBasePath + `bgi_temp.bmp`
 )
 
-// loadLoginTextures lazy-loads the login background and logo.
+// The original login window is a single 280x120 texture with the labels and
+// input wells painted in; the client places five widgets on top at fixed
+// offsets. Those offsets are the original's, cross-checked against roBrowser's
+// transcription of the same window.
+const (
+	loginWinW = float32(280)
+	loginWinH = float32(120)
+
+	loginFieldX = float32(91)
+	loginFieldW = float32(127)
+	loginFieldH = float32(18)
+	loginUserY  = float32(29)
+	loginPassY  = float32(61)
+
+	// Buttons and the checkbox are anchored to the right and bottom edges.
+	loginBtnW      = float32(42)
+	loginBtnH      = float32(20)
+	loginBtnBottom = float32(4)
+	loginConnRight = float32(50)
+	loginExitRight = float32(5)
+
+	// The checkbox art that ships with the window has its Korean caption
+	// baked in, so the plain 12x12 box is used and the caption drawn.
+	loginChkBox   = float32(12)
+	loginChkY     = float32(31)
+	loginChkRight = float32(44)
+
+	// The window art is Korean. Its captions are painted over and redrawn in
+	// English: the body behind them is flat white, and the title bar is a
+	// vertical gradient that is uniform across its width, so a clean column
+	// of it stretches over the title without a seam.
+	loginTitleX     = float32(16) // Korean title glyphs span x 16..50
+	loginTitleY     = float32(1)
+	loginTitleW     = float32(35)
+	loginTitleH     = float32(12)
+	loginCleanColX  = float32(200) // title-bar column with no text or icon
+	loginLabelMaskX = float32(30)  // captions sit within x 30..86
+	loginLabelMaskW = float32(56)
+	loginLabelMaskH = float32(15)
+	loginLabelRight = float32(83) // captions are right-aligned to here
+
+	// The original's UI text is around 11px. The font is 14pt, so it is scaled
+	// down to sit inside an 18px well the way the artwork expects.
+	loginTextScale = float32(0.7)
+
+	// The buttons carry their captions in the texture too. Ink spans x 10..32
+	// on both; columns 2..9 are clean face, so one of them stretches over the
+	// caption the same way the title bar does.
+	loginBtnInkX   = float32(3)
+	loginBtnInkW   = float32(36)
+	loginBtnInkY   = float32(2)
+	loginBtnInkH   = float32(16)
+	loginBtnCleanX = float32(39)
+	loginBtnTexW   = float32(42)
+	loginBtnTexH   = float32(20)
+)
+
+// loginWindowSkin holds the original login window art and its widget states.
+type loginWindowSkin struct {
+	window *TextureInfo
+
+	connect, connectOver, connectDown *TextureInfo
+	exit, exitOver, exitDown          *TextureInfo
+	saveOff, saveOn                   *TextureInfo
+}
+
+// loginWindowPos returns the window's top-left, centering it the first time
+// and honoring wherever it has since been dragged.
+func (b *UI2DBackend) loginWindowPos(width, height float32) (float32, float32) {
+	if !b.loginWinPlaced {
+		b.loginWinX = float32(int((width - loginWinW) / 2))
+		b.loginWinY = float32(int((height - loginWinH) / 2))
+		b.loginWinPlaced = true
+	}
+
+	return b.loginWinX, b.loginWinY
+}
+
+// drawLoginCaptions paints over the window's Korean captions and redraws them
+// in English.
+func (b *UI2DBackend) drawLoginCaptions(skin *loginWindowSkin, x, y float32) {
+	r := b.ctx.Renderer()
+
+	// Title: stretch a clean column of the gradient across the glyphs, then
+	// write over it. The icon to the left of them is left alone.
+	u := loginCleanColX / loginWinW
+	v0 := loginTitleY / loginWinH
+	v1 := (loginTitleY + loginTitleH) / loginWinH
+	r.DrawImageUV(skin.window.ID,
+		x+loginTitleX, y+loginTitleY, loginTitleW, loginTitleH,
+		u, v0, u+1/loginWinW, v1, ui2d.ColorWhite)
+
+	ascent := r.FontAscent(loginTextScale)
+	r.DrawText(x+loginTitleX, y+loginTitleY+(loginTitleH-ascent)/2,
+		"Login", loginTextScale, ui2d.ColorText)
+
+	// Captions: the body behind them is flat white.
+	for _, caption := range []struct {
+		text string
+		y    float32
+	}{
+		{"ID", loginUserY},
+		{"Password", loginPassY},
+	} {
+		maskY := y + caption.y + (loginFieldH-loginLabelMaskH)/2
+		r.DrawRect(x+loginLabelMaskX, maskY, loginLabelMaskW, loginLabelMaskH, ui2d.ColorWhite)
+
+		textW, _ := r.MeasureText(caption.text, loginTextScale)
+		r.DrawText(x+loginLabelRight-textW, y+caption.y+(loginFieldH-ascent)/2,
+			caption.text, loginTextScale, ui2d.ColorText)
+	}
+}
+
+// loadLoginSkin loads the original login window art. A miss leaves the skin
+// nil and the caller falls back to the themed window, so a client running
+// against an archive without these textures still shows a usable login.
+func (b *UI2DBackend) loadLoginSkin() *loginWindowSkin {
+	if b.loginSkin != nil {
+		return b.loginSkin
+	}
+
+	const dir = loginTexBasePath
+
+	names := []string{
+		`win_login.bmp`,
+		`btn_connect.bmp`, `btn_connect_a.bmp`, `btn_connect_b.bmp`,
+		`btn_exit.bmp`, `btn_exit_a.bmp`, `btn_exit_b.bmp`,
+		`checkbox_off.bmp`, `checkbox_on.bmp`,
+	}
+
+	loaded := make([]*TextureInfo, 0, len(names))
+
+	for _, name := range names {
+		tex, err := b.texCache.Load(dir + name)
+		if err != nil {
+			logger.Warn("login window art unavailable, falling back to the themed window",
+				zap.String("path", dir+name), zap.Error(err))
+
+			return nil
+		}
+
+		loaded = append(loaded, tex)
+	}
+
+	b.loginSkin = &loginWindowSkin{
+		window:      loaded[0],
+		connect:     loaded[1],
+		connectOver: loaded[2],
+		connectDown: loaded[3],
+		exit:        loaded[4],
+		exitOver:    loaded[5],
+		exitDown:    loaded[6],
+		saveOff:     loaded[7],
+		saveOn:      loaded[8],
+	}
+
+	return b.loginSkin
+}
+
+// renderNativeLoginWindow draws the original login window and its widgets, and
+// reports whether it handled the screen.
+func (b *UI2DBackend) renderNativeLoginWindow(state LoginUIState, width, height float32) bool {
+	skin := b.loadLoginSkin()
+	if skin == nil {
+		return false
+	}
+
+	x, y := b.loginWindowPos(width, height)
+
+	// Draggable by the title bar, as the original is. Done before the widgets
+	// so a drag that starts on the bar keeps them from reacting.
+	b.ctx.DragHandle("login_titlebar",
+		ui2d.Rect{X: x, Y: y, W: loginWinW, H: loginTitleH + loginTitleY}, &b.loginWinX, &b.loginWinY)
+	x, y = b.loginWinX, b.loginWinY
+
+	r := b.ctx.Renderer()
+	r.DrawImage(skin.window.ID, x, y, loginWinW, loginWinH, ui2d.ColorWhite)
+	b.drawLoginCaptions(skin, x, y)
+
+	doLogin := func() {
+		if !state.IsLoading && state.OnLogin != nil {
+			state.OnLogin()
+		}
+	}
+
+	// The wells are painted into the window art, so the fields draw text only.
+	user, userChanged, userSubmit := b.ctx.TextInputBareAt("login_user",
+		x+loginFieldX, y+loginUserY, loginFieldW, loginFieldH, loginTextScale, b.loginUsername)
+	if userChanged {
+		b.loginUsername = user
+
+		if state.OnUsernameChange != nil {
+			state.OnUsernameChange(user)
+		}
+	}
+
+	pass, passChanged, passSubmit := b.ctx.PasswordInputBareAt("login_pass",
+		x+loginFieldX, y+loginPassY, loginFieldW, loginFieldH, loginTextScale, b.loginPassword)
+	if passChanged {
+		b.loginPassword = pass
+
+		if state.OnPasswordChange != nil {
+			state.OnPasswordChange(pass)
+		}
+	}
+
+	saveTex := skin.saveOff
+	if b.loginSaveID {
+		saveTex = skin.saveOn
+	}
+
+	chkX := x + loginWinW - loginChkRight - loginChkBox
+
+	if b.ctx.ImageButtonAt("login_save",
+		chkX, y+loginChkY, loginChkBox, loginChkBox,
+		saveTex.ID, saveTex.ID, saveTex.ID) {
+		b.loginSaveID = !b.loginSaveID
+	}
+
+	// Centered on the box rather than sitting on its top edge.
+	saveAscent := r.FontAscent(loginTextScale)
+	r.DrawText(chkX+loginChkBox+4, y+loginChkY+(loginChkBox-saveAscent)/2,
+		"Save", loginTextScale, ui2d.ColorText)
+
+	btnY := y + loginWinH - loginBtnBottom - loginBtnH
+
+	if b.skinButton("login_connect", x+loginWinW-loginConnRight-loginBtnW, btnY,
+		skin.connect, skin.connectOver, skin.connectDown, "Ok") {
+		doLogin()
+	}
+
+	if b.skinButton("login_exit", x+loginWinW-loginExitRight-loginBtnW, btnY,
+		skin.exit, skin.exitOver, skin.exitDown, "Exit") {
+		if state.OnExit != nil {
+			state.OnExit()
+		}
+	}
+
+	if userSubmit || passSubmit {
+		doLogin()
+	}
+
+	// The original has no room for status text inside the window; the real
+	// client uses a separate popup. Until there is one, it goes underneath.
+	statusY := y + loginWinH + 8
+
+	switch {
+	case state.ErrorMessage != "":
+		b.ctx.LabelAtColored(x, statusY, state.ErrorMessage, ui2d.Color{R: 1, G: 0.4, B: 0.4, A: 1})
+	case state.IsLoading:
+		b.ctx.LabelAtColored(x, statusY, "Connecting...", ui2d.ColorText)
+	default:
+		b.ctx.LabelAtColored(x, statusY, "Server: "+state.ServerName, ui2d.ColorTextDim)
+	}
+
+	return true
+}
+
+// skinButton draws one of RO's 42x20 buttons and replaces the caption
+// baked into it with an English one.
+func (b *UI2DBackend) skinButton(id string, x, y float32, normal, over, down *TextureInfo, label string) bool {
+	clicked, drawn := b.ctx.ImageButtonAtEx(id, x, y, loginBtnW, loginBtnH,
+		normal.ID, over.ID, down.ID)
+
+	if drawn == 0 {
+		return clicked
+	}
+
+	r := b.ctx.Renderer()
+
+	// Cover the caption with a clean column of whichever state is showing —
+	// the three differ, so the mask has to come from the texture on screen.
+	u := loginBtnCleanX / loginBtnTexW
+	r.DrawImageUV(drawn,
+		x+loginBtnInkX, y+loginBtnInkY, loginBtnInkW, loginBtnInkH,
+		u, loginBtnInkY/loginBtnTexH,
+		u+1/loginBtnTexW, (loginBtnInkY+loginBtnInkH)/loginBtnTexH,
+		ui2d.ColorWhite)
+
+	textW, _ := r.MeasureText(label, loginTextScale)
+	ascent := r.FontAscent(loginTextScale)
+	r.DrawText(x+(loginBtnW-textW)/2, y+(loginBtnH-ascent)/2, label, loginTextScale, ui2d.ColorText)
+
+	return clicked
+}
+
+// loadLoginTextures lazy-loads the login-screen backdrop. We use
+// `t_login.jpg`, the Korean RO client's title-screen art, drawn fullscreen
+// behind the dialog. Dialog chrome itself is rendered from the generic
+// `win_msgbox` skin so labels and buttons stay text-driven (translatable);
+// the per-screen `win_login.bmp` is *not* used because its Korean labels
+// are baked into the artwork.
 func (b *UI2DBackend) loadLoginTextures() {
 	if b.loginTexTried || b.texCache == nil {
 		return
@@ -233,16 +610,18 @@ func (b *UI2DBackend) loadLoginTextures() {
 }
 
 // RenderLoginUI renders the login screen.
+//
+// Layout: t_login.jpg fills the screen as the title backdrop; the dialog
+// itself is a generic themed window centered on top. Labels and the Login
+// button are drawn from Go strings (not from baked-in BMP artwork) so they
+// remain translatable.
 func (b *UI2DBackend) RenderLoginUI(state LoginUIState, width, height float32) {
-	// Lazy-load login textures on first render
 	b.loadLoginTextures()
 
-	// Draw login background fullscreen
 	if b.loginBgTex != nil {
 		b.ctx.Renderer().DrawImage(b.loginBgTex.ID, 0, 0, width, height, ui2d.ColorWhite)
 	}
 
-	// Sync state to local cache
 	if b.loginUsername == "" && state.Username != "" {
 		b.loginUsername = state.Username
 	}
@@ -250,221 +629,226 @@ func (b *UI2DBackend) RenderLoginUI(state LoginUIState, width, height float32) {
 		b.loginPassword = state.Password
 	}
 
-	// Center the login window
-	windowWidth := float32(400)
-	// Tall enough for the contents. At 340 the trailing server label was
-	// drawn below the frame, outside the window it belongs to.
-	windowHeight := float32(400)
+	if b.renderNativeLoginWindow(state, width, height) {
+		return
+	}
+
+	// Compact dialog modeled on the original RO "Log On" — labels sit
+	// LEFT of inputs (not above), and login/exit buttons live in the
+	// bottom-right corner. HStack flex sizes the inputs to fill the
+	// remaining width after the fixed-width label column.
+	windowWidth := float32(420)
+	windowHeight := float32(190)
 	windowX := (width - windowWidth) / 2
 	windowY := (height - windowHeight) / 2
 
-	if b.ctx.BeginWindow("login", windowX, windowY, windowWidth, windowHeight, "Login to Ragnarok Online") {
-		b.ctx.Spacer(12)
-		b.ctx.LabelCentered("Welcome to Midgard")
-		b.ctx.Spacer(12)
-		b.ctx.Separator()
-		b.ctx.Spacer(12)
-
-		// Username
-		b.ctx.Row(20)
-		b.ctx.Label("Username:")
-		b.ctx.Row(32)
-		newUsername, changed, _ := b.ctx.TextInput("username", 0, b.loginUsername)
-		if changed {
-			b.loginUsername = newUsername
-			if state.OnUsernameChange != nil {
-				state.OnUsernameChange(newUsername)
+	if b.ctx.BeginWindow("login", windowX, windowY, windowWidth, windowHeight, "Log On") {
+		doLogin := func() {
+			if !state.IsLoading && state.OnLogin != nil {
+				state.OnLogin()
 			}
 		}
-		b.ctx.Spacer(12)
 
-		// Password
-		b.ctx.Row(20)
-		b.ctx.Label("Password:")
-		b.ctx.Row(32)
-		newPassword, changed, submitted := b.ctx.PasswordInput("password", 0, b.loginPassword)
-		if changed {
-			b.loginPassword = newPassword
-			if state.OnPasswordChange != nil {
-				state.OnPasswordChange(newPassword)
-			}
-		}
-		b.ctx.Spacer(16)
+		labelW := float32(80) // wide enough for "Password" without wrap
 
-		// Error message
-		if state.ErrorMessage != "" {
-			b.ctx.LabelColored(state.ErrorMessage, ui2d.Color{R: 1, G: 0.3, B: 0.3, A: 1})
-			b.ctx.Spacer(8)
-		}
+		idRow := ui2d.HStack(8,
+			ui2d.Sized(labelW, 0, ui2d.Label("ID")),
+			ui2d.Sized(0, 22, ui2d.TextInput("username", &b.loginUsername, nil)),
+		)
+		passRow := ui2d.HStack(8,
+			ui2d.Sized(labelW, 0, ui2d.Label("Password")),
+			ui2d.Sized(0, 22, ui2d.PasswordInput("password", &b.loginPassword, doLogin)),
+		)
 
-		// Login button - larger for easier clicking
-		b.ctx.Row(40)
-		if state.IsLoading {
-			b.ctx.ButtonDisabled("login", 0, "Login")
-		} else {
-			btnClicked := b.ctx.Button("login", 0, "Login")
-			if btnClicked || submitted {
-				if state.OnLogin != nil {
-					state.OnLogin()
+		// Bottom action row: Filler pushes the buttons to the right edge.
+		// 28px tall gives the radius-6 corners visible vertical space
+		// (h - 2*r = 16px straight middle) without the button looking
+		// chunky.
+		btnW := float32(80)
+		btnH := float32(28)
+		btnRow := ui2d.HStack(6,
+			ui2d.Filler(),
+			ui2d.Sized(btnW, btnH, ui2d.Button("login", "login", doLogin)),
+			ui2d.Sized(btnW, btnH, ui2d.Button("exit", "exit", func() {
+				if state.OnExit != nil {
+					state.OnExit()
 				}
-			}
-		}
+			})),
+		)
 
+		var rows []ui2d.Element
+		rows = append(rows, idRow, passRow)
+		if state.ErrorMessage != "" {
+			rows = append(rows, ui2d.LabelColor(state.ErrorMessage, ui2d.Color{R: 1, G: 0.4, B: 0.4, A: 1}))
+		}
 		if state.IsLoading {
-			b.ctx.Spacer(8)
-			b.ctx.LabelCentered("Connecting...")
+			rows = append(rows, ui2d.LabelCenteredEl("Connecting..."))
 		}
+		rows = append(rows,
+			ui2d.LabelColor("Server: "+state.ServerName, ui2d.ColorTextDim),
+			ui2d.Filler(), // pushes button row to bottom
+			btnRow,
+		)
 
-		b.ctx.Spacer(12)
-		b.ctx.Separator()
-		b.ctx.Spacer(8)
-		b.ctx.LabelColored("Server: "+state.ServerName, ui2d.ColorTextDim)
+		// Notify owners if the tree mutated the editable values.
+		prevUser := state.Username
+		prevPass := state.Password
+		b.ctx.RenderTree(ui2d.VStack(8, rows...), b.ctx.CurrentWindowContentRect())
+		if b.loginUsername != prevUser && state.OnUsernameChange != nil {
+			state.OnUsernameChange(b.loginUsername)
+		}
+		if b.loginPassword != prevPass && state.OnPasswordChange != nil {
+			state.OnPasswordChange(b.loginPassword)
+		}
 
 		b.ctx.EndWindow()
 	}
 }
 
-// RenderConnectingUI renders the connecting screen.
+// RenderConnectingUI renders the connecting screen — same backdrop as
+// login/charselect, themed window with status messages.
 func (b *UI2DBackend) RenderConnectingUI(state ConnectingUIState, width, height float32) {
-	windowWidth := float32(300)
-	windowHeight := float32(120)
+	b.loadLoginTextures()
+	if b.loginBgTex != nil {
+		b.ctx.Renderer().DrawImage(b.loginBgTex.ID, 0, 0, width, height, ui2d.ColorWhite)
+	}
+
+	windowWidth := float32(320)
+	windowHeight := float32(150)
 	windowX := (width - windowWidth) / 2
 	windowY := (height - windowHeight) / 2
 
-	if b.ctx.BeginWindow("connecting", windowX, windowY, windowWidth, windowHeight, "Connecting") {
-		b.ctx.Spacer(16)
-
+	if b.ctx.BeginWindowEx("connecting", windowX, windowY, windowWidth, windowHeight,
+		"Connecting", ui2d.WindowOptions{}) {
+		var rows []ui2d.Element
 		if state.StatusMessage != "" {
-			b.ctx.LabelCentered(state.StatusMessage)
+			rows = append(rows, ui2d.LabelCenteredEl(state.StatusMessage))
 		}
-		b.ctx.Spacer(8)
-
 		if state.ErrorMessage != "" {
-			b.ctx.LabelColored(state.ErrorMessage, ui2d.Color{R: 1, G: 0.3, B: 0.3, A: 1})
+			rows = append(rows, ui2d.LabelColor(state.ErrorMessage, ui2d.Color{R: 1, G: 0.4, B: 0.4, A: 1}))
 		}
+		rows = append(rows, ui2d.Spacer(8), ui2d.LabelCenteredEl("Please wait..."))
 
-		b.ctx.Spacer(16)
-		b.ctx.LabelCentered("Please wait...")
-
+		b.ctx.RenderTree(ui2d.VStack(8, rows...), b.ctx.CurrentWindowContentRect())
 		b.ctx.EndWindow()
 	}
 }
 
 // RenderCharSelectUI renders the character selection screen.
+//
+// Layout: t_login.jpg backdrop, centered themed window. The body is a
+// declarative tree — VStack of status/error rows, character Selectables,
+// detail labels, and the Enter Game button — so positions are deterministic
+// and every row gets the same vertical rhythm.
 func (b *UI2DBackend) RenderCharSelectUI(state CharSelectUIState, width, height float32) {
-	windowWidth := float32(500)
-	windowHeight := float32(400)
+	// Reuse the title-screen backdrop: it doubles as the char-select
+	// scenery in vanilla RO and saves loading another big asset.
+	b.loadLoginTextures()
+	if b.loginBgTex != nil {
+		b.ctx.Renderer().DrawImage(b.loginBgTex.ID, 0, 0, width, height, ui2d.ColorWhite)
+	}
+
+	if b.renderNativeCharSelect(state, width, height) {
+		return
+	}
+
+	windowWidth := float32(420)
+	windowHeight := float32(420)
 	windowX := (width - windowWidth) / 2
 	windowY := (height - windowHeight) / 2
 
-	if b.ctx.BeginWindow("charselect", windowX, windowY, windowWidth, windowHeight, "Character Selection") {
+	if b.ctx.BeginWindowEx("charselect", windowX, windowY, windowWidth, windowHeight,
+		"Character Selection", ui2d.WindowOptions{}) {
+		// Auto-select first row when characters arrive.
+		if state.IsReady && b.charSelectIdx < 0 && len(state.Characters) > 0 {
+			b.charSelectIdx = 0
+			if state.OnSelectIndex != nil {
+				state.OnSelectIndex(0)
+			}
+		}
+
+		var rows []ui2d.Element
 		if state.StatusMessage != "" {
-			b.ctx.Label(state.StatusMessage)
-			b.ctx.Spacer(4)
+			rows = append(rows, ui2d.Label(state.StatusMessage))
 		}
 		if state.ErrorMessage != "" {
-			b.ctx.LabelColored(state.ErrorMessage, ui2d.Color{R: 1, G: 0.3, B: 0.3, A: 1})
-			b.ctx.Spacer(4)
+			rows = append(rows, ui2d.LabelColor(state.ErrorMessage, ui2d.Color{R: 1, G: 0.4, B: 0.4, A: 1}))
 		}
 
-		b.ctx.Separator()
-		b.ctx.Spacer(8)
-
-		if !state.IsReady {
-			b.ctx.LabelCentered("Loading character list...")
-		} else if len(state.Characters) == 0 {
-			b.ctx.Spacer(16)
-			b.ctx.LabelCentered("No characters found.")
-			b.ctx.Spacer(8)
-			b.ctx.LabelCentered("Create a new character on the server.")
-		} else {
-			// Auto-select first character if none selected
-			if b.charSelectIdx < 0 && len(state.Characters) > 0 {
-				b.charSelectIdx = 0
-				if state.OnSelectIndex != nil {
-					state.OnSelectIndex(0)
-				}
-			}
-
-			// Character list
-			b.ctx.Row(20)
-			b.ctx.Label("Characters:")
-			b.ctx.Spacer(8)
-			b.ctx.BeginListBox("charlist", 0, 150)
-
+		switch {
+		case !state.IsReady:
+			rows = append(rows, ui2d.Spacer(8), ui2d.LabelCenteredEl("Loading character list..."))
+		case len(state.Characters) == 0:
+			rows = append(rows,
+				ui2d.Spacer(8),
+				ui2d.LabelCenteredEl("No characters found."),
+				ui2d.Spacer(4),
+				ui2d.LabelCenteredEl("Create a new character on the server."),
+			)
+		default:
+			rows = append(rows, ui2d.Label("Characters:"))
 			for i, char := range state.Characters {
-				label := fmt.Sprintf("%s (Lv %d)", char.GetName(), char.BaseLevel)
-				if b.ctx.Selectable(fmt.Sprintf("char_%d", i), label, b.charSelectIdx == i) {
-					b.charSelectIdx = i
-					if state.OnSelectIndex != nil {
-						state.OnSelectIndex(i)
-					}
-				}
+				idx := i // capture for closure
+				rows = append(rows, ui2d.Sized(0, 24, ui2d.Selectable(
+					fmt.Sprintf("char_%d", i),
+					fmt.Sprintf("%s  (Lv %d)", char.GetName(), char.BaseLevel),
+					b.charSelectIdx == i,
+					func() {
+						b.charSelectIdx = idx
+						if state.OnSelectIndex != nil {
+							state.OnSelectIndex(idx)
+						}
+					},
+				)))
 			}
 
-			b.ctx.EndListBox()
-			b.ctx.Spacer(8)
-
-			// Show selected character details
 			if b.charSelectIdx >= 0 && b.charSelectIdx < len(state.Characters) {
 				char := state.Characters[b.charSelectIdx]
-				b.ctx.Row(20)
-				b.ctx.Label(fmt.Sprintf("HP: %d/%d   SP: %d/%d", char.HP, char.MaxHP, char.SP, char.MaxSP))
-				b.ctx.Row(20)
-				b.ctx.Label(fmt.Sprintf("Map: %s", char.GetMapName()))
+				rows = append(rows,
+					ui2d.Spacer(8),
+					ui2d.Label(fmt.Sprintf("HP: %d/%d    SP: %d/%d", char.HP, char.MaxHP, char.SP, char.MaxSP)),
+					ui2d.Label(fmt.Sprintf("Map: %s", char.GetMapName())),
+				)
 			}
 
-			b.ctx.Spacer(8)
-			b.ctx.Separator()
-			b.ctx.Spacer(8)
-
-			// Action buttons
-			b.ctx.Row(40)
-			if state.IsLoading || b.charSelectIdx < 0 {
-				b.ctx.ButtonDisabled("enter", 0, "Enter Game")
-			} else {
-				btnClicked := b.ctx.Button("enter", 0, "Enter Game")
-				if btnClicked {
-					if state.OnSelect != nil {
-						state.OnSelect(b.charSelectIdx)
-					}
+			rows = append(rows, ui2d.Spacer(8))
+			canEnter := !state.IsLoading && b.charSelectIdx >= 0
+			enterLabel := "Enter Game"
+			rows = append(rows, ui2d.Sized(0, 36, ui2d.Button("enter", enterLabel, func() {
+				if canEnter && state.OnSelect != nil {
+					state.OnSelect(b.charSelectIdx)
 				}
-			}
+			})))
 		}
 
+		b.ctx.RenderTree(ui2d.VStack(6, rows...), b.ctx.CurrentWindowContentRect())
 		b.ctx.EndWindow()
 	}
 }
 
-// RenderLoadingUI renders the loading screen.
+// RenderLoadingUI renders the loading screen the same way the original
+// RO client does: just the title backdrop fills the screen and a single
+// short progress bar sits centered on the X-axis near the bottom — no
+// dialog chrome, no labels, no percentage caption.
 func (b *UI2DBackend) RenderLoadingUI(state LoadingUIState, width, height float32) {
-	windowWidth := float32(400)
-	windowHeight := float32(150)
-	windowX := (width - windowWidth) / 2
-	windowY := (height - windowHeight) / 2
+	b.loadLoginTextures()
+	if b.loginBgTex != nil {
+		b.ctx.Renderer().DrawImage(b.loginBgTex.ID, 0, 0, width, height, ui2d.ColorWhite)
+	}
 
-	if b.ctx.BeginWindow("loading", windowX, windowY, windowWidth, windowHeight, "Loading") {
-		b.ctx.Spacer(8)
+	barW := float32(280)
+	barH := float32(16)
+	barX := (width - barW) / 2
+	barY := height - 60
 
-		b.ctx.LabelCentered(fmt.Sprintf("Loading: %s", state.MapName))
-		b.ctx.Spacer(8)
+	b.ctx.ProgressBarAt(barX, barY, barW, barH, state.Progress, fmt.Sprintf("%.0f%%", state.Progress*100))
 
-		if state.StatusMessage != "" {
-			b.ctx.LabelCentered(state.StatusMessage)
-		}
-		b.ctx.Spacer(8)
-
-		// Progress bar
-		b.ctx.ProgressBar(state.Progress, 0, 20, fmt.Sprintf("%.0f%%", state.Progress*100))
-		b.ctx.Spacer(4)
-
-		if state.ErrorMessage != "" {
-			b.ctx.LabelColored(state.ErrorMessage, ui2d.Color{R: 1, G: 0.3, B: 0.3, A: 1})
-		}
-
-		b.ctx.LabelColored(fmt.Sprintf("Phase: %s", state.Phase), ui2d.ColorTextDim)
-
-		b.ctx.EndWindow()
+	// Debug gate hint — visible once loading is done and the state is
+	// waiting on Enter. Sits just above the progress bar in light text.
+	if state.ReadyForInput {
+		hint := "Press Enter to continue"
+		tw, _ := b.ctx.Renderer().MeasureText(hint, 1.0)
+		b.ctx.LabelAtColored((width-tw)/2, barY-26, hint, ui2d.ColorTextOnDark)
 	}
 }
 

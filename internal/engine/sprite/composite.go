@@ -10,6 +10,16 @@ type CompositeResult struct {
 	Pixels []byte // RGBA pixels
 	Width  int    // Image width
 	Height int    // Image height
+
+	// OffsetX and OffsetY place the image against the sprite's own origin:
+	// they are where its top-left corner sits relative to that origin, and are
+	// negative for the usual sprite drawn around it. Callers that stand a
+	// sprite on the ground can ignore them, but anything that has to line the
+	// origin up with a point on screen — a cursor on the mouse — needs them,
+	// because the image is cropped to its content and would otherwise have
+	// lost where that origin went.
+	OffsetX int
+	OffsetY int
 }
 
 // CompositeSprites creates a single RGBA image by compositing body and head
@@ -257,9 +267,11 @@ func CompositeSprites(
 	}
 
 	return CompositeResult{
-		Pixels: pixels,
-		Width:  width,
-		Height: height,
+		Pixels:  pixels,
+		Width:   width,
+		Height:  height,
+		OffsetX: minX,
+		OffsetY: minY,
 	}
 }
 

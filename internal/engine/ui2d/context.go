@@ -23,6 +23,12 @@ type Context struct {
 	// Default window skin (nine-slice frame texture)
 	defaultSkin *NineSlice
 
+	// Chrome the original client draws its windows from. Nil falls back to
+	// defaultSkin, and then to a plain themed panel.
+	windowFrame *WindowFrame
+	// Default input skin (nine-slice; nil falls back to procedural sunken bevel)
+	defaultInputSkin *NineSlice
+
 	// Layout state
 	cursorX float32
 	cursorY float32
@@ -47,6 +53,16 @@ type WindowState struct {
 	Moving  bool
 	Dragged bool
 	Skin    *NineSlice // Per-window skin override (nil uses default)
+
+	// Options says which chrome this window carries.
+	Options WindowOptions
+
+	// Resized, like Dragged, freezes the caller's size once the user has set
+	// their own.
+	Resized bool
+
+	// Minimized collapses the window to its title bar.
+	Minimized bool
 }
 
 // SetClickSound registers what to play when a widget is activated. Passing nil
@@ -109,6 +125,12 @@ func (c *Context) SetDefaultWindowSkin(skin *NineSlice) {
 	c.defaultSkin = skin
 }
 
+// SetDefaultInputSkin sets a nine-slice skin used to draw text inputs.
+// When nil, inputs fall back to drawSunkenInput's procedural bevel.
+func (c *Context) SetDefaultInputSkin(skin *NineSlice) {
+	c.defaultInputSkin = skin
+}
+
 // Begin starts a new UI frame.
 func (c *Context) Begin() {
 	c.input.Update()
@@ -124,6 +146,12 @@ func (c *Context) End() {
 // BeginWindow starts a new window.
 // Returns false if the window is closed.
 func (c *Context) BeginWindow(id string, x, y, w, h float32, title string) bool {
+	return c.BeginWindowEx(id, x, y, w, h, title, DefaultWindowOptions())
+}
+
+// BeginWindowEx is BeginWindow with the chrome spelled out. Blocking screens
+// pass a zero WindowOptions so they cannot be closed out from under the player.
+func (c *Context) BeginWindowEx(id string, x, y, w, h float32, title string, opts WindowOptions) bool {
 	// Get or create window state
 	ws, ok := c.windows[id]
 	if !ok {
@@ -141,13 +169,18 @@ func (c *Context) BeginWindow(id string, x, y, w, h float32, title string) bool 
 		// initial hint: once the user drags the window we stop overwriting
 		// X/Y so the new position survives drop. Without this the window
 		// snaps back to the caller's center-of-screen each frame.
-		ws.W = w
-		ws.H = h
+		if !ws.Resized {
+			ws.W = w
+			ws.H = h
+		}
+
 		if !ws.Moving && !ws.Dragged {
 			ws.X = x
 			ws.Y = y
 		}
 	}
+
+	ws.Options = opts
 
 	if !ws.Open {
 		return false
@@ -155,8 +188,7 @@ func (c *Context) BeginWindow(id string, x, y, w, h float32, title string) bool 
 
 	c.currentWindow = ws
 
-	// Handle window dragging (title bar is top 25 pixels)
-	titleBarH := float32(25)
+	titleBarH := c.frameTitleBarH()
 	titleBarRect := Rect{ws.X, ws.Y, ws.W, titleBarH}
 
 	if c.input.MouseLeftPressed && titleBarRect.Contains(c.input.MouseX, c.input.MouseY) {
@@ -177,6 +209,26 @@ func (c *Context) BeginWindow(id string, x, y, w, h float32, title string) bool 
 		}
 	}
 
+	if c.windowFrame != nil {
+		if !c.drawWindowFrame(ws, title) {
+			c.currentWindow = nil
+
+			return false
+		}
+
+		if ws.Minimized {
+			c.currentWindow = nil
+
+			return false
+		}
+
+		c.cursorX = ws.X + 8
+		c.cursorY = ws.Y + FrameTitleH + 8
+		c.rowH = 0
+
+		return true
+	}
+
 	// Draw window background
 	skin := ws.Skin
 	if skin == nil {
@@ -195,17 +247,25 @@ func (c *Context) BeginWindow(id string, x, y, w, h float32, title string) bool 
 		c.renderer.DrawRect(ws.X+1, ws.Y+1, ws.W-2, titleBarH-1, ColorPanelBorder)
 	}
 
-	// Draw the per-window title text on the title bar (always, regardless of
-	// skin — the skin's clean strip leaves room for it).
+	// Draw the per-window title text centered in the title bar. Drawing
+	// the same glyph at +1px X gives a fake-bold effect that thickens
+	// strokes on the light blue title bar without needing a bold font
+	// face (which our TTF pipeline doesn't load). Centering uses ascent
+	// (cap-height) and biases up a few pixels so the title sits visually
+	// in the upper portion of the bar — the gradient's accent is at the
+	// top of the bar, and centering the line box looks low.
 	if title != "" {
-		scale := float32(1.0)
+		scale := float32(0.85)
 		barH := titleBarH
 		if skin != nil && skin.Top > 0 {
 			barH = float32(skin.Top)
 		}
-		_, textH := c.renderer.MeasureText(title, scale)
-		textY := ws.Y + (barH-textH)/2
-		c.renderer.DrawText(ws.X+8, textY, title, scale, ColorText)
+		textW, _ := c.renderer.MeasureText(title, scale)
+		ascent := c.renderer.FontAscent(scale)
+		textX := ws.X + (ws.W-textW)/2
+		textY := ws.Y + (barH-ascent)/2 - 6
+		c.renderer.DrawText(textX, textY, title, scale, ColorTitleText)
+		c.renderer.DrawText(textX+1, textY, title, scale, ColorTitleText)
 	}
 
 	// Set cursor for content (below title bar, with padding)
@@ -221,6 +281,26 @@ func (c *Context) EndWindow() {
 	c.currentWindow = nil
 }
 
+// CurrentWindowContentRect returns the rect inside the active window's
+// chrome (under the title bar, padded). Returns the zero rect when no
+// window is active. Tree-based screens use this as the root rect for
+// RenderTree, so layouts compute the same body region the imperative
+// cursor would have used.
+func (c *Context) CurrentWindowContentRect() Rect {
+	if c.currentWindow == nil {
+		return Rect{}
+	}
+	ws := c.currentWindow
+	pad := float32(8)
+	titleBarH := c.frameTitleBarH()
+	return Rect{
+		X: ws.X + pad,
+		Y: ws.Y + titleBarH + pad,
+		W: ws.W - pad*2,
+		H: ws.H - titleBarH - pad*2,
+	}
+}
+
 // Row starts a new row with the given height.
 func (c *Context) Row(height float32) {
 	if c.currentWindow == nil {
@@ -231,7 +311,9 @@ func (c *Context) Row(height float32) {
 	c.rowH = height
 }
 
-// Button draws a button and returns true if clicked.
+// Button draws a button at the layout cursor and returns true if clicked.
+// For absolute placement (the RO-style fixed-coordinate layout we use for
+// skinned dialogs) call ButtonAt directly instead.
 func (c *Context) Button(id string, width float32, label string) bool {
 	if c.currentWindow == nil {
 		return false
@@ -248,63 +330,8 @@ func (c *Context) Button(id string, width float32, label string) bool {
 	}
 
 	fullID := c.currentWindow.ID + "_" + id
-	rect := Rect{x, y, width, h}
-
-	// Check interaction - click on press for better responsiveness
-	hovered := rect.Contains(c.input.MouseX, c.input.MouseY)
-	clicked := false
-
-	if hovered {
-		c.hotWidget = fullID
-		// Use both edge detection AND event-based click for reliability
-		if c.input.MouseLeftPressed || c.input.MouseLeftClicked {
-			c.activeWidget = fullID
-			clicked = true // Click immediately on press
-			// Consume the click event so only one button gets it
-			c.input.MouseLeftClicked = false
-
-			c.playClickSound()
-		}
-	}
-
-	// Clear active state on release
-	if c.activeWidget == fullID && c.input.MouseLeftReleased {
-		c.activeWidget = ""
-	}
-
-	// Draw button
-	color := ColorButtonNormal
-	pressed := c.activeWidget == fullID
-	if pressed {
-		color = ColorButtonActive
-	} else if hovered {
-		color = ColorButtonHover
-	}
-
-	c.renderer.DrawRect(x, y, width, h, color)
-	// Raised-button bevel: light highlight on top/left, dark shadow on
-	// bottom/right gives a 3D look that reads as a clickable widget on the
-	// pure-white BMP body. When pressed, swap the bevel direction so the
-	// button appears "pushed in".
-	hi, lo := ColorButtonBevelHi, ColorButtonBevelLo
-	if pressed {
-		hi, lo = ColorButtonBevelLo, ColorButtonBevelHi
-	}
-	c.renderer.DrawRect(x, y, width, 1, hi)     // top
-	c.renderer.DrawRect(x, y, 1, h, hi)         // left
-	c.renderer.DrawRect(x, y+h-1, width, 1, lo) // bottom
-	c.renderer.DrawRect(x+width-1, y, 1, h, lo) // right
-
-	// Draw button label centered
-	scale := float32(1.0)
-	textW, textH := c.renderer.MeasureText(label, scale)
-	textX := x + (width-textW)/2
-	textY := y + (h-textH)/2
-	c.renderer.DrawText(textX, textY, label, scale, ColorText)
-
-	// Advance cursor
+	clicked := c.ButtonAt(fullID, x, y, width, h, label)
 	c.cursorX += width + 4
-
 	return clicked
 }
 
@@ -382,7 +409,7 @@ func (c *Context) TextInput(id string, width float32, value string) (string, boo
 		}
 	}
 
-	drawSunkenInput(c.renderer, x, y, width, h, focused)
+	c.drawInput(x, y, width, h, focused)
 
 	// Draw text value
 	scale := float32(1.0)
@@ -401,6 +428,28 @@ func (c *Context) TextInput(id string, width float32, value string) (string, boo
 	c.cursorX += width + 4
 
 	return value, changed, submitted
+}
+
+// drawInput renders the input background. With a skin set, it 9-slices the
+// skin texture (RO's `name-edit.bmp`) for an authentic look; without a skin,
+// it falls back to the procedural sunken bevel below. Focus tints the border
+// either by recoloring the skin (subtle blue tint) or by drawing the focus
+// outline over the skin's neutral border.
+func (c *Context) drawInput(x, y, width, h float32, focused bool) {
+	if c.defaultInputSkin != nil {
+		tint := ColorWhite
+		if focused {
+			// A light-blue tint on the skin pulls in the RO accent without
+			// hiding the recessed look.
+			tint = Color{R: 0.85, G: 0.9, B: 1.0, A: 1}
+		}
+		c.defaultInputSkin.Draw(c.renderer, x, y, width, h, tint)
+		if focused {
+			c.renderer.DrawRectOutline(x, y, width, h, 1, ColorInputBorderFocus)
+		}
+		return
+	}
+	drawSunkenInput(c.renderer, x, y, width, h, focused)
 }
 
 // drawSunkenInput renders a text-input field as a recessed (sunken) box on
@@ -540,7 +589,7 @@ func (c *Context) PasswordInput(id string, width float32, value string) (string,
 	}
 
 	// Draw input field
-	drawSunkenInput(c.renderer, x, y, width, h, focused)
+	c.drawInput(x, y, width, h, focused)
 
 	// Draw masked text (dots instead of characters)
 	scale := float32(1.0)
@@ -786,7 +835,10 @@ func (c *Context) Checkbox(id string, label string, checked bool) bool {
 	return checked
 }
 
-// LabelCentered draws centered text.
+// LabelCentered draws centered text and advances the cursor down by the
+// text's measured height. Unlike Label, which only advances X (so callers
+// can chain inline labels in a Row), LabelCentered owns the whole row and
+// must move Y so the next Spacer/Separator/Row doesn't draw on top of it.
 func (c *Context) LabelCentered(text string) {
 	if c.currentWindow == nil {
 		return
@@ -806,6 +858,31 @@ func (c *Context) LabelCentered(text string) {
 	// LabelCentered calls in a row used to draw on top of each other.
 	if textH > c.rowH {
 		c.rowH = textH
+	}
+}
+
+// DragHandle moves the position at x/y while the mouse drags inside handle.
+//
+// Windows drawn from a skin texture are not BeginWindow windows, so they need
+// the dragging behavior on its own. Grabbing anywhere in handle — the title
+// bar, conventionally — takes the widget slot for id until the button is
+// released, which stops widgets underneath from reacting mid-drag.
+func (c *Context) DragHandle(id string, handle Rect, x, y *float32) {
+	if c.input.MouseLeftPressed && handle.Contains(c.input.MouseX, c.input.MouseY) {
+		c.activeWidget = id
+	}
+
+	if c.activeWidget != id {
+		return
+	}
+
+	if c.input.MouseLeftDown {
+		*x += c.input.MouseDeltaX
+		*y += c.input.MouseDeltaY
+	}
+
+	if c.input.MouseLeftReleased {
+		c.activeWidget = ""
 	}
 }
 
