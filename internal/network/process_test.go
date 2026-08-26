@@ -261,3 +261,120 @@ func TestProcessReportsServerDisconnect(t *testing.T) {
 	}
 	t.Error("Process never reported the server closing the connection")
 }
+
+// TestHandlerRegisteredLateStillSeesPackets is the regression guard for an
+// empty-looking map. The server describes every unit around you the moment you
+// enter, while the client is still loading it — so those packets arrive
+// seconds before the in-game state and its handlers exist. Dropping them
+// leaves the map bare until something happens to be re-sent, which for a
+// standing NPC is never.
+func TestHandlerRegisteredLateStillSeesPackets(t *testing.T) {
+	c, server := newTestClient(t)
+
+	// Three arrive with nothing listening.
+	for i := 0; i < 3; i++ {
+		if _, err := server.Write(notifyTimePacket()); err != nil {
+			t.Fatalf("server write: %v", err)
+		}
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := c.Process(); err != nil {
+			t.Fatalf("Process: %v", err)
+		}
+		if c.heldCount == 3 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if c.heldCount != 3 {
+		t.Fatalf("held %d packets, want 3", c.heldCount)
+	}
+
+	// Registering now must deliver the backlog, oldest first.
+	fired := make(chan int, 8)
+	c.RegisterHandler(0x007F, func(data []byte) error {
+		fired <- len(data)
+		return nil
+	})
+
+	for i := 0; i < 3; i++ {
+		select {
+		case n := <-fired:
+			if n != 6 {
+				t.Errorf("held packet %d was %d bytes, want 6", i, n)
+			}
+		default:
+			t.Fatalf("only %d of 3 held packets were delivered", i)
+		}
+	}
+	if c.heldCount != 0 {
+		t.Errorf("heldCount = %d after delivery, want 0", c.heldCount)
+	}
+}
+
+// TestHeldPacketsAreBounded: some ids are never handled at all, and an
+// unbounded backlog would grow for the whole session and crowd out the ones
+// that will be.
+func TestHeldPacketsAreBounded(t *testing.T) {
+	c, server := newTestClient(t)
+
+	for i := 0; i < heldPerPacket+20; i++ {
+		if _, err := server.Write(notifyTimePacket()); err != nil {
+			t.Fatalf("server write: %v", err)
+		}
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := c.Process(); err != nil {
+			t.Fatalf("Process: %v", err)
+		}
+		if c.heldCount >= heldPerPacket {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if c.heldCount > heldPerPacket {
+		t.Errorf("held %d packets of one id, want at most %d", c.heldCount, heldPerPacket)
+	}
+}
+
+// TestDisconnectDropsHeldPackets: the client walks login to char to map,
+// disconnecting between each, and a backlog from one server must never be
+// delivered to the state that follows it.
+func TestDisconnectDropsHeldPackets(t *testing.T) {
+	c, server := newTestClient(t)
+
+	if _, err := server.Write(notifyTimePacket()); err != nil {
+		t.Fatalf("server write: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && c.heldCount == 0 {
+		if err := c.Process(); err != nil {
+			t.Fatalf("Process: %v", err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if c.heldCount == 0 {
+		t.Fatal("nothing was held to begin with")
+	}
+
+	c.Disconnect()
+	if c.heldCount != 0 {
+		t.Errorf("heldCount = %d after Disconnect, want 0", c.heldCount)
+	}
+
+	fired := make(chan int, 1)
+	c.RegisterHandler(0x007F, func(data []byte) error {
+		fired <- len(data)
+		return nil
+	})
+	select {
+	case <-fired:
+		t.Error("a packet from the previous connection was delivered after it closed")
+	default:
+	}
+}

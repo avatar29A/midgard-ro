@@ -33,6 +33,25 @@ const (
 	// Directions is the number of facings every action provides.
 	Directions = 8
 
+	// ActIntervalTickMs converts an ACT's stored animation interval into
+	// milliseconds. RO records the interval in ticks of 25ms, so the 4.0 that
+	// nearly every sprite carries means 100ms a frame.
+	ActIntervalTickMs = 25.0
+
+	// MaxAnimationFrames bounds how much of one action is baked.
+	//
+	// Every frame becomes a full-size composited texture, which is enormously
+	// wasteful for a single-piece sprite: nothing is being composited, and the
+	// same handful of images are re-baked at different offsets. A Kafra's idle
+	// runs 99 frames, so baking it whole costs 27 MB and 1584 texture uploads
+	// in the frame she first comes into view — a visible stall.
+	//
+	// The real fix is to stop pre-compositing sprites that have nothing to
+	// composite, and draw the frames from their own images with per-frame
+	// offsets. Until then this bounds the damage, and Sheet.Dropped reports
+	// when it bites rather than leaving a shortened loop to be discovered.
+	MaxAnimationFrames = 40
+
 	// HeadStraight is the head direction for looking dead ahead. RO gives a
 	// character three head poses — turned each way and straight — which the
 	// head sprite stores as its three "frames". The server can change this
@@ -42,6 +61,9 @@ const (
 
 // Spec identifies which character sprites to load.
 type Spec struct {
+	// Kind selects the sprite family. The zero value is a player.
+	Kind Kind
+
 	Job       int  // rAthena job/class id
 	Female    bool // sex M/F selects the sprite folder and filename suffix
 	HairStyle int  // head sprite number
@@ -59,6 +81,15 @@ type Sheet struct {
 	Width  int
 	Height int
 	Frames map[int][]Frame
+
+	// IntervalMs is how long each frame of an action is held, taken from the
+	// ACT. Zero means the file did not say and the caller should fall back to
+	// its own rate.
+	IntervalMs [LoadedActions]float32
+
+	// Dropped counts frames left unbaked by MaxAnimationFrames, so a
+	// shortened animation is reported rather than silently shortened.
+	Dropped int
 }
 
 // Frame is one baked animation frame: RGBA pixels at the sheet's dimensions.
@@ -92,11 +123,27 @@ func (s *Sheet) FrameCount(action, direction int) int {
 // bakes the composite sheet. A missing head is not fatal — the body renders
 // on its own — but a missing body is.
 func Load(load Loader, spec Spec) (*Assets, error) {
-	bodySPRPath, bodyACTPath := spec.BodyPaths()
+	candidates := spec.BodyPathCandidates()
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("no sprite known for job %d", spec.Job)
+	}
 
-	bodySPR, bodyACT, err := loadPair(load, bodySPRPath, bodyACTPath)
+	var (
+		bodySPR      *formats.SPR
+		bodyACT      *formats.ACT
+		bodySPRPath  string
+		err          error
+		firstAttempt = candidates[0][0]
+	)
+	for _, candidate := range candidates {
+		bodySPR, bodyACT, err = loadPair(load, candidate[0], candidate[1])
+		if err == nil {
+			bodySPRPath = candidate[0]
+			break
+		}
+	}
 	if err != nil {
-		return nil, fmt.Errorf("body sprite %q: %w", bodySPRPath, err)
+		return nil, fmt.Errorf("body sprite %q: %w", firstAttempt, err)
 	}
 
 	a := &Assets{
@@ -114,7 +161,7 @@ func Load(load Loader, spec Spec) (*Assets, error) {
 		a.HeadPath = headSPRPath
 	}
 
-	a.Sheet = BuildSheet(a.BodySPR, a.BodyACT, a.HeadSPR, a.HeadACT, spec.HeadDirection)
+	a.Sheet = BuildSheet(a.BodySPR, a.BodyACT, a.HeadSPR, a.HeadACT, spec.HeadDirection, spec.Kind)
 	if a.Sheet == nil {
 		return nil, fmt.Errorf("body sprite %q produced no frames", bodySPRPath)
 	}
@@ -130,12 +177,18 @@ func Load(load Loader, spec Spec) (*Assets, error) {
 //
 // headDir picks which of the three head poses to bake in (see HeadStraight).
 //
-// Standing still is a single frame, not three. RO's "idle" action stores one
-// entry per head direction rather than an animation — the body art is
-// identical across all three, only the head turns — so cycling them makes a
-// standing character swivel their head forever. Walking is a real 8-frame
-// animation, and its head stays on the chosen pose while the legs cycle.
-func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR, headACT *formats.ACT, headDir int) *Sheet {
+// What "standing still" means depends on the kind. For a player it is a single
+// frame, not three: RO's idle action stores one entry per head direction
+// rather than an animation — the body art is identical across all three, only
+// the head turns — so cycling them makes a standing character swivel their
+// head forever. Walking is a real animation, and its head stays on the chosen
+// pose while the legs cycle.
+//
+// A monster or NPC has no head to pose, and its idle action is a real
+// animation: a Kafra has 99 idle frames of her standing and shifting. Baking
+// only the first leaves every one of them frozen, which is what treating them
+// like players did.
+func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR, headACT *formats.ACT, headDir int, kind Kind) *Sheet {
 	if bodySPR == nil || bodyACT == nil || len(bodyACT.Actions) == 0 {
 		return nil
 	}
@@ -144,17 +197,39 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 	}
 
 	// frameIndices returns the (bodyFrame, headFrame) pairs to bake for an
-	// action. Idle indexes the body by head direction too, because the body's
-	// neck anchor moves with the head pose.
+	// action. A player's idle indexes the body by head direction too, because
+	// the body's neck anchor moves with the head pose.
 	frameIndices := func(action, available int) [][2]int {
-		if action == ActionIdle {
+		if action == ActionIdle && kind == KindPlayer {
 			return [][2]int{{headDir, headDir}}
+		}
+		if available > MaxAnimationFrames {
+			available = MaxAnimationFrames
 		}
 		pairs := make([][2]int, 0, available)
 		for i := 0; i < available; i++ {
 			pairs = append(pairs, [2]int{i, headDir})
 		}
 		return pairs
+	}
+
+	// Count what the cap leaves out, so the caller can report it. A player's
+	// unbaked idle entries do not count: those are head poses deliberately
+	// left alone, not animation that went missing.
+	dropped := 0
+	for action := 0; action < LoadedActions; action++ {
+		if action == ActionIdle && kind == KindPlayer {
+			continue
+		}
+		for dir := 0; dir < Directions; dir++ {
+			idx := action*Directions + dir
+			if idx >= len(bodyACT.Actions) {
+				continue
+			}
+			if extra := len(bodyACT.Actions[idx].Frames) - MaxAnimationFrames; extra > 0 {
+				dropped += extra
+			}
+		}
 	}
 
 	// First pass: the largest frame decides the sheet size.
@@ -182,9 +257,19 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 
 	// Second pass: bake each frame onto a canvas of that size.
 	sheet := &Sheet{
-		Width:  maxW,
-		Height: maxH,
-		Frames: make(map[int][]Frame, LoadedActions*Directions),
+		Width:   maxW,
+		Height:  maxH,
+		Frames:  make(map[int][]Frame, LoadedActions*Directions),
+		Dropped: dropped,
+	}
+
+	// Every direction of an action shares one interval, so the first is the
+	// action's rate.
+	for action := 0; action < LoadedActions; action++ {
+		idx := action * Directions
+		if idx < len(bodyACT.Intervals) {
+			sheet.IntervalMs[action] = bodyACT.Intervals[idx] * ActIntervalTickMs
+		}
 	}
 
 	for action := 0; action < LoadedActions; action++ {

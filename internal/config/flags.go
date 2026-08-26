@@ -16,6 +16,7 @@ var (
 	flagTrace      = flag.String("trace", "", "Comma-separated trace channels (move, pick, net, render, or all)")
 	flagShotAfter  = flag.Duration("screenshot-after", 0, "Capture a screenshot this long after startup, then keep running (QA aid)")
 	flagShotEvery  = flag.Duration("screenshot-every", 0, "Capture a screenshot on this interval (QA aid)")
+	flagAutoLogin  = flag.Bool("autologin", false, "Log in and enter the first character without input (QA aid)")
 )
 
 // ParseFlags parses command-line flags. Call this early in main().
@@ -36,6 +37,17 @@ func ScreenshotAfter() time.Duration {
 // ScreenshotEvery returns the repeating screenshot interval, zero when unset.
 func ScreenshotEvery() time.Duration {
 	return *flagShotEvery
+}
+
+// AutoLogin reports whether the client should walk the login and character
+// select screens by itself.
+//
+// Getting in game otherwise takes two clicks, which is enough to make every
+// check of anything past the login screen need a person at the keyboard. The
+// credentials still come from the config, so this grants no access that
+// running the client would not.
+func AutoLogin() bool {
+	return *flagAutoLogin
 }
 
 // ConfigPath returns the explicit config path if provided via --config flag.

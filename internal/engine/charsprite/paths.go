@@ -15,9 +15,39 @@ const (
 	bodyDir    = spriteRoot + `몸통\`
 	headDir    = spriteRoot + `머리통\`
 
+	// Monsters and NPCs are single sprites rather than a body with a head
+	// anchored to it, and live outside the character tree.
+	//
+	//	몬스터  "monster"
+	monsterDir = `data\sprite\몬스터\`
+	npcDir     = `data\sprite\npc\`
+
 	male   = `남`
 	female = `여`
 )
+
+// Kind selects which family of sprites a unit is drawn from. Players are
+// composited from a body and a head; everything else is a single sprite named
+// by the generated table in spritenames.go.
+type Kind uint8
+
+// Sprite families. The zero value is a player, so a Spec that predates this
+// still resolves the way it did.
+const (
+	KindPlayer Kind = iota
+	KindMonster
+	KindNPC
+)
+
+// SpriteName returns the sprite basename for a monster or NPC job id, and
+// whether the id was in the client's table.
+//
+// The name can carry a subdirectory: a few sprites sit in a folder under the
+// monster directory rather than directly in it.
+func SpriteName(job int) (string, bool) {
+	name, ok := spriteNames[job]
+	return name, ok
+}
 
 // jobSpriteNames maps rAthena job ids to the body sprite basename. Only the
 // jobs a character can currently be are listed; anything unknown falls back
@@ -74,16 +104,58 @@ func (s Spec) sexSuffix() string {
 }
 
 // BodyPaths returns the archive paths of the body SPR and ACT.
+//
+// For anything that is not a player this is the first candidate only; use
+// BodyPathCandidates, which also offers the other directory.
 func (s Spec) BodyPaths() (sprPath, actPath string) {
-	job, _ := JobSpriteName(s.Job)
-	sex := s.sexSuffix()
-	base := fmt.Sprintf(`%s%s\%s_%s`, bodyDir, sex, job, sex)
-	return base + ".spr", base + ".act"
+	candidates := s.BodyPathCandidates()
+	if len(candidates) == 0 {
+		return "", ""
+	}
+	return candidates[0][0], candidates[0][1]
+}
+
+// BodyPathCandidates returns the archive paths to try, in order.
+//
+// Monsters and NPCs are not cleanly separated in the archive: the same sprite
+// can appear under either directory, and some monsters are only under the NPC
+// one. Trying the other directory after the expected one costs a failed
+// lookup and covers those.
+func (s Spec) BodyPathCandidates() [][2]string {
+	if s.Kind == KindPlayer {
+		job, _ := JobSpriteName(s.Job)
+		sex := s.sexSuffix()
+		base := fmt.Sprintf(`%s%s\%s_%s`, bodyDir, sex, job, sex)
+		return [][2]string{{base + ".spr", base + ".act"}}
+	}
+
+	name, ok := SpriteName(s.Job)
+	if !ok {
+		// No name for this id: there is nothing to guess at. A player sprite
+		// would resolve, but it would be the wrong thing entirely.
+		return nil
+	}
+
+	dirs := [2]string{monsterDir, npcDir}
+	if s.Kind == KindNPC {
+		dirs = [2]string{npcDir, monsterDir}
+	}
+
+	candidates := make([][2]string, 0, len(dirs))
+	for _, dir := range dirs {
+		base := dir + name
+		candidates = append(candidates, [2]string{base + ".spr", base + ".act"})
+	}
+	return candidates
 }
 
 // HeadPaths returns the archive paths of the head SPR and ACT for the
-// character's hair style.
+// character's hair style. Only players have a separate head; for anything else
+// the sprite is whole and this returns nothing.
 func (s Spec) HeadPaths() (sprPath, actPath string) {
+	if s.Kind != KindPlayer {
+		return "", ""
+	}
 	sex := s.sexSuffix()
 	hair := s.HairStyle
 	if hair <= 0 {

@@ -111,6 +111,17 @@ func (c *Character) CurrentCell() (cellX, cellY int) {
 	return WorldToCell(c.WorldX, c.WorldZ)
 }
 
+// SetCell places the character on a map cell, at the terrain height there.
+//
+// This is a correction from the server rather than a step of a walk, so it
+// goes through SetPosition: any path in progress is abandoned and the render
+// position is brought with it, putting the character where the server says it
+// is instead of sliding it there.
+func (c *Character) SetCell(cellX, cellY int) {
+	x, z := CellToWorld(cellX, cellY)
+	c.SetPosition(x, c.groundAt(x, z), z)
+}
+
 // IsWalkingPath reports whether a server path is being walked.
 func (c *Character) IsWalkingPath() bool {
 	return len(c.path) > 0

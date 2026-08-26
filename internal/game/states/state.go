@@ -91,6 +91,10 @@ type Manager struct {
 	// Session data for the character being played.
 	Session Session
 
+	// AutoPlay walks the login and character select screens without input, so
+	// anything past them can be checked unattended. Set from --autologin.
+	AutoPlay bool
+
 	// BGM is nil when audio is unavailable, which the PlayBGM helpers below
 	// tolerate so states never have to check.
 	BGM BGMController
