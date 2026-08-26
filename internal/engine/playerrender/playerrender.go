@@ -52,9 +52,15 @@ const SpriteScale = 1.0 / 6.0
 const (
 	// shadowWidthRatio sizes the shadow against the sprite it belongs to, so
 	// it stays right whatever the character's dimensions are. It is half the
-	// quad's width, and RO's shadow is about the width of the feet rather than
-	// the whole sprite.
-	shadowWidthRatio = 0.18
+	// quad's width: a character's sheet is 50x94px, which at SpriteScale is a
+	// quad 8.3 units wide, so this puts the shadow at 5 units — one tile,
+	// about the width of the character's stance.
+	shadowWidthRatio = 0.30
+
+	// shadowOpacity is darker than the shared default, which was chosen for
+	// the map viewer's lighting. On a bright stone street the softer value
+	// disappeared.
+	shadowOpacity = 0.4
 
 	// shadowLift keeps the shadow off the ground plane it is drawn on;
 	// coplanar quads z-fight.
@@ -249,7 +255,7 @@ func (r *Renderer) Render(viewProj math.Mat4, char *entity.Character, camPosX, c
 // createShadow builds the soft circle the character stands on and the flat
 // quad it is drawn with.
 func (r *Renderer) createShadow() error {
-	pixels := sprite.GenerateCircularShadow(sprite.DefaultShadowSize, sprite.DefaultShadowOpacity)
+	pixels := sprite.GenerateCircularShadow(sprite.DefaultShadowSize, shadowOpacity)
 
 	gl.GenTextures(1, &r.shadowTex)
 	gl.BindTexture(gl.TEXTURE_2D, r.shadowTex)
