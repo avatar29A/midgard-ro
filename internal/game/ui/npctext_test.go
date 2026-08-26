@@ -193,3 +193,67 @@ func TestWrapKeepsColors(t *testing.T) {
 		t.Errorf("second run color = %+v, want blue", lines[0][1].Color)
 	}
 }
+
+func TestStripNPCMarkup(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"nothing to strip", "Welcome to Prontera.", "Welcome to Prontera."},
+		{
+			// Straight from the Prontera Guide, which is where this was found.
+			name: "a navigation link keeps its label and loses its payload",
+			in:   "one for Knights to the <NAVI>[northwest]<INFO>prontera,55,350,0,000,0</INFO></NAVI>",
+			want: "one for Knights to the [northwest]",
+		},
+		{
+			name: "two links on one line",
+			in:   "<NAVI>[a]<INFO>x,1,1,0,0,0</INFO></NAVI> and <NAVI>[b]<INFO>y,2,2,0,0,0</INFO></NAVI>",
+			want: "[a] and [b]",
+		},
+		{
+			name: "lower case tags",
+			in:   "<navi>[here]<info>x,1,1,0,0,0</info></navi>",
+			want: "[here]",
+		},
+		{
+			name: "an unterminated tag is left alone rather than eating the line",
+			in:   "cost < 5 and > 2",
+			want: "cost < 5 and > 2",
+		},
+		{
+			name: "an unclosed INFO keeps the text",
+			in:   "see <NAVI>[there]<INFO>broken",
+			want: "see <NAVI>[there]<INFO>broken",
+		},
+		{
+			name: "line breaks are untouched",
+			in:   "[Guide]\n<NAVI>[north]<INFO>prt,1,1,0,0,0</INFO></NAVI>",
+			want: "[Guide]\n[north]",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := StripNPCMarkup(tt.in); got != tt.want {
+				t.Errorf("StripNPCMarkup(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestParseStripsMarkupBeforeColors pins that the two passes compose: a script
+// can color a navigation label, and both have to come out right.
+func TestParseStripsMarkupBeforeColors(t *testing.T) {
+	runs := ParseNPCText("go ^0000FF<NAVI>[north]<INFO>prt,1,1,0,0,0</INFO></NAVI>^000000 now")
+
+	var text string
+	for _, run := range runs {
+		text += run.Text
+	}
+
+	if text != "go [north] now" {
+		t.Errorf("text = %q, want %q", text, "go [north] now")
+	}
+}

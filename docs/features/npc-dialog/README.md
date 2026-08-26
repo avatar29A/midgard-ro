@@ -399,6 +399,25 @@ clicking inside it does not walk the character. Not exercised yet: a script
 that actually uses `^RRGGBB`, since the Guide's text is plain — the parser has
 table tests but no capture of its own.
 
+**NPC text carries navigation markup as well as color codes.** Found in
+testing, in the Prontera Guide:
+
+```
+<NAVI>[northwest]<INFO>prontera,55,350,0,000,0</INFO></NAVI>
+```
+
+The original turns that into a clickable link showing only `[northwest]`; the
+server passes it through untouched, so printing what arrives puts raw tags and
+map coordinates on screen. `StripNPCMarkup` keeps the label and drops the
+payload. Making the label actually clickable needs minimap navigation, which
+does not exist — but showing `[northwest]` is right either way, and showing the
+coordinates never is. An unclosed tag is left alone rather than swallowing the
+rest of the line, so a stray `<` in prose costs nothing.
+
+This is the second kind of inline markup the text carries, after `^RRGGBB`.
+There may be more — `<ITEM>` and `<URL>` exist in later clients — but nothing
+was invented for tags no script here uses.
+
 Two decisions the tests pinned down. The default text color is **exactly
 black**, because scripts return to the default with `^000000` and any softer
 near-black would make that a visible color change rather than a return — the
