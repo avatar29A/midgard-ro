@@ -4,12 +4,14 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/AllenDang/cimgui-go/imgui"
 	"github.com/go-gl/gl/v4.1-core/gl"
 	"go.uber.org/zap"
 
 	"github.com/Faultbox/midgard-ro/internal/engine/charsprite"
+	"github.com/Faultbox/midgard-ro/internal/engine/cursor"
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
 	"github.com/Faultbox/midgard-ro/internal/logger"
 )
@@ -33,6 +35,10 @@ type UI2DBackend struct {
 	// Where the login window has been dragged to.
 	loginWinX, loginWinY float32
 	loginWinPlaced       bool
+
+	// The game's own mouse cursor, drawn over everything else.
+	cursor     *cursor.Cursor
+	cursorTick time.Time
 
 	// Raw archive reader, for assets that are not textures — character
 	// sprites are composited from SPR and ACT before they can be uploaded.
@@ -173,7 +179,40 @@ func (b *UI2DBackend) syncViewportSize() {
 
 // End finishes the UI frame.
 func (b *UI2DBackend) End() {
+	// The cursor is drawn last so it sits over every window, which is where a
+	// cursor belongs.
+	b.drawCursor()
+
 	b.ctx.End()
+}
+
+// SetCursorState switches which cursor is shown.
+func (b *UI2DBackend) SetCursorState(state cursor.State) {
+	b.cursor.SetState(state)
+}
+
+// drawCursor advances the cursor's animation and draws it under the pointer.
+func (b *UI2DBackend) drawCursor() {
+	if b.cursor == nil {
+		return
+	}
+
+	now := time.Now()
+	b.cursor.Update(now.Sub(b.cursorTick))
+	b.cursorTick = now
+
+	frame, ok := b.cursor.Frame()
+	if !ok {
+		return
+	}
+
+	in := b.ctx.Input()
+
+	// The sprite's origin is the point being pointed at, and the frame's
+	// offset says where its top-left sits relative to that.
+	b.ctx.Renderer().DrawImage(frame.Texture,
+		in.MouseX+frame.OffsetX, in.MouseY+frame.OffsetY,
+		frame.Width, frame.Height, ui2d.ColorWhite)
 }
 
 // SetAssetLoader wires the GRF asset loader into the UI backend.
@@ -181,6 +220,15 @@ func (b *UI2DBackend) End() {
 func (b *UI2DBackend) SetAssetLoader(loadFunc func(string) ([]byte, error)) {
 	b.texCache = NewTextureCache(b.ctx.Renderer(), loadFunc)
 	b.assetLoader = loadFunc
+
+	// The cursor comes from the archives like everything else, so it can only
+	// be built once there is something to read them with.
+	if c, err := cursor.Load(loadFunc, b.ctx.Renderer().CreateTextureNearest); err != nil {
+		logger.Warn("no game cursor, leaving the system one", zap.Error(err))
+	} else {
+		b.cursor = c
+		b.cursorTick = time.Now()
+	}
 
 	// Prefer the original window chrome; the nine-sliced skin stays as the
 	// fallback for archives that lack it.
