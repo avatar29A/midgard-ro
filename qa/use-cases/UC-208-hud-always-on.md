@@ -44,8 +44,26 @@ without any interaction, alongside the Basic Info panel from #87.
 5. Verify it disappears when the character arrives
 6. Verify `hud.target` reports the cell under the cursor
 
+### HP/SP bars under the character
+1. Verify a green HP bar sits under the character's feet with a blue SP bar below it
+2. Verify both follow the character as it walks, and stay under the feet when the camera rotates
+3. Take damage or spend SP, and verify the matching bar shortens
+4. Verify the HP bar turns red below 25%
+5. Verify a monster or pet in view shows its own bar in its own colour, with no SP bar
+6. Verify an entity whose kind should not show a bar has none
+
+### The vitals seam
+1. In a unit test, call `Manager.SetVitals(aid, hp, maxHP)` with a lower HP
+2. Verify the entity's stored values change and the bar width follows
+3. Verify a max of zero does not divide by zero or draw a negative width
+4. **Known limitation:** nothing calls `SetVitals` from the network yet, so a
+   monster's bar shows its spawn value until Track F lands. Verify that is what
+   happens rather than the bar disappearing or reading zero.
+
 ## Expected Results
 - All four HUD elements visible simultaneously and legible at both resolutions
+- Bars under the player and under units that should have them
+- `SetVitals` moves a bar, ready for combat to call
 - Minimap dot matches the real position
 - Chat shows server text and is bounded
 - The target square tracks the cursor and animates on click

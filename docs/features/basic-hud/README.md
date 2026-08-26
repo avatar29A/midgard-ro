@@ -258,10 +258,11 @@ Two traps, both the same shape as ones already hit:
 - **Proved by:** screenshot scenario with the cursor over a cell; UC-208.
 - **Reference:** grf-grid ③
 
-### Step 4 — HP/SP bars under the character
-- **Changes:** `internal/game/ui/hud_entity_bars.go`, `internal/game/states/ingame.go`
+### Step 4 — HP/SP bars under the character and other units
+- **Changes:** `internal/game/ui/hud_entity_bars.go`, `internal/game/entity/entity.go`, `internal/game/states/ingame.go`
 - **Done when:** a green HP bar with a blue SP bar under it follows the player's
-  feet, tracking the camera, and both shorten as the values drop.
+  feet, tracking the camera, and both shorten as the values drop. Other units
+  that should show one — monsters, pets — get theirs in their own colour.
 - **Drawn, not skinned.** roBrowser fills these procedurally
   (`Renderer/Entity/EntityLife.js:79-119`) and the capture agrees, so this does
   **not** use the `gzered`/`gzeblue` art — that is the HUD panel's gauge skin and
@@ -278,9 +279,29 @@ Two traps, both the same shape as ones already hit:
 
   Mobs and pets use different HP colours (`#FF00E7` and `#FFE7E7`), which is why
   the second entity in ref-02 looks nothing like the player's.
-- **No new packets.** The player's HP/SP are already live in `PlayerStats` from
-  #87 — this is a rendering step over a model that exists.
-- **Proved by:** screenshot scenario; UC-208. Bar width against value is a table test.
+- **One renderer, two sources.** The bar takes values, not an entity: give it
+  hp/maxHP, optional sp/maxSP and a kind, and it draws. The player's numbers come
+  from `PlayerStats` (#87, already live); other units' come from
+  `entity.Entity.HP`/`MaxHP`, which `upsertUnit` already fills from the spawn
+  packets (`states/entities.go:66`). Visibility is `Entity.ShowHP`, which
+  `NewEntity` already sets per type.
+- **Built for updates that do not exist yet.** Other units' HP is a *snapshot*
+  from the spawn packet, and nothing refreshes it until combat lands in Track F.
+  Rather than leave that to be discovered, the seam is explicit now:
+
+  ```go
+  // SetVitals updates what a unit's bar shows. Spawn fills it once; combat
+  // packets call this as damage and healing arrive (Track F).
+  func (m *Manager) SetVitals(aid uint32, hp, maxHP int)
+  ```
+
+  Track F wires its damage handlers into that one method and the bars come
+  alive with no change to the renderer. Until then a monster's bar reads full
+  until it despawns — a known limitation, written down rather than surprising.
+- **No new packets.** Everything drawn here is already decoded.
+- **Proved by:** screenshot scenario; UC-208. Bar width against value is a table
+  test, and `SetVitals` has its own test so the seam is exercised before Track F
+  uses it.
 - **Reference:** ref-02 ⑤⑥
 
 ### Step 5 — Hotkey bar
@@ -342,6 +363,8 @@ Two traps, both the same shape as ones already hit:
   readable at 1280×720 and 1920×1080
 - A green square follows the cursor and animates when you click to move
 - A green HP bar and a blue SP bar sit under the character's feet and follow it
+- Units that should show a bar have one, in the colour their kind uses
+- `SetVitals` moves a bar, so Track F has a tested seam to call
 - Each of the four menu buttons opens and closes its window, and the button
   shows which state it is in
 - The stats window updates live as the server sends stat changes
@@ -355,11 +378,9 @@ Two traps, both the same shape as ones already hit:
 - Assigning skills or items to hotkey slots — the bar draws, the slots stay empty.
 - Item icons and skill icons (needs the item sprite table, its own feature).
 - Party, guild, storage, equipment windows.
-- **HP bars over other entities.** The spawn packets already carry their HP and
-  MaxHP, so drawing one is nearly free — but that value is a snapshot, and
-  nothing updates it until the combat packets land in Track F. A bar frozen at
-  full health is worse than no bar. The player's own bars are in scope precisely
-  because #87 already keeps those live.
+- **Keeping other units' HP current.** The bars are drawn and the `SetVitals`
+  seam is in place, but nothing calls it yet — that is Track F's combat packets.
+  Until then a monster's bar shows what it had when it spawned.
 - Settings inside the ESC menu beyond volume — no keybinding UI.
 - **Removing the ImGui dependency.** The dead widgets go (Step 10), but the SDL
   platform backend and the input/DPI calls the native UI makes stay. Replacing
@@ -398,3 +419,6 @@ Two traps, both the same shape as ones already hit:
 - 2026-08-26 — added the HP/SP bars under the character as Step 4, with real
   client captures (ref-01, ref-02) taken from #86's ref-03; Open question 1
   answered by them (per request)
+- 2026-08-26 — extended Step 4 to other units too, with an explicit `SetVitals`
+  seam for Track F to call, rather than deferring the whole component (per
+  direction)
