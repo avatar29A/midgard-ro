@@ -166,11 +166,35 @@ func (b *UI2DBackend) renderNPCDialog(state InGameUIState, width, height float32
 
 	lines := WrapNPCText(ParseNPCText(state.DialogMessage), textW, measure)
 
-	// Show the end of a conversation that has outgrown its box, not the
-	// beginning. Successive messages append, so what was just said is what
-	// the player wants to read — this is the scroll, without a scrollbar.
-	if fits := int((textBottom - textY) / npcLineHeight); fits > 0 && len(lines) > fits {
-		lines = lines[len(lines)-fits:]
+	fits := int((textBottom - textY) / npcLineHeight)
+	if fits < 1 {
+		fits = 1
+	}
+
+	// New text pins the view to the bottom: what was just said is what the
+	// player is waiting to read. Scrolling up holds until the next message.
+	if len(state.DialogMessage) != b.npcTextLen {
+		b.npcTextLen = len(state.DialogMessage)
+		b.npcTextScroll = len(lines) - fits
+	}
+
+	maxScroll := len(lines) - fits
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+
+	b.scrollNPCText(maxScroll, x, y)
+
+	if b.npcTextScroll > maxScroll {
+		b.npcTextScroll = maxScroll
+	}
+	if b.npcTextScroll < 0 {
+		b.npcTextScroll = 0
+	}
+
+	if len(lines) > fits {
+		lines = lines[b.npcTextScroll : b.npcTextScroll+fits]
+		b.drawNPCTextScrollbar(len(lines), maxScroll, textX+textW, textY, float32(fits)*npcLineHeight)
 	}
 
 	for _, line := range lines {
@@ -224,4 +248,35 @@ func (b *UI2DBackend) drawNPCDialogButton(state InGameUIState, x, y float32) {
 		skin.normal, skin.hover, skin.pressed, label) && action != nil {
 		action()
 	}
+}
+
+// scrollNPCText moves the message under the wheel, so a conversation that has
+// outgrown the window can be read back rather than just losing its beginning.
+func (b *UI2DBackend) scrollNPCText(maxScroll int, x, y float32) {
+	if maxScroll <= 0 {
+		return
+	}
+
+	in := b.ctx.Input()
+	if in == nil || in.ScrollY == 0 {
+		return
+	}
+
+	if !(ui2d.Rect{X: x, Y: y, W: npcWinW, H: npcWinH}).Contains(in.MouseX, in.MouseY) {
+		return
+	}
+
+	b.npcTextScroll -= int(in.ScrollY)
+}
+
+// drawNPCTextScrollbar shows where the view sits in a longer conversation.
+func (b *UI2DBackend) drawNPCTextScrollbar(visible, maxScroll int, x, y, height float32) {
+	total := visible + maxScroll
+
+	b.fillNPCRect(x, y, npcMenuBarW, height, npcMenuListColor)
+
+	thumbH := height * float32(visible) / float32(total)
+	thumbY := y + (height-thumbH)*float32(b.npcTextScroll)/float32(maxScroll)
+
+	b.fillNPCRect(x, thumbY, npcMenuBarW, thumbH, npcMenuBarColor)
 }

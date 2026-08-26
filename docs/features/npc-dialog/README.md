@@ -436,11 +436,16 @@ near-black would make that a visible color change rather than a return — the
 test caught this. And a word wider than the field overflows rather than being
 broken mid-word: rare, and a split word reads worse than one that runs on.
 
-**Scrolling is not implemented.** Lines past the bottom of the field are
-dropped. The original scrolls, and roBrowser accumulates successive messages in
-one box — but a message only grows past the box once `Next` starts appending to
-it, which is Step 5. Doing it here would be building for a case that cannot yet
-arise.
+**Both windows scroll.** The text window follows the newest line, and the
+wheel reads back through a longer conversation; a track and thumb show where
+the view sits. New text re-pins to the bottom, since what was just said is what
+the player is waiting for, but scrolling up holds until then.
+
+This became necessary rather than optional when the line pitch was corrected to
+the original's 21px: six lines fit where eleven had, and a conversation of two
+or three messages now outgrows the window every time. Neither window has the
+arrow buttons at the ends of the original's scrollbar — the wheel does the same
+job.
 
 **How to test this at all:** the NPCs near the default spawn are warps and
 shops (see Step 2). Move the character next to a talker first —
