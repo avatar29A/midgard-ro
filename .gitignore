@@ -6,7 +6,11 @@
 *.dylib
 build/
 bin/
+# Local `go build -o` targets. /grfbrowser was already here; the client is
+# built under both names depending on which command you copy.
 /grfbrowser
+/client
+/midgard
 
 # Test binary, built with `go test -c`
 *.test

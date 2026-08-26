@@ -13,10 +13,12 @@ var (
 	flagFullscreen = flag.Bool("fullscreen", false, "Run in fullscreen mode")
 	flagWidth      = flag.Int("width", 0, "Window width")
 	flagHeight     = flag.Int("height", 0, "Window height")
-	flagTrace      = flag.String("trace", "", "Comma-separated trace channels (move, pick, net, render, or all)")
+	flagTrace      = flag.String("trace", "", "Comma-separated trace channels (move, pick, net, render, status, or all)")
 	flagShotAfter  = flag.Duration("screenshot-after", 0, "Capture a screenshot this long after startup, then keep running (QA aid)")
 	flagShotEvery  = flag.Duration("screenshot-every", 0, "Capture a screenshot on this interval (QA aid)")
 	flagAutoLogin  = flag.Bool("autologin", false, "Log in and enter the first character without input (QA aid)")
+	flagDebugHUD   = flag.Bool("debug-overlay", false, "Start with the F3 debug overlay open (QA aid)")
+	flagNoBGM      = flag.Bool("no-bgm", false, "Run without background music, keeping sound effects")
 )
 
 // ParseFlags parses command-line flags. Call this early in main().
@@ -48,6 +50,24 @@ func ScreenshotEvery() time.Duration {
 // running the client would not.
 func AutoLogin() bool {
 	return *flagAutoLogin
+}
+
+// DebugOverlay reports whether the F3 overlay should start open.
+//
+// The overlay is the cheapest proof that a value reached the client, but F3 is
+// a keypress, so an unattended --screenshot-after run could never capture it.
+// This makes the same readout reachable from a command line.
+func DebugOverlay() bool {
+	return *flagDebugHUD
+}
+
+// NoBGM reports whether background music should be left off.
+//
+// The music loops for as long as the client runs, which is exactly what you
+// do not want while reading a log or listening for a sound effect. Sound
+// effects are unaffected.
+func NoBGM() bool {
+	return *flagNoBGM
 }
 
 // ConfigPath returns the explicit config path if provided via --config flag.

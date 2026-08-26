@@ -84,6 +84,9 @@ type Game struct {
 	// turn on to inspect player/camera/scene/network telemetry live.
 	showDebug bool
 
+	// toggleBasicInfo is set for the frame Ctrl+V was pressed.
+	toggleBasicInfo bool
+
 	// Unattended screenshot capture (--screenshot-after / --screenshot-every),
 	// so the UI can be inspected without someone sitting at the keyboard to
 	// press F12.
@@ -324,6 +327,14 @@ func (g *Game) initAudio(cfg *config.Config) {
 	manager.SetBGMVolume(float64(cfg.Audio.MusicVolume))
 	manager.SetSFXVolume(float64(cfg.Audio.SFXVolume))
 
+	g.audioManager = manager
+
+	if config.NoBGM() {
+		logger.Info("background music disabled (--no-bgm)")
+
+		return
+	}
+
 	// The name table says which track belongs to which map. Without it every
 	// location falls back to the title theme, which is still better than
 	// silence.
@@ -342,7 +353,6 @@ func (g *Game) initAudio(cfg *config.Config) {
 		zap.String("bgmDir", bgmDir),
 		zap.Int("bgmTracks", len(table)))
 
-	g.audioManager = manager
 	g.bgm = audio.NewLocationPlayer(manager, table, bgmDir)
 	g.stateManager.BGM = g.bgm
 }
@@ -448,6 +458,11 @@ func (g *Game) frame() {
 		g.showDebug = !g.showDebug
 	}
 
+	// Ctrl+V folds the Basic Info panel to its reduced form, as in the
+	// original. Read here and passed to the UI as a one-frame event: which
+	// form the panel is in belongs to the panel.
+	g.toggleBasicInfo = imgui.IsKeyChordPressed(imgui.KeyChord(imgui.ModCtrl | imgui.KeyV))
+
 	// F4 hides map objects, leaving bare terrain. Anything still wrong on
 	// screen with the models gone belongs to the terrain mesh — otherwise the
 	// two are hard to tell apart where objects sit flush against the ground.
@@ -500,6 +515,12 @@ func (g *Game) SetScreenshotTimers(after, every time.Duration) {
 	g.shotEvery = every
 	g.startedAt = time.Now()
 	g.shotLast = time.Now()
+}
+
+// ShowDebugOverlay opens the F3 overlay from the start, so an unattended
+// screenshot can capture what it reads. F3 still toggles it afterwards.
+func (g *Game) ShowDebugOverlay(show bool) {
+	g.showDebug = show
 }
 
 // checkTimedScreenshot fires the unattended capture timers. Both are off
@@ -642,18 +663,12 @@ func (g *Game) renderUI() {
 		}, viewportWidth, viewportHeight)
 
 	case *states.LoadingState:
-		// Debug gate: once loading hits 100% the state holds until the
-		// user presses Enter, so we can inspect the loading screen.
-		if state.IsReadyForTransition() && imgui.IsKeyPressedBoolV(imgui.KeyEnter, false) {
-			state.PressEnter()
-		}
 		g.uiBackend.RenderLoadingUI(ui.LoadingUIState{
 			MapName:       state.GetMapName(),
 			StatusMessage: state.GetStatusMessage(),
 			ErrorMessage:  state.GetErrorMessage(),
 			Progress:      state.GetProgress(),
 			Phase:         state.GetLoadingPhase(),
-			ReadyForInput: state.IsReadyForTransition(),
 		}, viewportWidth, viewportHeight)
 
 	case *states.InGameState:
@@ -666,6 +681,8 @@ func (g *Game) renderUI() {
 			playerDirection = uint8(player.Direction)
 		}
 		playerTileX, playerTileY = state.GetPlayerTilePosition()
+
+		stats := state.Stats()
 
 		uiState := ui.InGameUIState{
 			MapName:         state.GetMapName(),
@@ -680,7 +697,24 @@ func (g *Game) renderUI() {
 			StatusMessage:   state.GetStatusMessage(),
 			ErrorMessage:    state.GetErrorMessage(),
 			ShowDebugInfo:   g.showDebug,
+			ToggleBasicInfo: g.toggleBasicInfo,
 			FPS:             g.fps,
+			PlayerName:      ui.GetCharName(state.CharInfo()),
+			PlayerClass:     stats.Class,
+			PlayerHP:        stats.HP,
+			PlayerMaxHP:     stats.MaxHP,
+			PlayerSP:        stats.SP,
+			PlayerMaxSP:     stats.MaxSP,
+			PlayerLevel:     stats.BaseLevel,
+			PlayerJobLevel:  stats.JobLevel,
+
+			PlayerBaseExp:     stats.BaseExp,
+			PlayerNextBaseExp: stats.NextBaseExp,
+			PlayerJobExp:      stats.JobExp,
+			PlayerNextJobExp:  stats.NextJobExp,
+			PlayerZeny:        stats.Zeny,
+			PlayerWeight:      stats.Weight,
+			PlayerMaxWeight:   stats.MaxWeight,
 		}
 		populateDebugFields(&uiState, state, g.client)
 		g.uiBackend.RenderInGameUI(uiState, g.dt, viewportWidth, viewportHeight)
@@ -871,7 +905,12 @@ func (g *Game) handleInGameInput(state *states.InGameState) {
 	// Left click for click-to-move. Skip if any imgui window (HUD, minimap,
 	// chat, etc) is consuming the click; otherwise ray-cast to ground plane
 	// and dispatch a server move request.
-	if imgui.IsMouseClickedBool(imgui.MouseButtonLeft) && !io.WantCaptureMouse() {
+	// A click on the interface is not a click on the world behind it. ImGui
+	// answers for its own windows; the 2D UI has to be asked separately,
+	// since the HUD is not an ImGui window and ImGui does not know it is
+	// there.
+	if imgui.IsMouseClickedBool(imgui.MouseButtonLeft) && !io.WantCaptureMouse() &&
+		!g.uiBackend.MouseCaptured() {
 		viewportW, viewportH := g.uiBackend.GetScreenSize()
 
 		trace.Emit(trace.Pick, "click",

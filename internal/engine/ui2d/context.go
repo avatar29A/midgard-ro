@@ -1,6 +1,9 @@
 package ui2d
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // Context is the main UI context that manages rendering and input.
 type Context struct {
@@ -38,7 +41,26 @@ type Context struct {
 	// rather than an audio dependency because this package may only import
 	// pkg/ — see the layer rules in CLAUDE.md.
 	clickSound func()
+
+	// mouseCaptured is set while the pointer is over something this package
+	// drew, so the game can tell a click on the interface from a click on
+	// the world behind it. Reset every frame.
+	mouseCaptured bool
+
+	// The last press, for recognizing a double click.
+	lastClickID string
+	lastClickAt time.Time
+	lastClickX  float32
+	lastClickY  float32
 }
+
+// doubleClickWindow and doubleClickSlop are what counts as a double click:
+// two presses close together in both time and place. The slop matters because
+// a mouse almost always moves a pixel or two between the two presses.
+const (
+	doubleClickWindow = 400 * time.Millisecond
+	doubleClickSlop   = float32(6)
+)
 
 // WindowState holds state for a UI window.
 //
@@ -134,7 +156,65 @@ func (c *Context) SetDefaultInputSkin(skin *NineSlice) {
 // Begin starts a new UI frame.
 func (c *Context) Begin() {
 	c.input.Update()
+	c.mouseCaptured = false
 	c.renderer.Begin()
+}
+
+// CaptureMouse claims the pointer for the interface while it is inside rect.
+//
+// Widgets do this for themselves; this is for the areas between them — a
+// panel's body, which is not a widget but is still part of the interface and
+// should not let a click through to the world behind it.
+func (c *Context) CaptureMouse(rect Rect) {
+	if rect.Contains(c.input.MouseX, c.input.MouseY) {
+		c.mouseCaptured = true
+	}
+}
+
+// MouseCaptured reports whether the pointer is over the interface.
+//
+// It describes the frame that was last drawn, so a caller reading it during
+// its update step is looking at the previous frame — which is what you want:
+// the interface has to be drawn before anyone can click on it.
+func (c *Context) MouseCaptured() bool {
+	return c.mouseCaptured
+}
+
+// DoubleClickedIn reports a double click inside rect, attributed to id.
+//
+// It does not consume the press: a control can be both dragged and
+// double-clicked, which is exactly what a title bar is.
+func (c *Context) DoubleClickedIn(id string, rect Rect) bool {
+	if !c.input.MouseLeftPressed || !rect.Contains(c.input.MouseX, c.input.MouseY) {
+		return false
+	}
+
+	x, y := c.input.MouseX, c.input.MouseY
+
+	quick := time.Since(c.lastClickAt) < doubleClickWindow
+	near := abs32(x-c.lastClickX) <= doubleClickSlop && abs32(y-c.lastClickY) <= doubleClickSlop
+
+	if c.lastClickID == id && quick && near {
+		// Cleared so a third press starts a new pair rather than firing again.
+		c.lastClickID = ""
+
+		return true
+	}
+
+	c.lastClickID = id
+	c.lastClickAt = time.Now()
+	c.lastClickX, c.lastClickY = x, y
+
+	return false
+}
+
+// abs32 is math.Abs without the conversion to float64 and back.
+func abs32(v float32) float32 {
+	if v < 0 {
+		return -v
+	}
+
+	return v
 }
 
 // End finishes the UI frame.

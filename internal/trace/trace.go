@@ -34,6 +34,9 @@ const (
 	// Render covers per-frame timing: how long update, scene and UI each take,
 	// and how much of the frame is spent blocked in the buffer swap.
 	Render = "render"
+	// Status covers the parameter updates the server pushes — HP, SP, levels,
+	// experience, weight and Zeny — including the ids we do not map yet.
+	Status = "status"
 )
 
 // All is the channel spec that turns everything on.

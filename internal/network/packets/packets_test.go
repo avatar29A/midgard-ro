@@ -209,37 +209,116 @@ func TestMapAcceptDecode(t *testing.T) {
 	}
 }
 
+// TestCharInfoDecode builds a record at the offsets rAthena's CHARACTER_INFO
+// actually uses at PACKETVER_RE 20211103 and checks every field lands where
+// the decoder expects.
+//
+// The values are picked so a misread is visible rather than plausible: HP and
+// SP differ, and so do their maxima. The offsets were previously guessed from
+// a capture and had hp reading sp and maxhp reading maxsp, so a character with
+// 40 HP and 11 SP showed as 11 HP and 40 SP — two real numbers in the wrong
+// places, which is exactly the kind of wrong that survives being looked at.
 func TestCharInfoDecode(t *testing.T) {
-	// Create a minimal char info packet
 	data := make([]byte, CharInfoSize)
 
-	// Set char ID
-	data[0] = 0x01
-	data[1] = 0x00
-	data[2] = 0x02
-	data[3] = 0x00
+	put16 := func(off int, v uint16) {
+		data[off] = byte(v)
+		data[off+1] = byte(v >> 8)
+	}
+	put32 := func(off int, v uint32) {
+		writeU32(data, off, v)
+	}
+	put64 := func(off int, v uint64) {
+		put32(off, uint32(v))
+		put32(off+4, uint32(v>>32))
+	}
 
-	// Set name at offset 108
+	put32(0, 0x00020001) // GID
+	put64(4, 1234)       // exp
+	put32(12, 5000)      // money
+	put64(16, 99)        // jobexp
+	put32(24, 7)         // joblevel
+	put16(48, 3)         // jobpoint / status point
+	put64(50, 40)        // hp
+	put64(58, 45)        // maxhp
+	put64(66, 11)        // sp
+	put64(74, 12)        // maxsp
+	put16(82, 150)       // speed
+	put16(84, 4)         // job
+	put16(86, 2)         // head / hair style
+	put16(88, 1)         // body
+	put16(90, 1101)      // weapon
+	put16(92, 33)        // level
+	put16(94, 9)         // sppoint
+	put16(104, 6)        // headpalette / hair color
+	put16(106, 5)        // bodypalette / clothes color
 	copy(data[108:132], "TestChar\x00")
-
-	// Set slot at offset 138
-	data[138] = 3
+	data[132], data[133], data[134] = 11, 12, 13 // Str Agi Vit
+	data[135], data[136], data[137] = 14, 15, 16 // Int Dex Luk
+	data[138] = 3                                // CharNum / slot
+	copy(data[142:158], "prontera\x00")
+	put32(162, 8) // robePalette
+	data[174] = 1 // sex
 
 	info := DecodeCharInfo(data)
 	if info == nil {
 		t.Fatal("DecodeCharInfo returned nil")
 	}
 
-	if info.CharID != 0x00020001 {
-		t.Errorf("expected CharID 0x00020001, got %08x", info.CharID)
+	tests := []struct {
+		field string
+		got   uint64
+		want  uint64
+	}{
+		{"CharID", uint64(info.CharID), 0x00020001},
+		{"BaseExp", uint64(info.BaseExp), 1234},
+		{"Zeny", uint64(info.Zeny), 5000},
+		{"JobExp", uint64(info.JobExp), 99},
+		{"JobLevel", uint64(info.JobLevel), 7},
+		{"StatusPoint", uint64(info.StatusPoint), 3},
+		{"HP", uint64(info.HP), 40},
+		{"MaxHP", uint64(info.MaxHP), 45},
+		{"SP", uint64(info.SP), 11},
+		{"MaxSP", uint64(info.MaxSP), 12},
+		{"WalkSpeed", uint64(info.WalkSpeed), 150},
+		{"Class", uint64(info.Class), 4},
+		{"HairStyle", uint64(info.HairStyle), 2},
+		{"Body", uint64(info.Body), 1},
+		{"Weapon", uint64(info.Weapon), 1101},
+		{"BaseLevel", uint64(info.BaseLevel), 33},
+		{"SkillPoint", uint64(info.SkillPoint), 9},
+		{"HairColor", uint64(info.HairColor), 6},
+		{"ClothesColor", uint64(info.ClothesColor), 5},
+		{"Str", uint64(info.Str), 11},
+		{"Agi", uint64(info.Agi), 12},
+		{"Vit", uint64(info.Vit), 13},
+		{"Int", uint64(info.Int), 14},
+		{"Dex", uint64(info.Dex), 15},
+		{"Luk", uint64(info.Luk), 16},
+		{"Slot", uint64(info.Slot), 3},
+		{"Robe", uint64(info.Robe), 8},
+		{"Sex", uint64(info.Sex), 1},
+	}
+
+	for _, tt := range tests {
+		if tt.got != tt.want {
+			t.Errorf("%s = %d, want %d", tt.field, tt.got, tt.want)
+		}
 	}
 
 	if info.GetName() != "TestChar" {
-		t.Errorf("expected name 'TestChar', got '%s'", info.GetName())
+		t.Errorf("GetName() = %q, want \"TestChar\"", info.GetName())
 	}
+	if info.GetMapName() != "prontera" {
+		t.Errorf("GetMapName() = %q, want \"prontera\"", info.GetMapName())
+	}
+}
 
-	if info.Slot != 3 {
-		t.Errorf("expected slot 3, got %d", info.Slot)
+// TestCharInfoDecodeShort makes sure a truncated record is refused rather than
+// read past its end.
+func TestCharInfoDecodeShort(t *testing.T) {
+	if info := DecodeCharInfo(make([]byte, CharInfoSize-1)); info != nil {
+		t.Errorf("DecodeCharInfo(short) = %+v, want nil", info)
 	}
 }
 
