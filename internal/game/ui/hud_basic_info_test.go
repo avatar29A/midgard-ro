@@ -63,3 +63,49 @@ func TestPercentOf(t *testing.T) {
 		})
 	}
 }
+
+func TestExpFillWidth(t *testing.T) {
+	const track = 110
+
+	tests := []struct {
+		name          string
+		current, next int64
+		want          float32
+	}{
+		{"none earned", 0, 548, 0},
+		{"half way", 274, 548, 55},
+		{"level reached", 548, 548, track},
+		{"max level sends no next total", 12345, 0, 0},
+		{"a fraction of a percent still shows", 1, 100000, float32(track) / 100000},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := expFillWidth(tt.current, tt.next, track); got != tt.want {
+				t.Errorf("expFillWidth(%d, %d, %v) = %v, want %v",
+					tt.current, tt.next, float32(track), got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWithThousands(t *testing.T) {
+	tests := []struct {
+		in   int64
+		want string
+	}{
+		{0, "0"},
+		{7, "7"},
+		{999, "999"},
+		{1000, "1,000"},
+		{100000, "100,000"},
+		{1234567, "1,234,567"},
+		{-1234, "-1,234"},
+	}
+
+	for _, tt := range tests {
+		if got := withThousands(tt.in); got != tt.want {
+			t.Errorf("withThousands(%d) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}

@@ -251,11 +251,25 @@ The panel reads `18 / 40` and `7 / 11` — the values after those updates, not t
 
 Two decisions worth recording. The fill is rounded to **whole pixels**, because the art is nearest-filtered and a fractional edge shimmers as the value changes; but anything above zero keeps at least one pixel, so a character on their last hit point does not read as a corpse. And the gauge row is set smaller than the rest of the panel (0.6 against 0.7): the bar is 8px tall and the reading sits on it, so at the body's size the glyphs stood proud of the bar.
 
-### Step 4 — Experience bars, weight and Zeny, and the menu grid
-- **Changes:** `internal/game/ui/hud_basic_info.go`
+### Step 4 — Experience bars, weight and Zeny, and the menu grid ✅
+- **Changes:** `internal/game/ui/hud_basic_info.go`, `internal/game/states/player_stats.go`
 - **Done when:** Base/Job EXP bars fill against the next-level values; `Weight: cur/max` and `Zeny: n` read the server's values; the ten 54×18 buttons draw in a four-per-row grid using their own hover and pressed art
 - **Proved by:** screenshot scenario; buttons are drawn but inert (see Out of scope)
 - **Reference:** ref screenshot ⑩⑪⑫, grf-basewin-bg2 ④⑤, grf-btn-info1 ⑥
+
+![The finished panel: base experience at 200/548, weight, Zeny and the ten menu buttons](./current-full-panel.png)
+
+**Three things roBrowser's markup settled that the plan had wrong or missing.**
+
+1. **The experience bars are not artwork.** `BasicInfo.css` draws them: a 1px `#afafaf` rule around a white well with a solid `#4262a5` fill, 110×4. No bitmap was needed, and none exists for them. Unlike the health gauges the fill keeps its fractional width — the bar covers a whole level in 110px, so rounding down would show nothing for the first percent.
+2. **Weight arrives in tenths of a unit.** `this.ui.find('.weight_value').text(val1 / 10 | 0)`. The server sent `SP_MAXWEIGHT = 20300` for this character, which is 2030, and without the conversion the panel would have read `0 / 20300` convincingly. Converted in `PlayerStats.Apply`, so `Weight` means weight wherever it is read.
+3. **Weight turns red at half load**, which is where the carrying penalties start — the color is the warning, not decoration.
+
+The footer line lives on the striped band at y 119, right-aligned 5px from the edge (`.extra`), which is what the reference screenshot shows.
+
+Verified against real values by setting `zeny` and `base_exp` in the server's database, then restoring them: `Weight : 0 / 2030`, `Zeny : 123,456`, and a base bar at 200/548.
+
+roBrowser lists **eight** buttons; the archive ships ten and your screenshot shows ten, so ten is what is drawn. They are inert — the windows they open are their own features — but they use their real hover and pressed art, which is what tells you a button is alive. Not carried over: the original fades the whole strip to 50% until the mouse is over it.
 
 ### Step 5 — Reduced form and dragging
 - **Changes:** `internal/game/ui/hud_basic_info.go`, input handling for Ctrl+V
@@ -295,6 +309,10 @@ _All three from the first round are answered — see the Revision log. One follo
 
 ## Revision log
 
+- 2026-08-26 — **Step 4 done.** Experience bars, the weight/Zeny footer and
+  the ten-button grid. Two corrections from roBrowser's markup: the experience
+  bars are drawn rectangles rather than artwork, and weight arrives in tenths
+  of a unit.
 - 2026-08-26 — **Step 3 done.** Both gauges fill proportionally with the
   reading on the bar and the percentage beside it, verified against a
   deliberately damaged character and against live regeneration ticks.

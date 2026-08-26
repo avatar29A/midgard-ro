@@ -698,6 +698,14 @@ func (g *Game) renderUI() {
 			PlayerMaxSP:     stats.MaxSP,
 			PlayerLevel:     stats.BaseLevel,
 			PlayerJobLevel:  stats.JobLevel,
+
+			PlayerBaseExp:     stats.BaseExp,
+			PlayerNextBaseExp: stats.NextBaseExp,
+			PlayerJobExp:      stats.JobExp,
+			PlayerNextJobExp:  stats.NextJobExp,
+			PlayerZeny:        stats.Zeny,
+			PlayerWeight:      stats.Weight,
+			PlayerMaxWeight:   stats.MaxWeight,
 		}
 		populateDebugFields(&uiState, state, g.client)
 		g.uiBackend.RenderInGameUI(uiState, g.dt, viewportWidth, viewportHeight)
