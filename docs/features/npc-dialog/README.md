@@ -322,13 +322,38 @@ packet's own length rather than by the buffer — several packets arrive in one
 read, and trusting the buffer would swallow the next one. There is a test for
 exactly that.
 
-### Step 2 — Click an NPC and tell the server
-- **Changes:** `internal/engine/picking`, `internal/game/states/ingame.go`, `internal/game/game.go`
+### Step 2 — Click an NPC and tell the server ✅
+- **Changes:** `internal/game/states/npcpick.go` (new), `ingame.go`, `internal/engine/playerrender`
 - **Done when:** clicking an NPC sends `CZ_CONTACTNPC` and does **not** walk you
   there; clicking the ground still walks.
-- **Proved by:** `--trace=npc,net` shows `npc.click` → `npc.contact` → a
-  `ZC_SAY_DIALOG` arriving. No `net.send` of a move request in the same frame.
+- **Proved by:** `--trace=npc,net` shows `npc.click` → `npc.contact` → the
+  server answering for that npc id. `ClickWorld` returns before it ever reaches
+  `ScreenToTile`, so no move request is built.
 - **Reference:** current-npcs ⑥
+
+The hit test is an axis-aligned box per unit rather than the sprite itself: the
+billboard turns to face the camera, so its plane has no fixed orientation, and
+a square column of the sprite's own width covers wherever it is pointing. It
+over-selects at the corners, which is the forgiving direction for something you
+are trying to click. The box matches the drawn quad — `playerrender.UnitQuadSize`
+reports it — and stands on the unit's feet, because the quad does.
+
+**Two things worth knowing before Step 3 tests anything.**
+
+`--trace=npc` now emits a `candidate` line per eligible unit, with its world
+position **and where it projects on screen**. That last field is what turned a
+guessing game into a measurement: the first three attempts at clicking an NPC
+missed, and the trace showed 7 candidates with the ray hitting none — which
+distinguishes "no NPC is tracked" from "the boxes are in the wrong place" from
+"your aim is off". It was the third: the nearest NPC stood at world z 1222
+while the click landed on the ground at z 1206.
+
+And **most NPCs near the Prontera spawn are not talkers**. `prt05`, `prt07` and
+friends are warps — contacting one is valid and silent. `Amatsu Trader#nin`
+answers `CZ_CONTACTNPC` with **`0x00C4`** (`ZC_SELECT_DEALTYPE`, the buy/sell
+prompt), because it is a shop. Both prove the round trip; neither produces a
+`ZC_SAY_DIALOG`. Step 3 needs an NPC whose script actually calls `mes` — the
+Kafra is the obvious one.
 
 ### Step 3 — Show what the NPC says
 - **Changes:** `internal/game/states/npcdialog.go`, `internal/game/ui/`
@@ -403,6 +428,13 @@ exactly that.
   declared with `parseable_packet(...)`.
 
 ## Revision log
+
+- 2026-08-26 — **Step 2 done.** Clicking an NPC contacts it and does not walk
+  you there. Added `playerrender.UnitQuadSize` so the hit box matches the drawn
+  quad, and a `candidate` trace that projects each eligible unit to screen —
+  which is what found that the misses were bad aim rather than bad geometry.
+  Also learned that the NPCs nearest the spawn are warps and shops, so Step 3
+  must pick a scripted one to test against.
 
 - 2026-08-26 — **Step 1 done.** The eight conversation packets encode and
   decode, verified against the server's headers rather than against this plan's
