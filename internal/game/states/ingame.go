@@ -92,6 +92,9 @@ type InGameState struct {
 	// current by the server's parameter packets.
 	stats PlayerStats
 
+	// The conversation in progress, if any.
+	dialog NPCDialog
+
 	// Parameter ids we do not track, remembered so each is reported once
 	// rather than on every update the server sends for it.
 	unknownStats map[uint16]bool
@@ -641,6 +644,10 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_PAR_CHANGE, s.handleStatusChange)
 	s.client.RegisterHandler(packets.ZC_LONGPAR_CHANGE, s.handleStatusChange)
 	s.client.RegisterHandler(packets.ZC_LONGLONGPAR_CHANGE, s.handleStatusChange)
+	s.client.RegisterHandler(packets.ZC_SAY_DIALOG, s.handleSayDialog)
+	s.client.RegisterHandler(packets.ZC_WAIT_DIALOG, s.handleWaitDialog)
+	s.client.RegisterHandler(packets.ZC_CLOSE_DIALOG, s.handleCloseDialog)
+	s.client.RegisterHandler(packets.ZC_MENU_LIST, s.handleMenuList)
 }
 
 // sendKeepAlive sends CZ_REQUEST_TIME so the map server doesn't time us out.
@@ -1064,6 +1071,39 @@ func abs(v int) int {
 		return -v
 	}
 	return v
+}
+
+// ClickWorld handles a left click that landed on the world rather than on the
+// interface.
+//
+// It exists so there is one place that decides what a click means. Today that
+// decision is only "walk there"; entity picking goes in front of it, and
+// having the decision in the state — where the entities and the connection
+// already are — is what lets it, without the game loop growing a second copy
+// of the ray cast.
+func (s *InGameState) ClickWorld(mouseX, mouseY, viewportW, viewportH float32) {
+	// An NPC under the pointer takes the click. Walking there instead would be
+	// the wrong thing twice over: the conversation would not start, and the
+	// server would refuse a step into the cell the NPC is standing on.
+	if npc := s.PickEntity(mouseX, mouseY, viewportW, viewportH); npc != nil {
+		trace.Emit(trace.NPC, "click",
+			zap.Uint32("npcID", npc.ID), zap.String("name", npc.Name),
+			zap.Float32("screenX", mouseX), zap.Float32("screenY", mouseY))
+
+		s.ContactNPC(npc)
+
+		return
+	}
+
+	tileX, tileY, ok := s.ScreenToTile(mouseX, mouseY, viewportW, viewportH)
+	if !ok {
+		trace.Emit(trace.Pick, "miss")
+		return
+	}
+
+	if err := s.RequestMove(tileX, tileY); err != nil {
+		logger.Warn("click-to-move RequestMove failed", zap.Error(err))
+	}
 }
 
 // RequestMove asks the server to walk to a cell, remembering it as the

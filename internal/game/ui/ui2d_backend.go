@@ -53,6 +53,33 @@ type UI2DBackend struct {
 	charSelX, charSelY float32
 	charSelPlaced      bool
 
+	// The NPC dialog's Next and Close buttons, keyed by name.
+	npcButtons map[string]*npcButtonSkin
+
+	// The original's scrollbar art, shared by every list that needs one.
+	scrollSkin  *scrollbarSkin
+	scrollTried bool
+
+	// A single white pixel, stretched to paint rectangles in the image layer.
+	// See fillNPCRect for why that is not the same as DrawRect.
+	whiteTex uint32
+
+	// Where the NPC dialog has been dragged to, and how far its text is
+	// scrolled back. npcTextLen notices new text so the view can re-pin to
+	// the bottom when the script says something more.
+	npcWinX, npcWinY float32
+	npcWinPlaced     bool
+	npcTextScroll    int
+	npcTextLen       int
+
+	// The menu window: where it sits, which row is selected, how far the
+	// list is scrolled, and its shared OK/cancel art.
+	npcMenuX, npcMenuY float32
+	npcMenuPlaced      bool
+	npcMenuIdx         int
+	npcMenuScroll      int
+	npcMenuBtns        map[string]*TextureInfo
+
 	// Basic Info panel art, where it has been dragged to, and whether it is
 	// folded down to its reduced form.
 	hudSkin    *basicInfoSkin
@@ -868,13 +895,15 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 	}
 
 	b.renderBasicInfo(state)
+	b.renderNPCDialog(state, width, height)
+	b.renderNPCMenu(state, width, height)
 
 	// Debug overlay (top-left)
 	if state.ShowDebugInfo {
 		// Tall enough for the stat rows: the height is not derived from the
 		// content, so text past it draws outside the frame rather than
 		// growing it.
-		if b.ctx.BeginWindow("debug", 10, 10, 320, 230, "Debug") {
+		if b.ctx.BeginWindow("debug", 10, 10, 420, 272, "Debug") {
 			b.ctx.Row(16)
 			b.ctx.Label(fmt.Sprintf("Map: %s", state.MapName))
 			b.ctx.Row(16)
@@ -890,6 +919,9 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 				state.PlayerHP, state.PlayerMaxHP, state.PlayerSP, state.PlayerMaxSP))
 			b.ctx.Row(16)
 			b.ctx.Label(fmt.Sprintf("Base Lv: %d   Job Lv: %d", state.PlayerLevel, state.PlayerJobLevel))
+			b.ctx.Separator()
+			b.ctx.Row(16)
+			b.ctx.Label("Dialog: " + describeDialog(state))
 			b.ctx.EndWindow()
 		}
 	}
@@ -932,6 +964,31 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 
 	b.ctx.Renderer().DrawText(10, textY, statusText, scale, ui2d.ColorTextOnDark)
 	b.ctx.Renderer().DrawText(width-posW-10, textY, posText, scale, ui2d.ColorTextOnDark)
+}
+
+// describeDialog is the debug overlay's one-line account of the conversation.
+//
+// A stuck dialog is the failure this is for: the phase says what the client
+// thinks the server last asked for, so a screenshot is enough to tell a packet
+// we ignored from a window we failed to draw.
+func describeDialog(state InGameUIState) string {
+	if state.DialogNPCID == 0 {
+		return state.DialogPhase
+	}
+
+	who := state.DialogNPCName
+	if who == "" {
+		// Legitimate: the server sends a fake npc id for scripts whose owner
+		// is not a unit near the player, and there is nothing to look up.
+		who = "?"
+	}
+
+	line := fmt.Sprintf("%s  npc %d (%s)", state.DialogPhase, state.DialogNPCID, who)
+	if len(state.DialogMenu) > 0 {
+		line += fmt.Sprintf("  %d items", len(state.DialogMenu))
+	}
+
+	return line
 }
 
 // RenderFPSOverlay renders an FPS counter.

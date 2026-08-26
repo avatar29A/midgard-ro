@@ -7,6 +7,7 @@ import (
 	"github.com/AllenDang/cimgui-go/imgui"
 	"github.com/go-gl/gl/v4.1-core/gl"
 
+	"github.com/Faultbox/midgard-ro/internal/engine/cursor"
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
 )
@@ -61,6 +62,10 @@ func (b *ImGuiBackend) GetScreenSize() (width, height float32) {
 func (b *ImGuiBackend) MouseCaptured() bool {
 	return imgui.CurrentIO().WantCaptureMouse()
 }
+
+// SetCursorState does nothing here: this backend draws the system cursor, not
+// the game's own.
+func (b *ImGuiBackend) SetCursorState(cursor.State) {}
 
 // Input returns the input state.
 func (b *ImGuiBackend) Input() *ui2d.InputState {
