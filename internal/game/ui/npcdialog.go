@@ -117,9 +117,21 @@ func (b *UI2DBackend) renderNPCDialog(state InGameUIState, width, height float32
 		return false
 	}
 
-	x := float32(int((width - npcWinW) / 2))
-	y := float32(int(height - npcWinBottomGap - npcWinH))
+	if !b.npcWinPlaced {
+		b.npcWinX = float32(int((width - npcWinW) / 2))
+		b.npcWinY = float32(int(height - npcWinBottomGap - npcWinH))
+		b.npcWinPlaced = true
+	}
 
+	// Dragged by the window itself, since it has no title bar to grab. The
+	// button is drawn afterwards and claims the pointer for itself, so
+	// pressing it does not also drag. Where it is put is kept for the next
+	// conversation — a window that jumped back to the middle every time you
+	// spoke to someone would be worth moving only once.
+	b.ctx.DragHandle("npc_dialog", ui2d.Rect{X: b.npcWinX, Y: b.npcWinY, W: npcWinW, H: npcWinH},
+		&b.npcWinX, &b.npcWinY)
+
+	x, y := b.npcWinX, b.npcWinY
 	r := b.ctx.Renderer()
 
 	// Drawn as tinted images rather than with DrawRect, which would be the
