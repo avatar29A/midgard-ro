@@ -22,6 +22,55 @@ type TextRun struct {
 	Color ui2d.Color
 }
 
+// StripNPCMarkup removes the navigation tags scripts embed in their text.
+//
+// A script writes a place as
+// `<NAVI>[northwest]<INFO>prontera,55,350,0,000,0</INFO></NAVI>`. The original
+// client turns that into a clickable link showing only the label; the server
+// passes it through untouched, so printing the string as it arrives puts the
+// raw tags and coordinates on screen.
+//
+// The label is kept and the payload dropped. Making it actually clickable
+// needs minimap navigation, which does not exist yet — but showing
+// `[northwest]` is right either way, and showing the coordinates never is.
+//
+// An unclosed tag is left alone rather than swallowing the rest of the line:
+// a stray `<` in prose should cost nothing.
+func StripNPCMarkup(message string) string {
+	message = removeTagPairs(message, "<info>", "</info>", true)
+	message = removeTagPairs(message, "<navi>", "</navi>", false)
+
+	return message
+}
+
+// removeTagPairs removes markers, and what is between them when withBody is
+// set. Matching is case-insensitive; scripts write these in capitals but
+// nothing guarantees it.
+func removeTagPairs(message, open, close string, withBody bool) string {
+	for {
+		lower := strings.ToLower(message)
+
+		start := strings.Index(lower, open)
+		if start < 0 {
+			return message
+		}
+
+		end := strings.Index(lower[start+len(open):], close)
+		if end < 0 {
+			// Unterminated: leave the whole thing rather than eat the line.
+			return message
+		}
+
+		end += start + len(open)
+
+		if withBody {
+			message = message[:start] + message[end+len(close):]
+		} else {
+			message = message[:start] + message[start+len(open):end] + message[end+len(close):]
+		}
+	}
+}
+
 // ParseNPCText splits a script's message into colored runs.
 //
 // Scripts set color inline with `^RRGGBB` and return to black with `^000000`.
@@ -32,6 +81,8 @@ type TextRun struct {
 // A caret that is not followed by six hex digits is just a caret: scripts use
 // it in ordinary prose, and swallowing it would eat their punctuation.
 func ParseNPCText(message string) []TextRun {
+	message = StripNPCMarkup(message)
+
 	var (
 		runs    []TextRun
 		current strings.Builder
