@@ -510,8 +510,16 @@ warp-list capture shows exactly four rows above a scrollbar.
 
 A row is selected — the pale blue band runs the full width, per `.selected` and
 ref-01 — and **OK** confirms it. Double-clicking a row does the same thing
-faster, using `DoubleClickedIn` from #87. Cancel sends 255, which the script
-treats as its own branch, so it is not the same as closing the window.
+faster, using `DoubleClickedIn` from #87.
+
+**Cancel closes the whole conversation, not just the menu.** Testing found the
+text window left behind with no button and no way out. The server is never
+going to rescue it: `buildin_menu` handles 255 with `st->state = END`
+(`script.cpp:5174`) and sends nothing back, because the original client has
+already closed its own window by then. The trace shows exactly that — an
+`npc.cancel` followed by silence. A script using `prompt` rather than `select`
+carries on and sends more text, which arrives with the dialog idle and simply
+opens it again.
 
 The wheel scrolls the list and the selection is kept in view. The scrollbar is
 a track and a thumb; the original also has arrow buttons at each end, which are

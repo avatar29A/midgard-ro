@@ -217,3 +217,24 @@ func TestMalformedMenuIsRefused(t *testing.T) {
 		t.Errorf("a malformed menu opened one: %+v", s.dialog)
 	}
 }
+
+// TestCancelWithoutAClientLeavesTheDialogAlone guards the ordering in
+// CancelMenuChoice: it must not clear the conversation when the answer never
+// reached the server, or the player loses the window and the script keeps
+// waiting.
+func TestCancelWithoutAClientLeavesTheDialogAlone(t *testing.T) {
+	var s InGameState
+
+	if err := s.handleSayDialog(sayPacket(42, "Hello.")); err != nil {
+		t.Fatalf("handleSayDialog: %v", err)
+	}
+	if err := s.handleMenuList(menuPacket(42, "a:b")); err != nil {
+		t.Fatalf("handleMenuList: %v", err)
+	}
+
+	s.CancelMenuChoice()
+
+	if s.dialog.Phase != DialogMenu {
+		t.Errorf("phase = %v, want the menu still open when nothing was sent", s.dialog.Phase)
+	}
+}

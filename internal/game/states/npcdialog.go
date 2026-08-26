@@ -166,8 +166,17 @@ func (s *InGameState) ChooseMenuItem(choice int) {
 	trace.Emit(trace.NPC, "choose", zap.Uint32("npcID", npcID), zap.Int("choice", choice))
 }
 
-// CancelMenuChoice backs out of a menu. The script treats it as its own branch,
-// which is why it is not the same as closing the window.
+// CancelMenuChoice backs out of a menu, which ends the conversation.
+//
+// Canceling closes the whole window, not just the menu, because the server
+// will never tell us to: `buildin_menu` handles 255 with `st->state = END`
+// (script.cpp:5174) and sends nothing back, on the assumption the client has
+// already closed its own window. Leaving the text up would strand the player
+// with a dialog that has no button and no way out — the Close button only
+// appears when the server asks for it, and it never will.
+//
+// A script that used `prompt` rather than `select` carries on and sends more
+// text; that arrives with the dialog idle and simply opens it again.
 func (s *InGameState) CancelMenuChoice() {
 	if s == nil || s.client == nil || s.dialog.Phase != DialogMenu {
 		return
@@ -180,8 +189,7 @@ func (s *InGameState) CancelMenuChoice() {
 		return
 	}
 
-	s.dialog.Phase = DialogText
-	s.dialog.Menu = nil
+	s.dialog = NPCDialog{}
 
 	trace.Emit(trace.NPC, "cancel", zap.Uint32("npcID", npcID))
 }
