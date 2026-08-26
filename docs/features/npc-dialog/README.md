@@ -66,23 +66,50 @@ Two behaviours fall out of that CSS and are easy to miss:
 
 ### Real client, supplied in review
 
-Three captures of the original in conversation (posted on this issue). They
-answer Open question 1 and correct two things the plan had wrong.
+![ref-01 — [Kris]: the text window and the menu window side by side](./ref-01-text-and-menu.png)
 
-**ref-01 — Genius Skyler.** A text window reading `[Genius Skyler]` on its first
-line and the message on the three below it. Underneath, *overlapping it*, a
-separate menu window with `Search for cards` and `Cancel`, the first row filled
-edge to edge with a blue highlight and white text, and **OK** / **cancel**
-buttons at its bottom right.
+**ref-01 — text and menu together.** `[Kris]` on the first line of the text
+window, the message below it, and a separate menu window to its right with
+`Yes.` / `Nah, I'm a pro~` / `Cancel.`, the first row filled edge to edge with a
+blue highlight, and **OK** / **cancel** at its bottom right. The text window
+shows no button of its own while the menu is up.
 
-**ref-02 — a warp list.** A menu alone: `Last Warp [pay_dun01]` highlighted,
-then `~ Towns`, `~ Fields`, `~ Dungeons`, with a **vertical scrollbar and arrow
-buttons** down the right edge, and the same OK / cancel pair.
+![ref-02 — [Shopkeeper]: the Next button in place, and colored text in the message](./ref-02-next-button.jpg)
 
-**ref-03 — Kafra Employee, full screen.** The text window upper right, the menu
-window below and left of it with four rows (`Save`, `Use Storage`,
-`Use Teleport Service`, `Rent a Pushcart`), both floating over the map alongside
-the chat box and the minimap.
+**ref-02 — the Next button in situ.** `next`, lowercase, at the **bottom right
+inside the text window**. Also the first sight of **colored text in an NPC
+message**: `Clana Nemieri` is blue while the rest of the line is black.
+
+![ref-03 — Kafra Employee, the whole screen](./ref-03-kafra-fullscreen.jpg)
+
+**ref-03 — a whole screen.** Text window upper right, menu window below and left
+of it (`Save`, `Use Storage`, `Use Teleport Service`, `Rent a Pushcart`), both
+floating over the map beside the chat box and the minimap.
+
+Two more captures were supplied in chat but are not files, so they are not in
+the repo: a `[Genius Skyler]` dialog with the menu *overlapping* the text window
+rather than beside it, and a warp list — `Last Warp [pay_dun01]`, `~ Towns`,
+`~ Fields`, `~ Dungeons` — with a **vertical scrollbar and arrow buttons** down
+the right edge. The scrollbar claim in ⑩ rests on that second one.
+
+#### Measured against roBrowser
+
+ref-01 is a lossless capture at native size — its 1px borders are single crisp
+pixels, not resampled — so it can be measured rather than eyeballed:
+
+| | Measured in ref-01 | roBrowser |
+|---|---|---|
+| Text window, outer | 278 × 178 | 276 × 176 |
+| Menu window, outer width | 278 | 276 |
+| Text area | 260 wide, rows 131–270 | 254 × 130 |
+| Border | 1px `#c5c5c5` | `#c1c6c2` |
+| Text area fill | `#f7f7f7` | `#eff4f0` |
+
+**roBrowser is confirmed.** Its 276 × 176 is a CSS content box; add the 1px
+border it also declares and you get the 278 × 178 measured here, in both
+dimensions and for both windows. The two colors differ in the last step or two
+of each channel — the measured ones are what the original actually draws, so
+prefer them.
 
 What they establish, in the order it matters:
 
@@ -196,7 +223,14 @@ costs nothing, but do not expect `packets.Length()` to know them.
    script's text verbatim (`safestrncpy(packet->menu, mes, ...)`), NUL-terminated.
    The client splits on `:`, and the item's position in that list — 1-based — is
    what goes back in `CZ_CHOOSE_MENU`.
-3. **The talking NPC may not be an entity we know.** `clif_scriptmenu` calls
+3. **NPC text carries color codes.** ref-02 shows `Clana Nemieri` in blue
+   inside an otherwise black line. Scripts write `^RRGGBB` inline — `^0000FF`
+   to set, `^000000` to return to black. They are not stripped by the server:
+   whatever the script wrote arrives verbatim. Rendering the string as-is would
+   print `^0000FFClana Nemieri^000000` on screen. At minimum they must be
+   parsed out of the text; drawing them in color is a small extra step once the
+   parser exists, since the text is already drawn run by run.
+4. **The talking NPC may not be an entity we know.** `clif_scriptmenu` calls
    `clif_sendfakenpc` when the npcId is not a real unit near the player. The
    dialog must key off the id in the packet and never assume `Manager.Get(npcId)`
    returns anything.
@@ -260,9 +294,13 @@ costs nothing, but do not expect `packets.Length()` to know them.
 ### Step 3 — Show what the NPC says
 - **Changes:** `internal/game/states/npcdialog.go`, `internal/game/ui/`
 - **Done when:** the greeting appears in a window over the map, with its own
-  line breaks intact, scrolling when longer than the box.
-- **Proved by:** screenshot scenario; UC-205.
-- **Reference:** roBrowser measurements ③④
+  line breaks intact, scrolling when longer than the box, and `^RRGGBB` codes
+  parsed out rather than printed.
+- **Proved by:** screenshot scenario; UC-205; a table test for the color-code
+  parser (no codes, one code, unterminated code, a code at the very end).
+- **Reference:** ref-01 ⑦⑧, ref-02, measurements above
+- **Chrome:** a plain panel — 278 × 178, 1px `#c5c5c5` border, `#f7f7f7` fill —
+  **not** `BeginWindow`, which would give it a title bar it does not have.
 
 ### Step 4 — Next and Close
 - **Changes:** `internal/game/states/npcdialog.go`, `internal/game/ui/`
@@ -270,7 +308,8 @@ costs nothing, but do not expect `packets.Length()` to know them.
   `ZC_CLOSE_DIALOG` shows Close, which ends the conversation and returns control.
 - **Proved by:** UC-205 end to end against Prontera's Guide; `npc` trace shows
   the full sequence and a clean `npc.close`.
-- **Reference:** grf-btn-close ①, grf-btn-next ②
+- **Reference:** grf-btn-close ①, grf-btn-next ②, ref-02 for placement — the
+  button sits at the bottom right *inside* the text window.
 
 ### Step 5 — Menus
 - **Changes:** `internal/game/states/npcdialog.go`, `internal/game/ui/`
@@ -305,11 +344,9 @@ costs nothing, but do not expect `packets.Length()` to know them.
 
 ## Open questions
 
-1. ~~No original screenshot of the dialog in situ.~~ **Answered** — three
-   supplied in review, described above. They are not in the repo yet: they came
-   through chat rather than a fetchable URL, so `docs/features/npc-dialog/`
-   still holds only the GRF bitmaps. Save them to disk or attach them here and
-   they go in as `ref-01`…`ref-03` against the legend above.
+1. ~~No original screenshot of the dialog in situ.~~ **Answered and
+   committed** — `ref-01`…`ref-03`, and roBrowser's measurements confirmed
+   against them.
 2. ~~Where should the window open?~~ **Partly answered** — the three captures
    disagree on position, so it is not a fixed spot. Remaining question: should
    it be remembered between conversations, the way camera zoom is?
@@ -328,6 +365,11 @@ costs nothing, but do not expect `packets.Length()` to know them.
 
 ## Revision log
 
+- 2026-08-26 — three captures committed as `ref-01`…`ref-03`. Measuring the
+  lossless one confirms roBrowser to the pixel (276 × 176 content box + 1px
+  border = the 278 × 178 measured). Two findings the earlier round missed: the
+  Next button sits bottom right *inside* the text window, and NPC text carries
+  `^RRGGBB` color codes that would otherwise print literally.
 - 2026-08-26 — rebased onto `main` after #87 merged, which brings
   `CaptureMouse`/`MouseCaptured`, `DoubleClickedIn` and `ButtonOptions` — all of
   which this feature wants. Three real-client captures supplied in review:
