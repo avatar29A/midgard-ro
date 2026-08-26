@@ -50,7 +50,25 @@ lifting — GAT sampling and scrollback are solved problems in there — but eve
 line that draws is ImGui and has to be rewritten against `ui2d`. Planning this
 as "wire up the existing minimap" would be planning against dead code.
 
-Whether the ImGui files get deleted in this PR is Open question 3.
+**Direction (Boris, 2026-08-26): ImGui is deprecated.** Nothing new uses it, and
+the UI framework continues to be built from scratch on `ui2d`. That settles what
+was Open question 3 — the dead widget files go in this PR's Step 10.
+
+It does not remove ImGui from the build, and it is worth being exact about why.
+ImGui is doing two jobs here, and only one of them is dead:
+
+| Job | Where | State |
+|-----|-------|-------|
+| **Widgets** — windows, buttons, the old login/charselect/in-game screens | `ingame_ui.go`, `minimap.go`, `chatbox.go`, `charselect_ui.go`, `login_ui.go`, `loading_ui.go`, `connecting_ui.go`, `debug_overlay.go`, `statusbar.go`, `imgui_backend.go` | ⚠️ **unreachable — delete** |
+| **Platform** — window, GL context, event pump, mouse, keyboard, HiDPI scale | `game.go:140` `sdlbackend.NewSDLBackend()`; `ui2d_backend.go:102,146-154` `imgui.CurrentIO()`, `MousePos()`, `IsMouseDown()` | 🔴 **load-bearing** |
+
+The second row is the surprise: our **native** backend reaches into ImGui for
+input and DPI. So `ui2d` draws everything itself but still gets its mouse from
+ImGui, and `game.go:442` reads the Escape key the same way — which Step 5 needs.
+
+Replacing that platform layer with our own SDL window and input is a real piece
+of work and **its own feature**, not a step here. This feature deletes the dead
+widgets and adds no new ImGui; it does not claim to remove the dependency.
 
 ## Reference (original client)
 
@@ -265,7 +283,13 @@ Two traps, both the same shape as ones already hit:
   marked — the minimap enlarged, sharing its loader.
 - **Proved by:** UC-209.
 
-### Step 10 — Docs
+### Step 10 — Delete the deprecated ImGui widgets, and docs
+- **Changes:** remove `internal/game/ui/{imgui_backend,ingame_ui,minimap,chatbox,charselect_ui,login_ui,loading_ui,connecting_ui,debug_overlay,statusbar}.go`
+- **Done when:** every ImGui *widget* file is gone, the build is clean, and the
+  only remaining ImGui use is the platform layer named above.
+- **Proved by:** `go build ./... && go test ./...`; `git grep -l cimgui-go -- internal/game/ui` returns only `ui2d_backend.go`.
+- **Note:** done last, once each native replacement is proven — deleting a
+  minimap before its replacement works leaves nothing to compare against.
 - [ ] `docs/ENGINE_FEATURES.md`
 - [ ] Session log
 - [ ] Close #53's D1/D2/D3 items; note what remains
@@ -289,7 +313,9 @@ Two traps, both the same shape as ones already hit:
 - Item icons and skill icons (needs the item sprite table, its own feature).
 - Party, guild, storage, equipment windows; entity HP bars.
 - Settings inside the ESC menu beyond volume — no keybinding UI.
-- Deleting the dead ImGui files (Open question 3).
+- **Removing the ImGui dependency.** The dead widgets go (Step 10), but the SDL
+  platform backend and the input/DPI calls the native UI makes stay. Replacing
+  those is its own feature.
 
 ## Open questions
 
@@ -298,11 +324,9 @@ Two traps, both the same shape as ones already hit:
 2. **Minimap for maps with no image?** Prontera has one. If a map ships none, is
    an empty corner right, or should it fall back to sampling the GAT the way the
    dead `Minimap` does?
-3. **Delete the dead ImGui path in this PR?** `imgui_backend.go`, `ingame_ui.go`,
-   `minimap.go`, `chatbox.go` are unreachable. Removing them alongside their
-   replacements is tidy but widens the diff; keeping them leaves two minimaps in
-   the tree. My inclination is to delete in the final step, after the native ones
-   are proven.
+3. **When should the platform layer be replaced?** Deleting the widgets still
+   leaves `ui2d` taking its mouse, keyboard and DPI scale from ImGui. Worth
+   raising as the next feature after this one, or later?
 4. **Hotkey bar with nothing to put in it** — worth shipping empty in this
    feature, or holding it until skills can be dragged onto it?
 
@@ -318,3 +342,6 @@ Two traps, both the same shape as ones already hit:
 ## Revision log
 
 - 2026-08-26 — created
+- 2026-08-26 — ImGui declared deprecated: deleting the dead widget files became
+  Step 10 rather than an open question, and the platform layer it still provides
+  was recorded as a separate feature (per direction)
