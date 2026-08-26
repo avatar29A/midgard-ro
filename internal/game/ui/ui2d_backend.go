@@ -218,7 +218,10 @@ func (b *UI2DBackend) drawCursor() {
 
 	// The sprite's origin is the point being pointed at, and the frame's
 	// offset says where its top-left sits relative to that.
-	b.ctx.Renderer().DrawImage(frame.Texture,
+	// On the overlay layer, not with the other images: images are drawn
+	// before solids, so anything rectangular — a gauge fill, an experience
+	// bar, a button's hover shading — was painting over the cursor.
+	b.ctx.Renderer().DrawImageTop(frame.Texture,
 		in.MouseX+frame.OffsetX, in.MouseY+frame.OffsetY,
 		frame.Width, frame.Height, ui2d.ColorWhite)
 }

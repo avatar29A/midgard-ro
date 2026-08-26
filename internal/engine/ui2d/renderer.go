@@ -58,6 +58,13 @@ type Renderer struct {
 	// Batched image draw calls (grouped by texture)
 	imageDrawCalls []imageDrawCall
 
+	// The overlay layer: textured quads that must sit above everything,
+	// solids and text included. The mouse cursor is the reason it exists —
+	// it is an image, and images are the first thing drawn, so anything
+	// rectangular painted afterwards was covering it.
+	overlayVertices  []float32
+	overlayDrawCalls []imageDrawCall
+
 	// Font for text rendering
 	font *Font
 
@@ -146,6 +153,8 @@ func (r *Renderer) Begin() {
 	r.textVertices = r.textVertices[:0]
 	r.imageVertices = r.imageVertices[:0]
 	r.imageDrawCalls = r.imageDrawCalls[:0]
+	r.overlayVertices = r.overlayVertices[:0]
+	r.overlayDrawCalls = r.overlayDrawCalls[:0]
 }
 
 // End finishes the UI frame and renders all queued elements.
@@ -217,6 +226,28 @@ func (r *Renderer) End() {
 		gl.BindBuffer(gl.ARRAY_BUFFER, r.textVBO)
 		gl.BufferData(gl.ARRAY_BUFFER, len(r.textVertices)*4, unsafe.Pointer(&r.textVertices[0]), gl.STREAM_DRAW)
 		gl.DrawArrays(gl.TRIANGLES, 0, int32(len(r.textVertices)/9)) // 9 floats per vertex (pos3 + uv2 + color4)
+	}
+
+	// The overlay goes over the lot. It shares the image shader and buffers;
+	// re-uploading replaces what the image pass put there, which has already
+	// been drawn.
+	if len(r.overlayDrawCalls) > 0 {
+		gl.UseProgram(r.imageShader)
+		projLoc := gl.GetUniformLocation(r.imageShader, gl.Str("uProjection\x00"))
+		gl.UniformMatrix4fv(projLoc, 1, false, &proj[0])
+
+		texLoc := gl.GetUniformLocation(r.imageShader, gl.Str("uTexture\x00"))
+		gl.Uniform1i(texLoc, 0)
+
+		gl.ActiveTexture(gl.TEXTURE0)
+		gl.BindVertexArray(r.imageVAO)
+		gl.BindBuffer(gl.ARRAY_BUFFER, r.imageVBO)
+		gl.BufferData(gl.ARRAY_BUFFER, len(r.overlayVertices)*4, unsafe.Pointer(&r.overlayVertices[0]), gl.STREAM_DRAW)
+
+		for _, dc := range r.overlayDrawCalls {
+			gl.BindTexture(gl.TEXTURE_2D, dc.textureID)
+			gl.DrawArrays(gl.TRIANGLES, int32(dc.vertStart), int32(dc.vertCount))
+		}
 	}
 
 	// Restore state
@@ -783,40 +814,59 @@ func (r *Renderer) DrawImage(texID uint32, x, y, w, h float32, tint Color) {
 
 // DrawImageUV draws a textured quad with custom UV coordinates.
 func (r *Renderer) DrawImageUV(texID uint32, x, y, w, h, u0, v0, u1, v1 float32, tint Color) {
+	appendImageQuad(&r.imageVertices, &r.imageDrawCalls, texID, x, y, w, h, u0, v0, u1, v1, tint)
+}
+
+// DrawImageTop draws a textured quad above everything else, text included.
+//
+// Reserved for things that are not part of the interface's stacking order at
+// all — the mouse cursor. Ordinary images go through DrawImage, or they would
+// paint over the windows they belong to.
+func (r *Renderer) DrawImageTop(texID uint32, x, y, w, h float32, tint Color) {
+	r.DrawImageUVTop(texID, x, y, w, h, 0, 0, 1, 1, tint)
+}
+
+// DrawImageUVTop is DrawImageTop with custom UV coordinates.
+func (r *Renderer) DrawImageUVTop(texID uint32, x, y, w, h, u0, v0, u1, v1 float32, tint Color) {
+	appendImageQuad(&r.overlayVertices, &r.overlayDrawCalls, texID, x, y, w, h, u0, v0, u1, v1, tint)
+}
+
+// appendImageQuad adds a textured quad to a layer, extending the layer's last
+// draw call when it uses the same texture so a run of quads costs one call.
+func appendImageQuad(vertices *[]float32, calls *[]imageDrawCall, texID uint32, x, y, w, h, u0, v0, u1, v1 float32, tint Color) {
 	if texID == 0 {
 		return
 	}
 
-	// Check if we can merge with the last draw call (same texture)
-	vertStart := len(r.imageVertices) / 9 // 9 floats per vertex
-	if len(r.imageDrawCalls) > 0 {
-		last := &r.imageDrawCalls[len(r.imageDrawCalls)-1]
+	vertStart := len(*vertices) / 9 // 9 floats per vertex
+
+	if len(*calls) > 0 {
+		last := &(*calls)[len(*calls)-1]
 		if last.textureID == texID {
-			// Extend the existing draw call
-			r.addImageQuad(x, y, w, h, u0, v0, u1, v1, tint)
+			addImageQuad(vertices, x, y, w, h, u0, v0, u1, v1, tint)
 			last.vertCount += 6
+
 			return
 		}
 	}
 
-	// New draw call
-	r.addImageQuad(x, y, w, h, u0, v0, u1, v1, tint)
-	r.imageDrawCalls = append(r.imageDrawCalls, imageDrawCall{
+	addImageQuad(vertices, x, y, w, h, u0, v0, u1, v1, tint)
+	*calls = append(*calls, imageDrawCall{
 		textureID: texID,
 		vertStart: vertStart,
 		vertCount: 6,
 	})
 }
 
-// addImageQuad adds a textured quad to the image vertex buffer.
-func (r *Renderer) addImageQuad(x, y, w, h, u0, v0, u1, v1 float32, c Color) {
+// addImageQuad appends one quad's vertices.
+func addImageQuad(vertices *[]float32, x, y, w, h, u0, v0, u1, v1 float32, c Color) {
 	// Same vertex format as text: pos(3) + uv(2) + color(4) = 9 floats
-	r.imageVertices = append(r.imageVertices,
+	*vertices = append(*vertices,
 		x, y, 0, u0, v0, c.R, c.G, c.B, c.A,
 		x+w, y, 0, u1, v0, c.R, c.G, c.B, c.A,
 		x+w, y+h, 0, u1, v1, c.R, c.G, c.B, c.A,
 	)
-	r.imageVertices = append(r.imageVertices,
+	*vertices = append(*vertices,
 		x, y, 0, u0, v0, c.R, c.G, c.B, c.A,
 		x+w, y+h, 0, u1, v1, c.R, c.G, c.B, c.A,
 		x, y+h, 0, u0, v1, c.R, c.G, c.B, c.A,

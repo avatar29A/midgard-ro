@@ -292,6 +292,17 @@ Driving it that way found a defect worth more than the check itself: **a click o
 
 ### Follow-ups from review
 
+- **The cursor was drawn under the experience bars.** It is an image and the
+  bars are solids, and the renderer's batching is images → solids → text, so
+  anything rectangular painted after the cursor covered it — the exp bars, the
+  gauge fills, a button's hover shading. `ui2d.Renderer` now has an overlay
+  layer (`DrawImageTop`) flushed after text, and the cursor draws there. It is
+  for things outside the interface's stacking order entirely; ordinary images
+  still go through `DrawImage`.
+
+  ![The cursor drawn over both experience bars](./current-cursor-over-bars.png)
+
+
 - **Buttons take a `ui2d.ButtonOptions`,** whose `Silent` field suppresses the click sound. Every button on this panel is silent: folding it and opening other windows is arranging the interface rather than acting in the game, and the menu buttons open nothing yet — a click that makes a noise and changes nothing reads as a fault.
 - **Double-clicking the title bar folds the panel,** alongside Ctrl+V and the system button. `Context.DoubleClickedIn` recognises two presses within 400ms and 6px, and deliberately does not consume the press, so a title bar can be both dragged and double-clicked.
 
@@ -330,6 +341,9 @@ _All three from the first round are answered — see the Revision log. One follo
 
 ## Revision log
 
+- 2026-08-26 — **Cursor above everything.** It was drawn in the image batch,
+  which the renderer flushes before solids, so the experience bars painted over
+  it. Added an overlay layer flushed after text.
 - 2026-08-26 — **Review follow-ups.** `ButtonOptions{Silent}` and every button
   on the panel silenced; double-click on the title bar folds it; dragging
   verified, which turned up clicks falling through the panel into the world —
