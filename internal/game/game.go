@@ -15,6 +15,7 @@ import (
 	"github.com/AllenDang/cimgui-go/backend/sdlbackend"
 	"github.com/AllenDang/cimgui-go/imgui"
 	"github.com/go-gl/gl/v4.1-core/gl"
+	"github.com/veandco/go-sdl2/sdl"
 	"go.uber.org/zap"
 
 	"github.com/Faultbox/midgard-ro/internal/assets"
@@ -144,6 +145,10 @@ func New(cfg *config.Config) (*Game, error) {
 		io := imgui.CurrentIO()
 		flags := io.ConfigFlags()
 		flags &^= imgui.ConfigFlagsViewportsEnable // Clear viewport flag
+
+		// The game draws RO's cursor itself. ImGui otherwise sets the system
+		// cursor every frame, which puts it back however often it is hidden.
+		flags |= imgui.ConfigFlagsNoMouseCursorChange
 		io.SetConfigFlags(flags)
 
 		g.loadKoreanFont()
@@ -151,6 +156,13 @@ func New(cfg *config.Config) (*Game, error) {
 
 	g.imguiBackend.SetBgColor(imgui.NewVec4(0.05, 0.05, 0.08, 1.0))
 	g.imguiBackend.CreateWindow("Midgard RO", cfg.Graphics.Width, cfg.Graphics.Height)
+
+	// The game draws RO's own cursor, so the system one would be a second
+	// pointer on screen. SDL owns it — the windowing backend runs on the same
+	// library — and a failure here is cosmetic, not worth refusing to start.
+	if _, err := sdl.ShowCursor(sdl.DISABLE); err != nil {
+		logger.Warn("could not hide the system cursor", zap.Error(err))
+	}
 
 	// Initialize OpenGL
 	if err := gl.Init(); err != nil {
