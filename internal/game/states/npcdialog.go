@@ -74,6 +74,10 @@ type NPCDialog struct {
 	// color codes and line breaks included. Interpreting it belongs to
 	// whatever draws it.
 	Message string
+
+	// newParagraph marks that the next thing said starts a new block, which
+	// is true after a Next and at no other time.
+	newParagraph bool
 }
 
 // handleSayDialog shows what the NPC said.
@@ -92,15 +96,21 @@ func (s *InGameState) handleSayDialog(data []byte) error {
 	// script that says three things in a row reads as three paragraphs rather
 	// than replacing itself twice before you can read it. A message from a
 	// different NPC, or after a close, starts fresh.
-	if s.dialog.Phase == DialogIdle || s.dialog.NPCID != say.NPCID {
+	// Every `mes` line arrives as its own packet, so joining messages with a
+	// blank line would double-space the whole conversation — including
+	// between a speaker's name and what they then say. The break belongs at
+	// the page boundary: the script said Next, and what follows starts again
+	// with the speaker's name.
+	switch {
+	case s.dialog.Phase == DialogIdle || s.dialog.NPCID != say.NPCID:
 		s.dialog.Message = say.Message
-	} else {
-		// A blank line between messages. Each is a separate thing the script
-		// chose to say — usually starting with the speaker's name again — and
-		// running them together makes one wall of text out of what were meant
-		// to be paragraphs.
+	case s.dialog.newParagraph:
 		s.dialog.Message += "\n\n" + say.Message
+	default:
+		s.dialog.Message += "\n" + say.Message
 	}
+
+	s.dialog.newParagraph = false
 
 	s.dialog.Phase = DialogText
 	s.dialog.NPCID = say.NPCID
@@ -247,6 +257,9 @@ func (s *InGameState) AdvanceDialog() {
 	// this the button stays on screen and a second press sends a second
 	// request the script is not waiting for.
 	s.dialog.Phase = DialogText
+
+	// What the script says next is a new block, and gets a blank line.
+	s.dialog.newParagraph = true
 
 	trace.Emit(trace.NPC, "next", zap.Uint32("npcID", npcID))
 }

@@ -424,11 +424,11 @@ Ours were 13px apart with glyphs the same size, so the original is nearly
 double-spaced and we were cramped. At 21 the window holds six or seven lines,
 which is what ref-01 shows.
 
-Successive messages are also separated by a blank line (per review). Each is
-its own thing the script chose to say, usually repeating the speaker's name,
-and running them together made one wall of text out of what were meant to be
-paragraphs. No capture shows the original accumulating several messages, so
-this is a reading decision rather than a match to something measured.
+**A blank line goes between pages, not between lines.** Every `mes` arrives as
+its own `ZC_SAY_DIALOG` — page one of the Guide is five separate packets — so
+separating *messages* double-spaced the whole conversation, including between
+a speaker's name and what they then say. The break belongs where the player
+pressed Next, which is the only boundary the script actually marks.
 
 Two decisions the tests pinned down. The default text color is **exactly
 black**, because scripts return to the default with `^000000` and any softer
@@ -436,16 +436,23 @@ near-black would make that a visible color change rather than a return — the
 test caught this. And a word wider than the field overflows rather than being
 broken mid-word: rare, and a split word reads worse than one that runs on.
 
-**Both windows scroll.** The text window follows the newest line, and the
-wheel reads back through a longer conversation; a track and thumb show where
-the view sits. New text re-pins to the bottom, since what was just said is what
-the player is waiting for, but scrolling up holds until then.
+**Both windows scroll, with the original's own scrollbar.** `scroll0*` at the
+root of the interface folder is the vertical set — `scroll1*` is its horizontal
+twin: two 13×13 arrows, a 13×13 track stretched between them, and a thumb
+three-sliced from 13×4 pieces. One widget (`scrollbar.go`) serves both windows.
+The arrows step, the thumb drags, and the thumb's length says how much of the
+conversation is on screen.
 
-This became necessary rather than optional when the line pitch was corrected to
-the original's 21px: six lines fit where eleven had, and a conversation of two
-or three messages now outgrows the window every time. Neither window has the
-arrow buttons at the ends of the original's scrollbar — the wheel does the same
-job.
+**The wheel goes to the interface first.** It was being taken by the camera
+zoom, so a dialog long enough to scroll was exactly the moment the wheel
+stopped working — which makes a scrollbar look broken. Zoom now defers to
+`MouseCaptured`.
+
+Scrolling became necessary rather than optional when the line pitch was
+corrected to 21px: six lines fit where eleven had, so a conversation of two or
+three pages outgrows the window every time. New text re-pins the view to the
+bottom, since what was just said is what the player is waiting for, while
+scrolling up holds until then.
 
 **How to test this at all:** the NPCs near the default spawn are warps and
 shops (see Step 2). Move the character next to a talker first —
