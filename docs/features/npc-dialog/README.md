@@ -418,6 +418,18 @@ This is the second kind of inline markup the text carries, after `^RRGGBB`.
 There may be more — `<ITEM>` and `<URL>` exist in later clients — but nothing
 was invented for tags no script here uses.
 
+**Line spacing is measured, not chosen.** In ref-01 the text rows fall at 138,
+159, 180, 201 and 222 — an exact **21px pitch**, with glyphs 9 to 11px tall.
+Ours were 13px apart with glyphs the same size, so the original is nearly
+double-spaced and we were cramped. At 21 the window holds six or seven lines,
+which is what ref-01 shows.
+
+Successive messages are also separated by a blank line (per review). Each is
+its own thing the script chose to say, usually repeating the speaker's name,
+and running them together made one wall of text out of what were meant to be
+paragraphs. No capture shows the original accumulating several messages, so
+this is a reading decision rather than a match to something measured.
+
 Two decisions the tests pinned down. The default text color is **exactly
 black**, because scripts return to the default with `^000000` and any softer
 near-black would make that a visible color change rather than a return — the

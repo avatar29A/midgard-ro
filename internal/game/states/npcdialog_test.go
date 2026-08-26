@@ -70,8 +70,9 @@ func TestDialogTextAccumulates(t *testing.T) {
 	if err := s.handleSayDialog(sayPacket(42, "Second.")); err != nil {
 		t.Fatalf("handleSayDialog: %v", err)
 	}
-	if s.dialog.Message != "First.\nSecond." {
-		t.Errorf("Message = %q, want both lines", s.dialog.Message)
+	// A blank line between them: each message is its own paragraph.
+	if s.dialog.Message != "First.\n\nSecond." {
+		t.Errorf("Message = %q, want both lines separated by a blank one", s.dialog.Message)
 	}
 
 	// A different NPC is a different conversation and starts over.
