@@ -378,7 +378,7 @@ so that waits for something that does.
 Verified by parking the pointer on an NPC and screenshotting: the speech
 bubble appears, and moving off it brings the arrow back.
 
-### Step 4 — Show what the NPC says 🟡 built, not yet seen
+### Step 4 — Show what the NPC says ✅
 - **Changes:** `internal/game/states/npcdialog.go`, `internal/game/ui/npcdialog.go`, `npctext.go`
 - **Done when:** the greeting appears in a window over the map, with its own
   line breaks intact, scrolling when longer than the box, and `^RRGGBB` codes
@@ -394,9 +394,10 @@ window draws it: color codes parsed into runs, the script's own line breaks
 kept, the rest wrapped on spaces to the 260px field. The window swallows clicks
 so talking to an NPC does not also walk you into the scenery behind it.
 
-**Not confirmed on screen yet.** The parser and the wrapper have table tests,
-but nobody has watched an NPC say something. Everything up to that point is
-verified — `npc.say` will appear on the trace — but the drawing has not been.
+**Confirmed on screen** by Boris: the window appears with the NPC's text, and
+clicking inside it does not walk the character. Not exercised yet: a script
+that actually uses `^RRGGBB`, since the Guide's text is plain — the parser has
+table tests but no capture of its own.
 
 Two decisions the tests pinned down. The default text color is **exactly
 black**, because scripts return to the default with `^000000` and any softer
