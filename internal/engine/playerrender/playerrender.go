@@ -269,6 +269,26 @@ func (r *Renderer) UnitFrameInterval(spec charsprite.Spec, action int) float32 {
 	return sh.intervals[action]
 }
 
+// UnitQuadSize reports the world size of an appearance's billboard, or zeroes
+// when its sheet has not been baked yet.
+//
+// It is what picking needs to size a hit box that matches what is on screen.
+// The quad is centered on the unit horizontally and stands on its feet, so a
+// unit at (x, y, z) occupies x±w/2 and y..y+h — the billboard turns to face
+// the camera, so the same width applies along Z.
+func (r *Renderer) UnitQuadSize(spec charsprite.Spec) (w, h float32) {
+	if r == nil {
+		return 0, 0
+	}
+
+	sh := r.units[spec]
+	if sh == nil {
+		return 0, 0
+	}
+
+	return float32(sh.width) * r.scale, float32(sh.height) * r.scale
+}
+
 // CachedUnitSheets reports how many distinct appearances are held in memory.
 func (r *Renderer) CachedUnitSheets() int {
 	if r == nil {
