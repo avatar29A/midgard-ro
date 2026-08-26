@@ -19,11 +19,22 @@ Standing in Prontera, the player sees the original client's Basic Info panel in 
 
 ![grf-btn-info1 — one of the five menu buttons, 54×18 (`basic_interface/info1.bmp`)](./grf-btn-info1.png)
 
-6. **Menu buttons** — `info1`, `item1`, `map1`, `option1`, `guild1`, each 54×18, in a row under the panel. They open other windows; this feature draws them but wires none of them.
+6. **Menu buttons** — 54×18 each. The archive carries **ten** of them, each in three states (`info1/2/3`, `skill1/2/3`, `item*`, `map*`, `party*`, `guild*`, `quest*`, `option*`, `booking*`, `recruit*`), which matches the screenshot's grid rather than roBrowser's row of five. Four per row × 54 = 216, against a 220-wide panel. This feature draws them but wires none of them.
 
 **Transparency:** the panel's left and right edges are magenta (255,0,255) colour-key, not visible pixels — the loader must key them out or the panel gets pink borders.
 
-**No real-client screenshot is included.** Both sources the skill prefers (irowiki.org, strategywiki.org) returned HTTP 403 to `WebFetch`, so rather than substitute a guess the layout below is reconstructed from the original bitmaps (which *are* the client's own art) and roBrowser's transcription. See Open question 1.
+**Real client, supplied in review** (kRO, classic skin, windowed — posted on this issue). What it shows, and the names the plan uses:
+
+7. **Panel header** — reads `Basic Info`, with a **single** button at the right (minimize). There is no close button: this panel is always present.
+8. **Name / job** — `TankJr` over `Novice`, left-aligned on the white body.
+9. **HP / SP rows** — label, then a filled gauge, then the percentage on the right: `HP [====] 54 / 54 100%`. The numbers sit **on** the gauge, the percentage outside it.
+10. **Base Lv. / Job Lv.** — each with a thin experience bar to its right.
+11. **Weight and Zeny** — `Weight: 50/2150   Zeny: 100,000` on one line under the levels, inside the panel.
+12. **Menu buttons** — a **grid of ten** below the panel, four per row: `info skill item map` / `party guild quest option` / `booking rec` + the game's logo. Not the single row of five that roBrowser's older markup describes.
+
+Also visible but **not this feature**: the minimap (top-right), the tabbed chat box (bottom-left, `Regular Chat` / `Battle Log`), and the HP bar under the character.
+
+The client's own bitmaps below remain the measurement source; the screenshot is what confirms which elements exist and how they read.
 
 Behaviour confirmed from documentation rather than a capture ([StrategyWiki](https://strategywiki.org/wiki/Ragnarok_Online/Basic_Info), [iRO Wiki](https://irowiki.org/wiki/Basic_Game_Control)): the window shows name, class, Base/Job level with EXP as a percentage, HP, SP, weight and Zeny, and **Ctrl+V toggles between the large and reduced form**.
 
@@ -47,7 +58,7 @@ Coordinates are relative to the panel's top-left. Cross-checked against the bitm
 | HP % / SP % | (right 20, 50) / (right 20, 65) | — |
 | Base Lv. / Job Lv. | (15, 86) / (15, 97) | — |
 | Base EXP / Job EXP bar | (84, 89) / (84, 101) | 110 × 4 |
-| Menu buttons | row at y = 135 | 54 × 18 each |
+| Menu buttons | grid at y = 135, four per row | 54 × 18 each |
 
 ## What exists today
 
@@ -86,7 +97,7 @@ All confirmed present with `grftool search` against `data.grf`.
 | HP gauge | `…/basic_interface/gzered_left/mid/right.bmp` | 4×8, 1×8, 4×8 | ✅ |
 | SP gauge | `…/basic_interface/gzeblue_left/mid/right.bmp` | 4×8, 1×8, 4×8 | ✅ |
 | Gauge trough | `…/basic_interface/gze_bg_left/mid/right.bmp` | 9px tall | ✅ |
-| Menu buttons | `…/basic_interface/{info1,item1,map1,option1,guild1}.bmp` | 54×18 | ✅ |
+| Menu buttons (ten, three states each) | `…/basic_interface/{info,skill,item,map,party,guild,quest,option,booking,recruit}{1,2,3}.bmp` | 54×18 | ✅ |
 
 The gauges are three-slice horizontally: fixed 4px caps and a 1px middle stretched to the fill width.
 
@@ -107,6 +118,7 @@ Var ids come from `enum _sp` in `docker/rathena/build/rathena/src/map/map.hpp:49
 | `SP_MAXHP` | 6 | | `SP_JOBLEVEL` | 55 |
 | `SP_SP` | 7 | | `SP_BASEEXP` | 1 |
 | `SP_MAXSP` | 8 | | `SP_NEXTBASEEXP` | 22 |
+| `SP_ZENY` | 20 | | `SP_WEIGHT` / `SP_MAXWEIGHT` | 24 / 25 |
 
 `clif_updatestatus` (`clif.cpp:3635`) is the dispatcher that decides which of the two packets carries a given parameter.
 
@@ -158,11 +170,11 @@ Var ids come from `enum _sp` in `docker/rathena/build/rathena/src/map/map.hpp:49
 - **Proved by:** `go test ./internal/game/ui/` (fill widths), UC-206 — sit to regenerate and watch the bar move
 - **Reference:** grf-basewin-bg2 ③
 
-### Step 4 — Experience bars and the menu button row
+### Step 4 — Experience bars, weight and Zeny, and the menu grid
 - **Changes:** `internal/game/ui/hud_basic_info.go`
-- **Done when:** Base/Job EXP bars fill against the next-level values, and the five 54×18 buttons draw under the panel with hover shading
+- **Done when:** Base/Job EXP bars fill against the next-level values; `Weight: cur/max` and `Zeny: n` read the server's values; the ten 54×18 buttons draw in a four-per-row grid using their own hover and pressed art
 - **Proved by:** screenshot scenario; buttons are drawn but inert (see Out of scope)
-- **Reference:** grf-basewin-bg2 ④⑤, grf-btn-info1 ⑥
+- **Reference:** ref screenshot ⑩⑪⑫, grf-basewin-bg2 ④⑤, grf-btn-info1 ⑥
 
 ### Step 5 — Reduced form and dragging
 - **Changes:** `internal/game/ui/hud_basic_info.go`, input handling for Ctrl+V
@@ -186,7 +198,7 @@ Var ids come from `enum _sp` in `docker/rathena/build/rathena/src/map/map.hpp:49
 ## Out of scope
 
 - The menu buttons **open nothing** — inventory, skills, map, options and guild windows are their own features.
-- Weight and Zeny (`SP_WEIGHT`, `SP_ZENY`) — shown by the original in this panel, but they need inventory work to be meaningful.
+- Nothing about the minimap, the chat box or entity HP bars, all visible in the reference but each its own feature.
 - Party/guild HP bars, and HP bars over other entities.
 - The status window (STR/AGI/VIT/INT/DEX/LUK) — a separate window, despite arriving in the same packets.
 
@@ -194,16 +206,20 @@ Var ids come from `enum _sp` in `docker/rathena/build/rathena/src/map/map.hpp:49
 
 _All three from the first round are answered — see the Revision log. One follow-up:_
 
-1. **The reference screenshot cannot be fetched from here.** The image you linked
-   is on ResearchGate, which refuses both `curl` and `WebFetch` (403, bot
-   protection), and Wikimedia Commons has no equivalent in-game capture. Could
-   you save the PNG to disk and point me at the path? I will add it as `ref-01`
-   with a legend naming the elements — it is the one piece the plan is still
-   missing.
+1. **The reference image lives on the issue, not in the repo.** It was supplied
+   in review rather than fetched (ResearchGate blocks automated download), so
+   `docs/features/hud-basic-info/` holds only the client's own bitmaps. Attach
+   the PNG to this issue if you want it in the permanent record, and I will
+   commit it as `ref-01` with the legend above.
 
 ## Revision log
 
 - 2026-08-26 — created
+- 2026-08-26 — real-client screenshot supplied in review: the menu buttons are a
+  grid of ten (three states each, all present in the archive), not roBrowser's
+  row of five; weight and Zeny move into scope since they arrive as status vars
+  (`SP_ZENY` 20, `SP_WEIGHT` 24, `SP_MAXWEIGHT` 25) rather than needing
+  inventory; the panel has a minimize button and no close button.
 - 2026-08-26 — Step 1 now also verifies the `CharInfo` layout against rAthena
   before the HUD trusts its values (per comment 2). Job names stay as they are;
   `Unknown (N)` is acceptable (per comment 3). The reference screenshot is still
