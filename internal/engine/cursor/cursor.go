@@ -39,9 +39,17 @@ const (
 	StateTarget  State = 10 // skill targeting
 )
 
-// defaultFrameDelay is used when the sprite gives an action no interval of its
-// own; without it a frame list would advance every tick.
-const defaultFrameDelay = 100 * time.Millisecond
+const (
+	// intervalTick is what one unit of an ACT interval is worth. RO counts
+	// animation in ticks of 25ms, not milliseconds: the character sprite's
+	// walk interval of 3 is the 75ms the walk animation actually runs at.
+	// Reading the field as milliseconds runs everything 25x too fast.
+	intervalTick = 25 * time.Millisecond
+
+	// defaultFrameDelay is used when the sprite gives an action no interval of
+	// its own; without it a frame list would advance every tick.
+	defaultFrameDelay = 100 * time.Millisecond
+)
 
 // speed scales a state's frame delay. The original runs the arrow at half rate
 // and the targeting ring at double, which is what makes them read as an idle
@@ -159,7 +167,7 @@ func frameDelay(act *formats.ACT, index int) time.Duration {
 	delay := defaultFrameDelay
 
 	if index < len(act.Intervals) && act.Intervals[index] > 0 {
-		delay = time.Duration(float64(act.Intervals[index]) * float64(time.Millisecond))
+		delay = time.Duration(float64(act.Intervals[index]) * float64(intervalTick))
 	}
 
 	if mult, ok := speed[State(index)]; ok {

@@ -145,6 +145,10 @@ func New(cfg *config.Config) (*Game, error) {
 		io := imgui.CurrentIO()
 		flags := io.ConfigFlags()
 		flags &^= imgui.ConfigFlagsViewportsEnable // Clear viewport flag
+
+		// The game draws RO's cursor itself. ImGui otherwise sets the system
+		// cursor every frame, which puts it back however often it is hidden.
+		flags |= imgui.ConfigFlagsNoMouseCursorChange
 		io.SetConfigFlags(flags)
 
 		g.loadKoreanFont()
