@@ -66,9 +66,9 @@ type NPCDialog struct {
 	// player is written by the script into the message text.
 	Name string
 
-	// MenuItems is how many choices the last menu offered, kept so an
-	// out-of-range selection can be refused before it is sent.
-	MenuItems int
+	// Menu is the choices the server last offered, already split. Its length
+	// is the bound a selection has to stay inside — see ChooseMenuItem.
+	Menu []string
 
 	// Message is what the NPC last said, exactly as the script wrote it —
 	// color codes and line breaks included. Interpreting it belongs to
@@ -100,7 +100,7 @@ func (s *InGameState) handleSayDialog(data []byte) error {
 
 	s.dialog.Phase = DialogText
 	s.dialog.NPCID = say.NPCID
-	s.dialog.MenuItems = 0
+	s.dialog.Menu = nil
 	s.dialog.Name = s.entityName(say.NPCID)
 
 	trace.Emit(trace.NPC, "say",
@@ -109,6 +109,81 @@ func (s *InGameState) handleSayDialog(data []byte) error {
 		zap.Int("chars", len(say.Message)))
 
 	return nil
+}
+
+// handleMenuList shows the choices the script is waiting on.
+func (s *InGameState) handleMenuList(data []byte) error {
+	menu := packets.DecodeMenuList(data)
+	if menu == nil {
+		logger.Warn("malformed NPC menu packet", zap.Int("bytes", len(data)))
+		return nil
+	}
+
+	s.dialog.Phase = DialogMenu
+	s.dialog.NPCID = menu.NPCID
+	s.dialog.Menu = menu.Items
+
+	if s.dialog.Name == "" {
+		s.dialog.Name = s.entityName(menu.NPCID)
+	}
+
+	trace.Emit(trace.NPC, "menu",
+		zap.Uint32("npcID", menu.NPCID), zap.Int("items", len(menu.Items)))
+
+	return nil
+}
+
+// ChooseMenuItem answers a menu with a one-based selection.
+//
+// The bound is checked before anything is sent. rAthena calls clif_GM_kick for
+// a selection of zero or past the end, so a wrong index disconnects the player
+// rather than branching the script oddly — which makes this the one place in
+// the conversation where being careful is not merely tidy.
+func (s *InGameState) ChooseMenuItem(choice int) {
+	if s == nil || s.client == nil || s.dialog.Phase != DialogMenu {
+		return
+	}
+
+	npcID := s.dialog.NPCID
+
+	pkt, err := packets.ChooseMenu(npcID, choice, len(s.dialog.Menu))
+	if err != nil {
+		logger.Warn("refusing to send a menu choice the server would kick us for",
+			zap.Int("choice", choice), zap.Int("items", len(s.dialog.Menu)), zap.Error(err))
+
+		return
+	}
+
+	if err := s.client.Send(pkt); err != nil {
+		logger.Warn("could not answer NPC menu", zap.Uint32("npcID", npcID), zap.Error(err))
+		return
+	}
+
+	// The script decides what comes next; until it says, there is no menu.
+	s.dialog.Phase = DialogText
+	s.dialog.Menu = nil
+
+	trace.Emit(trace.NPC, "choose", zap.Uint32("npcID", npcID), zap.Int("choice", choice))
+}
+
+// CancelMenuChoice backs out of a menu. The script treats it as its own branch,
+// which is why it is not the same as closing the window.
+func (s *InGameState) CancelMenuChoice() {
+	if s == nil || s.client == nil || s.dialog.Phase != DialogMenu {
+		return
+	}
+
+	npcID := s.dialog.NPCID
+
+	if err := s.client.Send(packets.CancelMenu(npcID)); err != nil {
+		logger.Warn("could not cancel NPC menu", zap.Uint32("npcID", npcID), zap.Error(err))
+		return
+	}
+
+	s.dialog.Phase = DialogText
+	s.dialog.Menu = nil
+
+	trace.Emit(trace.NPC, "cancel", zap.Uint32("npcID", npcID))
 }
 
 // handleWaitDialog is the server asking for a Next button.

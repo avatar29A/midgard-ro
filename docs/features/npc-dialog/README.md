@@ -494,13 +494,34 @@ Two faults it turned up, both now fixed:
   done, because **a panel built from solids cannot host an image widget**.
 - The captions were Korean, addressed above.
 
-### Step 6 — Menus
-- **Changes:** `internal/game/states/npcdialog.go`, `internal/game/ui/`
+### Step 6 — Menus 🟡 built, not yet driven
+- **Changes:** `internal/game/states/npcdialog.go`, `internal/game/ui/npcmenu.go`
 - **Done when:** `ZC_MENU_LIST` shows the choices; picking one sends its 1-based
   index and the script branches; cancel sends 255.
 - **Proved by:** UC-208, UC-209. Talking to the Guide and choosing a destination
   branches correctly, and cancel closes without a kick.
-- **Reference:** roBrowser `NpcMenu.css` measurements
+- **Reference:** ref-01 ⑨⑩, roBrowser `NpcMenu.css`
+
+A second window, shown at the same time as the text one — ref-01 has both on
+screen together. Geometry from `NpcMenu.css` with the same +2 for its border
+that the text window needed. **Four rows fit and the rest scroll**, which is
+not a guess: roBrowser gives the list an 80px box with 20px rows, and the
+warp-list capture shows exactly four rows above a scrollbar.
+
+A row is selected — the pale blue band runs the full width, per `.selected` and
+ref-01 — and **OK** confirms it. Double-clicking a row does the same thing
+faster, using `DoubleClickedIn` from #87. Cancel sends 255, which the script
+treats as its own branch, so it is not the same as closing the window.
+
+The wheel scrolls the list and the selection is kept in view. The scrollbar is
+a track and a thumb; the original also has arrow buttons at each end, which are
+not here.
+
+`btn_ok.bmp` and `btn_cancel.bmp` exist only in `login_interface\` and ship no
+hover or pressed art, so the same texture serves all three states and the
+widget shades it — the case character select already handles the same way.
+
+Not yet driven in the client.
 
 ### Step 7 — Docs
 - [ ] `docs/ENGINE_FEATURES.md` if a package was added
@@ -554,6 +575,10 @@ Two faults it turned up, both now fixed:
   question 2: its position is remembered between conversations. It has no
   title bar, so the whole window is the handle; the button is drawn after and
   claims the pointer for itself, so pressing it does not drag.
+- 2026-08-27 — **Step 6 built.** `ZC_MENU_LIST` handled and drawn as a second
+  window with a selected row, OK, cancel and a scrollbar. This also removes the
+  60-second wait recorded above, which was rAthena timing out a menu nobody
+  answered.
 - 2026-08-26 — **Step 5 verified**, after two fixes from Boris's testing: the
   buttons were drawn under the window background (the images-then-solids
   batching again), and their Korean captions needed the login window's masking

@@ -64,6 +64,14 @@ type UI2DBackend struct {
 	npcWinX, npcWinY float32
 	npcWinPlaced     bool
 
+	// The menu window: where it sits, which row is selected, how far the
+	// list is scrolled, and its shared OK/cancel art.
+	npcMenuX, npcMenuY float32
+	npcMenuPlaced      bool
+	npcMenuIdx         int
+	npcMenuScroll      int
+	npcMenuBtns        map[string]*TextureInfo
+
 	// Basic Info panel art, where it has been dragged to, and whether it is
 	// folded down to its reduced form.
 	hudSkin    *basicInfoSkin
@@ -880,6 +888,7 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 
 	b.renderBasicInfo(state)
 	b.renderNPCDialog(state, width, height)
+	b.renderNPCMenu(state, width, height)
 
 	// Debug overlay (top-left)
 	if state.ShowDebugInfo {
@@ -967,8 +976,8 @@ func describeDialog(state InGameUIState) string {
 	}
 
 	line := fmt.Sprintf("%s  npc %d (%s)", state.DialogPhase, state.DialogNPCID, who)
-	if state.DialogMenuItems > 0 {
-		line += fmt.Sprintf("  %d items", state.DialogMenuItems)
+	if len(state.DialogMenu) > 0 {
+		line += fmt.Sprintf("  %d items", len(state.DialogMenu))
 	}
 
 	return line
