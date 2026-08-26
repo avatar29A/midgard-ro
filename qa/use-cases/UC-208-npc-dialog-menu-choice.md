@@ -1,11 +1,11 @@
-# UC-206: NPC Dialog — Menu Choice
+# UC-208: NPC Dialog — Menu Choice
 
 ## Description
 An NPC that offers choices (`ZC_MENU_LIST`) shows them as a list; picking one
 sends its **1-based** index and the script branches accordingly.
 
 ## Preconditions
-- As UC-205
+- As UC-207
 - An NPC with a menu in reach — Prontera's Guide offers a destination list
 
 ## Test Steps

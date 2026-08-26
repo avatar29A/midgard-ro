@@ -92,6 +92,9 @@ type InGameState struct {
 	// current by the server's parameter packets.
 	stats PlayerStats
 
+	// The conversation in progress, if any.
+	dialog NPCDialog
+
 	// Parameter ids we do not track, remembered so each is reported once
 	// rather than on every update the server sends for it.
 	unknownStats map[uint16]bool
@@ -1064,6 +1067,26 @@ func abs(v int) int {
 		return -v
 	}
 	return v
+}
+
+// ClickWorld handles a left click that landed on the world rather than on the
+// interface.
+//
+// It exists so there is one place that decides what a click means. Today that
+// decision is only "walk there"; entity picking goes in front of it, and
+// having the decision in the state — where the entities and the connection
+// already are — is what lets it, without the game loop growing a second copy
+// of the ray cast.
+func (s *InGameState) ClickWorld(mouseX, mouseY, viewportW, viewportH float32) {
+	tileX, tileY, ok := s.ScreenToTile(mouseX, mouseY, viewportW, viewportH)
+	if !ok {
+		trace.Emit(trace.Pick, "miss")
+		return
+	}
+
+	if err := s.RequestMove(tileX, tileY); err != nil {
+		logger.Warn("click-to-move RequestMove failed", zap.Error(err))
+	}
 }
 
 // RequestMove asks the server to walk to a cell, remembering it as the

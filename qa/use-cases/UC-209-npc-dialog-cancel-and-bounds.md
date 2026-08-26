@@ -1,4 +1,4 @@
-# UC-207: NPC Dialog — Cancel and Index Bounds
+# UC-209: NPC Dialog — Cancel and Index Bounds
 
 ## Description
 Cancelling a menu sends 255, and no interaction can produce an index the server
@@ -7,7 +7,7 @@ rejects. This is a disconnect guard, not a cosmetic one: rAthena's
 than the number of items the script offered.
 
 ## Preconditions
-- As UC-206
+- As UC-208
 
 ## Test Steps
 
