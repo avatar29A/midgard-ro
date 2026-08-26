@@ -128,11 +128,23 @@ Var ids come from `enum _sp` in `docker/rathena/build/rathena/src/map/map.hpp:49
 
 ## Steps
 
-### Step 1 — Parse status packets and keep the player's stats
+### Step 1 — Parse status packets, verify the CharInfo layout, keep the player's stats
 - **Changes:** `internal/network/packets` (constants + struct), `internal/game/states/ingame.go` (handler), `internal/game/game.go` (fill the six `InGameUIState` fields)
 - **Done when:** `--trace=status` prints `status.change` with sensible ids and values on login and when taking damage; F3 shows HP/SP/levels matching the server
 - **Proved by:** `go test ./internal/network/packets/` (round-trips), F3 screenshot, UC-305
 - **Reference:** Protocol table above
+
+  **Layout investigation (per review).** Character select reports `Job 40`,
+  `Lv. 0` and `HP 11/11` next to `SP 40/40` for the test account. 40 is not a
+  base job, and those three disagreeing is the signature of a struct read at the
+  wrong offsets: `packets.go:151` defines `CharInfo` with `CharInfoSize = 175`
+  (eAthena) while noting rAthena/Hercules uses 155, so the same bytes can be
+  read two different ways. This step checks the layout against
+  `docker/rathena/build/rathena/src/map/packets.hpp` for our PACKETVER and fixes
+  the offsets before the HUD trusts them — a panel fed from a misread struct
+  shows wrong numbers convincingly. The `0x00B0` values are the cross-check: if
+  HP from the packet disagrees with HP from `CharInfo`, the struct is still
+  wrong.
 
 ### Step 2 — Draw the panel with name, job and levels
 - **Changes:** `internal/game/ui/hud_basic_info.go` (new), `internal/game/ui/ui2d_backend.go` (call it from `RenderInGameUI`)
@@ -180,10 +192,20 @@ Var ids come from `enum _sp` in `docker/rathena/build/rathena/src/map/map.hpp:49
 
 ## Open questions
 
-1. **No real-client screenshot.** irowiki.org and strategywiki.org both refuse `WebFetch` (403). The layout comes from the original bitmaps plus roBrowser, which agree with each other on every size I could check (panel 220×135, buttons 54×18). Do you want a real capture before implementation, or is the reconstruction enough?
-2. **`Job 40` looks wrong.** Character select reports `Job 40`, `Lv. 0` and `HP 11/11` alongside `SP 40/40` for the test account. 40 is not a base job, and `packets.go` carries both a 175-byte eAthena and a 155-byte rAthena `CharInfo` layout — this looks like field offsets shifted for the server in use. Step 1 should verify the offsets against rAthena rather than inherit them; if that turns out to be a real packet bug, is it in scope here or its own fix?
-3. **Job names.** `getJobName` (`internal/game/ui/charselect_ui.go:210`) maps the base jobs and returns `Unknown (N)` otherwise. Good enough for the panel, or should the feature complete the table?
+_All three from the first round are answered — see the Revision log. One follow-up:_
+
+1. **The reference screenshot cannot be fetched from here.** The image you linked
+   is on ResearchGate, which refuses both `curl` and `WebFetch` (403, bot
+   protection), and Wikimedia Commons has no equivalent in-game capture. Could
+   you save the PNG to disk and point me at the path? I will add it as `ref-01`
+   with a legend naming the elements — it is the one piece the plan is still
+   missing.
 
 ## Revision log
 
 - 2026-08-26 — created
+- 2026-08-26 — Step 1 now also verifies the `CharInfo` layout against rAthena
+  before the HUD trusts its values (per comment 2). Job names stay as they are;
+  `Unknown (N)` is acceptable (per comment 3). The reference screenshot is still
+  outstanding: the linked ResearchGate image is not fetchable from here
+  (per comment 1).
