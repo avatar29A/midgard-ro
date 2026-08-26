@@ -227,11 +227,29 @@ The magenta edges key out through `texture.ImageToRGBA(img, true)`, which the te
 
 Two notes. The window caption is **not** painted into the bitmap, so `Basic Info` is drawn like the rest; it is centered in the 16-row title band rather than sat on its top edge. And the minimize button is deliberately not here — it belongs with Step 5, which gives it something to do. A button that does nothing is worse than no button.
 
-### Step 3 — HP and SP gauges
+### Step 3 — HP and SP gauges ✅
 - **Changes:** `internal/game/ui/hud_basic_info.go`
 - **Done when:** both gauges fill in proportion with `current / max` printed on them and the percentage to the right; a gauge with `max = 0` draws empty rather than dividing by zero
-- **Proved by:** `go test ./internal/game/ui/` (fill widths), UC-206 — sit to regenerate and watch the bar move
+- **Proved by:** `go test ./internal/game/ui/` (fill widths), UC-206
 - **Reference:** grf-basewin-bg2 ③
+
+![HP 18/40 at 45% and SP 7/11 at 63%, both partly filled](./current-gauges.png)
+
+**How this was checked.** A full bar proves almost nothing — 100% and a broken proportion look identical — so the character's `hp` and `sp` were set to 17 and 4 directly in the server's database before logging in (`UPDATE \`char\` SET hp=17, sp=4`), and restored afterwards.
+
+That turned into a better test than intended. By the time the screenshot fired, natural regeneration had moved the values, and the trace shows each tick arriving as its own packet:
+
+```
+status.change {"varID":5,"value":17}   # on entry
+status.change {"varID":7,"value":5}
+status.change {"varID":7,"value":6}
+status.change {"varID":5,"value":18}
+status.change {"varID":7,"value":7}
+```
+
+The panel reads `18 / 40` and `7 / 11` — the values after those updates, not the ones it started with. That is UC-206 without needing to take damage.
+
+Two decisions worth recording. The fill is rounded to **whole pixels**, because the art is nearest-filtered and a fractional edge shimmers as the value changes; but anything above zero keeps at least one pixel, so a character on their last hit point does not read as a corpse. And the gauge row is set smaller than the rest of the panel (0.6 against 0.7): the bar is 8px tall and the reading sits on it, so at the body's size the glyphs stood proud of the bar.
 
 ### Step 4 — Experience bars, weight and Zeny, and the menu grid
 - **Changes:** `internal/game/ui/hud_basic_info.go`
@@ -277,6 +295,9 @@ _All three from the first round are answered — see the Revision log. One follo
 
 ## Revision log
 
+- 2026-08-26 — **Step 3 done.** Both gauges fill proportionally with the
+  reading on the bar and the percentage beside it, verified against a
+  deliberately damaged character and against live regeneration ticks.
 - 2026-08-26 — **Step 2 done.** Panel drawn with caption, name, job and both
   levels. roBrowser's stylesheet verified against the bitmap by reading its
   pixels — exact, so the remaining coordinates are trusted. Added `--no-bgm`.
