@@ -647,6 +647,7 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_SAY_DIALOG, s.handleSayDialog)
 	s.client.RegisterHandler(packets.ZC_WAIT_DIALOG, s.handleWaitDialog)
 	s.client.RegisterHandler(packets.ZC_CLOSE_DIALOG, s.handleCloseDialog)
+	s.client.RegisterHandler(packets.ZC_MENU_LIST, s.handleMenuList)
 }
 
 // sendKeepAlive sends CZ_REQUEST_TIME so the map server doesn't time us out.

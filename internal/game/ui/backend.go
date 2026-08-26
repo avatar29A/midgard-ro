@@ -181,10 +181,15 @@ type InGameUIState struct {
 	OnDialogClose func()
 
 	// The conversation in progress, for the debug overlay.
-	DialogPhase     string
-	DialogNPCID     uint32
-	DialogNPCName   string
-	DialogMenuItems int
+	DialogPhase   string
+	DialogNPCID   uint32
+	DialogNPCName string
+
+	// DialogMenu is the choices on offer, and the callbacks answer them.
+	// OnDialogChoose takes a one-based index, which is what the wire wants.
+	DialogMenu     []string
+	OnDialogChoose func(choice int)
+	OnDialogCancel func()
 
 	// ToggleBasicInfo folds the Basic Info panel to its reduced form, or back.
 	// It is an event rather than a setting — set for the one frame the key was

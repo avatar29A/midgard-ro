@@ -710,18 +710,24 @@ func (g *Game) renderUI() {
 			OnDialogClose: func() {
 				g.pendingAction = state.EndDialog
 			},
-			DialogPhase:     dialog.Phase.String(),
-			DialogNPCID:     dialog.NPCID,
-			DialogNPCName:   dialog.Name,
-			DialogMenuItems: dialog.MenuItems,
-			PlayerName:      ui.GetCharName(state.CharInfo()),
-			PlayerClass:     stats.Class,
-			PlayerHP:        stats.HP,
-			PlayerMaxHP:     stats.MaxHP,
-			PlayerSP:        stats.SP,
-			PlayerMaxSP:     stats.MaxSP,
-			PlayerLevel:     stats.BaseLevel,
-			PlayerJobLevel:  stats.JobLevel,
+			DialogPhase:   dialog.Phase.String(),
+			DialogNPCID:   dialog.NPCID,
+			DialogNPCName: dialog.Name,
+			DialogMenu:    dialog.Menu,
+			OnDialogChoose: func(choice int) {
+				g.pendingAction = func() { state.ChooseMenuItem(choice) }
+			},
+			OnDialogCancel: func() {
+				g.pendingAction = state.CancelMenuChoice
+			},
+			PlayerName:     ui.GetCharName(state.CharInfo()),
+			PlayerClass:    stats.Class,
+			PlayerHP:       stats.HP,
+			PlayerMaxHP:    stats.MaxHP,
+			PlayerSP:       stats.SP,
+			PlayerMaxSP:    stats.MaxSP,
+			PlayerLevel:    stats.BaseLevel,
+			PlayerJobLevel: stats.JobLevel,
 
 			PlayerBaseExp:     stats.BaseExp,
 			PlayerNextBaseExp: stats.NextBaseExp,
