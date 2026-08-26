@@ -21,9 +21,30 @@ const (
 	hudPanelW = float32(220)
 	hudPanelH = float32(135)
 
-	// Where the panel sits. The original keeps it in the top-left corner.
+	// The reduced form is the same bitmap clipped to its top 53 rows, which
+	// ends exactly above the HP trough. There is a `basewin_mini.bmp` in the
+	// archive but it is 280x34 — a different, smaller window, not this one.
+	hudReducedH = float32(53)
+
+	// Where the panel starts. The original keeps it in the top-left corner;
+	// after that it is wherever it was dragged.
 	hudMarginX = float32(5)
 	hudMarginY = float32(5)
+
+	// The system button in the title bar, which folds the panel away.
+	hudSysBtn      = float32(11)
+	hudSysBtnRight = float32(2)
+	hudSysBtnY     = float32(3)
+
+	// The reduced form's three lines. The first sits in the title bar, where
+	// the caption is in the large form — folded up, the panel shows the
+	// character's name rather than the window's.
+	hudSmallLine1X = float32(18)
+	hudSmallLine1Y = float32(2)
+	hudSmallLine2X = float32(10)
+	hudSmallLine2Y = float32(20)
+	hudSmallLine3X = float32(10)
+	hudSmallLine3Y = float32(36)
 
 	// Title bar: 16 rows of gradient, then the black rule at y16. The caption
 	// is centered in that band rather than sat on its top edge.
@@ -137,6 +158,8 @@ type basicInfoSkin struct {
 	panel  *TextureInfo
 	hp, sp *gaugeSkin
 	menu   []*menuButtonSkin
+
+	sysOff, sysOn *TextureInfo
 }
 
 // loadBasicInfoSkin loads the panel background, once. A miss leaves the skin
@@ -168,7 +191,19 @@ func (b *UI2DBackend) loadBasicInfoSkin() *basicInfoSkin {
 		logger.Warn("gauge art unavailable, the panel will draw without its bars")
 	}
 
-	b.hudSkin = &basicInfoSkin{panel: panel, hp: hp, sp: sp, menu: b.loadMenuButtons()}
+	skin := &basicInfoSkin{panel: panel, hp: hp, sp: sp, menu: b.loadMenuButtons()}
+
+	// The fold control. Missing art costs the button, not the panel — Ctrl+V
+	// does the same thing.
+	if off, err := b.texCache.Load(basicInterfacePath + "sys_mini_off.bmp"); err == nil {
+		skin.sysOff = off
+	}
+
+	if on, err := b.texCache.Load(basicInterfacePath + "sys_mini_on.bmp"); err == nil {
+		skin.sysOn = on
+	}
+
+	b.hudSkin = skin
 
 	return b.hudSkin
 }
@@ -317,10 +352,44 @@ func (b *UI2DBackend) renderBasicInfo(state InGameUIState) {
 		return
 	}
 
-	x, y := hudMarginX, hudMarginY
+	if state.ToggleBasicInfo {
+		b.hudReduced = !b.hudReduced
+	}
+
+	if !b.hudPlaced {
+		b.hudX, b.hudY = hudMarginX, hudMarginY
+		b.hudPlaced = true
+	}
+
+	height := hudPanelH
+	if b.hudReduced {
+		height = hudReducedH
+	}
+
+	// Dragged by its title bar, like every other window.
+	b.ctx.DragHandle("basicinfo_titlebar",
+		ui2d.Rect{X: b.hudX, Y: b.hudY, W: hudPanelW, H: ui2d.FrameTitleH},
+		&b.hudX, &b.hudY)
+
+	x, y := b.hudX, b.hudY
 	r := b.ctx.Renderer()
 
-	r.DrawImage(skin.panel.ID, x, y, hudPanelW, hudPanelH, ui2d.ColorWhite)
+	// The reduced form is the same bitmap with its lower part cut away.
+	r.DrawImageUV(skin.panel.ID, x, y, hudPanelW, height, 0, 0, 1, height/hudPanelH, ui2d.ColorWhite)
+
+	if b.hudReduced {
+		b.drawBasicInfoReduced(state, x, y)
+	} else {
+		b.drawBasicInfoLarge(skin, state, x, y)
+	}
+
+	b.drawFoldButton(skin, x, y)
+	b.drawMenuButtons(skin, x, y+height)
+}
+
+// drawBasicInfoLarge draws the full panel.
+func (b *UI2DBackend) drawBasicInfoLarge(skin *basicInfoSkin, state InGameUIState, x, y float32) {
+	r := b.ctx.Renderer()
 
 	// The title bar is bare gradient — the original's caption is not painted
 	// into it, so it is drawn like everything else here.
@@ -342,7 +411,40 @@ func (b *UI2DBackend) renderBasicInfo(state InGameUIState) {
 	b.drawExpBar(x+hudExpX, y+hudJobExpY, state.PlayerJobExp, state.PlayerNextJobExp)
 
 	b.drawWeightAndZeny(state, x, y)
-	b.drawMenuButtons(skin, x, y)
+}
+
+// drawBasicInfoReduced draws the folded panel: the name in the title bar, then
+// levels and gauges as two lines of text.
+func (b *UI2DBackend) drawBasicInfoReduced(state InGameUIState, x, y float32) {
+	r := b.ctx.Renderer()
+
+	r.DrawText(x+hudSmallLine1X, y+hudSmallLine1Y-hudTextLift,
+		state.PlayerName, hudTextScale, ui2d.ColorText)
+
+	r.DrawText(x+hudSmallLine2X, y+hudSmallLine2Y-hudGaugeTextLift,
+		fmt.Sprintf("Lv.%d / %s / Lv.%d / Exp. %d",
+			state.PlayerLevel, getJobName(uint16(state.PlayerClass)),
+			state.PlayerJobLevel, state.PlayerBaseExp),
+		hudGaugeTextScale, ui2d.ColorText)
+
+	r.DrawText(x+hudSmallLine3X, y+hudSmallLine3Y-hudGaugeTextLift,
+		fmt.Sprintf("HP. %d / %d | SP. %d / %d",
+			state.PlayerHP, state.PlayerMaxHP, state.PlayerSP, state.PlayerMaxSP),
+		hudGaugeTextScale, ui2d.ColorText)
+}
+
+// drawFoldButton draws the title bar's system button, which folds the panel
+// down to its reduced form and back. Ctrl+V does the same.
+func (b *UI2DBackend) drawFoldButton(skin *basicInfoSkin, x, y float32) {
+	if skin.sysOff == nil || skin.sysOn == nil {
+		return
+	}
+
+	if b.ctx.ImageButtonAt("basicinfo_fold",
+		x+hudPanelW-hudSysBtnRight-hudSysBtn, y+hudSysBtnY, hudSysBtn, hudSysBtn,
+		skin.sysOff.ID, skin.sysOn.ID, skin.sysOn.ID) {
+		b.hudReduced = !b.hudReduced
+	}
 }
 
 // drawExpBar draws one experience bar: a grey rule around a white well, with
@@ -434,7 +536,7 @@ func (b *UI2DBackend) drawMenuButtons(skin *basicInfoSkin, x, y float32) {
 		row := i / hudBtnCols
 
 		b.ctx.ImageButtonAt("hud_menu_"+button.name,
-			x+float32(col)*hudBtnW, y+hudPanelH+float32(row)*hudBtnH,
+			x+float32(col)*hudBtnW, y+float32(row)*hudBtnH,
 			hudBtnW, hudBtnH,
 			button.normal.ID, button.hover.ID, button.pressed.ID)
 	}

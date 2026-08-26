@@ -1,7 +1,7 @@
 # Feature: Basic Info HUD (name, job, HP/SP, levels)
 
 **Branch:** `feature/hud-basic-info` · **Issue:** #85 · **Parent:** #49 (MVP scope)
-**Status:** Planned · **Created:** 2026-08-26
+**Status:** Steps 0–6 done, ready for review · **Created:** 2026-08-26
 
 ## Goal
 
@@ -271,15 +271,27 @@ Verified against real values by setting `zeny` and `base_exp` in the server's da
 
 roBrowser lists **eight** buttons; the archive ships ten and your screenshot shows ten, so ten is what is drawn. They are inert — the windows they open are their own features — but they use their real hover and pressed art, which is what tells you a button is alive. Not carried over: the original fades the whole strip to 50% until the mouse is over it.
 
-### Step 5 — Reduced form and dragging
-- **Changes:** `internal/game/ui/hud_basic_info.go`, input handling for Ctrl+V
+### Step 5 — Reduced form and dragging ✅
+- **Changes:** `internal/game/ui/hud_basic_info.go`, `internal/game/game.go` (Ctrl+V)
 - **Done when:** Ctrl+V switches between the 220×135 and 220×53 forms, and the panel can be dragged by its title bar and stays where it is put
 - **Proved by:** screenshot scenario in both forms, UC-205
-- **Reference:** `basewin_mini.bmp`
 
-### Step 6 — Docs
-- [ ] `docs/ENGINE_FEATURES.md` — the HUD entry
-- [ ] Session log `docs/sessions/2026-08-26-hud-basic-info.md`
+![The reduced panel: name in the title bar, levels and gauges as two lines, buttons moved up](./current-reduced.png)
+
+**`basewin_mini.bmp` is not the reduced panel.** It is 280×34 — a different, smaller window. roBrowser's reduced form is `basewin_bg2.bmp` clipped to its top 53 rows, which ends exactly above the HP trough, and that is what is drawn here (`DrawImageUV`). The plan's asset table was wrong about this.
+
+Folded up, the title bar shows the **character's** name rather than the window's, and the two lines below are `Lv.1 / Novice / Lv.1 / Exp. 0` and `HP. 40 / 40 | SP. 11 / 11`. The menu buttons follow the shorter panel up to y 53.
+
+Ctrl+V and the title bar's system button (`sys_mini_off`/`on`) both fold it, and the round trip was checked by driving the key into the running client — large → reduced → large.
+
+Not carried over: the original also has a 9×14 `viewoff`/`viewon` toggle at the reduced form's bottom-right. The title bar button does the same job in both forms, so a second control would be redundant.
+
+**Dragging is wired but not visually verified.** It uses the same `ui2d.DragHandle` as the login and character select windows, with the same shape — but synthesising a drag needs the window's position on screen, and SDL does not expose the window through the accessibility API, so a synthetic click would have been aimed at a guess. Worth a manual check.
+
+### Step 6 — Docs ✅
+- [x] `docs/ENGINE_FEATURES.md` — the HUD entry, under the game layer
+- [x] Session log `docs/sessions/2026-08-26-hud-basic-info.md`
+- No ADR: nothing here crossed a layer or changed an interface, as Step 0a predicted.
 
 ## Done when (feature)
 
@@ -309,6 +321,10 @@ _All three from the first round are answered — see the Revision log. One follo
 
 ## Revision log
 
+- 2026-08-26 — **Steps 5 and 6 done.** Reduced form, folding by Ctrl+V and by
+  the title bar button, dragging, and the docs. One more plan correction:
+  `basewin_mini.bmp` is a different 280×34 window, not the reduced panel —
+  that is `basewin_bg2.bmp` clipped to its top 53 rows.
 - 2026-08-26 — **Step 4 done.** Experience bars, the weight/Zeny footer and
   the ten-button grid. Two corrections from roBrowser's markup: the experience
   bars are drawn rectangles rather than artwork, and weight arrives in tenths
