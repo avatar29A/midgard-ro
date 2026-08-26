@@ -18,6 +18,11 @@ const (
 	scrollCapH   = float32(4)
 )
 
+// scrollButtonOptions keeps the arrows quiet. Scrolling is moving the view,
+// not doing something — and an arrow held down to run through a long list
+// would machine-gun the click sound.
+var scrollButtonOptions = ui2d.ButtonOptions{Silent: true}
+
 var scrollPieces = []string{
 	"scroll0up", "scroll0down", "scroll0mid",
 	"scroll0bar_up", "scroll0bar_mid", "scroll0bar_down",
@@ -86,13 +91,13 @@ func (b *UI2DBackend) scrollbar(id string, x, y, height float32, offset, maxOffs
 
 	r.DrawImage(skin.track.ID, x, trackY, scrollW, trackH, ui2d.ColorWhite)
 
-	if b.ctx.ImageButtonAt(id+"_up", x, y, scrollW, scrollArrowH,
-		skin.up.ID, skin.up.ID, skin.up.ID) {
+	if b.ctx.ImageButtonAtOpts(id+"_up", x, y, scrollW, scrollArrowH,
+		skin.up.ID, skin.up.ID, skin.up.ID, scrollButtonOptions) {
 		offset--
 	}
 
-	if b.ctx.ImageButtonAt(id+"_down", x, y+height-scrollArrowH, scrollW, scrollArrowH,
-		skin.down.ID, skin.down.ID, skin.down.ID) {
+	if b.ctx.ImageButtonAtOpts(id+"_down", x, y+height-scrollArrowH, scrollW, scrollArrowH,
+		skin.down.ID, skin.down.ID, skin.down.ID, scrollButtonOptions) {
 		offset++
 	}
 
