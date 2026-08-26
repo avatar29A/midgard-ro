@@ -219,10 +219,14 @@ costs nothing, but do not expect `packets.Length()` to know them.
    (`clif.cpp`) calls `clif_GM_kick` when `select == 0` or `select > npc_menu`.
    Valid values are **1..n**, plus **255 for cancel**. A zero-based index is not
    a display bug — it is a kick.
-2. **The menu is one colon-separated string.** `clif_scriptmenu` copies the
-   script's text verbatim (`safestrncpy(packet->menu, mes, ...)`), NUL-terminated.
-   The client splits on `:`, and the item's position in that list — 1-based — is
-   what goes back in `CZ_CHOOSE_MENU`.
+2. **The menu is one colon-separated string, and empty entries do not count.**
+   `clif_scriptmenu` copies the script's text verbatim, NUL-terminated. The
+   client splits on `:` and sends the item's 1-based position — but the
+   position is in the list with **empty entries removed**. `menu_countoptions`
+   (`script.cpp:5051`) counts only non-empty options into `sd->npc_menu`, which
+   is the bound `clif_parse_NpcSelectMenu` then checks against. So `a::b`
+   offers two choices and `b` is choice **2**, not 3. Keeping the empty entry
+   would be a kick, by landmine 1.
 3. **NPC text carries color codes.** ref-02 shows `Clana Nemieri` in blue
    inside an otherwise black line. Scripts write `^RRGGBB` inline — `^0000FF`
    to set, `^000000` to return to black. They are not stripped by the server:
@@ -290,12 +294,33 @@ costs nothing, but do not expect `packets.Length()` to know them.
 
 ## Steps
 
-### Step 1 — Decode the dialog packets
+### Step 1 — Decode the dialog packets ✅
 - **Changes:** `internal/network/packets/npc.go`, `npc_test.go`
-- **Done when:** all seven ids are constants with encoders/decoders; the menu
+- **Done when:** all eight ids are constants with encoders/decoders; the menu
   string splits into items; index 0 and >n are rejected by the encoder.
 - **Proved by:** `go test ./internal/network/packets/` — round-trips against
   hand-written bytes, and a table for menu splitting.
+
+Every id and layout was re-checked against the server's headers rather than
+taken from this table, and three things came out of that:
+
+- **`0x0BA8` is a red herring.** `PACKET_CZ_CHOOSE_MENU_ZERO` is declared under
+  `PACKETVER_RE_NUM >= 20211103`, which our server satisfies, and it looks like
+  the modern replacement for `CZ_CHOOSE_MENU`. It is not:
+  `clif_packetdb.hpp` registers `parseable_packet(0x00b8, 7, …, 2, 6)` and never
+  mentions `0x0ba8`. The old id is the one the server listens for.
+- **Empty menu entries do not count** — see landmine 2, which this step
+  rewrote. `SplitMenu` drops them, and that is what makes the 1-based position
+  match `sd->npc_menu`.
+- **The `kind` byte of `CZ_CONTACTNPC` is ignored.** `clif_parse_NpcClicked`
+  switches on the target's own block type, never on this field. The original
+  sends zero and so do we.
+
+The message ends in a NUL that the server's length includes
+(`clif_scriptmes` sends `strlen(mes) + 1`), and decoding bounds the text by the
+packet's own length rather than by the buffer — several packets arrive in one
+read, and trusting the buffer would swallow the next one. There is a test for
+exactly that.
 
 ### Step 2 — Click an NPC and tell the server
 - **Changes:** `internal/engine/picking`, `internal/game/states/ingame.go`, `internal/game/game.go`
@@ -378,6 +403,12 @@ costs nothing, but do not expect `packets.Length()` to know them.
   declared with `parseable_packet(...)`.
 
 ## Revision log
+
+- 2026-08-26 — **Step 1 done.** The eight conversation packets encode and
+  decode, verified against the server's headers rather than against this plan's
+  own table. `0x0BA8` looked like it had replaced `CZ_CHOOSE_MENU` at our
+  packet version and had not; empty menu entries turn out not to count toward
+  the selection index, which landmine 2 now spells out.
 
 - 2026-08-26 — **Step 0 done.** `npc` trace channel, the `Dialog:` line on the
   F3 overlay backed by a `DialogPhase` type, and the click decision extracted
