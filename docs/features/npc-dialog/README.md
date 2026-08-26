@@ -1,7 +1,7 @@
 # Feature: NPC dialog and interaction
 
 **Branch:** `feature/npc-dialog` · **Issue:** #86 · **Parent:** #49 (MVP scope), #54 (Track E, task **E3**)
-**Status:** Planned · **Created:** 2026-08-26
+**Status:** Steps 0–7 done, ready for review · **Created:** 2026-08-26
 
 ## Goal
 
@@ -280,15 +280,14 @@ costs nothing, but do not expect `packets.Length()` to know them.
       it on and the window occluded, macOS stops the display link and the
       client renders zero frames while staying alive, which looks exactly like
       a hang (learned in #85).
-- [ ] **Logs:** a menu index outside 1..n must be refused client-side and logged
-      at **warn** with the index and the item count — never sent. Getting kicked
-      by our own packet is the failure this prevents. *(Step 6 — there is no
-      menu to bound yet.)*
-- [ ] **Tests:** `internal/network/packets/npc_test.go` — round-trip each packet
-      against bytes written by hand from the layout table, and a menu-splitting
-      table (empty, one item, trailing colon, embedded newlines, 255-cancel).
-      *(Step 1.)* `internal/game/states/npcdialog_test.go` exists and covers the
-      phase type; the transitions it will drive arrive with Steps 4–6.
+- [x] **Logs:** a menu index outside 1..n is refused in `ChooseMenuItem` and
+      logged at **warn** with the index and the item count — never sent.
+      Getting kicked by our own packet is the failure this prevents.
+- [x] **Tests:** `internal/network/packets/npc_test.go` round-trips every
+      packet against hand-written bytes and tables the menu splitting;
+      `internal/game/states/npcdialog_test.go` drives the phases, the
+      accumulation rule and the paragraph break; `internal/game/ui/npctext_test.go`
+      covers the color codes and the navigation markup.
 - [x] **Use cases:** UC-207 (talk and close), UC-208 (menu choice), UC-209
       (cancel and out-of-range refusal).
 
@@ -537,7 +536,7 @@ Two faults it turned up, both now fixed:
   done, because **a panel built from solids cannot host an image widget**.
 - The captions were Korean, addressed above.
 
-### Step 6 — Menus 🟡 built, not yet driven
+### Step 6 — Menus ✅
 - **Changes:** `internal/game/states/npcdialog.go`, `internal/game/ui/npcmenu.go`
 - **Done when:** `ZC_MENU_LIST` shows the choices; picking one sends its 1-based
   index and the script branches; cancel sends 255.
@@ -572,12 +571,15 @@ not here.
 hover or pressed art, so the same texture serves all three states and the
 widget shades it — the case character select already handles the same way.
 
-Not yet driven in the client.
+**Confirmed in the client** by Boris, along with the fixes that came out of
+testing it: cancelling now ends the conversation (the server never sends a
+close after a 255 — see below), the scrollbar is the original's art and
+actually works, and its arrows are silent.
 
-### Step 7 — Docs
-- [ ] `docs/ENGINE_FEATURES.md` if a package was added
-- [ ] Session log `docs/sessions/2026-08-DD-npc-dialog.md`
-- [ ] Close #54's **E3** checklist items
+### Step 7 — Docs ✅
+- [x] `docs/ENGINE_FEATURES.md` — the conversation entry under the game layer
+- [x] Session log `docs/sessions/2026-08-27-npc-dialog.md`
+- [ ] Close #54's **E3** checklist items — for Boris, since it is his tracking issue
 
 ## Done when (feature)
 

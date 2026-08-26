@@ -244,6 +244,25 @@ High-level game systems.
 | **world/** | World/map management |
 | **game.go** | Main game loop |
 
+### NPC conversations (`internal/game/states/npcdialog.go`, `internal/game/ui/npcdialog.go`, `npcmenu.go`)
+
+Click an NPC and talk to it. The server owns the conversation entirely — it
+sends text, then asks for a Next, a Close or a choice from a menu — so the
+client is a state machine (`DialogPhase`) and two windows. Neither has a title
+bar; both are plain panels, both drag, and both scroll with the original's
+`scroll0*` scrollbar.
+
+What the NPC says arrives one `mes` line per packet and accumulates, with a
+blank line at each page boundary. The text carries inline markup the server
+passes through untouched: `^RRGGBB` color codes and `<NAVI>[label]<INFO>…</INFO></NAVI>`
+navigation links, both handled in `npctext.go` — without that, the raw codes
+print on screen.
+
+A menu selection is one-based and counts only non-empty entries; an index
+outside that range is refused before it is sent, because rAthena kicks the
+connection for it rather than reporting an error. `--trace=npc` shows a
+conversation as a sequence.
+
 ### Basic Info HUD (`internal/game/ui/hud_basic_info.go`)
 
 The original client's top-left panel: name, job, HP and SP gauges, Base and
