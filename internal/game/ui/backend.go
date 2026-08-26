@@ -122,7 +122,9 @@ type InGameUIState struct {
 	TerrainY      float32
 	HasGAT        bool
 
-	// Player stats
+	// Player identity and stats, as shown on the Basic Info panel.
+	PlayerName            string
+	PlayerClass           int
 	PlayerHP, PlayerMaxHP int
 	PlayerSP, PlayerMaxSP int
 	PlayerLevel           int

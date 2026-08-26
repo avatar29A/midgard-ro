@@ -53,6 +53,10 @@ type UI2DBackend struct {
 	charSelX, charSelY float32
 	charSelPlaced      bool
 
+	// Basic Info panel art.
+	hudSkin  *basicInfoSkin
+	hudTried bool
+
 	// Cached widget states
 	loginUsername string
 	loginPassword string
@@ -850,6 +854,8 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 	if state.SceneReady && state.SceneTexture != 0 {
 		b.ctx.Renderer().DrawSceneTexture(0, 0, width, height, state.SceneTexture)
 	}
+
+	b.renderBasicInfo(state)
 
 	// Debug overlay (top-left)
 	if state.ShowDebugInfo {

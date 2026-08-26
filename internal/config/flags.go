@@ -18,6 +18,7 @@ var (
 	flagShotEvery  = flag.Duration("screenshot-every", 0, "Capture a screenshot on this interval (QA aid)")
 	flagAutoLogin  = flag.Bool("autologin", false, "Log in and enter the first character without input (QA aid)")
 	flagDebugHUD   = flag.Bool("debug-overlay", false, "Start with the F3 debug overlay open (QA aid)")
+	flagNoBGM      = flag.Bool("no-bgm", false, "Run without background music, keeping sound effects")
 )
 
 // ParseFlags parses command-line flags. Call this early in main().
@@ -58,6 +59,15 @@ func AutoLogin() bool {
 // This makes the same readout reachable from a command line.
 func DebugOverlay() bool {
 	return *flagDebugHUD
+}
+
+// NoBGM reports whether background music should be left off.
+//
+// The music loops for as long as the client runs, which is exactly what you
+// do not want while reading a log or listening for a sound effect. Sound
+// effects are unaffected.
+func NoBGM() bool {
+	return *flagNoBGM
 }
 
 // ConfigPath returns the explicit config path if provided via --config flag.
