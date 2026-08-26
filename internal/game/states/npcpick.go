@@ -23,7 +23,8 @@ const (
 	fallbackUnitHeight    = float32(15)
 )
 
-// PickEntity returns the unit under a screen position, nearest first, or nil.
+// PickEntity returns the unit under a screen position, nearest first, or nil,
+// reporting what it considered on the `npc` trace.
 //
 // The test is against an axis-aligned box around each unit rather than against
 // the sprite itself: the billboard turns to face the camera, so its plane has
@@ -31,6 +32,17 @@ const (
 // wherever it happens to be pointing. That over-selects at the corners, which
 // is the forgiving direction for a thing you are trying to click on.
 func (s *InGameState) PickEntity(screenX, screenY, viewportW, viewportH float32) *entity.Entity {
+	return s.pickEntity(screenX, screenY, viewportW, viewportH, true)
+}
+
+// HoverEntity is PickEntity without the trace, for the test that runs every
+// frame to decide which cursor to show. Tracing that would put sixty lines a
+// second in the log and bury the clicks it exists to explain.
+func (s *InGameState) HoverEntity(screenX, screenY, viewportW, viewportH float32) *entity.Entity {
+	return s.pickEntity(screenX, screenY, viewportW, viewportH, false)
+}
+
+func (s *InGameState) pickEntity(screenX, screenY, viewportW, viewportH float32, tracing bool) *entity.Entity {
 	if s == nil || s.scene == nil || s.entityManager == nil || viewportW <= 0 || viewportH <= 0 {
 		return nil
 	}
@@ -52,7 +64,7 @@ func (s *InGameState) PickEntity(screenX, screenY, viewportW, viewportH float32)
 		box := s.unitBox(e)
 		t, hit := ray.IntersectAABB(box)
 
-		if trace.On(trace.NPC) {
+		if tracing && trace.On(trace.NPC) {
 			// Where the unit is on screen, which is what you need to know when
 			// a click that looked right missed: it tells a box in the wrong
 			// place from a hand in the wrong place.
@@ -82,7 +94,7 @@ func (s *InGameState) PickEntity(screenX, screenY, viewportW, viewportH float32)
 	// candidates and a missed ray are very different faults: the first means
 	// no NPC is being tracked, the second that the boxes are in the wrong
 	// place.
-	if trace.On(trace.NPC) {
+	if tracing && trace.On(trace.NPC) {
 		trace.Emit(trace.NPC, "pick",
 			zap.Int("units", len(s.entityManager.All())),
 			zap.Int("candidates", candidates),
