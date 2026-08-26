@@ -1,6 +1,6 @@
 # Feature: Basic HUD — minimap, chat, hotkey bar, ESC menu and the four menu windows
 
-**Branch:** `feature/basic-hud` · **Issue:** _(filled after creation)_ · **Parent:** #49 (MVP scope), #53 (Track D — HUD + ESC menu)
+**Branch:** `feature/basic-hud` · **Issue:** #88 · **Parent:** #49 (MVP scope), #53 (Track D — HUD + ESC menu)
 **Status:** Planned · **Created:** 2026-08-26
 
 ## Goal
