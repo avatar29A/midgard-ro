@@ -324,6 +324,14 @@ func (g *Game) initAudio(cfg *config.Config) {
 	manager.SetBGMVolume(float64(cfg.Audio.MusicVolume))
 	manager.SetSFXVolume(float64(cfg.Audio.SFXVolume))
 
+	g.audioManager = manager
+
+	if config.NoBGM() {
+		logger.Info("background music disabled (--no-bgm)")
+
+		return
+	}
+
 	// The name table says which track belongs to which map. Without it every
 	// location falls back to the title theme, which is still better than
 	// silence.
@@ -342,7 +350,6 @@ func (g *Game) initAudio(cfg *config.Config) {
 		zap.String("bgmDir", bgmDir),
 		zap.Int("bgmTracks", len(table)))
 
-	g.audioManager = manager
 	g.bgm = audio.NewLocationPlayer(manager, table, bgmDir)
 	g.stateManager.BGM = g.bgm
 }
@@ -683,6 +690,8 @@ func (g *Game) renderUI() {
 			ErrorMessage:    state.GetErrorMessage(),
 			ShowDebugInfo:   g.showDebug,
 			FPS:             g.fps,
+			PlayerName:      ui.GetCharName(state.CharInfo()),
+			PlayerClass:     stats.Class,
 			PlayerHP:        stats.HP,
 			PlayerMaxHP:     stats.MaxHP,
 			PlayerSP:        stats.SP,

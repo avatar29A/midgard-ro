@@ -46,7 +46,20 @@ The panel itself is still unbuilt — the in-game UI is this overlay and a botto
 
 ## Layout (from roBrowser, `src/UI/Components/BasicInfo/BasicInfo.css`)
 
-Coordinates are relative to the panel's top-left. Cross-checked against the bitmap: the panel is 220×135 and the buttons are 54×18 in both.
+Coordinates are relative to the panel's top-left.
+
+**The stylesheet was checked against the bitmap itself** (Step 2) by reading the pixels rather than by eye, and it is exact — so the rest of it can be trusted without measuring each one:
+
+| Band in `basewin_bg2.bmp` | Measured | roBrowser says |
+|---|---|---|
+| Title bar | rows 0–15, black rule at 16 | — |
+| White body | rows 17–52 | — |
+| HP gauge trough | rows 53–61, **columns 35–169** | (35, 53) 135 × 8 |
+| SP gauge trough | rows 68–76, columns 35–169 | (35, 68) 135 × 8 |
+| Grey info block | rows 85–109, columns 6–214 | levels at y 86 and 97 |
+| Striped footer | rows 114–134 | — |
+
+Nothing else is painted: no `HP`/`SP` labels, no `Base Lv.`, and no window caption. Every piece of text on this panel is drawn by us.
 
 | Element | Position | Size |
 |---|---|---|
@@ -150,6 +163,7 @@ Fixed offsets are pinned as named constants in `packets.go` and asserted field-b
 
 - [x] Trace channel `status` in `internal/trace` — `status.initial` is emitted on entering the map with the CharInfo baseline, so later deltas can be read (a reported HP of 40 means nothing without knowing what it was). Step 1 adds `status.change` (var id, value) and `status.unknown`.
 - [x] F3 overlay fields: `HP cur/max`, `SP cur/max`, `Base/Job Lv` — so a single screenshot proves whether the values arrived, independent of whether the panel draws them.
+- [x] `--no-bgm` runs without background music, keeping sound effects. The music loops for as long as the client runs, which is exactly what you do not want while reading a log or listening for a sound effect.
 - [x] `--debug-overlay` starts the F3 overlay open. Without it the screenshot scenario below could not work at all: the overlay is toggled by a keypress, so nothing unattended could ever capture it.
 - [x] Screenshot scenario: `./midgard --config config.yaml --autologin --debug-overlay --trace=status --screenshot-after 25s` → `latest.png` shows the readout; from Step 2 it also shows the panel. **Set `vsync: false` in `config.yaml` for unattended runs** — see below.
 - [x] The loading screen held at 100% for an Enter keypress (a debug gate). Removed, at Boris's request: it also meant no unattended run could reach the game, so `--screenshot-after` could only ever capture the loading screen.
@@ -201,11 +215,17 @@ The untracked ids are reported once each and turn out to be exactly what they sh
   HP from the packet disagrees with HP from `CharInfo`, the struct is still
   wrong.
 
-### Step 2 — Draw the panel with name, job and levels
+### Step 2 — Draw the panel with name, job and levels ✅
 - **Changes:** `internal/game/ui/hud_basic_info.go` (new), `internal/game/ui/ui2d_backend.go` (call it from `RenderInGameUI`)
 - **Done when:** the panel is in the top-left with the character's name, job and Base/Job level; magenta edges are keyed out
 - **Proved by:** screenshot scenario, UC-205
 - **Reference:** grf-basewin-bg2 ①②④
+
+![The panel in game: caption, name, job and both levels, over the painted chrome](./current-panel.png)
+
+The magenta edges key out through `texture.ImageToRGBA(img, true)`, which the texture cache already does for every UI bitmap — no special handling was needed.
+
+Two notes. The window caption is **not** painted into the bitmap, so `Basic Info` is drawn like the rest; it is centered in the 16-row title band rather than sat on its top edge. And the minimize button is deliberately not here — it belongs with Step 5, which gives it something to do. A button that does nothing is worse than no button.
 
 ### Step 3 — HP and SP gauges
 - **Changes:** `internal/game/ui/hud_basic_info.go`
@@ -257,6 +277,9 @@ _All three from the first round are answered — see the Revision log. One follo
 
 ## Revision log
 
+- 2026-08-26 — **Step 2 done.** Panel drawn with caption, name, job and both
+  levels. roBrowser's stylesheet verified against the bitmap by reading its
+  pixels — exact, so the remaining coordinates are trusted. Added `--no-bgm`.
 - 2026-08-26 — **Step 1 done.** Status packets parsed and the player's stats
   kept live. Two corrections to the plan: experience arrives over `0x0ACB`
   (`ZC_LONGLONGPAR_CHANGE`), which the plan did not list, and the `CharInfo`
