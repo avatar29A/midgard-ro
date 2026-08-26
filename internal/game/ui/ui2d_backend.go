@@ -842,14 +842,6 @@ func (b *UI2DBackend) RenderLoadingUI(state LoadingUIState, width, height float3
 	barY := height - 60
 
 	b.ctx.ProgressBarAt(barX, barY, barW, barH, state.Progress, fmt.Sprintf("%.0f%%", state.Progress*100))
-
-	// Debug gate hint — visible once loading is done and the state is
-	// waiting on Enter. Sits just above the progress bar in light text.
-	if state.ReadyForInput {
-		hint := "Press Enter to continue"
-		tw, _ := b.ctx.Renderer().MeasureText(hint, 1.0)
-		b.ctx.LabelAtColored((width-tw)/2, barY-26, hint, ui2d.ColorTextOnDark)
-	}
 }
 
 // RenderInGameUI renders the in-game HUD.
@@ -861,7 +853,10 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 
 	// Debug overlay (top-left)
 	if state.ShowDebugInfo {
-		if b.ctx.BeginWindow("debug", 10, 10, 320, 105, "Debug") {
+		// Tall enough for the stat rows: the height is not derived from the
+		// content, so text past it draws outside the frame rather than
+		// growing it.
+		if b.ctx.BeginWindow("debug", 10, 10, 320, 230, "Debug") {
 			b.ctx.Row(16)
 			b.ctx.Label(fmt.Sprintf("Map: %s", state.MapName))
 			b.ctx.Row(16)
@@ -871,6 +866,12 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 			b.ctx.Separator()
 			b.ctx.Row(16)
 			b.ctx.Label(fmt.Sprintf("Dir: %d  Entities: %d", state.PlayerDirection, state.EntityCount))
+			b.ctx.Separator()
+			b.ctx.Row(16)
+			b.ctx.Label(fmt.Sprintf("HP: %d/%d   SP: %d/%d",
+				state.PlayerHP, state.PlayerMaxHP, state.PlayerSP, state.PlayerMaxSP))
+			b.ctx.Row(16)
+			b.ctx.Label(fmt.Sprintf("Base Lv: %d   Job Lv: %d", state.PlayerLevel, state.PlayerJobLevel))
 			b.ctx.EndWindow()
 		}
 	}

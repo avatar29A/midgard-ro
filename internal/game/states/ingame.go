@@ -174,6 +174,8 @@ func (s *InGameState) Enter() error {
 		zap.Float32("msPerCell", s.player.WalkSpeedMs),
 		zap.Bool("hasPathfinder", s.pathFinder != nil))
 
+	s.traceInitialStats()
+
 	logger.Debug("created player character",
 		zap.Float32("worldX", worldX),
 		zap.Float32("worldY", worldY),
@@ -502,6 +504,45 @@ func (s *InGameState) GetCamera() *camera.ThirdPersonCamera {
 // framebuffer dimensions, terrain Y query, etc).
 func (s *InGameState) GetScene() *scene.Scene {
 	return s.scene
+}
+
+// traceInitialStats records the stats we enter the map with. Everything the
+// server pushes afterwards is a delta against these, so a trace that starts
+// without them cannot be read: a later HP of 40 means nothing unless you know
+// whether it went up or down.
+func (s *InGameState) traceInitialStats() {
+	if !trace.On(trace.Status) {
+		return
+	}
+
+	char := s.CharInfo()
+	if char == nil {
+		trace.Emit(trace.Status, "initial", zap.String("source", "none"))
+		return
+	}
+
+	trace.Emit(trace.Status, "initial",
+		zap.String("source", "charinfo"),
+		zap.Uint32("hp", char.HP),
+		zap.Uint32("maxHP", char.MaxHP),
+		zap.Uint16("sp", char.SP),
+		zap.Uint16("maxSP", char.MaxSP),
+		zap.Uint16("baseLevel", char.BaseLevel),
+		zap.Uint32("jobLevel", char.JobLevel),
+		zap.Uint16("class", char.Class))
+}
+
+// CharInfo returns the character being played as character select last
+// described it. Until the status packets are parsed this is the only source of
+// the player's stats, and afterwards it is what those packets are checked
+// against — the two disagreeing means the CharInfo struct is being read at the
+// wrong offsets.
+func (s *InGameState) CharInfo() *packets.CharInfo {
+	if s == nil || s.manager == nil {
+		return nil
+	}
+
+	return s.manager.Session.Char
 }
 
 // NetworkClient returns the underlying network client (for diagnostics).

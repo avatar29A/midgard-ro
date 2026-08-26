@@ -38,7 +38,11 @@ The client's own bitmaps below remain the measurement source; the screenshot is 
 
 Behaviour confirmed from documentation rather than a capture ([StrategyWiki](https://strategywiki.org/wiki/Ragnarok_Online/Basic_Info), [iRO Wiki](https://irowiki.org/wiki/Basic_Game_Control)): the window shows name, class, Base/Job level with EXP as a percentage, HP, SP, weight and Zeny, and **Ctrl+V toggles between the large and reduced form**.
 
-**Current state (ours):** nothing related renders — the in-game HUD is a debug overlay and a bottom status bar (`internal/game/ui/ui2d_backend.go:856` `RenderInGameUI`), so there is no "before" screenshot to show.
+**Current state (ours), after Step 0:**
+
+![The F3 overlay in Prontera, showing the six stat fields Step 0 wired through](./current-f3-stats.png)
+
+The panel itself is still unbuilt — the in-game UI is this overlay and a bottom status bar (`internal/game/ui/ui2d_backend.go` `RenderInGameUI`). What the readout proves is that the values reach the client, and that they are **wrong**: `HP 11/11` beside `SP 40/40`, `Base Lv 0`, and `class 40` for a Novice. `--trace=status` says the same (`status.initial {"hp":11,"maxHP":11,"sp":40,"maxSP":40,"baseLevel":0,"jobLevel":0,"class":40}`). That is the misread `CharInfo` Step 1 has to fix, now reproducible in one command instead of by eye on the character-select screen.
 
 ## Layout (from roBrowser, `src/UI/Components/BasicInfo/BasicInfo.css`)
 
@@ -126,22 +130,32 @@ Var ids come from `enum _sp` in `docker/rathena/build/rathena/src/map/map.hpp:49
 
 ### 0a. Refactoring (only what this feature needs)
 
-- [ ] `internal/game/ui/ui2d_backend.go` is ~950 lines and already holds login, char-select, connecting, loading and in-game rendering. The HUD goes in its own file (`hud_basic_info.go`) beside `charselect_native.go`, rather than growing it further. No interface changes, so **no ADR**.
-- [ ] `internal/game/game.go:657` — the `InGameUIState` literal is where the six unset fields are filled; the player's live stats need somewhere to live first (Step 1).
+- [x] `internal/game/ui/ui2d_backend.go` is ~950 lines and already holds login, char-select, connecting, loading and in-game rendering. The HUD goes in its own file (`hud_basic_info.go`) beside `charselect_native.go`, rather than growing it further. No interface changes, so **no ADR**.
+- [x] `internal/game/game.go:657` — the `InGameUIState` literal is where the six unset fields are filled. `internal/game/player_stats.go` (new) holds `playerStats` and `statsFromChar`: one place where CharInfo's differing widths (HP 32-bit, SP 16) become `int`, and the obvious home for the live store Step 1 adds.
 
 ### 0b. Debug tooling & tests
 
-- [ ] Trace channel `status` in `internal/trace` — events: `status.change` (var id, value), `status.unknown` (an id we do not map, logged once per id).
-- [ ] F3 overlay fields: `HP cur/max`, `SP cur/max`, `Base/Job Lv` — so a single screenshot proves whether the values arrived, independent of whether the panel draws them.
-- [ ] Screenshot scenario: `go run ./cmd/client --config config.yaml --trace=status,net --screenshot-after 12s` → `latest.png` shows the panel top-left with non-zero HP/SP.
-- [ ] Logs: an unmapped `var id` warns once; a missing panel bitmap warns and falls back to no HUD, never a swallowed error.
-- [ ] Tests: `internal/network/packets/status_test.go` — table-driven round-trip of `0x00B0`/`0x00B1` from known bytes, including a var id we do not map; `internal/game/ui/hud_basic_info_test.go` — gauge fill width for 0%, 50%, 100% and the `max = 0` case.
-- [ ] Use cases: UC-205 (panel renders with live values), UC-206 (HP gauge tracks damage), UC-305 (status packets parsed).
+- [x] Trace channel `status` in `internal/trace` — `status.initial` is emitted on entering the map with the CharInfo baseline, so later deltas can be read (a reported HP of 40 means nothing without knowing what it was). Step 1 adds `status.change` (var id, value) and `status.unknown`.
+- [x] F3 overlay fields: `HP cur/max`, `SP cur/max`, `Base/Job Lv` — so a single screenshot proves whether the values arrived, independent of whether the panel draws them.
+- [x] `--debug-overlay` starts the F3 overlay open. Without it the screenshot scenario below could not work at all: the overlay is toggled by a keypress, so nothing unattended could ever capture it.
+- [x] Screenshot scenario: `./midgard --config config.yaml --autologin --debug-overlay --trace=status --screenshot-after 25s` → `latest.png` shows the readout; from Step 2 it also shows the panel. **Set `vsync: false` in `config.yaml` for unattended runs** — see below.
+- [x] The loading screen held at 100% for an Enter keypress (a debug gate). Removed, at Boris's request: it also meant no unattended run could reach the game, so `--screenshot-after` could only ever capture the loading screen.
+- [ ] Logs: an unmapped `var id` warns once; a missing panel bitmap warns and falls back to no HUD, never a swallowed error. *(Step 1 / Step 2 — nothing to log yet.)*
+- [x] Tests: `internal/game/player_stats_test.go` — the first test in `internal/game`. Still to come: `internal/network/packets/status_test.go` (round-trip `0x00B0`/`0x00B1` from known bytes, including a var id we do not map, Step 1) and `internal/game/ui/hud_basic_info_test.go` (gauge fill at 0%, 50%, 100% and `max = 0`, Step 3).
+- [x] Use cases: UC-205 (panel renders with live values), UC-206 (HP gauge tracks damage), UC-305 (status packets parsed).
+
+**Two things that stopped unattended runs, both now understood.**
+
+*vsync.* With `vsync: true` and the window occluded — which it is when the client is launched from a shell — macOS stops servicing the display link and the buffer swap never returns. The process stays alive at ~2% CPU and renders **zero** frames, so `--screenshot-after` never fires and it looks like a hang with no error. `vsync: false` in the local `config.yaml` fixes it outright. Worth knowing before diagnosing a "frozen" client again; `config.yaml` is gitignored, so this is a per-machine setting, not a code change.
+
+*The Enter gate.* `LoadingState` held at 100% until Enter, so even a rendering client stopped at the loading screen. Now removed.
+
+**Correction found while doing this.** The plan named `internal/game/ui/debug_overlay.go` as the F3 overlay. It is not: that file, `ingame_ui.go` and `imgui_backend.go` are the pre-ui2d imgui code and nothing constructs them. The overlay actually drawn is the `BeginWindow("debug", …)` block in `internal/game/ui/ui2d_backend.go:863`, fed from `InGameUIState`. The fields went there.
 
 ## Steps
 
 ### Step 1 — Parse status packets, verify the CharInfo layout, keep the player's stats
-- **Changes:** `internal/network/packets` (constants + struct), `internal/game/states/ingame.go` (handler), `internal/game/game.go` (fill the six `InGameUIState` fields)
+- **Changes:** `internal/network/packets` (constants + struct), `internal/game/states/ingame.go` (handler), `internal/game/player_stats.go` (the live store replaces `statsFromChar` as the source)
 - **Done when:** `--trace=status` prints `status.change` with sensible ids and values on login and when taking damage; F3 shows HP/SP/levels matching the server
 - **Proved by:** `go test ./internal/network/packets/` (round-trips), F3 screenshot, UC-305
 - **Reference:** Protocol table above
@@ -214,6 +228,11 @@ _All three from the first round are answered — see the Revision log. One follo
 
 ## Revision log
 
+- 2026-08-26 — **Step 0 done.** `status` trace channel with a `status.initial`
+  baseline; the six stat fields wired through `InGameUIState` into the F3
+  overlay, sourced from CharInfo until Step 1 replaces it; `--debug-overlay` so
+  the screenshot scenario can run unattended; `internal/game/player_stats.go`
+  and its test. Corrected the overlay file the plan named — see Step 0b.
 - 2026-08-26 — created
 - 2026-08-26 — real-client screenshot supplied in review: the menu buttons are a
   grid of ten (three states each, all present in the archive), not roBrowser's
