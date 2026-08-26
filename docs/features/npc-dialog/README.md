@@ -52,6 +52,10 @@ measurement source (the approach PR #81 used for the login window):
 | Buttons | 42 × 20 | `NpcBox.css:5` |
 | Menu window | 276 × 116, list rows 260 wide | `NpcMenu.css:4-33` |
 
+The menu's OK/cancel buttons and its scrollbar are visible in the captures above
+but are not in this table — `NpcMenu.css` will need re-reading for their
+geometry when Step 5 gets there.
+
 Two behaviours fall out of that CSS and are easy to miss:
 
 3. **`white-space: pre-wrap`** — NPC text carries its own line breaks and they
@@ -60,11 +64,54 @@ Two behaviours fall out of that CSS and are easy to miss:
 4. **`overflow-y: auto`** — the text area scrolls. A long message does not grow
    the window.
 
-**No reference screenshot of the original dialog in situ.** A web search for a
-classic-client Kafra dialog capture turned up nothing usable (iRO Wiki, MobyGames
-and the fan galleries have gameplay shots, not clean UI captures). The GRF
-bitmaps and roBrowser's stylesheet are precise enough to build against, but if
-you have a real screenshot it is worth attaching — see Open question 1.
+### Real client, supplied in review
+
+Three captures of the original in conversation (posted on this issue). They
+answer Open question 1 and correct two things the plan had wrong.
+
+**ref-01 — Genius Skyler.** A text window reading `[Genius Skyler]` on its first
+line and the message on the three below it. Underneath, *overlapping it*, a
+separate menu window with `Search for cards` and `Cancel`, the first row filled
+edge to edge with a blue highlight and white text, and **OK** / **cancel**
+buttons at its bottom right.
+
+**ref-02 — a warp list.** A menu alone: `Last Warp [pay_dun01]` highlighted,
+then `~ Towns`, `~ Fields`, `~ Dungeons`, with a **vertical scrollbar and arrow
+buttons** down the right edge, and the same OK / cancel pair.
+
+**ref-03 — Kafra Employee, full screen.** The text window upper right, the menu
+window below and left of it with four rows (`Save`, `Use Storage`,
+`Use Teleport Service`, `Rent a Pushcart`), both floating over the map alongside
+the chat box and the minimap.
+
+What they establish, in the order it matters:
+
+7. **Neither window has a title bar.** Both are plain light panels: a thin grey
+   border, softly rounded corners, a slight drop shadow, and nothing else. This
+   contradicts the "reuse `win_msgbox.bmp` — no new chrome" line in the table
+   below: that bitmap nine-slices with a 24px gradient title bar, which these
+   windows do not have. roBrowser agrees — its `NpcBox.css` is a 1px `#c1c6c2`
+   border around an `#eff4f0` fill, a plain box. **Step 3 must not open a titled
+   window.**
+8. **The NPC's name is part of the message,** not a window title —
+   `[Genius Skyler]`, `[Kafra Employee]`, written by the script as its first
+   line. Nothing parses a name out of anything; the bracket text is just text.
+   This follows from ⑦ and is why it can.
+9. **The menu is a window with OK and cancel,** not a list that acts on a
+   click. A row is *selected* — full-width blue highlight, first row by default
+   — and **OK** confirms it. That is two steps, and the plan described one.
+10. **A long list scrolls,** with a real scrollbar and arrow buttons (ref-02).
+    The menu window does not grow to fit its items.
+11. **Text and menu are shown at the same time,** as two separate windows, and
+    the text window keeps its content while the menu is up. In both captures
+    that show a menu, the text window shows **no Next or Close button** — which
+    matches roBrowser revealing those only when the server asks for them.
+
+Not established, so not assumed: whether double-clicking a row also confirms it
+(likely — it is the convention, and `ui2d.DoubleClickedIn` now exists — but no
+capture shows it), the exact fonts and padding, and where the windows open. The
+three captures disagree on position, which is itself the answer to Open
+question 2: it is not a fixed spot.
 
 ### Current state (ours)
 
@@ -86,7 +133,10 @@ you have a real screenshot it is worth attaching — see Open question 1.
 | `internal/game/game.go:883` | click → `ScreenToTile` → `RequestMove` | 🟡 needs to try NPCs first |
 | `internal/engine/ui2d/context.go:154` | `BeginWindowEx`, draggable, nine-sliced | ✅ |
 | `internal/engine/ui2d/context.go:317,339,618` | `Button`, `Label`, `Selectable` | ✅ |
-| `internal/game/ui/window_skin.go:48` | `win_msgbox.bmp` frame already loaded | ✅ **reuse — no new chrome** |
+| `internal/game/ui/window_skin.go:48` | `win_msgbox.bmp` frame already loaded | ❌ **not this window** — it has a title bar and the NPC dialog does not (see ⑦) |
+| `internal/engine/ui2d/context.go` | `CaptureMouse` / `MouseCaptured` | ✅ from #87 — this is most of Step 0a |
+| `internal/engine/ui2d/context.go` | `DoubleClickedIn` | ✅ from #87 — for confirming a menu row |
+| `internal/engine/ui2d/widgets_at.go` | `ButtonOptions{Silent}` | ✅ from #87 |
 | `internal/network/packets/` | none of the seven dialog packets | ❌ |
 | `internal/game/states/ingame.go:531` | `registerPacketHandlers` — entity handlers only | 🟡 extend |
 | Tests | entity/packet tests from #80; nothing for dialog | ❌ |
@@ -155,10 +205,13 @@ costs nothing, but do not expect `packets.Length()` to know them.
 
 ### 0a. Refactoring
 
-- [ ] `internal/game/game.go:883` — the click handler goes straight from
+- [ ] `internal/game/game.go` — the click handler goes straight from
       `ScreenToTile` to `RequestMove`, with no seam for "did this click hit
       something". Extract the decision so a click can be offered to entities
       first and fall through to movement. Minimal change; no new package.
+      **Smaller than planned since #87**: click-to-move is already gated on
+      `uiBackend.MouseCaptured()`, so the dialog windows only have to claim
+      their own rects — what is left is the entity hit test itself.
 - [ ] No ADR. This adds a state machine inside an existing package and a window
       to an existing UI layer — it crosses no layer boundary in `CLAUDE.md`.
 
@@ -252,12 +305,14 @@ costs nothing, but do not expect `packets.Length()` to know them.
 
 ## Open questions
 
-1. **No original screenshot of the dialog in situ.** Built from GRF bitmaps and
-   roBrowser's CSS, which agree on 42×20 buttons, but a real capture would settle
-   font, padding and where the window sits on screen. Do you have one?
-2. **Where should the window open?** roBrowser puts it at a fixed `top:100 left:100`.
-   The original opens it near the bottom centre. Fixed position, or remembered
-   between conversations the way camera zoom now is?
+1. ~~No original screenshot of the dialog in situ.~~ **Answered** — three
+   supplied in review, described above. They are not in the repo yet: they came
+   through chat rather than a fetchable URL, so `docs/features/npc-dialog/`
+   still holds only the GRF bitmaps. Save them to disk or attach them here and
+   they go in as `ref-01`…`ref-03` against the legend above.
+2. ~~Where should the window open?~~ **Partly answered** — the three captures
+   disagree on position, so it is not a fixed spot. Remaining question: should
+   it be remembered between conversations, the way camera zoom is?
 3. **Text encoding.** rAthena's English scripts are ASCII, so this does not bite
    today, but Korean scripts would arrive as EUC-KR and our font atlas is built
    from the ASCII range. Worth confirming we only care about English scripts.
@@ -272,5 +327,12 @@ costs nothing, but do not expect `packets.Length()` to know them.
   declared with `parseable_packet(...)`.
 
 ## Revision log
+
+- 2026-08-26 — rebased onto `main` after #87 merged, which brings
+  `CaptureMouse`/`MouseCaptured`, `DoubleClickedIn` and `ButtonOptions` — all of
+  which this feature wants. Three real-client captures supplied in review:
+  neither window has a title bar (so `win_msgbox.bmp` is the wrong chrome), the
+  NPC's name is part of the message text, and the menu is a window with OK,
+  cancel and a scrollbar rather than a click-to-choose list.
 
 - 2026-08-26 — created
