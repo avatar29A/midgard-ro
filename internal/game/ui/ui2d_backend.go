@@ -60,9 +60,13 @@ type UI2DBackend struct {
 	// See fillNPCRect for why that is not the same as DrawRect.
 	whiteTex uint32
 
-	// Where the NPC dialog has been dragged to.
+	// Where the NPC dialog has been dragged to, and how far its text is
+	// scrolled back. npcTextLen notices new text so the view can re-pin to
+	// the bottom when the script says something more.
 	npcWinX, npcWinY float32
 	npcWinPlaced     bool
+	npcTextScroll    int
+	npcTextLen       int
 
 	// The menu window: where it sits, which row is selected, how far the
 	// list is scrolled, and its shared OK/cancel art.
