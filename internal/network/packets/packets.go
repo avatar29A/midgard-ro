@@ -169,8 +169,8 @@ type CharInfo struct {
 	StatusPoint  uint16
 	HP           uint32
 	MaxHP        uint32
-	SP           uint16
-	MaxSP        uint16
+	SP           uint32
+	MaxSP        uint32
 	WalkSpeed    uint16
 	Class        uint16
 	HairStyle    uint16
@@ -201,100 +201,115 @@ type CharInfo struct {
 	Sex          uint8
 }
 
-// CharInfoSize is the size of CharInfo in the packet.
-// eAthena uses 175 bytes per character (with 64-bit exp/zeny fields).
-// rAthena/Hercules uses 155 bytes.
-const CharInfoSize = 175
-const CharInfoSizeRathena = 155
+// CharInfoSize is the wire size of one CHARACTER_INFO, and CharInfoSizeOld
+// the size before the 64-bit widening.
+//
+// The layout is version-dependent. At PACKETVER_RE >= 20211103 — the server
+// in docker/rathena — hp, maxhp, sp and maxsp are each int64, which is what
+// makes the record 175 bytes; before that they were int32/int32/int16/int16
+// and it was 155. Everything else is the same. Our packet length table is
+// generated for 20211103, so this decoder reads that layout; a server built
+// for an older PACKETVER would need the other one.
+const (
+	CharInfoSize    = 175
+	CharInfoSizeOld = 155
+)
 
-// DecodeCharInfo decodes character info from bytes.
-// This decoder supports eAthena's 175-byte format with 64-bit fields.
+// Field offsets within CHARACTER_INFO, from rAthena src/common/packets.hpp:31
+// with PACKETVER 20211103 and PACKETVER_RE. The struct is `#pragma pack(1)`,
+// so these are just the running sum of the field widths — no padding.
+//
+// They were previously guessed from a live capture, and were wrong in a way
+// that looked plausible: hp landed on sp and maxhp on maxsp, so a character
+// with 40 HP and 11 SP read back as 11 HP and 40 SP. Both numbers were real,
+// which is why it survived being looked at.
+const (
+	ciCharID       = 0   // uint32 GID
+	ciBaseExp      = 4   // int64  exp        (int32 before 20170830)
+	ciZeny         = 12  // int32  money
+	ciJobExp       = 16  // int64  jobexp
+	ciJobLevel     = 24  // int32  joblevel
+	ciStatusPoint  = 48  // int16  jobpoint
+	ciHP           = 50  // int64  hp
+	ciMaxHP        = 58  // int64  maxhp
+	ciSP           = 66  // int64  sp
+	ciMaxSP        = 74  // int64  maxsp
+	ciWalkSpeed    = 82  // int16  speed
+	ciClass        = 84  // int16  job
+	ciHairStyle    = 86  // int16  head
+	ciBody         = 88  // int16  body       (since 20141022)
+	ciWeapon       = 90  // int16  weapon
+	ciBaseLevel    = 92  // int16  level
+	ciSkillPoint   = 94  // int16  sppoint
+	ciHeadBottom   = 96  // int16  accessory
+	ciShield       = 98  // int16  shield
+	ciHeadTop      = 100 // int16  accessory2
+	ciHeadMid      = 102 // int16  accessory3
+	ciHairColor    = 104 // int16  headpalette
+	ciClothesColor = 106 // int16  bodypalette
+	ciName         = 108 // char   name[24]
+	ciStr          = 132 // uint8  Str, then Agi Vit Int Dex Luk
+	ciSlot         = 138 // uint8  CharNum
+	ciRename       = 140 // int16  bIsChangedCharName
+	ciMapName      = 142 // char   mapName[16]
+	ciDeleteDate   = 158 // int32  DelRevDate
+	ciRobe         = 162 // int32  robePalette
+	ciSlotChange   = 166 // int32  chr_slot_changeCnt
+	ciRename2      = 170 // int32  chr_name_changeCnt
+	ciSex          = 174 // uint8  sex
+)
+
+// DecodeCharInfo decodes one character record from a character list.
+//
+// The 64-bit fields are read as their low 32 bits: rAthena caps hp and maxhp
+// at int32 and sp and maxsp at int16 before sending, so the high half is
+// always zero and nothing is lost.
 func DecodeCharInfo(data []byte) *CharInfo {
 	if len(data) < CharInfoSize {
 		return nil
 	}
 
-	// eAthena packet layout (175 bytes total):
-	// Offset 0: CharID (4 bytes)
-	// Offset 4: BaseExp (8 bytes - int64)
-	// Offset 12: Zeny (8 bytes - int64)
-	// Offset 20: JobExp (8 bytes - int64)
-	// Offset 28: JobLevel (4 bytes)
-	// ... other fields with 64-bit HP/MaxHP ...
-	// Offset 48: WalkSpeed (2 bytes)
-	// Offset 50: Class (2 bytes)
-	// Offset 56: HP (8 bytes - int64)
-	// Offset 64: MaxHP (8 bytes - int64)
-	// Offset 72: SP (4 bytes)
-	// Offset 76: MaxSP (4 bytes)
-	// Offset 80-107: Various 2-byte fields (HairStyle, Body, Weapon, BaseLevel, etc.)
-	// Offset 108: Name (24 bytes)
-	// Offset 132: Stats (6 bytes: Str, Agi, Vit, Int, Dex, Luk)
-	// Offset 138: Slot (1 byte)
-	// Offset 139: Rename (1 byte)
-	// Offset 140: Reserved (2 bytes)
-	// Offset 142: MapName (16 bytes)
-	// Offset 158: Remaining fields...
-
-	// eAthena packet field positions (determined empirically):
-	// Offset 0: CharID (4 bytes)
-	// Offset 50: Class (2 bytes) = 40 (Super Novice)
-	// Offset 58: SP (2 bytes)
-	// Offset 66: HP (2 bytes) = 11
-	// Offset 74: MaxHP (2 bytes) = 11
-	// Offset 82: WalkSpeed (2 bytes) = 150
-	// Offset 90: BaseLevel (2 bytes) = 1
-	// Offset 92: JobLevel (2 bytes) = 1
-	// Offset 108: Name (24 bytes)
-	// Offset 132: Stats (6 bytes)
-	// Offset 138: Slot (1 byte)
-	// Offset 142: MapName (16 bytes)
-
 	c := &CharInfo{
-		CharID:       readU32(data, 0),
-		BaseExp:      readU32(data, 4),
-		Zeny:         readU32(data, 12),
-		JobExp:       readU32(data, 20),
-		JobLevel:     readU32(data, 28),
-		BodyState:    0,
-		HealthState:  0,
-		EffectState:  0,
-		Virtue:       0,
-		Honor:        0,
-		StatusPoint:  0,
-		HP:           uint32(readU16(data, 66)), // HP at offset 66
-		MaxHP:        uint32(readU16(data, 74)), // MaxHP at offset 74
-		SP:           readU16(data, 58),         // SP at offset 58
-		MaxSP:        readU16(data, 58),         // Assume same as SP for now
-		WalkSpeed:    readU16(data, 82),         // WalkSpeed at offset 82
-		Class:        readU16(data, 50),         // Class at offset 50
-		HairStyle:    readU16(data, 84),
-		Body:         readU16(data, 86),
-		Weapon:       readU16(data, 88),
-		BaseLevel:    readU16(data, 90), // BaseLevel at offset 90
-		SkillPoint:   0,
-		HeadBottom:   0,
-		Shield:       0,
-		HeadTop:      0,
-		HeadMid:      0,
-		HairColor:    readU16(data, 100),
-		ClothesColor: readU16(data, 102),
-		Str:          data[132],
-		Agi:          data[133],
-		Vit:          data[134],
-		Int:          data[135],
-		Dex:          data[136],
-		Luk:          data[137],
-		Slot:         data[138],
-		Rename:       data[139],
-		DeleteDate:   readU32(data, 158),
-		Robe:         readU16(data, 162),
-		SlotChange:   0,
-		Rename2:      0,
-		Sex:          data[174],
+		CharID:       readU32(data, ciCharID),
+		BaseExp:      readU32(data, ciBaseExp),
+		Zeny:         readU32(data, ciZeny),
+		JobExp:       readU32(data, ciJobExp),
+		JobLevel:     readU32(data, ciJobLevel),
+		StatusPoint:  readU16(data, ciStatusPoint),
+		HP:           readU32(data, ciHP),
+		MaxHP:        readU32(data, ciMaxHP),
+		SP:           readU32(data, ciSP),
+		MaxSP:        readU32(data, ciMaxSP),
+		WalkSpeed:    readU16(data, ciWalkSpeed),
+		Class:        readU16(data, ciClass),
+		HairStyle:    readU16(data, ciHairStyle),
+		Body:         readU16(data, ciBody),
+		Weapon:       readU16(data, ciWeapon),
+		BaseLevel:    readU16(data, ciBaseLevel),
+		SkillPoint:   readU16(data, ciSkillPoint),
+		HeadBottom:   readU16(data, ciHeadBottom),
+		Shield:       readU16(data, ciShield),
+		HeadTop:      readU16(data, ciHeadTop),
+		HeadMid:      readU16(data, ciHeadMid),
+		HairColor:    readU16(data, ciHairColor),
+		ClothesColor: readU16(data, ciClothesColor),
+		Str:          data[ciStr],
+		Agi:          data[ciStr+1],
+		Vit:          data[ciStr+2],
+		Int:          data[ciStr+3],
+		Dex:          data[ciStr+4],
+		Luk:          data[ciStr+5],
+		Slot:         data[ciSlot],
+		Rename:       uint8(readU16(data, ciRename)),
+		DeleteDate:   readU32(data, ciDeleteDate),
+		Robe:         readU16(data, ciRobe),
+		SlotChange:   readU32(data, ciSlotChange),
+		Rename2:      readU32(data, ciRename2),
+		Sex:          data[ciSex],
 	}
-	copy(c.Name[:], data[108:132])
-	copy(c.MapName[:], data[142:158])
+	copy(c.Name[:], data[ciName:ciName+24])
+	copy(c.MapName[:], data[ciMapName:ciMapName+16])
+
 	return c
 }
 
@@ -305,6 +320,7 @@ func (c *CharInfo) GetName() string {
 			return string(c.Name[:i])
 		}
 	}
+
 	return string(c.Name[:])
 }
 
@@ -315,6 +331,7 @@ func (c *CharInfo) GetMapName() string {
 			return string(c.MapName[:i])
 		}
 	}
+
 	return string(c.MapName[:])
 }
 

@@ -88,6 +88,14 @@ type InGameState struct {
 	keepAliveInterval            time.Duration
 	enterTime                    time.Time // Used as the local epoch for ClientTick
 
+	// The player's own numbers, seeded from the character list and kept
+	// current by the server's parameter packets.
+	stats PlayerStats
+
+	// Parameter ids we do not track, remembered so each is reported once
+	// rather than on every update the server sends for it.
+	unknownStats map[uint16]bool
+
 	// State
 	ErrorMsg   string
 	StatusMsg  string
@@ -173,6 +181,9 @@ func (s *InGameState) Enter() error {
 	logger.Info("player walk speed",
 		zap.Float32("msPerCell", s.player.WalkSpeedMs),
 		zap.Bool("hasPathfinder", s.pathFinder != nil))
+
+	s.stats = PlayerStatsFromChar(s.CharInfo())
+	s.traceInitialStats()
 
 	logger.Debug("created player character",
 		zap.Float32("worldX", worldX),
@@ -504,6 +515,97 @@ func (s *InGameState) GetScene() *scene.Scene {
 	return s.scene
 }
 
+// traceInitialStats records the stats we enter the map with. Everything the
+// server pushes afterwards is a delta against these, so a trace that starts
+// without them cannot be read: a later HP of 40 means nothing unless you know
+// whether it went up or down.
+func (s *InGameState) traceInitialStats() {
+	if !trace.On(trace.Status) {
+		return
+	}
+
+	if s.CharInfo() == nil {
+		trace.Emit(trace.Status, "initial", zap.String("source", "none"))
+		return
+	}
+
+	trace.Emit(trace.Status, "initial",
+		zap.String("source", "charinfo"),
+		zap.Int("hp", s.stats.HP),
+		zap.Int("maxHP", s.stats.MaxHP),
+		zap.Int("sp", s.stats.SP),
+		zap.Int("maxSP", s.stats.MaxSP),
+		zap.Int("baseLevel", s.stats.BaseLevel),
+		zap.Int("jobLevel", s.stats.JobLevel),
+		zap.Int("class", s.stats.Class))
+}
+
+// Stats returns the player's current numbers.
+func (s *InGameState) Stats() PlayerStats {
+	if s == nil {
+		return PlayerStats{}
+	}
+
+	return s.stats
+}
+
+// handleStatusChange applies one parameter update from the server.
+//
+// These arrive constantly — every point of HP regenerated is one — so the
+// handler stays cheap and says nothing at info level; --trace=status is how
+// you watch them.
+func (s *InGameState) handleStatusChange(data []byte) error {
+	change := packets.DecodeStatusChange(data)
+	if change == nil {
+		logger.Warn("malformed status packet", zap.Int("bytes", len(data)))
+		return nil
+	}
+
+	if !s.stats.Apply(change.VarID, change.Value) {
+		s.reportUnknownStat(change.VarID, change.Value)
+		return nil
+	}
+
+	trace.Emit(trace.Status, "change",
+		zap.Uint16("varID", change.VarID),
+		zap.Int64("value", change.Value))
+
+	return nil
+}
+
+// reportUnknownStat notes a parameter the client does not track, once per id.
+//
+// Most are genuinely not ours — the server sends every combat stat down the
+// same pipe. The point of saying it at all is that a parameter which *should*
+// be on the panel would otherwise go missing without a word.
+func (s *InGameState) reportUnknownStat(varID uint16, value int64) {
+	if s.unknownStats == nil {
+		s.unknownStats = make(map[uint16]bool)
+	}
+
+	if s.unknownStats[varID] {
+		return
+	}
+	s.unknownStats[varID] = true
+
+	trace.Emit(trace.Status, "unknown",
+		zap.Uint16("varID", varID),
+		zap.Int64("value", value))
+}
+
+// CharInfo returns the character being played as character select last
+// described it. Until the status packets are parsed this is the only source of
+// the player's stats, and afterwards it is what those packets are checked
+// against — the two disagreeing means the CharInfo struct is being read at the
+// wrong offsets.
+func (s *InGameState) CharInfo() *packets.CharInfo {
+	if s == nil || s.manager == nil {
+		return nil
+	}
+
+	return s.manager.Session.Char
+}
+
 // NetworkClient returns the underlying network client (for diagnostics).
 func (s *InGameState) NetworkClient() *network.Client {
 	return s.client
@@ -536,6 +638,9 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_NPCACK_MAPMOVE, s.handleMapChange)
 	s.client.RegisterHandler(packets.ZC_NOTIFY_PLAYERMOVE, s.handlePlayerMove)
 	s.client.RegisterHandler(packets.ZC_NOTIFY_TIME, s.handleServerTick)
+	s.client.RegisterHandler(packets.ZC_PAR_CHANGE, s.handleStatusChange)
+	s.client.RegisterHandler(packets.ZC_LONGPAR_CHANGE, s.handleStatusChange)
+	s.client.RegisterHandler(packets.ZC_LONGLONGPAR_CHANGE, s.handleStatusChange)
 }
 
 // sendKeepAlive sends CZ_REQUEST_TIME so the map server doesn't time us out.

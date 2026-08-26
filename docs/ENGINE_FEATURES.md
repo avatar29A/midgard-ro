@@ -239,9 +239,25 @@ High-level game systems.
 | Package | Description |
 |---------|-------------|
 | **entity/** | Entity definitions (`Character`, etc.) |
-| **states/** | Game state machine |
+| **states/** | Game state machine, and the player's live stats (`player_stats.go`) |
+| **ui/** | The 2D interface, including the Basic Info HUD (`hud_basic_info.go`) |
 | **world/** | World/map management |
 | **game.go** | Main game loop |
+
+### Basic Info HUD (`internal/game/ui/hud_basic_info.go`)
+
+The original client's top-left panel: name, job, HP and SP gauges, Base and
+Job level with experience bars, weight and Zeny, and the ten menu buttons.
+Drawn over `basic_interface/basewin_bg2.bmp`, which has the chrome painted in
+— every piece of text is ours, the window caption included.
+
+Ctrl+V or the title bar's system button folds it to its reduced form, which is
+the same bitmap clipped to its top 53 rows. The panel drags by its title bar.
+
+The values come from `states.PlayerStats`, seeded from the character list and
+kept current by the server's parameter packets — `0x00B0`, `0x00B1` and, for
+experience at `PACKETVER >= 20170830`, `0x0ACB`. `--trace=status` shows each
+update as it arrives.
 
 ---
 

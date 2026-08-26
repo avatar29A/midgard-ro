@@ -22,6 +22,10 @@ type UIBackend interface {
 	// GetScreenSize returns the current screen dimensions.
 	GetScreenSize() (width, height float32)
 
+	// MouseCaptured reports whether the pointer is over the interface, so a
+	// click on a panel is not also a click on the world behind it.
+	MouseCaptured() bool
+
 	// Input returns the input state for the current frame.
 	// Note: This returns the ui2d InputState; ImGui backends should provide
 	// a compatible adapter or translation layer.
@@ -94,10 +98,6 @@ type LoadingUIState struct {
 	ErrorMessage  string
 	Progress      float32
 	Phase         string
-	// ReadyForInput is true once loading has hit 100% and the state is
-	// holding for the user to press Enter (debug gate). The UI shows a
-	// hint when this is set.
-	ReadyForInput bool
 }
 
 // InGameUIState contains the data needed to render the in-game HUD.
@@ -126,11 +126,18 @@ type InGameUIState struct {
 	TerrainY      float32
 	HasGAT        bool
 
-	// Player stats
+	// Player identity and stats, as shown on the Basic Info panel.
+	PlayerName            string
+	PlayerClass           int
 	PlayerHP, PlayerMaxHP int
 	PlayerSP, PlayerMaxSP int
 	PlayerLevel           int
 	PlayerJobLevel        int
+
+	PlayerBaseExp, PlayerNextBaseExp int64
+	PlayerJobExp, PlayerNextJobExp   int64
+	PlayerZeny                       int64
+	PlayerWeight, PlayerMaxWeight    int
 
 	// Entity counts
 	EntityCount  int
@@ -156,6 +163,11 @@ type InGameUIState struct {
 	SceneTexture  uint32
 	StatusMessage string
 	ErrorMessage  string
+
+	// ToggleBasicInfo folds the Basic Info panel to its reduced form, or back.
+	// It is an event rather than a setting — set for the one frame the key was
+	// pressed — because the panel owns which form it is in.
+	ToggleBasicInfo bool
 
 	// UI visibility settings
 	ShowDebugInfo  bool

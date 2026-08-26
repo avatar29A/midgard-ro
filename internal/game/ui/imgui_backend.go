@@ -56,6 +56,12 @@ func (b *ImGuiBackend) GetScreenSize() (width, height float32) {
 	return size.X, size.Y
 }
 
+// MouseCaptured reports whether the pointer is over the interface. ImGui
+// answers this for its own windows.
+func (b *ImGuiBackend) MouseCaptured() bool {
+	return imgui.CurrentIO().WantCaptureMouse()
+}
+
 // Input returns the input state.
 func (b *ImGuiBackend) Input() *ui2d.InputState {
 	return b.input

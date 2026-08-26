@@ -53,6 +53,14 @@ type UI2DBackend struct {
 	charSelX, charSelY float32
 	charSelPlaced      bool
 
+	// Basic Info panel art, where it has been dragged to, and whether it is
+	// folded down to its reduced form.
+	hudSkin    *basicInfoSkin
+	hudTried   bool
+	hudX, hudY float32
+	hudPlaced  bool
+	hudReduced bool
+
 	// Cached widget states
 	loginUsername string
 	loginPassword string
@@ -210,7 +218,10 @@ func (b *UI2DBackend) drawCursor() {
 
 	// The sprite's origin is the point being pointed at, and the frame's
 	// offset says where its top-left sits relative to that.
-	b.ctx.Renderer().DrawImage(frame.Texture,
+	// On the overlay layer, not with the other images: images are drawn
+	// before solids, so anything rectangular — a gauge fill, an experience
+	// bar, a button's hover shading — was painting over the cursor.
+	b.ctx.Renderer().DrawImageTop(frame.Texture,
 		in.MouseX+frame.OffsetX, in.MouseY+frame.OffsetY,
 		frame.Width, frame.Height, ui2d.ColorWhite)
 }
@@ -274,6 +285,11 @@ func (b *UI2DBackend) Resize(width, height int) {
 // GetScreenSize returns the current screen dimensions.
 func (b *UI2DBackend) GetScreenSize() (width, height float32) {
 	return b.ctx.GetScreenSize()
+}
+
+// MouseCaptured reports whether the pointer is over the interface.
+func (b *UI2DBackend) MouseCaptured() bool {
+	return b.ctx.MouseCaptured()
 }
 
 // Input returns the input state.
@@ -842,14 +858,6 @@ func (b *UI2DBackend) RenderLoadingUI(state LoadingUIState, width, height float3
 	barY := height - 60
 
 	b.ctx.ProgressBarAt(barX, barY, barW, barH, state.Progress, fmt.Sprintf("%.0f%%", state.Progress*100))
-
-	// Debug gate hint — visible once loading is done and the state is
-	// waiting on Enter. Sits just above the progress bar in light text.
-	if state.ReadyForInput {
-		hint := "Press Enter to continue"
-		tw, _ := b.ctx.Renderer().MeasureText(hint, 1.0)
-		b.ctx.LabelAtColored((width-tw)/2, barY-26, hint, ui2d.ColorTextOnDark)
-	}
 }
 
 // RenderInGameUI renders the in-game HUD.
@@ -859,9 +867,14 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 		b.ctx.Renderer().DrawSceneTexture(0, 0, width, height, state.SceneTexture)
 	}
 
+	b.renderBasicInfo(state)
+
 	// Debug overlay (top-left)
 	if state.ShowDebugInfo {
-		if b.ctx.BeginWindow("debug", 10, 10, 320, 105, "Debug") {
+		// Tall enough for the stat rows: the height is not derived from the
+		// content, so text past it draws outside the frame rather than
+		// growing it.
+		if b.ctx.BeginWindow("debug", 10, 10, 320, 230, "Debug") {
 			b.ctx.Row(16)
 			b.ctx.Label(fmt.Sprintf("Map: %s", state.MapName))
 			b.ctx.Row(16)
@@ -871,6 +884,12 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 			b.ctx.Separator()
 			b.ctx.Row(16)
 			b.ctx.Label(fmt.Sprintf("Dir: %d  Entities: %d", state.PlayerDirection, state.EntityCount))
+			b.ctx.Separator()
+			b.ctx.Row(16)
+			b.ctx.Label(fmt.Sprintf("HP: %d/%d   SP: %d/%d",
+				state.PlayerHP, state.PlayerMaxHP, state.PlayerSP, state.PlayerMaxSP))
+			b.ctx.Row(16)
+			b.ctx.Label(fmt.Sprintf("Base Lv: %d   Job Lv: %d", state.PlayerLevel, state.PlayerJobLevel))
 			b.ctx.EndWindow()
 		}
 	}
