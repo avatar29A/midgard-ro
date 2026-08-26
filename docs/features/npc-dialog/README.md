@@ -509,9 +509,11 @@ Two faults it turned up, both now fixed:
 1. ~~No original screenshot of the dialog in situ.~~ **Answered and
    committed** — `ref-01`…`ref-03`, and roBrowser's measurements confirmed
    against them.
-2. ~~Where should the window open?~~ **Partly answered** — the three captures
-   disagree on position, so it is not a fixed spot. Remaining question: should
-   it be remembered between conversations, the way camera zoom is?
+2. ~~Where should the window open?~~ **Answered.** The three captures disagree
+   on position, so it is not a fixed spot; the window is draggable (per review)
+   and where it is put is **kept for the next conversation**. One that jumped
+   back to the middle every time you spoke to someone would be worth moving
+   only once.
 3. **Text encoding.** rAthena's English scripts are ASCII, so this does not bite
    today, but Korean scripts would arrive as EUC-KR and our font atlas is built
    from the ASCII range. Worth confirming we only care about English scripts.
@@ -527,6 +529,10 @@ Two faults it turned up, both now fixed:
 
 ## Revision log
 
+- 2026-08-26 — dialog window made draggable (per review), which answers open
+  question 2: its position is remembered between conversations. It has no
+  title bar, so the whole window is the handle; the button is drawn after and
+  claims the pointer for itself, so pressing it does not drag.
 - 2026-08-26 — **Step 5 verified**, after two fixes from Boris's testing: the
   buttons were drawn under the window background (the images-then-solids
   batching again), and their Korean captions needed the login window's masking

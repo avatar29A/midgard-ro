@@ -60,6 +60,10 @@ type UI2DBackend struct {
 	// See fillNPCRect for why that is not the same as DrawRect.
 	whiteTex uint32
 
+	// Where the NPC dialog has been dragged to.
+	npcWinX, npcWinY float32
+	npcWinPlaced     bool
+
 	// Basic Info panel art, where it has been dragged to, and whether it is
 	// folded down to its reduced form.
 	hudSkin    *basicInfoSkin
