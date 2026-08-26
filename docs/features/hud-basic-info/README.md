@@ -1,6 +1,6 @@
 # Feature: Basic Info HUD (name, job, HP/SP, levels)
 
-**Branch:** `feature/hud-basic-info` · **Issue:** _(filled after creation)_ · **Parent:** #49 (MVP scope)
+**Branch:** `feature/hud-basic-info` · **Issue:** #85 · **Parent:** #49 (MVP scope)
 **Status:** Planned · **Created:** 2026-08-26
 
 ## Goal
