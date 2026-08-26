@@ -667,9 +667,7 @@ func (g *Game) renderUI() {
 		}
 		playerTileX, playerTileY = state.GetPlayerTilePosition()
 
-		// The stats still come from character select; the server's own
-		// updates replace this source once the status packets are handled.
-		stats := statsFromChar(state.CharInfo())
+		stats := state.Stats()
 
 		uiState := ui.InGameUIState{
 			MapName:         state.GetMapName(),
@@ -689,7 +687,7 @@ func (g *Game) renderUI() {
 			PlayerMaxHP:     stats.MaxHP,
 			PlayerSP:        stats.SP,
 			PlayerMaxSP:     stats.MaxSP,
-			PlayerLevel:     stats.Level,
+			PlayerLevel:     stats.BaseLevel,
 			PlayerJobLevel:  stats.JobLevel,
 		}
 		populateDebugFields(&uiState, state, g.client)
