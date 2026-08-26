@@ -1078,6 +1078,19 @@ func abs(v int) int {
 // already are — is what lets it, without the game loop growing a second copy
 // of the ray cast.
 func (s *InGameState) ClickWorld(mouseX, mouseY, viewportW, viewportH float32) {
+	// An NPC under the pointer takes the click. Walking there instead would be
+	// the wrong thing twice over: the conversation would not start, and the
+	// server would refuse a step into the cell the NPC is standing on.
+	if npc := s.PickEntity(mouseX, mouseY, viewportW, viewportH); npc != nil {
+		trace.Emit(trace.NPC, "click",
+			zap.Uint32("npcID", npc.ID), zap.String("name", npc.Name),
+			zap.Float32("screenX", mouseX), zap.Float32("screenY", mouseY))
+
+		s.ContactNPC(npc)
+
+		return
+	}
+
 	tileX, tileY, ok := s.ScreenToTile(mouseX, mouseY, viewportW, viewportH)
 	if !ok {
 		trace.Emit(trace.Pick, "miss")
