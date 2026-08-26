@@ -46,6 +46,11 @@ type Client struct {
 	mu       sync.Mutex
 	handlers map[uint16]PacketHandler
 
+	// held keeps packets that arrived before anything was listening for them,
+	// so a handler registering late still sees them. See holdForLateHandler.
+	held      map[uint16][][]byte
+	heldCount int
+
 	// Inbound bytes, filled by a reader goroutine and drained by Process on
 	// the game thread. Only the raw bytes cross the boundary: framing and
 	// handler dispatch stay on the game thread, so handlers keep their
@@ -221,6 +226,10 @@ func (c *Client) Disconnect() {
 	c.rx = nil
 	c.rxErr = nil
 	c.connected = false
+
+	// The client walks login to char to map, disconnecting between each. A
+	// backlog from one server must never reach the state that follows it.
+	c.dropHeld()
 }
 
 // IsConnected returns connection status.
@@ -233,6 +242,77 @@ func (c *Client) IsConnected() bool {
 // RegisterHandler registers a packet handler.
 func (c *Client) RegisterHandler(packetID uint16, handler PacketHandler) {
 	c.handlers[packetID] = handler
+	c.deliverHeld(packetID, handler)
+}
+
+// Packets that arrive before anything is listening for them.
+//
+// The server describes the units around you the moment you enter a map, while
+// the client is still loading it — several seconds during which the in-game
+// state, and its handlers, do not exist yet. Those packets are the entire
+// population of your surroundings, and dropping them leaves a town empty until
+// something happens to be re-sent.
+//
+// So an unhandled packet is held rather than discarded, and delivered if a
+// handler registers for it. The bounds matter: some ids are never handled at
+// all and would otherwise grow without limit, and they must not crowd out the
+// ones that will be.
+const (
+	// heldPerPacket is how many of one id are kept. A map entry sends one of
+	// each unit, so this only needs to cover repeats.
+	heldPerPacket = 64
+
+	// heldTotal bounds the whole backlog across every id.
+	heldTotal = 512
+)
+
+// holdForLateHandler keeps a packet nothing is listening for yet.
+func (c *Client) holdForLateHandler(packetID uint16, data []byte) {
+	if c.held == nil {
+		c.held = make(map[uint16][][]byte)
+	}
+	if c.heldCount >= heldTotal {
+		return
+	}
+	if len(c.held[packetID]) >= heldPerPacket {
+		return
+	}
+
+	// The read buffer is reused, so the packet has to be copied to outlive it.
+	packet := make([]byte, len(data))
+	copy(packet, data)
+	c.held[packetID] = append(c.held[packetID], packet)
+	c.heldCount++
+}
+
+// deliverHeld hands a newly registered handler whatever arrived for it before
+// it existed, oldest first.
+func (c *Client) deliverHeld(packetID uint16, handler PacketHandler) {
+	backlog := c.held[packetID]
+	if len(backlog) == 0 {
+		return
+	}
+	delete(c.held, packetID)
+	c.heldCount -= len(backlog)
+
+	trace.Emit(Net, "replay",
+		zap.String("id", fmt.Sprintf("0x%04X", packetID)),
+		zap.Int("packets", len(backlog)))
+
+	for _, packet := range backlog {
+		if err := handler(packet); err != nil {
+			logger.Error("held packet handler error",
+				zap.String("id", fmt.Sprintf("0x%04X", packetID)), zap.Error(err))
+			return
+		}
+	}
+}
+
+// dropHeld forgets the backlog, used when a connection ends so packets from
+// one server are never delivered to the state that follows it.
+func (c *Client) dropHeld() {
+	c.held = nil
+	c.heldCount = 0
 }
 
 // Send sends a packet to the server.
@@ -411,6 +491,7 @@ func (c *Client) Process() (err error) {
 				return fmt.Errorf("packet %04x handler: %w", packetID, err)
 			}
 		} else {
+			c.holdForLateHandler(packetID, packetData)
 			logger.Debug("no handler for packet", zap.String("id", fmt.Sprintf("0x%04X", packetID)))
 			trace.Emit(Net, "unhandled", zap.String("id", fmt.Sprintf("0x%04X", packetID)))
 		}

@@ -256,6 +256,7 @@ func (g *Game) initGameState(cfg *config.Config) error {
 
 	g.initAudio(cfg)
 
+	g.stateManager.AutoPlay = config.AutoLogin()
 	loginState := states.NewLoginState(loginCfg, g.client, g.stateManager)
 	g.stateManager.Change(loginState)
 

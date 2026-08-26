@@ -32,6 +32,10 @@ type LoginState struct {
 	// Connection state
 	connected bool
 	loginSent bool
+
+	// autoLoginTried keeps the unattended path to a single attempt, separately
+	// from loginSent, which only says a request reached the wire.
+	autoLoginTried bool
 }
 
 // NewLoginState creates a new login state.
@@ -102,6 +106,15 @@ func (s *LoginState) Update(dt float64) error {
 	if err := s.client.Process(); err != nil {
 		s.ErrorMsg = fmt.Sprintf("Network error: %v", err)
 		s.IsLoading = false
+	}
+
+	// Unattended login, for checking anything that lives past this screen.
+	// Attempted once and once only: a refused login has to stay refused rather
+	// than retry in a loop against the server. AttemptLogin reports failure
+	// through ErrorMsg, which the login screen already shows.
+	if s.manager.AutoPlay && !s.autoLoginTried && !s.IsLoading && s.ErrorMsg == "" {
+		s.autoLoginTried = true
+		_ = s.AttemptLogin()
 	}
 
 	return nil

@@ -44,6 +44,9 @@ type CharSelectState struct {
 
 	// Timing
 	enterTime time.Time
+
+	// autoSelected keeps unattended character entry to one attempt.
+	autoSelected bool
 }
 
 // NewCharSelectState creates a new character select state.
@@ -95,6 +98,14 @@ func (s *CharSelectState) Update(dt float64) error {
 	if err := s.client.Process(); err != nil {
 		s.ErrorMsg = fmt.Sprintf("Network error: %v", err)
 		s.IsLoading = false
+	}
+
+	// Unattended character entry, the other half of --autologin. Waits for the
+	// list to arrive, then takes the first character; with no characters there
+	// is nothing to enter and the screen is left as it is.
+	if s.manager.AutoPlay && !s.autoSelected && s.CharListReady && len(s.Characters) > 0 {
+		s.autoSelected = true
+		_ = s.SelectCharacter(0)
 	}
 
 	return nil

@@ -2902,7 +2902,7 @@ func (mv *MapViewer) LoadPlayerCharacterFromPath(texLoader func(string) ([]byte,
 		// Bake head+body composites for every action/direction/frame.
 		// Shared with the game client via internal/engine/charsprite so both
 		// render from one implementation.
-		sheet := charsprite.BuildSheet(spr, act, player.HeadSPR, player.HeadACT, charsprite.HeadStraight)
+		sheet := charsprite.BuildSheet(spr, act, player.HeadSPR, player.HeadACT, charsprite.HeadStraight, charsprite.KindPlayer)
 		if sheet != nil {
 			player.CompositeMaxWidth = sheet.Width
 			player.CompositeMaxHeight = sheet.Height
