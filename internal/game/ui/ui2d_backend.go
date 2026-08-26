@@ -53,6 +53,9 @@ type UI2DBackend struct {
 	charSelX, charSelY float32
 	charSelPlaced      bool
 
+	// The NPC dialog's Next and Close buttons, keyed by name.
+	npcButtons map[string]*npcButtonSkin
+
 	// Basic Info panel art, where it has been dragged to, and whether it is
 	// folded down to its reduced form.
 	hudSkin    *basicInfoSkin

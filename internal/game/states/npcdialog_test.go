@@ -36,3 +36,110 @@ func TestDialogZeroValueIsIdle(t *testing.T) {
 		t.Errorf("Dialog() on nil = %+v, want idle", got)
 	}
 }
+
+// sayPacket builds a ZC_SAY_DIALOG the way the server does.
+func sayPacket(npcID uint32, message string) []byte {
+	body := append([]byte(message), 0)
+	buf := make([]byte, 8+len(body))
+	buf[0], buf[1] = 0xB4, 0x00
+	buf[2], buf[3] = byte(len(buf)), byte(len(buf)>>8)
+	buf[4], buf[5] = byte(npcID), byte(npcID>>8)
+	buf[6], buf[7] = byte(npcID>>16), byte(npcID>>24)
+	copy(buf[8:], body)
+
+	return buf
+}
+
+// TestDialogTextAccumulates pins the behaviour that makes a conversation
+// readable: the original keeps one box per conversation and appends to it, so
+// a script saying three things in a row reads as three paragraphs instead of
+// replacing itself twice before the player can read them.
+func TestDialogTextAccumulates(t *testing.T) {
+	var s InGameState
+
+	if err := s.handleSayDialog(sayPacket(42, "First.")); err != nil {
+		t.Fatalf("handleSayDialog: %v", err)
+	}
+	if s.dialog.Message != "First." {
+		t.Errorf("Message = %q, want the first line alone", s.dialog.Message)
+	}
+	if s.dialog.Phase != DialogText || s.dialog.NPCID != 42 {
+		t.Errorf("dialog = %+v, want text/42", s.dialog)
+	}
+
+	if err := s.handleSayDialog(sayPacket(42, "Second.")); err != nil {
+		t.Fatalf("handleSayDialog: %v", err)
+	}
+	if s.dialog.Message != "First.\nSecond." {
+		t.Errorf("Message = %q, want both lines", s.dialog.Message)
+	}
+
+	// A different NPC is a different conversation and starts over.
+	if err := s.handleSayDialog(sayPacket(99, "Elsewhere.")); err != nil {
+		t.Fatalf("handleSayDialog: %v", err)
+	}
+	if s.dialog.Message != "Elsewhere." {
+		t.Errorf("Message = %q, want only the new NPC's line", s.dialog.Message)
+	}
+}
+
+func TestDialogPhaseFromPackets(t *testing.T) {
+	var s InGameState
+
+	if err := s.handleSayDialog(sayPacket(42, "Hello.")); err != nil {
+		t.Fatalf("handleSayDialog: %v", err)
+	}
+
+	// 00b5 <npc id>.L asks for Next; 00b6 asks for Close.
+	if err := s.handleWaitDialog([]byte{0xB5, 0x00, 42, 0, 0, 0}); err != nil {
+		t.Fatalf("handleWaitDialog: %v", err)
+	}
+	if s.dialog.Phase != DialogWaitingNext {
+		t.Errorf("phase = %v, want waiting-next", s.dialog.Phase)
+	}
+
+	if err := s.handleCloseDialog([]byte{0xB6, 0x00, 42, 0, 0, 0}); err != nil {
+		t.Fatalf("handleCloseDialog: %v", err)
+	}
+	if s.dialog.Phase != DialogWaitingClose {
+		t.Errorf("phase = %v, want waiting-close", s.dialog.Phase)
+	}
+
+	// Offering Close does not end the conversation — the player has to press
+	// it, and the script is still waiting until they do.
+	if s.dialog.Message == "" {
+		t.Error("the message was cleared when Close was merely offered")
+	}
+}
+
+// TestEndDialogClearsEvenWithoutAServer pins that the window goes away when
+// the player dismisses it. Leaving it up is worse than the server briefly
+// thinking we are still talking, which its own timeout resolves.
+func TestEndDialogClears(t *testing.T) {
+	var s InGameState
+
+	if err := s.handleSayDialog(sayPacket(42, "Hello.")); err != nil {
+		t.Fatalf("handleSayDialog: %v", err)
+	}
+
+	s.EndDialog()
+
+	if s.dialog != (NPCDialog{}) {
+		t.Errorf("dialog = %+v, want the zero value", s.dialog)
+	}
+}
+
+func TestMalformedDialogPacketsAreRefused(t *testing.T) {
+	var s InGameState
+
+	if err := s.handleSayDialog([]byte{0xB4, 0x00, 0x03}); err != nil {
+		t.Fatalf("handleSayDialog: %v", err)
+	}
+	if err := s.handleWaitDialog([]byte{0xB5, 0x00}); err != nil {
+		t.Fatalf("handleWaitDialog: %v", err)
+	}
+
+	if s.dialog.Phase != DialogIdle {
+		t.Errorf("a malformed packet opened a dialog: %+v", s.dialog)
+	}
+}

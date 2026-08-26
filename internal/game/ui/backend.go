@@ -171,6 +171,15 @@ type InGameUIState struct {
 	// What the NPC said, as the script wrote it — color codes and all.
 	DialogMessage string
 
+	// DialogShowNext and DialogShowClose are which button the server has
+	// asked for. Never both.
+	DialogShowNext  bool
+	DialogShowClose bool
+
+	// OnDialogNext and OnDialogClose are what the buttons do.
+	OnDialogNext  func()
+	OnDialogClose func()
+
 	// The conversation in progress, for the debug overlay.
 	DialogPhase     string
 	DialogNPCID     uint32
