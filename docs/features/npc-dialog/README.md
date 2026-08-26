@@ -460,6 +460,27 @@ Three behaviours worth stating:
 blue names on its second page: the pages append, the colored names render as
 colors, and both buttons work.
 
+**The "slow Close" is the server's NPC timeout, not a delay.** Testing showed
+a Close button appearing about a minute after the last Next. The net trace
+explains it exactly:
+
+```
+23:52:10.235  npc.next
+23:52:10.251  net.recv 0x00B7 (86 bytes)   <- a menu, 16ms later
+23:52:10.252  net.unhandled 0x00B7          <- we ignore menus until step 6
+23:52:16..23:53:06  net.recv 0x007F x6      <- nothing but keep-alives
+23:53:10.018  net.recv 0x00B6               <- close, 59.8s after the next
+```
+
+The server answered in 16 milliseconds. It offered a **menu**, we did not
+answer it because menus are Step 6, and rAthena's `SECURE_NPCTIMEOUT` force-
+closed the conversation sixty seconds later. Step 6 removes it; there is
+nothing to fix in the dialog.
+
+Incidentally the same lines show the length-bounded decode from Step 1 doing
+its job: `0x00B6` arrived with `remaining: 67`, another packet in the same
+read, and was not allowed to swallow it.
+
 Two faults it turned up, both now fixed:
 
 - **The buttons were invisible but still clickable.** The renderer batches
