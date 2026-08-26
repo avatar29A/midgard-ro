@@ -105,6 +105,16 @@ func (c *Context) ButtonAt(id string, x, y, w, h float32, label string) bool {
 	return clicked
 }
 
+// ButtonOptions customizes how a button behaves. The zero value is the
+// ordinary button: it clicks and it makes a noise doing so.
+type ButtonOptions struct {
+	// Silent suppresses the click sound. Not every control should announce
+	// itself — chrome that folds a panel away, or a strip of buttons that
+	// only open other windows, is part of arranging the interface rather
+	// than an action taken in the game.
+	Silent bool
+}
+
 // ImageButtonAt is the RO-style 3-state textured button. Pass texture IDs for
 // the normal / hover / pressed states; zero-IDs fall back to the normal
 // texture. Returns true on click. The texture is drawn 1:1 over the
@@ -115,10 +125,22 @@ func (c *Context) ImageButtonAt(id string, x, y, w, h float32, normalTex, overTe
 	return clicked
 }
 
+// ImageButtonAtOpts is ImageButtonAt with its behavior spelled out.
+func (c *Context) ImageButtonAtOpts(id string, x, y, w, h float32, normalTex, overTex, pressedTex uint32, opts ButtonOptions) bool {
+	clicked, _ := c.ImageButtonAtExOpts(id, x, y, w, h, normalTex, overTex, pressedTex, opts)
+
+	return clicked
+}
+
 // ImageButtonAtEx is ImageButtonAt that also reports the texture it drew.
 // Callers that need to paint over artwork baked into the button — a caption in
 // the wrong language — need to know which of the three states is on screen.
 func (c *Context) ImageButtonAtEx(id string, x, y, w, h float32, normalTex, overTex, pressedTex uint32) (bool, uint32) {
+	return c.ImageButtonAtExOpts(id, x, y, w, h, normalTex, overTex, pressedTex, ButtonOptions{})
+}
+
+// ImageButtonAtExOpts is ImageButtonAtEx with its behavior spelled out.
+func (c *Context) ImageButtonAtExOpts(id string, x, y, w, h float32, normalTex, overTex, pressedTex uint32, opts ButtonOptions) (bool, uint32) {
 	rect := Rect{x, y, w, h}
 	hovered := rect.Contains(c.input.MouseX, c.input.MouseY)
 	clicked := false
@@ -130,7 +152,9 @@ func (c *Context) ImageButtonAtEx(id string, x, y, w, h float32, normalTex, over
 			clicked = true
 			c.input.MouseLeftClicked = false
 
-			c.playClickSound()
+			if !opts.Silent {
+				c.playClickSound()
+			}
 		}
 	}
 	if c.activeWidget == id && c.input.MouseLeftReleased {

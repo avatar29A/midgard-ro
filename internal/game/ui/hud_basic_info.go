@@ -133,6 +133,13 @@ var (
 	hudWeightWarnColor = ui2d.Color{R: 0.8, G: 0.1, B: 0.1, A: 1}
 )
 
+// hudButtonOptions is how every button on this panel behaves. They are
+// silent: folding the panel and opening other windows is arranging the
+// interface, not doing something in the game, and the menu buttons do not
+// open anything yet — a click that makes a noise and changes nothing reads
+// as a fault.
+var hudButtonOptions = ui2d.ButtonOptions{Silent: true}
+
 // hudMenuButtons are the buttons under the panel, in the order the original
 // lays them out. Each has three bitmaps: `<name>1` normal, `2` hovered and
 // `3` pressed.
@@ -366,10 +373,17 @@ func (b *UI2DBackend) renderBasicInfo(state InGameUIState) {
 		height = hudReducedH
 	}
 
+	titleBar := ui2d.Rect{X: b.hudX, Y: b.hudY, W: hudPanelW, H: ui2d.FrameTitleH}
+
+	// Double-clicking the title bar folds the panel, as it does in most
+	// windowed interfaces. Checked before the drag so a double click that
+	// wanders a pixel still counts.
+	if b.ctx.DoubleClickedIn("basicinfo_titlebar", titleBar) {
+		b.hudReduced = !b.hudReduced
+	}
+
 	// Dragged by its title bar, like every other window.
-	b.ctx.DragHandle("basicinfo_titlebar",
-		ui2d.Rect{X: b.hudX, Y: b.hudY, W: hudPanelW, H: ui2d.FrameTitleH},
-		&b.hudX, &b.hudY)
+	b.ctx.DragHandle("basicinfo_titlebar", titleBar, &b.hudX, &b.hudY)
 
 	x, y := b.hudX, b.hudY
 	r := b.ctx.Renderer()
@@ -385,6 +399,17 @@ func (b *UI2DBackend) renderBasicInfo(state InGameUIState) {
 
 	b.drawFoldButton(skin, x, y)
 	b.drawMenuButtons(skin, x, y+height)
+
+	// The panel and its buttons swallow clicks. Without this a click on the
+	// interface also reaches the world behind it, and the character walks
+	// off while you are dragging the panel around.
+	rows := float32((len(skin.menu) + hudBtnCols - 1) / hudBtnCols)
+	b.ctx.CaptureMouse(ui2d.Rect{X: x, Y: y, W: hudPanelW, H: height})
+	b.ctx.CaptureMouse(ui2d.Rect{
+		X: x, Y: y + height,
+		W: float32(hudBtnCols) * hudBtnW,
+		H: rows * hudBtnH,
+	})
 }
 
 // drawBasicInfoLarge draws the full panel.
@@ -440,9 +465,9 @@ func (b *UI2DBackend) drawFoldButton(skin *basicInfoSkin, x, y float32) {
 		return
 	}
 
-	if b.ctx.ImageButtonAt("basicinfo_fold",
+	if b.ctx.ImageButtonAtOpts("basicinfo_fold",
 		x+hudPanelW-hudSysBtnRight-hudSysBtn, y+hudSysBtnY, hudSysBtn, hudSysBtn,
-		skin.sysOff.ID, skin.sysOn.ID, skin.sysOn.ID) {
+		skin.sysOff.ID, skin.sysOn.ID, skin.sysOn.ID, hudButtonOptions) {
 		b.hudReduced = !b.hudReduced
 	}
 }
@@ -535,9 +560,9 @@ func (b *UI2DBackend) drawMenuButtons(skin *basicInfoSkin, x, y float32) {
 		col := i % hudBtnCols
 		row := i / hudBtnCols
 
-		b.ctx.ImageButtonAt("hud_menu_"+button.name,
+		b.ctx.ImageButtonAtOpts("hud_menu_"+button.name,
 			x+float32(col)*hudBtnW, y+float32(row)*hudBtnH,
 			hudBtnW, hudBtnH,
-			button.normal.ID, button.hover.ID, button.pressed.ID)
+			button.normal.ID, button.hover.ID, button.pressed.ID, hudButtonOptions)
 	}
 }
