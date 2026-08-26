@@ -56,6 +56,10 @@ type UI2DBackend struct {
 	// The NPC dialog's Next and Close buttons, keyed by name.
 	npcButtons map[string]*npcButtonSkin
 
+	// A single white pixel, stretched to paint rectangles in the image layer.
+	// See fillNPCRect for why that is not the same as DrawRect.
+	whiteTex uint32
+
 	// Basic Info panel art, where it has been dragged to, and whether it is
 	// folded down to its reduced form.
 	hudSkin    *basicInfoSkin

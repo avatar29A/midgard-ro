@@ -417,7 +417,7 @@ shops (see Step 2). Move the character next to a talker first —
 beside `Guide#05prontera`, and `--trace=npc` then lists every NPC on screen
 with its projected position.
 
-### Step 5 — Next and Close 🟡 built, not yet driven
+### Step 5 — Next and Close ✅
 - **Changes:** `internal/game/states/npcdialog.go`, `internal/game/ui/npcdialog.go`
 - **Done when:** `ZC_WAIT_DIALOG` shows a Next button that advances the script;
   `ZC_CLOSE_DIALOG` shows Close, which ends the conversation and returns control.
@@ -434,6 +434,12 @@ subfolders contain different buttons that happen to share the names, and it is
 the `login_interface` one that has no hover art. The root pair has all six
 bitmaps, 42×20 each, so both buttons get real hover and pressed states.
 
+**Both are Korean** (`다음`, "next"), and so is the `login_interface` pair —
+there is no English version to pick instead. They go through `skinButton`, the
+helper the login window already uses to mask a baked-in caption and draw its
+own, which knows where the ink sits in a 42×20 button. Captions are lowercase
+`next` and `close`, matching ref-01 and ref-02.
+
 Three behaviours worth stating:
 
 - **Text accumulates.** A second message from the same NPC is appended rather
@@ -449,7 +455,23 @@ Three behaviours worth stating:
   the server briefly thinking we are still talking — its own timeout resolves
   that.
 
-Not yet driven end to end in the client.
+**Driven end to end in the client** against `Wanted Notice#edq`
+(`prontera 150,326`), whose script is `mes` → `next` → `next` → `close` with
+blue names on its second page: the pages append, the colored names render as
+colors, and both buttons work.
+
+Two faults it turned up, both now fixed:
+
+- **The buttons were invisible but still clickable.** The renderer batches
+  images, then solids, then text — and the window's background was drawn with
+  `DrawRect`, a solid, so it painted over the button, which is an image. The
+  window now fills itself with a tinted 1×1 texture so it sits in the image
+  layer, below its own widgets. *Invisible but clickable is the signature of
+  this fault: hit tests do not care what is on top.* It is the second time this
+  batching order has bitten — the cursor vanished under the experience bars for
+  the same reason — and it is worth a proper fix in `ui2d` once this feature is
+  done, because **a panel built from solids cannot host an image widget**.
+- The captions were Korean, addressed above.
 
 ### Step 6 — Menus
 - **Changes:** `internal/game/states/npcdialog.go`, `internal/game/ui/`
@@ -505,6 +527,11 @@ Not yet driven end to end in the client.
 
 ## Revision log
 
+- 2026-08-26 — **Step 5 verified**, after two fixes from Boris's testing: the
+  buttons were drawn under the window background (the images-then-solids
+  batching again), and their Korean captions needed the login window's masking
+  helper. Both button families in the archive are Korean; there is no English
+  one.
 - 2026-08-26 — **Step 5 built.** Next and Close handled, drawn and wired. The
   asset table was wrong about both buttons: roBrowser names them unprefixed, so
   they come from the root of the interface folder, where a full six-bitmap set

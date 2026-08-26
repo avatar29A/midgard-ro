@@ -60,9 +60,19 @@ var (
 	npcWinFillColor   = ui2d.Color{R: 0.969, G: 0.969, B: 0.969, A: 1}
 )
 
+// fillNPCRect paints a rectangle in the image layer, so that widgets drawn
+// after it — which are images — end up on top of it rather than under.
+func (b *UI2DBackend) fillNPCRect(x, y, w, h float32, color ui2d.Color) {
+	if b.whiteTex == 0 {
+		b.whiteTex = b.ctx.Renderer().CreateTextureNearest(1, 1, []byte{255, 255, 255, 255})
+	}
+
+	b.ctx.Renderer().DrawImage(b.whiteTex, x, y, w, h, color)
+}
+
 // npcButtonSkin is one dialog button's three states.
 type npcButtonSkin struct {
-	normal, hover, pressed uint32
+	normal, hover, pressed *TextureInfo
 }
 
 // loadNPCButton loads a dialog button, once. A miss returns nil and the button
@@ -78,7 +88,7 @@ func (b *UI2DBackend) loadNPCButton(name string) *npcButtonSkin {
 	}
 
 	base := npcDialogButtons[name]
-	ids := make([]uint32, 0, 3)
+	states := make([]*TextureInfo, 0, 3)
 
 	for _, suffix := range []string{"", "_a", "_b"} {
 		tex, err := b.texCache.Load(skinBasePath + base + suffix + ".bmp")
@@ -91,10 +101,10 @@ func (b *UI2DBackend) loadNPCButton(name string) *npcButtonSkin {
 			return nil
 		}
 
-		ids = append(ids, tex.ID)
+		states = append(states, tex)
 	}
 
-	skin := &npcButtonSkin{normal: ids[0], hover: ids[1], pressed: ids[2]}
+	skin := &npcButtonSkin{normal: states[0], hover: states[1], pressed: states[2]}
 	b.npcButtons[name] = skin
 
 	return skin
@@ -112,8 +122,13 @@ func (b *UI2DBackend) renderNPCDialog(state InGameUIState, width, height float32
 
 	r := b.ctx.Renderer()
 
-	r.DrawRect(x, y, npcWinW, npcWinH, npcWinBorderColor)
-	r.DrawRect(x+npcWinBorder, y+npcWinBorder,
+	// Drawn as tinted images rather than with DrawRect, which would be the
+	// obvious way and is wrong here. The renderer batches images, then solids,
+	// then text — so a solid background is painted *over* the button, which is
+	// an image. The button was invisible and still clickable until this
+	// changed: hit tests do not care what is on top.
+	b.fillNPCRect(x, y, npcWinW, npcWinH, npcWinBorderColor)
+	b.fillNPCRect(x+npcWinBorder, y+npcWinBorder,
 		npcWinW-2*npcWinBorder, npcWinH-2*npcWinBorder, npcWinFillColor)
 
 	textX := x + npcTextInset
@@ -164,13 +179,13 @@ func (b *UI2DBackend) renderNPCDialog(state InGameUIState, width, height float32
 // Never both: the script is either going to say more or it is finished, and
 // the packets that ask for them are separate.
 func (b *UI2DBackend) drawNPCDialogButton(state InGameUIState, x, y float32) {
-	name, action := "", state.OnDialogNext
+	name, label, action := "", "", state.OnDialogNext
 
 	switch {
 	case state.DialogShowNext:
-		name = "next"
+		name, label = "next", "next"
 	case state.DialogShowClose:
-		name, action = "close", state.OnDialogClose
+		name, label, action = "close", "close", state.OnDialogClose
 	default:
 		return
 	}
@@ -183,8 +198,12 @@ func (b *UI2DBackend) drawNPCDialogButton(state InGameUIState, x, y float32) {
 	btnX := x + npcWinW - npcBtnMargin - npcBtnW
 	btnY := y + npcWinH - npcBtnMargin - npcBtnH
 
-	if b.ctx.ImageButtonAt("npc_dialog_"+name, btnX, btnY, npcBtnW, npcBtnH,
-		skin.normal, skin.hover, skin.pressed) && action != nil {
+	// The archive's art has its caption baked in, in Korean — both families
+	// of this button do, so there is no English one to pick instead. Masked
+	// and relabelled the same way the login window's buttons are, by the
+	// helper that already knows where the ink sits in a 42x20 button.
+	if b.skinButton("npc_dialog_"+name, btnX, btnY,
+		skin.normal, skin.hover, skin.pressed, label) && action != nil {
 		action()
 	}
 }
