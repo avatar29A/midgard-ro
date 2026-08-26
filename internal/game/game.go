@@ -15,6 +15,7 @@ import (
 	"github.com/AllenDang/cimgui-go/backend/sdlbackend"
 	"github.com/AllenDang/cimgui-go/imgui"
 	"github.com/go-gl/gl/v4.1-core/gl"
+	"github.com/veandco/go-sdl2/sdl"
 	"go.uber.org/zap"
 
 	"github.com/Faultbox/midgard-ro/internal/assets"
@@ -144,6 +145,10 @@ func New(cfg *config.Config) (*Game, error) {
 		io := imgui.CurrentIO()
 		flags := io.ConfigFlags()
 		flags &^= imgui.ConfigFlagsViewportsEnable // Clear viewport flag
+
+		// The game draws RO's cursor itself. ImGui otherwise sets the system
+		// cursor every frame, which puts it back however often it is hidden.
+		flags |= imgui.ConfigFlagsNoMouseCursorChange
 		io.SetConfigFlags(flags)
 
 		g.loadKoreanFont()
@@ -151,6 +156,13 @@ func New(cfg *config.Config) (*Game, error) {
 
 	g.imguiBackend.SetBgColor(imgui.NewVec4(0.05, 0.05, 0.08, 1.0))
 	g.imguiBackend.CreateWindow("Midgard RO", cfg.Graphics.Width, cfg.Graphics.Height)
+
+	// The game draws RO's own cursor, so the system one would be a second
+	// pointer on screen. SDL owns it — the windowing backend runs on the same
+	// library — and a failure here is cosmetic, not worth refusing to start.
+	if _, err := sdl.ShowCursor(sdl.DISABLE); err != nil {
+		logger.Warn("could not hide the system cursor", zap.Error(err))
+	}
 
 	// Initialize OpenGL
 	if err := gl.Init(); err != nil {
@@ -414,10 +426,14 @@ func (g *Game) frame() {
 		}
 	}
 
-	// Handle ESC to quit
+	// Handle ESC to quit. The cimgui-go SDL backend's SetShouldClose is
+	// currently a no-op TODO upstream, so we exit the process directly.
+	// Deferred a frame so the input event finishes processing cleanly.
 	if imgui.IsKeyPressedBoolV(imgui.KeyEscape, false) {
-		g.running = false
-		g.imguiBackend.SetShouldClose(true)
+		g.pendingAction = func() {
+			logger.Info("escape pressed, exiting")
+			os.Exit(0)
+		}
 	}
 
 	// Handle F12 for screenshot (will capture at start of NEXT frame)
@@ -592,6 +608,16 @@ func (g *Game) renderUI() {
 					_ = state.AttemptLogin()
 				}
 			},
+			OnExit: func() {
+				// SDLBackend.SetShouldClose is a no-op TODO upstream
+				// (cimgui-go), so we terminate the process directly.
+				// Deferred a frame via pendingAction so the button
+				// visibly registers its pressed state first.
+				g.pendingAction = func() {
+					logger.Info("exit button clicked, exiting")
+					os.Exit(0)
+				}
+			},
 		}, viewportWidth, viewportHeight)
 
 	case *states.ConnectingState:
@@ -616,12 +642,18 @@ func (g *Game) renderUI() {
 		}, viewportWidth, viewportHeight)
 
 	case *states.LoadingState:
+		// Debug gate: once loading hits 100% the state holds until the
+		// user presses Enter, so we can inspect the loading screen.
+		if state.IsReadyForTransition() && imgui.IsKeyPressedBoolV(imgui.KeyEnter, false) {
+			state.PressEnter()
+		}
 		g.uiBackend.RenderLoadingUI(ui.LoadingUIState{
 			MapName:       state.GetMapName(),
 			StatusMessage: state.GetStatusMessage(),
 			ErrorMessage:  state.GetErrorMessage(),
 			Progress:      state.GetProgress(),
 			Phase:         state.GetLoadingPhase(),
+			ReadyForInput: state.IsReadyForTransition(),
 		}, viewportWidth, viewportHeight)
 
 	case *states.InGameState:
