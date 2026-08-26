@@ -905,7 +905,12 @@ func (g *Game) handleInGameInput(state *states.InGameState) {
 	// Left click for click-to-move. Skip if any imgui window (HUD, minimap,
 	// chat, etc) is consuming the click; otherwise ray-cast to ground plane
 	// and dispatch a server move request.
-	if imgui.IsMouseClickedBool(imgui.MouseButtonLeft) && !io.WantCaptureMouse() {
+	// A click on the interface is not a click on the world behind it. ImGui
+	// answers for its own windows; the 2D UI has to be asked separately,
+	// since the HUD is not an ImGui window and ImGui does not know it is
+	// there.
+	if imgui.IsMouseClickedBool(imgui.MouseButtonLeft) && !io.WantCaptureMouse() &&
+		!g.uiBackend.MouseCaptured() {
 		viewportW, viewportH := g.uiBackend.GetScreenSize()
 
 		trace.Emit(trace.Pick, "click",

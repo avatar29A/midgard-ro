@@ -284,6 +284,11 @@ func (b *UI2DBackend) GetScreenSize() (width, height float32) {
 	return b.ctx.GetScreenSize()
 }
 
+// MouseCaptured reports whether the pointer is over the interface.
+func (b *UI2DBackend) MouseCaptured() bool {
+	return b.ctx.MouseCaptured()
+}
+
 // Input returns the input state.
 func (b *UI2DBackend) Input() *ui2d.InputState {
 	return b.ctx.Input()

@@ -286,7 +286,16 @@ Ctrl+V and the title bar's system button (`sys_mini_off`/`on`) both fold it, and
 
 Not carried over: the original also has a 9×14 `viewoff`/`viewon` toggle at the reduced form's bottom-right. The title bar button does the same job in both forms, so a second control would be redundant.
 
-**Dragging is wired but not visually verified.** It uses the same `ui2d.DragHandle` as the login and character select windows, with the same shape — but synthesising a drag needs the window's position on screen, and SDL does not expose the window through the accessibility API, so a synthetic click would have been aimed at a guess. Worth a manual check.
+**Dragging is verified.** SDL does not expose the window through the accessibility API, but `CGWindowListCopyWindowInfo` reports its geometry, which is enough to aim a synthetic drag. Grabbing the title bar and dragging moved the panel and it stayed where it was dropped.
+
+Driving it that way found a defect worth more than the check itself: **a click on the panel also reached the world behind it**, so dragging the panel walked the character at the same time. `imgui`'s `WantCaptureMouse` only answers for ImGui's own windows, and the HUD is not one. `ui2d.Context` now has `CaptureMouse`/`MouseCaptured` for the areas between widgets — a panel's body is not a widget but is still interface — and the in-game click-to-move asks it before moving.
+
+### Follow-ups from review
+
+- **Buttons take a `ui2d.ButtonOptions`,** whose `Silent` field suppresses the click sound. Every button on this panel is silent: folding it and opening other windows is arranging the interface rather than acting in the game, and the menu buttons open nothing yet — a click that makes a noise and changes nothing reads as a fault.
+- **Double-clicking the title bar folds the panel,** alongside Ctrl+V and the system button. `Context.DoubleClickedIn` recognises two presses within 400ms and 6px, and deliberately does not consume the press, so a title bar can be both dragged and double-clicked.
+
+  Its logic is covered by unit tests — timing, drift, a third press starting a new pair, different controls not inheriting each other's presses — but **it is not confirmed in the running client**. The window moved to a second display mid-test and the synthetic click landed there; driving blind risks clicking on whatever else is on screen, so I stopped. Worth a manual check.
 
 ### Step 6 — Docs ✅
 - [x] `docs/ENGINE_FEATURES.md` — the HUD entry, under the game layer
@@ -321,6 +330,10 @@ _All three from the first round are answered — see the Revision log. One follo
 
 ## Revision log
 
+- 2026-08-26 — **Review follow-ups.** `ButtonOptions{Silent}` and every button
+  on the panel silenced; double-click on the title bar folds it; dragging
+  verified, which turned up clicks falling through the panel into the world —
+  fixed with `CaptureMouse`/`MouseCaptured`.
 - 2026-08-26 — **Steps 5 and 6 done.** Reduced form, folding by Ctrl+V and by
   the title bar button, dragging, and the docs. One more plan correction:
   `basewin_mini.bmp` is a different 280×34 window, not the reduced panel —

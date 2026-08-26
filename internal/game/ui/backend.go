@@ -22,6 +22,10 @@ type UIBackend interface {
 	// GetScreenSize returns the current screen dimensions.
 	GetScreenSize() (width, height float32)
 
+	// MouseCaptured reports whether the pointer is over the interface, so a
+	// click on a panel is not also a click on the world behind it.
+	MouseCaptured() bool
+
 	// Input returns the input state for the current frame.
 	// Note: This returns the ui2d InputState; ImGui backends should provide
 	// a compatible adapter or translation layer.
