@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strings"
 
 	"go.uber.org/zap"
 
@@ -59,6 +60,26 @@ const (
 	hudJobLvX  = float32(15)
 	hudJobLvY  = float32(97)
 
+	// The experience bars are not artwork: roBrowser draws them as a 1px
+	// bordered box with a solid fill, and so does the original. 110x4 of
+	// content inside that border.
+	hudExpX      = float32(84)
+	hudBaseExpY  = float32(89)
+	hudJobExpY   = float32(101)
+	hudExpW      = float32(110)
+	hudExpH      = float32(4)
+	hudExpBorder = float32(1)
+
+	// Weight and Zeny share one right-aligned line on the striped footer.
+	hudExtraY     = float32(119)
+	hudExtraRight = float32(215)
+	hudExtraGap   = float32(6)
+
+	// The menu buttons hang below the panel, four to a row.
+	hudBtnW    = float32(54)
+	hudBtnH    = float32(18)
+	hudBtnCols = 4
+
 	// The panel is small, so it takes the same reduced text as the login and
 	// character select windows rather than the default UI size.
 	hudTextScale = loginTextScale
@@ -79,15 +100,43 @@ const (
 // hudPanelFile is the panel background in the archive.
 const hudPanelFile = "basewin_bg2.bmp"
 
+// The experience bar's colors, taken from roBrowser's stylesheet, which took
+// them from the original: a grey rule, a white well and a solid blue fill.
+var (
+	hudExpBorderColor = ui2d.Color{R: 0.686, G: 0.686, B: 0.686, A: 1}
+	hudExpWellColor   = ui2d.Color{R: 1, G: 1, B: 1, A: 1}
+	hudExpFillColor   = ui2d.Color{R: 0.259, G: 0.384, B: 0.647, A: 1}
+
+	// The original turns the weight red once the character is carrying half
+	// of what they can, which is where the penalties start.
+	hudWeightWarnColor = ui2d.Color{R: 0.8, G: 0.1, B: 0.1, A: 1}
+)
+
+// hudMenuButtons are the buttons under the panel, in the order the original
+// lays them out. Each has three bitmaps: `<name>1` normal, `2` hovered and
+// `3` pressed.
+var hudMenuButtons = []string{
+	"info", "skill", "item", "map",
+	"party", "guild", "quest", "option",
+	"booking", "recruit",
+}
+
 // gaugeSkin is one gauge's three-slice fill.
 type gaugeSkin struct {
 	left, mid, right *TextureInfo
+}
+
+// menuButtonSkin is one menu button's three states.
+type menuButtonSkin struct {
+	name                   string
+	normal, hover, pressed *TextureInfo
 }
 
 // basicInfoSkin holds the panel art.
 type basicInfoSkin struct {
 	panel  *TextureInfo
 	hp, sp *gaugeSkin
+	menu   []*menuButtonSkin
 }
 
 // loadBasicInfoSkin loads the panel background, once. A miss leaves the skin
@@ -119,9 +168,46 @@ func (b *UI2DBackend) loadBasicInfoSkin() *basicInfoSkin {
 		logger.Warn("gauge art unavailable, the panel will draw without its bars")
 	}
 
-	b.hudSkin = &basicInfoSkin{panel: panel, hp: hp, sp: sp}
+	b.hudSkin = &basicInfoSkin{panel: panel, hp: hp, sp: sp, menu: b.loadMenuButtons()}
 
 	return b.hudSkin
+}
+
+// loadMenuButtons loads the button strip. A button whose art is missing is
+// left out rather than blanking the row.
+func (b *UI2DBackend) loadMenuButtons() []*menuButtonSkin {
+	buttons := make([]*menuButtonSkin, 0, len(hudMenuButtons))
+
+	for _, name := range hudMenuButtons {
+		states := make([]*TextureInfo, 0, 3)
+
+		for state := 1; state <= 3; state++ {
+			path := fmt.Sprintf("%s%s%d.bmp", basicInterfacePath, name, state)
+
+			tex, err := b.texCache.Load(path)
+			if err != nil {
+				logger.Warn("menu button art unavailable, leaving it out",
+					zap.String("path", path), zap.Error(err))
+
+				break
+			}
+
+			states = append(states, tex)
+		}
+
+		if len(states) != 3 {
+			continue
+		}
+
+		buttons = append(buttons, &menuButtonSkin{
+			name:    name,
+			normal:  states[0],
+			hover:   states[1],
+			pressed: states[2],
+		})
+	}
+
+	return buttons
 }
 
 // loadGaugeSkin loads one gauge's three pieces, named `<prefix>_left.bmp` and
@@ -251,4 +337,105 @@ func (b *UI2DBackend) renderBasicInfo(state InGameUIState) {
 		fmt.Sprintf("Base Lv. %d", state.PlayerLevel), hudTextScale, ui2d.ColorText)
 	r.DrawText(x+hudJobLvX, y+hudJobLvY-hudTextLift,
 		fmt.Sprintf("Job Lv. %d", state.PlayerJobLevel), hudTextScale, ui2d.ColorText)
+
+	b.drawExpBar(x+hudExpX, y+hudBaseExpY, state.PlayerBaseExp, state.PlayerNextBaseExp)
+	b.drawExpBar(x+hudExpX, y+hudJobExpY, state.PlayerJobExp, state.PlayerNextJobExp)
+
+	b.drawWeightAndZeny(state, x, y)
+	b.drawMenuButtons(skin, x, y)
+}
+
+// drawExpBar draws one experience bar: a grey rule around a white well, with
+// a solid fill for the progress made toward the next level.
+//
+// A next-level total of zero means the server has not sent one — at max level
+// it never will — and draws an empty well rather than a full bar.
+func (b *UI2DBackend) drawExpBar(x, y float32, current, next int64) {
+	r := b.ctx.Renderer()
+
+	r.DrawRect(x, y, hudExpW+2*hudExpBorder, hudExpH+2*hudExpBorder, hudExpBorderColor)
+	r.DrawRect(x+hudExpBorder, y+hudExpBorder, hudExpW, hudExpH, hudExpWellColor)
+
+	fill := expFillWidth(current, next, hudExpW)
+	if fill > 0 {
+		r.DrawRect(x+hudExpBorder, y+hudExpBorder, fill, hudExpH, hudExpFillColor)
+	}
+}
+
+// expFillWidth is how much of an experience bar is filled. Unlike the health
+// gauges this keeps its fractional width: the bar is 110px for a whole level,
+// so rounding down would show nothing at all for the first percent.
+func expFillWidth(current, next int64, track float32) float32 {
+	if next <= 0 || current <= 0 || track <= 0 {
+		return 0
+	}
+
+	if current >= next {
+		return track
+	}
+
+	return track * float32(current) / float32(next)
+}
+
+// drawWeightAndZeny draws the footer line. It is right-aligned as one run, so
+// the two halves are measured before either is drawn.
+func (b *UI2DBackend) drawWeightAndZeny(state InGameUIState, x, y float32) {
+	r := b.ctx.Renderer()
+
+	weight := fmt.Sprintf("Weight : %d / %d", state.PlayerWeight, state.PlayerMaxWeight)
+	zeny := "Zeny : " + withThousands(state.PlayerZeny)
+
+	weightW, _ := r.MeasureText(weight, hudGaugeTextScale)
+	zenyW, _ := r.MeasureText(zeny, hudGaugeTextScale)
+
+	left := x + hudExtraRight - (weightW + hudExtraGap + zenyW)
+	textY := y + hudExtraY - hudGaugeTextLift
+
+	// The original turns the weight red at half load, where the penalties
+	// begin, so the color is the warning rather than decoration.
+	weightColor := ui2d.ColorText
+	if state.PlayerMaxWeight > 0 && state.PlayerWeight*2 >= state.PlayerMaxWeight {
+		weightColor = hudWeightWarnColor
+	}
+
+	r.DrawText(left, textY, weight, hudGaugeTextScale, weightColor)
+	r.DrawText(left+weightW+hudExtraGap, textY, zeny, hudGaugeTextScale, ui2d.ColorText)
+}
+
+// withThousands groups a number with commas, the way the original prints Zeny.
+func withThousands(v int64) string {
+	digits := fmt.Sprintf("%d", v)
+
+	sign := ""
+	if strings.HasPrefix(digits, "-") {
+		sign, digits = "-", digits[1:]
+	}
+
+	var out strings.Builder
+	for i, d := range digits {
+		if i > 0 && (len(digits)-i)%3 == 0 {
+			out.WriteByte(',')
+		}
+
+		out.WriteRune(d)
+	}
+
+	return sign + out.String()
+}
+
+// drawMenuButtons draws the strip below the panel, four to a row.
+//
+// None of them opens anything yet — the windows they belong to are their own
+// features — but they are drawn with their real hover and pressed art, which
+// is what the archive ships and what tells you the button is alive.
+func (b *UI2DBackend) drawMenuButtons(skin *basicInfoSkin, x, y float32) {
+	for i, button := range skin.menu {
+		col := i % hudBtnCols
+		row := i / hudBtnCols
+
+		b.ctx.ImageButtonAt("hud_menu_"+button.name,
+			x+float32(col)*hudBtnW, y+hudPanelH+float32(row)*hudBtnH,
+			hudBtnW, hudBtnH,
+			button.normal.ID, button.hover.ID, button.pressed.ID)
+	}
 }

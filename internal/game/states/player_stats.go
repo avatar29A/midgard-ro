@@ -21,7 +21,9 @@ type PlayerStats struct {
 	BaseExp, NextBaseExp int64
 	JobExp, NextJobExp   int64
 
-	Zeny              int64
+	Zeny int64
+
+	// Weight is in units, not the tenths the server sends — see Apply.
 	Weight, MaxWeight int
 
 	// Class is the job id, which changes when the player advances.
@@ -79,10 +81,13 @@ func (s *PlayerStats) Apply(varID uint16, value int64) bool {
 		s.NextJobExp = value
 	case packets.SP_ZENY:
 		s.Zeny = value
+	// Weight travels in tenths of a unit — a max weight of 2030 arrives as
+	// 20300. Converted here rather than at the point it is displayed, so
+	// `Weight` means weight everywhere it is read.
 	case packets.SP_WEIGHT:
-		s.Weight = int(value)
+		s.Weight = int(value) / 10
 	case packets.SP_MAXWEIGHT:
-		s.MaxWeight = int(value)
+		s.MaxWeight = int(value) / 10
 	case packets.SP_CLASS:
 		s.Class = int(value)
 	default:

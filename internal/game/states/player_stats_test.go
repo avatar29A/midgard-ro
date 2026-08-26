@@ -71,8 +71,10 @@ func TestPlayerStatsApply(t *testing.T) {
 		{"job exp", packets.SP_JOBEXP, 40, PlayerStats{JobExp: 40}},
 		{"next job exp", packets.SP_NEXTJOBEXP, 660, PlayerStats{NextJobExp: 660}},
 		{"Zeny", packets.SP_ZENY, 100000, PlayerStats{Zeny: 100000}},
-		{"weight", packets.SP_WEIGHT, 50, PlayerStats{Weight: 50}},
-		{"max weight", packets.SP_MAXWEIGHT, 2150, PlayerStats{MaxWeight: 2150}},
+		// Weight arrives in tenths of a unit.
+		{"weight", packets.SP_WEIGHT, 500, PlayerStats{Weight: 50}},
+		{"max weight", packets.SP_MAXWEIGHT, 21500, PlayerStats{MaxWeight: 2150}},
+		{"a weight that does not divide evenly rounds down", packets.SP_WEIGHT, 507, PlayerStats{Weight: 50}},
 		{"class", packets.SP_CLASS, 4, PlayerStats{Class: 4}},
 	}
 

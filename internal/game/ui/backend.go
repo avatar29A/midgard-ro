@@ -130,6 +130,11 @@ type InGameUIState struct {
 	PlayerLevel           int
 	PlayerJobLevel        int
 
+	PlayerBaseExp, PlayerNextBaseExp int64
+	PlayerJobExp, PlayerNextJobExp   int64
+	PlayerZeny                       int64
+	PlayerWeight, PlayerMaxWeight    int
+
 	// Entity counts
 	EntityCount  int
 	PlayerCount  int
