@@ -41,11 +41,6 @@ type LoadingState struct {
 
 	// Timing
 	startTime time.Time
-
-	// Debug gate: when IsComplete becomes true the state holds at 100%
-	// progress until the user presses Enter (sets this flag), then
-	// transitions to InGame. Lets us inspect the loading screen.
-	userPressedEnter bool
 }
 
 // NewLoadingState creates a new loading state.
@@ -104,31 +99,12 @@ func (s *LoadingState) Update(dt float64) error {
 		}
 	}
 
-	// Hold at 100% until the user presses Enter — debug gate so the
-	// loading screen is visible long enough to inspect. Cleared by
-	// PressEnter() (wired to KeyEnter in the game loop).
 	if s.IsComplete {
 		s.Progress = 1.0
-		if s.userPressedEnter {
-			s.transitionToInGame()
-		}
+		s.transitionToInGame()
 	}
 
 	return nil
-}
-
-// PressEnter unblocks the post-loading transition. The Loading state holds
-// at 100% until this is called so a developer can inspect the loading
-// screen instead of it auto-advancing the moment the map finishes loading.
-func (s *LoadingState) PressEnter() {
-	s.userPressedEnter = true
-}
-
-// IsReadyForTransition reports whether loading has finished and the state
-// is now waiting on Enter to advance. Used by the UI to render the
-// "Press Enter to continue" hint.
-func (s *LoadingState) IsReadyForTransition() bool {
-	return s.IsComplete && !s.userPressedEnter
 }
 
 // Render is called every frame to draw the state.

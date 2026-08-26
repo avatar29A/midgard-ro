@@ -502,6 +502,12 @@ func (g *Game) SetScreenshotTimers(after, every time.Duration) {
 	g.shotLast = time.Now()
 }
 
+// ShowDebugOverlay opens the F3 overlay from the start, so an unattended
+// screenshot can capture what it reads. F3 still toggles it afterwards.
+func (g *Game) ShowDebugOverlay(show bool) {
+	g.showDebug = show
+}
+
 // checkTimedScreenshot fires the unattended capture timers. Both are off
 // unless asked for on the command line.
 func (g *Game) checkTimedScreenshot() {
@@ -642,18 +648,12 @@ func (g *Game) renderUI() {
 		}, viewportWidth, viewportHeight)
 
 	case *states.LoadingState:
-		// Debug gate: once loading hits 100% the state holds until the
-		// user presses Enter, so we can inspect the loading screen.
-		if state.IsReadyForTransition() && imgui.IsKeyPressedBoolV(imgui.KeyEnter, false) {
-			state.PressEnter()
-		}
 		g.uiBackend.RenderLoadingUI(ui.LoadingUIState{
 			MapName:       state.GetMapName(),
 			StatusMessage: state.GetStatusMessage(),
 			ErrorMessage:  state.GetErrorMessage(),
 			Progress:      state.GetProgress(),
 			Phase:         state.GetLoadingPhase(),
-			ReadyForInput: state.IsReadyForTransition(),
 		}, viewportWidth, viewportHeight)
 
 	case *states.InGameState:
@@ -666,6 +666,10 @@ func (g *Game) renderUI() {
 			playerDirection = uint8(player.Direction)
 		}
 		playerTileX, playerTileY = state.GetPlayerTilePosition()
+
+		// The stats still come from character select; the server's own
+		// updates replace this source once the status packets are handled.
+		stats := statsFromChar(state.CharInfo())
 
 		uiState := ui.InGameUIState{
 			MapName:         state.GetMapName(),
@@ -681,6 +685,12 @@ func (g *Game) renderUI() {
 			ErrorMessage:    state.GetErrorMessage(),
 			ShowDebugInfo:   g.showDebug,
 			FPS:             g.fps,
+			PlayerHP:        stats.HP,
+			PlayerMaxHP:     stats.MaxHP,
+			PlayerSP:        stats.SP,
+			PlayerMaxSP:     stats.MaxSP,
+			PlayerLevel:     stats.Level,
+			PlayerJobLevel:  stats.JobLevel,
 		}
 		populateDebugFields(&uiState, state, g.client)
 		g.uiBackend.RenderInGameUI(uiState, g.dt, viewportWidth, viewportHeight)

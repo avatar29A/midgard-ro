@@ -94,10 +94,6 @@ type LoadingUIState struct {
 	ErrorMessage  string
 	Progress      float32
 	Phase         string
-	// ReadyForInput is true once loading has hit 100% and the state is
-	// holding for the user to press Enter (debug gate). The UI shows a
-	// hint when this is set.
-	ReadyForInput bool
 }
 
 // InGameUIState contains the data needed to render the in-game HUD.

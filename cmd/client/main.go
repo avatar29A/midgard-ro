@@ -51,6 +51,7 @@ func main() {
 	// Unattended screenshot capture, for inspecting the UI without someone at
 	// the keyboard.
 	g.SetScreenshotTimers(config.ScreenshotAfter(), config.ScreenshotEvery())
+	g.ShowDebugOverlay(config.DebugOverlay())
 
 	// Run the game loop
 	if err := g.Run(); err != nil {
