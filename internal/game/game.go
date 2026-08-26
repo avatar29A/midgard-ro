@@ -683,6 +683,7 @@ func (g *Game) renderUI() {
 		playerTileX, playerTileY = state.GetPlayerTilePosition()
 
 		stats := state.Stats()
+		dialog := state.Dialog()
 
 		uiState := ui.InGameUIState{
 			MapName:         state.GetMapName(),
@@ -699,6 +700,10 @@ func (g *Game) renderUI() {
 			ShowDebugInfo:   g.showDebug,
 			ToggleBasicInfo: g.toggleBasicInfo,
 			FPS:             g.fps,
+			DialogPhase:     dialog.Phase.String(),
+			DialogNPCID:     dialog.NPCID,
+			DialogNPCName:   dialog.Name,
+			DialogMenuItems: dialog.MenuItems,
 			PlayerName:      ui.GetCharName(state.CharInfo()),
 			PlayerClass:     stats.Class,
 			PlayerHP:        stats.HP,
@@ -919,13 +924,7 @@ func (g *Game) handleInGameInput(state *states.InGameState) {
 			zap.Float32("mouseX", mouseX), zap.Float32("mouseY", mouseY),
 			zap.Float32("viewportW", viewportW), zap.Float32("viewportH", viewportH))
 
-		if tileX, tileY, ok := state.ScreenToTile(mouseX, mouseY, viewportW, viewportH); ok {
-			if err := state.RequestMove(tileX, tileY); err != nil {
-				logger.Warn("click-to-move RequestMove failed", zap.Error(err))
-			}
-		} else {
-			trace.Emit(trace.Pick, "miss")
-		}
+		state.ClickWorld(mouseX, mouseY, viewportW, viewportH)
 	}
 }
 

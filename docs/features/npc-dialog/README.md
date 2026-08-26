@@ -239,39 +239,53 @@ costs nothing, but do not expect `packets.Length()` to know them.
 
 ### 0a. Refactoring
 
-- [ ] `internal/game/game.go` — the click handler goes straight from
+- [x] `internal/game/game.go` — the click handler goes straight from
       `ScreenToTile` to `RequestMove`, with no seam for "did this click hit
       something". Extract the decision so a click can be offered to entities
       first and fall through to movement. Minimal change; no new package.
       **Smaller than planned since #87**: click-to-move is already gated on
       `uiBackend.MouseCaptured()`, so the dialog windows only have to claim
       their own rects — what is left is the entity hit test itself.
-- [ ] No ADR. This adds a state machine inside an existing package and a window
+
+      Done as `InGameState.ClickWorld`, which is where the entity manager and
+      the connection already are, so Step 2 adds the hit test in front of the
+      ground pick without the game loop growing a second copy of the ray cast.
+      No stub was left behind for it: the seam is the method, not a dead branch.
+      Verified by clicking after the move: `pick.hit … walkable: true` →
+      `move.request` → `move.ack-confirms-prediction`, unchanged.
+- [x] No ADR. This adds a state machine inside an existing package and a window
       to an existing UI layer — it crosses no layer boundary in `CLAUDE.md`.
 
 ### 0b. Debug tooling & tests
 
-- [ ] **Trace channel `npc`** in `internal/trace` — events: `npc.click`
+- [x] **Trace channel `npc`** in `internal/trace` — events: `npc.click`
       (aid, name, screen xy), `npc.contact` (aid sent), `npc.say` (npcId, bytes,
       text length), `npc.menu` (npcId, item count), `npc.choose` (npcId, index),
       `npc.close`. The `net` channel already shows the raw packets; this one
       shows the conversation as a sequence, which is what makes a stuck dialog
       readable.
-- [ ] **F3 overlay fields:** talking-to (npc id + name or `—`), dialog state
-      (`idle` / `text` / `waiting-next` / `menu`), last menu size. A stuck
-      conversation should be diagnosable from a single screenshot.
-- [ ] **Screenshot scenario:** `./build/midgard --autologin --trace=npc,net --screenshot-after 20s`
-      standing at the Prontera fountain (`prontera 156,191`). `latest.png` must
-      show the dialog window over the map with the Kafra's greeting in it.
+- [x] **F3 overlay fields:** one `Dialog:` line — the phase, and once a
+      conversation starts the npc id, the name if we know it (`?` if not, which
+      is legitimate: the server sends a fake id for scripts with no unit near
+      the player) and the menu size. A stuck conversation is diagnosable from a
+      single screenshot. `DialogPhase` lives in `states/npcdialog.go`; the
+      transitions arrive with Steps 3–5.
+- [x] **Screenshot scenario:** `./midgard --config config.yaml --autologin --no-bgm --debug-overlay --trace=npc,net --screenshot-every 4s`.
+      `latest.png` must show the dialog window over the map with the NPC's
+      greeting in it. **Set `vsync: false` in the local `config.yaml`** — with
+      it on and the window occluded, macOS stops the display link and the
+      client renders zero frames while staying alive, which looks exactly like
+      a hang (learned in #85).
 - [ ] **Logs:** a menu index outside 1..n must be refused client-side and logged
       at **warn** with the index and the item count — never sent. Getting kicked
-      by our own packet is the failure this prevents.
+      by our own packet is the failure this prevents. *(Step 5 — there is no
+      menu to bound yet.)*
 - [ ] **Tests:** `internal/network/packets/npc_test.go` — round-trip each packet
       against bytes written by hand from the layout table, and a menu-splitting
       table (empty, one item, trailing colon, embedded newlines, 255-cancel).
-      `internal/game/states/npcdialog_test.go` — the state machine, driven by
-      decoded packets with no GL or network.
-- [ ] **Use cases:** UC-205 (talk and close), UC-206 (menu choice), UC-207
+      *(Step 1.)* `internal/game/states/npcdialog_test.go` exists and covers the
+      phase type; the transitions it will drive arrive with Steps 3–5.
+- [x] **Use cases:** UC-207 (talk and close), UC-208 (menu choice), UC-209
       (cancel and out-of-range refusal).
 
 ## Steps
@@ -296,7 +310,7 @@ costs nothing, but do not expect `packets.Length()` to know them.
 - **Done when:** the greeting appears in a window over the map, with its own
   line breaks intact, scrolling when longer than the box, and `^RRGGBB` codes
   parsed out rather than printed.
-- **Proved by:** screenshot scenario; UC-205; a table test for the color-code
+- **Proved by:** screenshot scenario; UC-207; a table test for the color-code
   parser (no codes, one code, unterminated code, a code at the very end).
 - **Reference:** ref-01 ⑦⑧, ref-02, measurements above
 - **Chrome:** a plain panel — 278 × 178, 1px `#c5c5c5` border, `#f7f7f7` fill —
@@ -306,7 +320,7 @@ costs nothing, but do not expect `packets.Length()` to know them.
 - **Changes:** `internal/game/states/npcdialog.go`, `internal/game/ui/`
 - **Done when:** `ZC_WAIT_DIALOG` shows a Next button that advances the script;
   `ZC_CLOSE_DIALOG` shows Close, which ends the conversation and returns control.
-- **Proved by:** UC-205 end to end against Prontera's Guide; `npc` trace shows
+- **Proved by:** UC-207 end to end against Prontera's Guide; `npc` trace shows
   the full sequence and a clean `npc.close`.
 - **Reference:** grf-btn-close ①, grf-btn-next ②, ref-02 for placement — the
   button sits at the bottom right *inside* the text window.
@@ -315,7 +329,7 @@ costs nothing, but do not expect `packets.Length()` to know them.
 - **Changes:** `internal/game/states/npcdialog.go`, `internal/game/ui/`
 - **Done when:** `ZC_MENU_LIST` shows the choices; picking one sends its 1-based
   index and the script branches; cancel sends 255.
-- **Proved by:** UC-206, UC-207. Talking to the Guide and choosing a destination
+- **Proved by:** UC-208, UC-209. Talking to the Guide and choosing a destination
   branches correctly, and cancel closes without a kick.
 - **Reference:** roBrowser `NpcMenu.css` measurements
 
@@ -364,6 +378,12 @@ costs nothing, but do not expect `packets.Length()` to know them.
   declared with `parseable_packet(...)`.
 
 ## Revision log
+
+- 2026-08-26 — **Step 0 done.** `npc` trace channel, the `Dialog:` line on the
+  F3 overlay backed by a `DialogPhase` type, and the click decision extracted
+  to `InGameState.ClickWorld`. Renumbered the three use cases to UC-207…209:
+  this plan and the Basic Info HUD were written the same day and both claimed
+  UC-205 and UC-206, and the HUD's have since merged.
 
 - 2026-08-26 — three captures committed as `ref-01`…`ref-03`. Measuring the
   lossless one confirms roBrowser to the pixel (276 × 176 content box + 1px

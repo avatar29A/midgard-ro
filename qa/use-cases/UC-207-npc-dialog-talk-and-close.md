@@ -1,4 +1,4 @@
-# UC-205: NPC Dialog — Talk and Close
+# UC-207: NPC Dialog — Talk and Close
 
 ## Description
 Clicking an NPC opens its dialog, `Next` advances a multi-page script, and

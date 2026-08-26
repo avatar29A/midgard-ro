@@ -164,6 +164,12 @@ type InGameUIState struct {
 	StatusMessage string
 	ErrorMessage  string
 
+	// The conversation in progress, for the debug overlay.
+	DialogPhase     string
+	DialogNPCID     uint32
+	DialogNPCName   string
+	DialogMenuItems int
+
 	// ToggleBasicInfo folds the Basic Info panel to its reduced form, or back.
 	// It is an event rather than a setting — set for the one frame the key was
 	// pressed — because the panel owns which form it is in.
