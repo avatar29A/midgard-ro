@@ -84,6 +84,9 @@ type Game struct {
 	// turn on to inspect player/camera/scene/network telemetry live.
 	showDebug bool
 
+	// toggleBasicInfo is set for the frame Ctrl+V was pressed.
+	toggleBasicInfo bool
+
 	// Unattended screenshot capture (--screenshot-after / --screenshot-every),
 	// so the UI can be inspected without someone sitting at the keyboard to
 	// press F12.
@@ -455,6 +458,11 @@ func (g *Game) frame() {
 		g.showDebug = !g.showDebug
 	}
 
+	// Ctrl+V folds the Basic Info panel to its reduced form, as in the
+	// original. Read here and passed to the UI as a one-frame event: which
+	// form the panel is in belongs to the panel.
+	g.toggleBasicInfo = imgui.IsKeyChordPressed(imgui.KeyChord(imgui.ModCtrl | imgui.KeyV))
+
 	// F4 hides map objects, leaving bare terrain. Anything still wrong on
 	// screen with the models gone belongs to the terrain mesh — otherwise the
 	// two are hard to tell apart where objects sit flush against the ground.
@@ -689,6 +697,7 @@ func (g *Game) renderUI() {
 			StatusMessage:   state.GetStatusMessage(),
 			ErrorMessage:    state.GetErrorMessage(),
 			ShowDebugInfo:   g.showDebug,
+			ToggleBasicInfo: g.toggleBasicInfo,
 			FPS:             g.fps,
 			PlayerName:      ui.GetCharName(state.CharInfo()),
 			PlayerClass:     stats.Class,

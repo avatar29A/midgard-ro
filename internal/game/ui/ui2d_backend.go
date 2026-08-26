@@ -53,9 +53,13 @@ type UI2DBackend struct {
 	charSelX, charSelY float32
 	charSelPlaced      bool
 
-	// Basic Info panel art.
-	hudSkin  *basicInfoSkin
-	hudTried bool
+	// Basic Info panel art, where it has been dragged to, and whether it is
+	// folded down to its reduced form.
+	hudSkin    *basicInfoSkin
+	hudTried   bool
+	hudX, hudY float32
+	hudPlaced  bool
+	hudReduced bool
 
 	// Cached widget states
 	loginUsername string

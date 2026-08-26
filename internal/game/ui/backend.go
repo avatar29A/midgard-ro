@@ -160,6 +160,11 @@ type InGameUIState struct {
 	StatusMessage string
 	ErrorMessage  string
 
+	// ToggleBasicInfo folds the Basic Info panel to its reduced form, or back.
+	// It is an event rather than a setting — set for the one frame the key was
+	// pressed — because the panel owns which form it is in.
+	ToggleBasicInfo bool
+
 	// UI visibility settings
 	ShowDebugInfo  bool
 	ShowMinimap    bool
