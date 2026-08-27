@@ -100,8 +100,9 @@ type UI2DBackend struct {
 
 	// The minimap image for the map we are on. minimapTried is the path last
 	// attempted, so a map that ships no image is not retried every frame.
-	minimapTex   *TextureInfo
-	minimapTried string
+	minimapTex     *TextureInfo
+	minimapTried   string
+	minimapZoomIdx int
 
 	// Cached widget states
 	loginUsername string
@@ -1036,9 +1037,10 @@ func (b *UI2DBackend) RenderFPSOverlay(fps float64, width, height float32) {
 	y := float32(5)
 
 	// The minimap owns the top-right corner, as it does in the original, so
-	// the counter drops below it rather than printing over the map.
+	// the counter drops below it — past its zoom buttons too, which sit under
+	// the map and were the second thing this printed over.
 	if b.minimapTex != nil {
-		y += minimapSize + minimapMargin
+		y += minimapSize + minimapBtn + minimapMargin
 	}
 
 	// Semi-transparent background
