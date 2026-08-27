@@ -18,17 +18,20 @@ const (
 	statsW float32 = 280
 	statsH float32 = 103
 
-	// The value boxes, measured out of the bitmap: six of them at x 36 to
-	// 103, starting at y=6 and repeating every 16.
-	statsBoxX     float32 = 36
-	statsBoxW     float32 = 68
+	// Each stat's row is three cells, not one: the bitmap divides it at x=76
+	// and again at x=88. The value goes in the first, the button that spends
+	// a status point in the second, and what that costs in the third.
 	statsBoxY     float32 = 6
 	statsBoxH     float32 = 13
 	statsBoxPitch float32 = 16
 
-	// statsCostX is where the cost of raising a stat goes, in the gap between
-	// the value box and the right column.
-	statsCostRight float32 = 115
+	statsValueX  float32 = 37
+	statsArrowX  float32 = 77
+	statsArrowW  float32 = 11
+	statsCostEnd float32 = 100
+
+	// statsArrow is the raise button's mark.
+	statsArrow = basicInterfacePath + "arw_right.bmp"
 
 	// The right column is two sub-columns, each ending at an underline the
 	// bitmap draws: x 118 to 192 and 200 to 273. The bottom two rows run the
@@ -93,18 +96,15 @@ func (b *UI2DBackend) drawStatValues(state InGameUIState, x, y float32) {
 	r := b.ctx.Renderer()
 
 	for i := 0; i < packets.PrimaryStatCount; i++ {
-		// The box's left edge and its middle. Its width is the bitmap's
-		// business: the text runs from the left and the cost sits outside it.
-		boxX := x + statsBoxX
-		boxY := y + statsBoxY + float32(i)*statsBoxPitch
+		rowY := y + statsBoxY + float32(i)*statsBoxPitch
 
 		// The stat and what equipment adds to it, as the original writes it:
 		// "60+6" in the box, with the bonus colored so the two read apart.
 		value := strconv.Itoa(state.PrimaryStats[i])
 		_, capH := r.MeasureText(value, statsTextScale)
-		textY := boxY + (statsBoxH-capH)/2
+		textY := rowY + (statsBoxH-capH)/2
 
-		r.DrawText(boxX+4, textY, value, statsTextScale, ui2d.ColorText)
+		r.DrawText(x+statsValueX+4, textY, value, statsTextScale, ui2d.ColorText)
 
 		if bonus := state.PrimaryBonus[i]; bonus != 0 {
 			valueW, _ := r.MeasureText(value, statsTextScale)
@@ -117,15 +117,21 @@ func (b *UI2DBackend) drawStatValues(state InGameUIState, x, y float32) {
 				color = statsBonusDown
 			}
 
-			r.DrawText(boxX+4+valueW, textY, label, statsTextScale, color)
+			r.DrawText(x+statsValueX+4+valueW, textY, label, statsTextScale, color)
 		}
 
-		// What raising it by one would cost, in the gap the bitmap leaves
-		// between the box and the right column.
+		// The raise button, in the cell between the two, and only when there
+		// is a point to spend: the original leaves the cell empty otherwise,
+		// and a button that cannot do anything is worse than no button.
+		if state.StatusPoints > 0 {
+			b.drawStatRaise(x+statsArrowX, rowY)
+		}
+
+		// What raising it by one would cost, in the third cell.
 		cost := strconv.Itoa(state.PrimaryCost[i])
 		costW, _ := r.MeasureText(cost, statsTextScale)
 
-		r.DrawText(x+statsCostRight-costW, textY, cost, statsTextScale, ui2d.ColorText)
+		r.DrawText(x+statsCostEnd-costW, textY, cost, statsTextScale, ui2d.ColorText)
 	}
 
 	b.drawDerivedStats(state, x, y)
@@ -197,4 +203,30 @@ var (
 	// only thing that distinguishes the two at a glance.
 	statsBonusUp   = ui2d.Color{R: 0.11, G: 0.45, B: 0.15, A: 1}
 	statsBonusDown = ui2d.Color{R: 0.65, G: 0.13, B: 0.13, A: 1}
+
+	// statsArrowHot lights the raise button under the pointer.
+	statsArrowHot = ui2d.Color{R: 1, G: 1, B: 0.75, A: 1}
 )
+
+// drawStatRaise draws the button that spends a status point on one stat.
+//
+// It is drawn and not yet wired: raising a stat is CZ_STATUS_CHANGE, which
+// this window does not send. Showing it is still right — the cell is there in
+// the bitmap and the original fills it whenever there are points — and it is
+// hidden when there are none, so it never offers something it cannot do.
+func (b *UI2DBackend) drawStatRaise(x, y float32) {
+	tex, err := b.texCache.Load(statsArrow)
+	if err != nil {
+		return
+	}
+
+	arrowY := y + (statsBoxH-statsArrowW)/2
+	box := ui2d.Rect{X: x, Y: arrowY, W: statsArrowW, H: statsArrowW}
+
+	tint := ui2d.ColorWhite
+	if box.Contains(b.ctx.Input().MouseX, b.ctx.Input().MouseY) {
+		tint = statsArrowHot
+	}
+
+	b.ctx.Renderer().DrawImage(tex.ID, box.X, box.Y, box.W, box.H, tint)
+}
