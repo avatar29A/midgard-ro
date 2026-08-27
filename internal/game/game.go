@@ -1190,9 +1190,16 @@ func (g *Game) updateCursor(state *states.InGameState, io *imgui.IO, mouseX, mou
 
 	want := cursor.StateDefault
 
-	// Over the interface the pointer belongs to the interface, which keeps
-	// the plain arrow: nothing in the HUD asks for a cursor of its own.
-	if !io.WantCaptureMouse() && !g.uiBackend.MouseCaptured() {
+	hudCursor, hudAsked := g.uiBackend.WantCursor()
+
+	switch {
+	// An interface element under the pointer has first say: a resize corner
+	// asking for the hand is the only thing that knows it is one.
+	case hudAsked:
+		want = hudCursor
+
+	// Otherwise the pointer belongs to whatever is under it in the world.
+	case !io.WantCaptureMouse() && !g.uiBackend.MouseCaptured():
 		viewportW, viewportH := g.uiBackend.GetScreenSize()
 		want = cursorFor(state.HoverEntity(mouseX, mouseY, viewportW, viewportH))
 	}
