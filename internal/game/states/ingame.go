@@ -99,6 +99,9 @@ type InGameState struct {
 	// quit ends the process, once the server has agreed to let us go.
 	quit QuitFunc
 
+	// skills is what the character can do, as the server listed it.
+	skills []packets.Skill
+
 	// unitTraceAt rate limits the unit render statistics.
 	unitTraceAt time.Time
 
@@ -923,6 +926,24 @@ func (s *InGameState) Stats() PlayerStats {
 // These arrive constantly — every point of HP regenerated is one — so the
 // handler stays cheap and says nothing at info level; --trace=status is how
 // you watch them.
+// handleSkillList takes the character's skills, which the server sends once
+// on entering the map.
+func (s *InGameState) handleSkillList(data []byte) error {
+	list := packets.DecodeSkillList(data)
+
+	s.skills = list
+
+	trace.Emit(trace.HUD, "skill-list", zap.Int("count", len(list)))
+
+	return nil
+}
+
+// Skills returns the character's skills for the interface, oldest order kept:
+// the server sends them in the order the window is meant to list them.
+func (s *InGameState) Skills() []packets.Skill {
+	return s.skills
+}
+
 // handleStatus takes the whole status window: the six primary stats, what
 // raising each costs, and the points left to spend.
 func (s *InGameState) handleStatus(data []byte) error {
@@ -1060,6 +1081,7 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_ACK_REQ_DISCONNECT, s.handleDisconnectAck)
 	s.client.RegisterHandler(packets.ZC_PAR_CHANGE, s.handleStatusChange)
 	s.client.RegisterHandler(packets.ZC_STATUS, s.handleStatus)
+	s.client.RegisterHandler(packets.ZC_SKILLINFO_LIST, s.handleSkillList)
 	s.client.RegisterHandler(packets.ZC_COUPLESTATUS, s.handleCoupleStatus)
 	s.client.RegisterHandler(packets.ZC_LONGPAR_CHANGE, s.handleStatusChange)
 	s.client.RegisterHandler(packets.ZC_LONGLONGPAR_CHANGE, s.handleStatusChange)

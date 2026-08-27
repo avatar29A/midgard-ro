@@ -29,7 +29,8 @@ const (
 // bar set. Without that a window closes once and the button never brings it
 // back.
 var hudWindowFrames = map[HUDWindow]string{
-	WindowInfo: statsWindowID,
+	WindowInfo:  statsWindowID,
+	WindowSkill: skillsWindowID,
 }
 
 // hudWindowTitles are what each window calls itself, matching the original.

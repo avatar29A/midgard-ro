@@ -188,6 +188,10 @@ type InGameUIState struct {
 	PrimaryBonus [packets.PrimaryStatCount]int
 	PrimaryCost  [packets.PrimaryStatCount]int
 	StatusPoints int
+	SkillPoints  int
+
+	// Skills is what the character can do, as the server listed it.
+	Skills []packets.Skill
 
 	// The numbers derived from those six, down the right of the window.
 	Atk, AtkBonus    int
