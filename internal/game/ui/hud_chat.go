@@ -3,8 +3,10 @@ package ui
 import (
 	"strings"
 
+	"github.com/Faultbox/midgard-ro/internal/config"
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
 	"github.com/Faultbox/midgard-ro/internal/game/states"
+	"github.com/Faultbox/midgard-ro/internal/logger"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
 	"github.com/Faultbox/midgard-ro/internal/trace"
 
@@ -55,6 +57,11 @@ const (
 	chatBoxT     = 5.0 / chatBGH
 	chatBoxB     = 21.0 / chatBGH
 
+	// The ribbed separator between the two fields spans x 95 to 107, which is
+	// why the message box starts at 110.
+	chatSepL = 95.0 / chatBGW
+	chatSepR = 107.0 / chatBGW
+
 	// chatCtrlBtn is one control-panel button in the tab strip, and
 	// chatCtrlGap the space between them.
 	chatCtrlBtn float32 = 15
@@ -78,7 +85,16 @@ const (
 )
 
 // chatInputBG is the bar's background, a 600x24 strip in the archive.
-const chatInputBG = basicInterfacePath + "dialog_bg.bmp"
+// chatInputBG is the bar's background, and chatInputSepBG the same bar in the
+// archive's other color.
+//
+// The two are pixel-identical in geometry and differ only in palette: grey and
+// blue. The bar is the grey one, but the ribbed separator between the fields
+// is cut out of the blue — that piece alone is colored, not the whole row.
+const (
+	chatInputBG    = basicInterfacePath + "dialog_bg.bmp"
+	chatInputSepBG = basicInterfacePath + "dialog_bg2.bmp"
+)
 
 // chatResizeTexture is the hatched bar the original marks a resizable dialog
 // with, 6x24 in the archive.
@@ -209,12 +225,7 @@ func (b *UI2DBackend) wrapChat(lines []states.ChatLine, maxWidth float32) [][]Te
 // chat will appear.
 func (b *UI2DBackend) drawChat(state InGameUIState, screenH float32) {
 	if !b.chatPlaced {
-		// Flush into the bottom-left corner. Nothing sits below it now that
-		// the debug bar is gone, so a margin only left a gap.
-		b.chatX = 0
-		b.chatY = screenH - chatInputH - chatHeight - chatTabH
-		b.chatW, b.chatH = chatWidth, chatHeight
-		b.chatPlaced = true
+		b.placeChat(screenH)
 	}
 
 	x, top := b.chatX, b.chatY
@@ -275,6 +286,7 @@ func (b *UI2DBackend) chatDragAndResize(screenH float32) {
 
 	if b.chatY != beforeY {
 		b.chatH += beforeY - b.chatY
+		b.chatDirty = true
 	}
 
 	// The whole box drags, not a strip of it. Picking out the bare parts of
@@ -301,11 +313,58 @@ func (b *UI2DBackend) chatDragAndResize(screenH float32) {
 	// clamp. The second still reports movement here, so the log tells them
 	// apart.
 	if b.chatX != beforeX || b.chatY != beforeDragY {
+		b.chatDirty = true
+
 		trace.Emit(trace.HUD, "chat-drag",
 			zap.Float32("x", b.chatX), zap.Float32("y", b.chatY))
 	}
 
+	// Written when the drag ends rather than every frame it moves: one file
+	// per gesture instead of one per frame.
+	if b.chatDirty && b.ctx.Input().MouseLeftReleased {
+		b.saveChatPlacement()
+	}
+
 	b.clampChatToScreen(screenH)
+}
+
+// placeChat puts the box where it was last left, or in the bottom-left corner
+// the first time. Nothing sits below it, so it goes flush into the corner —
+// a margin would only leave a gap.
+func (b *UI2DBackend) placeChat(screenH float32) {
+	b.chatX = 0
+	b.chatY = screenH - chatInputH - chatHeight - chatTabH
+	b.chatW, b.chatH = chatWidth, chatHeight
+	b.chatPlaced = true
+
+	// A remembered size of zero is a state file written before the box was
+	// remembered at all, so the defaults above stand.
+	saved := config.LoadUIState()
+	if saved.ChatW <= 0 || saved.ChatH <= 0 {
+		return
+	}
+
+	b.chatX, b.chatY = saved.ChatX, saved.ChatY
+	b.chatW, b.chatH = saved.ChatW, saved.ChatH
+	b.chatLocked = saved.ChatLocked
+
+	// The screen may be a different size than it was last time, so what was
+	// on it then need not be now.
+	b.clampChatToScreen(screenH)
+}
+
+// saveChatPlacement records where the box was left.
+func (b *UI2DBackend) saveChatPlacement() {
+	b.chatDirty = false
+
+	err := config.UpdateUIState(func(state *config.UIState) {
+		state.ChatX, state.ChatY = b.chatX, b.chatY
+		state.ChatW, state.ChatH = b.chatW, b.chatH
+		state.ChatLocked = b.chatLocked
+	})
+	if err != nil {
+		logger.Warn("could not save chat placement", zap.Error(err))
+	}
 }
 
 // clampChatToScreen keeps the box a sane size and on the screen.
@@ -425,6 +484,7 @@ func (b *UI2DBackend) drawChatControls(x, y, w float32) {
 	controls := []control{
 		{"chat_ctrl_lock", chatCtrlBtn, b.chatLocked, b.drawPadlock, func() {
 			b.chatLocked = !b.chatLocked
+			b.saveChatPlacement()
 		}},
 		{"chat_ctrl_minus", chatCtrlBtn, false, b.icon(chatIconMinus), func() {
 			b.stepChatHeight(-chatStepLines)
@@ -555,6 +615,8 @@ func (b *UI2DBackend) stepChatHeight(lines float32) {
 	b.chatY -= want - b.chatH
 	b.chatH = want
 	b.chatPinned = true
+
+	b.saveChatPlacement()
 }
 
 // drawChatLines draws the scrollback, newest at the bottom.
@@ -637,6 +699,15 @@ func (b *UI2DBackend) drawChatInput(x, y, w float32) {
 	msg, _, msgSubmit := b.ctx.TextInputBareAt("hud_chat_input",
 		msgBox.X, msgBox.Y, msgBox.W, msgBox.H, chatInputScale, b.chatInput)
 	b.chatInput = msg
+
+	// The separator, taken out of the blue copy of this same bar: the grey
+	// one draws it so faintly that the two fields read as one long box.
+	if tex, err := b.texCache.Load(chatInputSepBG); err == nil {
+		sepX := x + w*chatSepL
+		sepW := w * (chatSepR - chatSepL)
+		r.DrawImageUV(tex.ID, sepX, y, sepW, chatInputH,
+			chatSepL, 0, chatSepR, 1, ui2d.ColorWhite)
+	}
 
 	// The fields are drawn bare, into boxes the background already paints, so
 	// an outline is the only thing that says where the typing goes.

@@ -862,7 +862,10 @@ func (s *InGameState) SaveUIState() {
 	if s.camera == nil {
 		return
 	}
-	if err := config.SaveUIState(config.UIState{CameraZoom: s.camera.Distance}); err != nil {
+	err := config.UpdateUIState(func(state *config.UIState) {
+		state.CameraZoom = s.camera.Distance
+	})
+	if err != nil {
 		logger.Warn("could not save ui state", zap.Error(err))
 	}
 }

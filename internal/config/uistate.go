@@ -24,6 +24,14 @@ type UIState struct {
 	// CameraZoom is the third-person camera distance. Zero means "unset", in
 	// which case the state's default applies.
 	CameraZoom float32 `json:"camera_zoom,omitempty"`
+
+	// Where the chat box was left, and whether it was pinned there. A zero
+	// width or height means unset, and the box takes its default corner.
+	ChatX      float32 `json:"chat_x,omitempty"`
+	ChatY      float32 `json:"chat_y,omitempty"`
+	ChatW      float32 `json:"chat_w,omitempty"`
+	ChatH      float32 `json:"chat_h,omitempty"`
+	ChatLocked bool    `json:"chat_locked,omitempty"`
 }
 
 // LoadUIState reads remembered UI state. A missing or unreadable file is not
@@ -40,6 +48,20 @@ func LoadUIState() UIState {
 		return UIState{}
 	}
 	return state
+}
+
+// UpdateUIState reads what is remembered, applies a change, and writes it
+// back.
+//
+// Whole-struct saves are how the chat's position would get erased: the camera
+// records its zoom on the way out, and a save that only knew about the zoom
+// would write zeroes over everything else. Callers change the field they own
+// and leave the rest alone.
+func UpdateUIState(apply func(*UIState)) error {
+	state := LoadUIState()
+	apply(&state)
+
+	return SaveUIState(state)
 }
 
 // SaveUIState writes remembered UI state, creating the directory if needed.
