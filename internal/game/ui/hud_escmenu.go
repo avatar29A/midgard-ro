@@ -105,12 +105,18 @@ func (b *UI2DBackend) drawEscMenu(screenW, screenH float32) {
 		return
 	}
 
-	x := (screenW - escMenuW) / 2
-	y := (screenH - escMenuH) / 2
+	// Only where it opens: once dragged, the window keeps its own position.
+	openX := (screenW - escMenuW) / 2
+	openY := (screenH - escMenuH) / 2
 
-	// Where the window actually is, which is only the position above until it
-	// has been dragged. Reading it back is what keeps the buttons with the
-	// frame; drawn at the caller's position they stayed behind when it moved.
+	if !b.ctx.BeginWindow(escWindowID, openX, openY, escMenuW, escMenuH, "Game setting window") {
+		return
+	}
+
+	// Read back after BeginWindow, not before. Before, the position is last
+	// frame's — the frame moves with the pointer and its contents trail a
+	// frame behind, which is what made the window look like loose parts.
+	x, y := openX, openY
 	if rect, ok := b.ctx.WindowRect(escWindowID); ok {
 		x, y = rect.X, rect.Y
 	}
@@ -118,10 +124,6 @@ func (b *UI2DBackend) drawEscMenu(screenW, screenH float32) {
 	// The whole menu claims the pointer: a click meant for a button must not
 	// also walk the character to whatever is behind it.
 	b.ctx.CaptureMouse(ui2d.Rect{X: x, Y: y, W: escMenuW, H: escMenuH})
-
-	if !b.ctx.BeginWindow(escWindowID, x, y, escMenuW, escMenuH, "Game setting window") {
-		return
-	}
 
 	btnX := x + escPad
 	btnY := y + ui2d.FrameTitleH + escPad
@@ -145,6 +147,10 @@ func (b *UI2DBackend) drawEscMenu(screenW, screenH float32) {
 		// the connection to send them on.
 		if item.action == EscSound {
 			b.soundOpen = true
+
+			// Clear the closed flag its own X set, or it opens once and
+			// never again.
+			b.ctx.OpenWindow(soundWindowID)
 
 			continue
 		}

@@ -502,6 +502,18 @@ func (c *Context) WindowRect(id string) (Rect, bool) {
 	return Rect{X: ws.X, Y: ws.Y, W: ws.W, H: ws.H}, true
 }
 
+// OpenWindow reopens a window that was closed from its own X.
+//
+// Closing sets a flag on the window's remembered state, and BeginWindow
+// returns false while it is set — for good, since the state outlives the
+// window. Anything that offers a way to open a window again has to clear it,
+// or the window opens once per session and never more.
+func (c *Context) OpenWindow(id string) {
+	if ws, ok := c.windows[id]; ok {
+		ws.Open = true
+	}
+}
+
 // CheckboxAt is Checkbox at a position of the caller's choosing, for a dialog
 // laid out to match the original rather than by the cursor.
 func (c *Context) CheckboxAt(id string, x, y, size float32, label string, checked bool) bool {
@@ -519,16 +531,18 @@ func (c *Context) CheckboxAt(id string, x, y, size float32, label string, checke
 		c.activeWidget = ""
 	}
 
-	bg := ColorInputBg
+	// A white box in a thin dark border, which is what the original's is: the
+	// panel-colored fill and heavy border read as a button, not a checkbox.
+	bg := ColorCheckFace
 	if hovered {
-		bg = ColorButtonHover
+		bg = ColorCheckFaceHot
 	}
 	c.renderer.DrawRect(x, y, size, size, bg)
-	c.renderer.DrawRectOutline(x, y, size, size, 1, ColorPanelBorder)
+	c.renderer.DrawRectOutline(x, y, size, size, 1, ColorCheckBorder)
 
 	if checked {
-		const inset float32 = 4
-		c.renderer.DrawRect(x+inset, y+inset, size-inset*2, size-inset*2, ColorHighlight)
+		const inset float32 = 3
+		c.renderer.DrawRect(x+inset, y+inset, size-inset*2, size-inset*2, ColorCheckMark)
 	}
 
 	if label != "" {
@@ -583,17 +597,17 @@ func (c *Context) SliderAt(id string, x, y, w, h, value float32) (float32, bool)
 
 	value = clamp01(value)
 
-	// Track: a sunken bar between two arrow caps.
-	trackY := y + h/2 - 4
-	c.renderer.DrawRect(trackX, trackY, trackW, 8, ColorInputBg)
-	c.renderer.DrawRectOutline(trackX, trackY, trackW, 8, 1, ColorPanelBorder)
+	// A pale track in a thin border, an outlined arrow at each end, and a
+	// round knob — the original's is a Windows trackbar, not a painted RO
+	// widget, and a solid blue bar is not what it looks like.
+	trackY := y + h/2 - 5
+	c.renderer.DrawRect(trackX, trackY, trackW, 10, ColorTrackFace)
+	c.renderer.DrawRectOutline(trackX, trackY, trackW, 10, 1, ColorTrackBorder)
 
 	c.drawSliderCap(x, y+h/2, cap, true)
 	c.drawSliderCap(x+w-cap, y+h/2, cap, false)
 
-	knobX := trackX + value*span
-	c.renderer.DrawRect(knobX, y+h/2-5, knobW, 10, ColorHighlight)
-	c.renderer.DrawRectOutline(knobX, y+h/2-5, knobW, 10, 1, ColorPanelBorder)
+	c.drawSliderKnob(trackX+value*span+knobW/2, y+h/2, knobW/2)
 
 	return value, changed
 }
@@ -604,6 +618,9 @@ func (c *Context) drawSliderCap(x, midY, size float32, left bool) {
 	// Stepped columns rather than a real triangle: the renderer draws
 	// rectangles, and at this size the steps read as the arrow the original
 	// has. Each column is tallest at the track side and a pixel at the point.
+	//
+	// Outlined rather than solid: a pale face with an edge, so it matches the
+	// track it sits against instead of being a block of color beside it.
 	steps := int(size)
 	for i := 0; i < steps; i++ {
 		half := float32(i+1) / float32(steps) * size / 2
@@ -618,8 +635,43 @@ func (c *Context) drawSliderCap(x, midY, size float32, left bool) {
 			col = x + float32(i)
 		}
 
-		c.renderer.DrawRect(col, midY-half, 1, half*2, ColorHighlight)
+		c.renderer.DrawRect(col, midY-half, 1, half*2, ColorTrackFace)
+		c.renderer.DrawRect(col, midY-half, 1, 1, ColorSliderEdge)
+		c.renderer.DrawRect(col, midY+half-1, 1, 1, ColorSliderEdge)
+
+		// The point itself, so the tip is edged rather than open.
+		if i == 0 {
+			c.renderer.DrawRect(col, midY-half, 1, half*2, ColorSliderEdge)
+		}
 	}
+}
+
+// drawSliderKnob draws the round grip. The renderer has no circle, so it is
+// built from rows whose width follows the chord of one.
+func (c *Context) drawSliderKnob(cx, cy, radius float32) {
+	for dy := -radius; dy <= radius; dy++ {
+		halfW := sqrt32(radius*radius - dy*dy)
+		if halfW < 0.5 {
+			continue
+		}
+
+		c.renderer.DrawRect(cx-halfW, cy+dy, halfW*2, 1, ColorKnobFace)
+	}
+}
+
+// sqrt32 is a Newton step or two, which is plenty for a knob a few pixels
+// across and avoids pulling math in for one call.
+func sqrt32(v float32) float32 {
+	if v <= 0 {
+		return 0
+	}
+
+	guess := v
+	for i := 0; i < 8; i++ {
+		guess = 0.5 * (guess + v/guess)
+	}
+
+	return guess
 }
 
 func clamp01(v float32) float32 {
