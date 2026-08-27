@@ -148,3 +148,63 @@ func TestDecodeBroadcast(t *testing.T) {
 		t.Errorf("broadcast = kind %d %q", msg.Kind, msg.Text)
 	}
 }
+
+// TestEncodeChatCarriesTheNamePrefix is a disconnect guard, not a formatting
+// one. rAthena's clif_process_message compares the prefix against the
+// character's own name and forces a relog when it does not match, so a bare
+// message is not a cosmetic mistake — it drops the connection.
+func TestEncodeChatCarriesTheNamePrefix(t *testing.T) {
+	pkt := EncodeChat("MidgardTest", "hello there")
+	if pkt == nil {
+		t.Fatal("EncodeChat returned nothing for a well-formed line")
+	}
+
+	if id := uint16(pkt[0]) | uint16(pkt[1])<<8; id != CZ_REQUEST_CHAT {
+		t.Errorf("packet id = 0x%04X, want 0x%04X", id, CZ_REQUEST_CHAT)
+	}
+
+	length := int(uint16(pkt[2]) | uint16(pkt[3])<<8)
+	if length != len(pkt) {
+		t.Errorf("declared length %d, actual %d", length, len(pkt))
+	}
+
+	body := string(pkt[4 : len(pkt)-1])
+	if want := "MidgardTest : hello there"; body != want {
+		t.Errorf("body = %q, want %q", body, want)
+	}
+	if pkt[len(pkt)-1] != 0 {
+		t.Error("the line is not terminated; the server reads to the terminator")
+	}
+}
+
+// TestEncodeChatRoundTripsThroughTheDecoder: what we send is what the server
+// echoes back, so our own encoder and decoder have to agree on the separator.
+func TestEncodeChatRoundTrips(t *testing.T) {
+	pkt := EncodeChat("MidgardTest", "hello there")
+
+	// The echo comes back as ZC_NOTIFY_PLAYERCHAT, same body layout.
+	echo := make([]byte, len(pkt))
+	copy(echo, pkt)
+	echo[0] = byte(ZC_NOTIFY_PLAYERCHAT)
+	echo[1] = byte(ZC_NOTIFY_PLAYERCHAT >> 8)
+
+	msg := DecodePlayerChat(echo)
+	if msg == nil {
+		t.Fatal("our own packet did not decode")
+	}
+	if msg.Speaker != "MidgardTest" || msg.Text != "hello there" {
+		t.Errorf("round trip gave %q / %q", msg.Speaker, msg.Text)
+	}
+}
+
+// TestEncodeChatRefusesWhatCannotBeSent: without a name there is no valid
+// prefix, and an empty line has nothing to say — building either would only
+// produce a packet the server rejects.
+func TestEncodeChatRefusesWhatCannotBeSent(t *testing.T) {
+	if EncodeChat("", "hello") != nil {
+		t.Error("encoded a line with no speaker name; the server would force a relog")
+	}
+	if EncodeChat("MidgardTest", "") != nil {
+		t.Error("encoded an empty line")
+	}
+}
