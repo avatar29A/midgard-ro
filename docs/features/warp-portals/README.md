@@ -9,13 +9,20 @@ Walk out of Prontera and into its buildings the way the original client does it.
 Every gate and door shows the blue swirling portal; the cursor turns into a door
 over one; stepping on it changes the map. Leaving for the next location shows the
 loading screen while the field loads and the server re-sends its NPCs and
-monsters; walking into a building cuts straight into the room, and inside the
-camera behaves like the original's indoor camera rather than letting you zoom out
-and look at the rooms from outside.
+monsters; walking into a building shows the same loading screen for the moment
+the room takes to load — the original's behaviour — and inside, the camera is
+the original's indoor camera: no orbiting, and black beyond the walls rather
+than water.
 
 Advances the MVP's **walking** item (Track B2 of #51 — the one task left open
 there) and turns "Prontera + fields" from a list of maps into a place you can
 actually walk across.
+
+**Generic by construction (scope confirmed by Boris, 2026-08-27):** nothing in
+this feature is keyed on Prontera. Any map the server names in `0x0091` loads
+through the same path; the indoor and camera rules come from the client's own
+tables (`indoorrswtable.txt`, `viewpointtable.txt`) for every map; and *Done
+when* verifies with maps far from Prontera.
 
 ## The one thing to know first
 
@@ -36,8 +43,9 @@ things:
    (`prt_in.rsw#` is line 144) where the original disables orbital rotation.
 
 There is no "walk into a building" logic to write: `prt_in` is just another map,
-and all fifteen Prontera doors lead into it. "Building" versus "next location" is
-purely a presentation choice (Steps 6–7), not a protocol one.
+and all fifteen Prontera doors lead into it. The protocol makes no distinction
+between "building" and "next location"; the only thing that differs indoors is
+the camera (Step 6).
 
 ## What the measurements say (the load-time research)
 
@@ -67,11 +75,11 @@ Three things follow:
   `scene.go:218-220`). Step 0b adds per-phase timing; the numbers above are the
   totals the plan is sized against.
 
-Consequence for Boris's two asks: a field change is a 1–1.5 s load and gets the
-original's loading screen with a real bar. A building is 0.6 s — "instant" is
-only possible if `prt_in` is already loaded **before** the door is stepped on,
-which is what Step 6 does (preload during Prontera's own loading screen, keep it
-cached). Without that, buildings get the same loading screen, just shorter.
+Consequence: every map change gets the original's loading screen with a real
+bar — 1–1.5 s for a field, ~0.6 s for a building. Preloading `prt_in` so that
+doors would be instant was considered and **dropped by decision (Boris,
+2026-08-27)**: the original shows the loading screen for buildings too, just
+briefly, and that is what we match.
 
 ## Reference (original client)
 
@@ -360,13 +368,13 @@ server   → inventory, weight, spawn(self), map property,
 - [ ] **Trace channel `map`** in `internal/trace` — `map.change` (from, to, x, y,
       `same` bool, origin `login|warp|rewarp`), `map.load.phase` (name, ms,
       count), `map.loaded` (map, total ms, models, textures), `map.ready`
-      (`0x007D` sent, ms since `map.change`), `map.cache` (`hit|miss|preload|
-      evict`, map), `map.indoor` (map, rotation locked, zoom range). The `net`
+      (`0x007D` sent, ms since `map.change`), `map.indoor` (map, rotation
+      locked, zoom range), `map.water` (cells with water / total cells). The `net`
       channel still shows the raw packets; this one reads as the story of one
       warp. Movement stays on `move`, cursor on `pick`/`npc`.
 - [ ] **F3 overlay fields:** a `State:` line (`Login/CharSelect/Loading/InGame`),
       `Load: 1243 ms (gat 3 · gnd 210 · rsw 12 · tex 380 · models 620 · water 18)`,
-      `Cache: prt_in ✓ prontera ✓`, `Indoor: yes (yaw locked, zoom 230–400)`.
+      `Indoor: yes (yaw locked, zoom 230–400)`, `Water: 1240 cells`.
       A frozen load or a wrong camera is diagnosable from one screenshot.
 - [ ] **`--walk-to x,y` (QA aid)** in `internal/config/flags.go`, alongside
       `--autologin`: once in-game, issue one click-to-move to that tile through
@@ -378,8 +386,8 @@ server   → inventory, weight, spawn(self), map property,
       `./build/midgard --autologin --no-bgm --debug-overlay --trace=map,net --walk-to 156,22 --screenshot-every 2s`
       → the sequence of `latest.png` must show the street, the loading screen
       with the bar part-way, and `prt_fild08` with mobs. Doors: from
-      `prontera 174,218`, `--walk-to 177,221` → the room, no loading screen
-      frame in between. **`vsync: false` in the local `config.yaml`** (learned
+      `prontera 174,218`, `--walk-to 177,221` → the loading screen, then the
+      room with the camera locked and black between the rooms. **`vsync: false` in the local `config.yaml`** (learned
       in #85).
 - [ ] **Logs:** a loading image that fails to load → **warn** with the path and
       the `bgi_temp.bmp` fallback (the black-login-screen lesson); a map whose
@@ -390,8 +398,8 @@ server   → inventory, weight, spawn(self), map property,
 - [ ] **Tests:** `internal/network/packets/mapchange_test.go` — `0x0091` decode
       against hand-written bytes (NUL padding, `.gat` stripped, x/y), `0x0AC7`
       decode; `internal/game/states/maploader_test.go` — phase order, progress
-      monotonic, error surfaces; `mapcache_test.go` — LRU of two, preload hint,
-      eviction never evicts the current map; `internal/assets/indoor_test.go` —
+      monotonic, error surfaces; `internal/engine/water/water_test.go` — cells only where the
+      GND rule says so, none for a map without water; `internal/assets/indoor_test.go` —
       `name.rsw#` parsing, CP949 comments ignored, `viewpointtable` fields;
       `internal/engine/camera/camera_test.go` — indoor clamps (yaw frozen, zoom
       range); `entities_test.go` — job 45 → `TypeWarp`, 139 not drawable, warps
@@ -458,37 +466,32 @@ server   → inventory, weight, spawn(self), map property,
   shows `move.request` and no `npc.contact` for the click.
 - **Reference:** grf-cursor-door ⑨
 
-### Step 6 — Buildings are instant
-- **Changes:** `internal/game/states/mapcache.go` (new: keep the last two loaded
-  maps' scenes alive; preload hints `prontera → prt_in`, `prt_in → prontera`
-  loaded during the current map's loading screen as extra phases), `loading.go`
-  (cached map → switch without the loading screen), `maploader.go`
-- **Done when:** entering a Prontera door cuts to the room in one frame
-  (`map.cache hit`, switch < 50 ms, no loading screen); leaving is the same;
-  the first entry after a cold start still shows a loading screen rather than a
-  freeze; memory stays bounded (two maps).
-- **Proved by:** UC-212; `--walk-to 177,221 --screenshot-every 500ms` shows no
-  loading-screen frame; trace `map.cache preload prt_in` during Prontera's
-  load, then `map.cache hit prt_in` on the door; `mapcache_test.go`.
-
-### Step 7 — Indoors, the camera behaves
+### Step 6 — Indoors, the camera behaves, and the void is black
 - **Changes:** `internal/assets/maptables.go` (new: `indoorrswtable.txt`,
   `viewpointtable.txt`, CP949-safe), `internal/engine/camera/camera.go`
   (`Limits{YawLocked, MinDistance, MaxDistance, Pitch}` + `SetLimits`), `ingame.go`
-  (apply per map on enter), `debug_fields.go`
+  (apply per map on enter), `debug_fields.go`; **water as per-cell tiles from the
+  GND** — `internal/engine/water/water.go` (`BuildPlane`, `:17`) and
+  `scene/water_renderer.go` (`createWaterPlane`, `:79`) currently make one
+  map-sized quad; the original emits a tile per cell only where the cell's
+  ground meets the level test (roBrowser `Ground.js:471-483`: a corner above
+  `level − waveHeight`), so cells with no ground get no water
 - **Done when:** in `prt_in` right-drag does not rotate the camera, zoom is
-  clamped to the table's normal range scaled to ours, entering resets to the
-  map's `rotation_IN`/`altitude_IN`; outdoors nothing changes; F3 shows
-  `Indoor: yes`.
-- **Proved by:** UC-212 step 3; screenshot in `prt_in` after a right-drag and a
-  full zoom-out (attach); `camera_test.go`, `indoor_test.go`.
+  clamped to the table's normal range, entering resets to the map's
+  `rotation_IN`/`altitude_IN`; **the space between the rooms is black, not
+  water**; outdoor maps are unchanged — Prontera's fountain and the field's
+  lake still render and animate; F3 shows `Indoor: yes` and the water cell
+  count.
+- **Proved by:** UC-212; screenshots in `prt_in` after a right-drag and a full
+  zoom-out, and at Prontera's fountain (attach both); `camera_test.go`,
+  `indoor_test.go`, `water_test.go`; `map.water` reports 0 cells for `prt_in`.
 - **Reference:** current-prt-in ⑭ (the before)
 
-### Step 8 — Docs
+### Step 7 — Docs
 - [ ] `docs/ENGINE_FEATURES.md` — the map loader and the portal primitive
 - [ ] `docs/features/warp-portals/README.md` — corrections found while building
 - [ ] Session log `docs/sessions/2026-08-DD-warp-portals.md`
-- [ ] RFC #49 / PRD §4.3.1 — note that Prontera's fields are `prt_fild05/06/08` (Open question 4)
+- [ ] RFC #49 / PRD §4.3.1 — Prontera's adjacent fields are `prt_fild05/06/08`, not `prt_fild01–03` (verified in the shared and the `re/` warp scripts; Open question 4)
 
 All steps land on `feature/warp-portals` in one PR (one or a few commits per step, in order). The PR closes the issue.
 
@@ -497,8 +500,9 @@ All steps land on `feature/warp-portals` in one PR (one or a few commits per ste
 - Every gate and door in Prontera shows the blue portal; none shows the `1_ETC_01` blob; hidden warps show nothing
 - The cursor is the animated door over a portal, talk over an NPC, default over the ground
 - Walking onto the south gate shows the original's loading screen (random image, stepping bar) and arrives in `prt_fild08` with NPCs and monsters; walking back returns to Prontera
-- Walking into a door cuts straight into `prt_in` with no loading screen; walking out cuts straight back
-- Inside `prt_in` the camera cannot orbit and cannot zoom out to see the rooms from outside; outside it behaves as before
+- Walking into a door shows the same loading screen, briefly, and lands in `prt_in`; walking out returns the same way
+- Inside `prt_in` the camera cannot orbit, and beyond the walls there is black, not water; outside, camera and water are as before
+- **Any map works:** with the character placed by DB on `geffen 119,59`, `morocc 156,93` and `prt_castle 102,20` (indoor-listed) in turn, each loads through the same path with the right camera rules; nothing in the feature names a map
 - The login-time `0x0091` no longer shows as `net.unhandled`; `--trace=map` reads as a story from `map.change` to `map.ready`
 - No freeze longer than one frame anywhere in the flow; no disconnect in a 5-minute walk `prontera → prt_fild08 → prontera → prt_in → prontera`
 
@@ -508,38 +512,30 @@ All steps land on `feature/warp-portals` in one PR (one or a few commits per ste
 - **Teleport skills and items** (Butterfly Wing, Kafra warp service): they arrive as the same `0x0091` and will simply work, but are not tested here.
 - **The Acolyte "Warp Portal" skill unit** (`ZC_SKILL_ENTRY`, unit id 0x81) — a skill-unit effect, not an NPC.
 - **Minimap update on map change** — #88 draws the minimap; this feature only provides the `OnMapChanged` hook it needs.
-- **Indoor lighting/void rendering** — the water plane filling `prt_in`'s void is a rendering-fidelity issue (Open question 2), not a camera one.
+- **Preloading / instant buildings** — decided against (Open question 1); the original shows its loading screen for buildings too.
 - **Loading tips, map-name banner, the `mapnametable.txt` names** — the original loading screen shows neither.
 - **Async (goroutine) loading** — the loader is phased so it can be moved off-thread later; not needed to meet the numbers above.
 
 ## Open questions
 
-1. **"Instant" buildings.** Step 6 makes doors instant by preloading `prt_in`
-   during Prontera's loading screen (+0.6 s there, once) and keeping the last two
-   maps alive. The original shows the loading screen for buildings too, just
-   briefly. If the original's behaviour is acceptable, Step 6 is dropped and the
-   plan loses nothing else. **Recommend keeping Step 6** — it is what was asked
-   for, and the cost is bounded.
-2. **What exactly should indoor restrict?** The original disables **rotation**
-   only (`indoorrswtable`); zoom stays in the normal range, and at full zoom-out
-   the void beyond the rooms *is* visible in the original — as black, not as
-   water. To truly "not see aside" we would (a) match the original (rotation
-   off), and (b) fix the void: draw water only where the GND has surfaces below
-   the water level, which is a small change in `water_renderer.go` but a
-   rendering change outside this feature. Plan assumes (a) in Step 7 and leaves
-   (b) as a follow-up unless Boris wants it here.
-3. **Portal proportions and sound.** The real-client frames settle that there
-   is a ground disc and a column, but not the exact height, the column's
-   opacity, or whether entering plays `ef_portal.wav`. Step 4 tunes by eye
-   against ref-04; a capture from Boris's own client would make that a
-   measurement instead.
-4. **The MVP field list.** RFC #49 and the PRD name `prt_fild01–03`, but
-   Prontera's gates open onto `prt_fild05` (west), `prt_fild06` (east) and
-   `prt_fild08` (south) in Renewal data; `prt_fild01` cannot be walked to from
-   town. The plan tests with `prt_fild08`. Update the RFC wording in Step 8, or
-   is `prt_fild01` there for another reason?
-5. **`--walk-to` as a permanent QA flag** — same status as `--autologin`. Any
-   objection to it living in `flags.go` rather than a test-only build?
+1. ~~"Instant" buildings — preload, or the original's loading screen?~~
+   **Answered (Boris, 2026-08-27): the original is fine.** The preload/cache
+   step is dropped; buildings get the loading screen like any other map.
+2. ~~What should indoor restrict, and is the void fix in scope?~~ **Answered:
+   keep it like the original, and fix the void here.** Rotation off per
+   `indoorrswtable`, the normal zoom range, and water drawn per GND cell so the
+   void is black — all in Step 6.
+3. ~~Portal proportions and sound.~~ **Withdrawn** — it was a note, not a
+   request: Step 4 tunes the portal by eye against ref-01/ref-04; nothing is
+   needed from Boris.
+4. ~~The MVP field list.~~ **Closed** — verified in the server's own scripts
+   (shared `npc/warps/cities/prontera.txt:24,30,32`; the `re/` file adds only
+   the Illusion door and the castle gate): Prontera's gates open onto
+   `prt_fild05/06/08` in both eras; `prt_fild01` is not adjacent. Step 7
+   corrects the RFC #49 / PRD wording.
+5. ~~`--walk-to` as a permanent QA flag?~~ **Answered: yes.**
+
+None open.
 
 ## Investigation notes
 
@@ -561,4 +557,10 @@ All steps land on `feature/warp-portals` in one PR (one or a few commits per ste
 
 ## Revision log
 
+- 2026-08-27 — **Review answers applied** (from chat): buildings keep the
+  original's loading screen — the preload step is dropped and the steps
+  renumbered (7 + docs); indoor stays like the original, and the
+  water-in-the-void fix moves into Step 6 as a per-cell water mesh; Open
+  questions 3–5 closed; scope made explicit — any map, nothing
+  Prontera-specific, verified with three far maps in *Done when*.
 - 2026-08-27 — created

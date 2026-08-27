@@ -15,6 +15,7 @@ The player walks onto Prontera's south gate warp and arrives in `prt_fild08` aft
 3. Observe the screen while the map changes
 4. Wait until the field is visible and walk a few tiles
 5. Read the `map` trace in the log
+6. **Any map:** log out; set `last_map`/`last_x`/`last_y` in the DB to `geffen 119,59`, then `morocc 156,93`, then `prt_castle 102,20`; log in each time
 
 ## Expected Results
 - The moment the character reaches the gate, movement stops and the **loading screen** appears: one of `loading01..10.jpg` filling the window, a progress bar that grows in steps, no black frame with the old map behind it
@@ -23,6 +24,7 @@ The player walks onto Prontera's south gate warp and arrives in `prt_fild08` aft
 - Field NPCs and monsters appear within a second of the map showing; clicking the ground walks normally
 - The BGM changes to the field's track; the NPC dialog window (if it was open) is closed
 - Walking back onto `prt_fild08 170,378` returns to `prontera 156,26` the same way
+- Step 6: each map loads through the same loading screen and lands the character at the given tile; `prt_castle` reports `Indoor: yes`, the other two `Indoor: no`; no map-specific code path is involved
 
 ## Priority
 Critical
