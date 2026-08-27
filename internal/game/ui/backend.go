@@ -35,6 +35,10 @@ type UIBackend interface {
 	// SetCursorState switches which of the original's cursors is drawn.
 	SetCursorState(state cursor.State)
 
+	// WantCursor is the cursor an interface element under the pointer asked
+	// for while drawing, and whether anything asked at all.
+	WantCursor() (cursor.State, bool)
+
 	// Input returns the input state for the current frame.
 	// Note: This returns the ui2d InputState; ImGui backends should provide
 	// a compatible adapter or translation layer.

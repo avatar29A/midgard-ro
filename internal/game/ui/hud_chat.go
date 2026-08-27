@@ -3,9 +3,13 @@ package ui
 import (
 	"strings"
 
+	"github.com/Faultbox/midgard-ro/internal/engine/cursor"
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
 	"github.com/Faultbox/midgard-ro/internal/game/states"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
+	"github.com/Faultbox/midgard-ro/internal/trace"
+
+	"go.uber.org/zap"
 )
 
 // The chat box sits along the bottom left, as the original does.
@@ -62,7 +66,10 @@ const (
 	chatStepLines = 3
 
 	// chatGrip is the corner you drag to resize, and how big that corner is.
-	chatGrip float32 = 14
+	// Bigger than it looks: a 14px target on a HiDPI screen is a 7px one to
+	// the hand, and the corner was being missed.
+	chatGrip    float32 = 14
+	chatGripHit float32 = 20
 
 	// The window will not be dragged or resized past these.
 	chatMinW float32 = 260
@@ -74,9 +81,20 @@ const (
 // chatInputBG is the bar's background, a 600x24 strip in the archive.
 const chatInputBG = basicInterfacePath + "dialog_bg.bmp"
 
+// chatResizeTexture is the hatched bar the original marks a resizable dialog
+// with, 6x24 in the archive.
+const (
+	chatResizeTexture         = basicInterfacePath + "dialog_resize.bmp"
+	chatResizeW       float32 = 6
+)
+
 // chatTabs are the tabs across the top. The original lets you rename and add
 // them; these two are what it opens with.
 var chatTabs = []string{"Public", "Battle"}
+
+// chatControlCaptions is the panel at the right of the tab strip, in the order
+// it is drawn: rightmost first.
+var chatControlCaptions = []string{">>", "L", "-", "+"}
 
 // Chat colors. RO tints a line by where it came from, which is how you tell
 // your own words from someone else's at a glance.
@@ -100,6 +118,12 @@ var (
 	chatTabIdle     = ui2d.Color{R: 0, G: 0, B: 0, A: 0.75}
 	chatShadow      = ui2d.Color{R: 0, G: 0, B: 0, A: 0.9}
 	chatGripHot     = ui2d.Color{R: 1, G: 0.9, B: 0.4, A: 1}
+
+	// The control pictograms: dimmed until the pointer reaches them, and lit
+	// while the thing they toggle is on.
+	chatCtrlIdle = ui2d.Color{R: 0.82, G: 0.82, B: 0.80, A: 0.85}
+	chatCtrlHot  = ui2d.Color{R: 1, G: 1, B: 1, A: 1}
+	chatCtrlOn   = ui2d.Color{R: 1, G: 0.9, B: 0.4, A: 1}
 )
 
 // chatKindColor is the color a line is drawn in.
@@ -222,20 +246,48 @@ func (b *UI2DBackend) chatDragAndResize(screenH float32) {
 		return
 	}
 
-	// Dragged by the strip above the box, past the tabs, which are buttons.
+	// Dragged by the strip above the box, past the tabs and short of the
+	// controls at its right, both of which are buttons. Hovering it asks for
+	// the hand, because a bare strip gives no other sign it can be grabbed.
 	tabsEnd := float32(len(chatTabs)) * (chatTabW + 1)
-	handle := ui2d.Rect{X: b.chatX + tabsEnd, Y: b.chatY, W: b.chatW - tabsEnd - chatGrip, H: chatTabH}
+	stripW := b.chatW - tabsEnd - chatGripHit - b.chatControlsW()
+	handle := ui2d.Rect{X: b.chatX + tabsEnd, Y: b.chatY, W: stripW, H: chatTabH}
+
+	// The original drags by the input bar as well (roBrowser makes exactly
+	// that element draggable), which is the part of the box most obviously
+	// grabbable — everything else in it is a control.
+	barY := b.chatY + chatTabH + b.chatH
+	bar := ui2d.Rect{X: b.chatX, Y: barY, W: b.chatW * chatNameBoxL, H: chatInputH}
+
+	for _, h := range []ui2d.Rect{handle, bar} {
+		if h.W > 0 && h.Contains(b.ctx.Input().MouseX, b.ctx.Input().MouseY) {
+			b.wantCursor(cursor.StateClick)
+		}
+	}
+
+	beforeX, beforeDragY := b.chatX, b.chatY
+
 	b.ctx.DragHandle("hud_chat_drag", handle, &b.chatX, &b.chatY)
+	b.ctx.DragHandle("hud_chat_drag_bar", bar, &b.chatX, &b.chatY)
+
+	// Traced because "it does not move" has two very different causes: the
+	// handle never being hit, and the box being dragged into a clamp. The
+	// second still reports movement here, so the log tells them apart.
+	if b.chatX != beforeX || b.chatY != beforeDragY {
+		trace.Emit(trace.HUD, "chat-drag",
+			zap.Float32("x", b.chatX), zap.Float32("y", b.chatY))
+	}
 
 	grip := ui2d.Rect{X: b.chatX + b.chatW - chatGrip, Y: b.chatY, W: chatGrip, H: chatGrip}
-	b.drawChatGrip(grip)
+	hit := ui2d.Rect{X: b.chatX + b.chatW - chatGripHit, Y: b.chatY, W: chatGripHit, H: chatGripHit}
+	b.drawChatGrip(grip, hit)
 
 	// Resizing drags two numbers that are not the window's position, so it
 	// cannot hand both to DragHandle. Width follows the pointer; height grows
 	// as the top edge is pulled up, which is why the top's movement is added
 	// back to the height.
 	beforeY := b.chatY
-	b.ctx.DragHandle("hud_chat_resize", grip, &b.chatW, &b.chatY)
+	b.ctx.DragHandle("hud_chat_resize", hit, &b.chatW, &b.chatY)
 
 	if b.chatY != beforeY {
 		b.chatH += beforeY - b.chatY
@@ -257,15 +309,35 @@ func (b *UI2DBackend) clampChatToScreen(screenH float32) {
 
 // drawChatGrip marks the corner that can be pulled, and lights it while the
 // pointer is over it so it is clear that it can be.
-func (b *UI2DBackend) drawChatGrip(grip ui2d.Rect) {
+func (b *UI2DBackend) drawChatGrip(grip, hit ui2d.Rect) {
+	hot := hit.Contains(b.ctx.Input().MouseX, b.ctx.Input().MouseY)
+
 	color := chatBorder
-	if grip.Contains(b.ctx.Input().MouseX, b.ctx.Input().MouseY) {
+	if hot {
 		color = chatGripHot
+
+		// RO has no dedicated resize pointer, so the hand it shows for
+		// anything you press is the closest thing to "you can grab this" —
+		// and the pointer changing at all is what says the corner is live.
+		b.wantCursor(cursor.StateClick)
 	}
 
 	r := b.ctx.Renderer()
 
-	// Stepped lines in the corner, the marking RO puts on a resizable window.
+	// The hatched bar the original marks a resizable dialog with. It is a
+	// vertical strip, so it is drawn along the corner's edge; if it is
+	// missing, the stepped corner lines stand in.
+	if tex, err := b.texCache.Load(chatResizeTexture); err == nil {
+		tint := ui2d.ColorWhite
+		if hot {
+			tint = chatGripHot
+		}
+
+		r.DrawImage(tex.ID, grip.X+grip.W-chatResizeW, grip.Y, chatResizeW, chatTabH, tint)
+
+		return
+	}
+
 	for i := float32(0); i < 3; i++ {
 		offset := i*4 + 2
 		r.DrawRect(grip.X+offset, grip.Y+2, chatGrip-offset-2, 1, color)
@@ -305,7 +377,12 @@ func (b *UI2DBackend) drawChatTabs(x, y, w float32) {
 		}
 
 		if b.ctx.InvisibleButtonAt("hud_chat_tab_"+name, tabX, y, chatTabW, chatTabH) {
-			b.chatTab = i
+			if b.chatTab != i {
+				b.chatTab = i
+				// The other tab's scroll position means nothing here.
+				b.chatPinned = true
+				b.chatScroll = 0
+			}
 		}
 
 		capW, capH := r.MeasureText(name, 1)
@@ -338,16 +415,16 @@ func (b *UI2DBackend) drawChatControls(x, y, w float32) {
 	}
 
 	controls := []control{
-		{"chat_ctrl_last", ">>", false, func() {
+		{"chat_ctrl_last", chatControlCaptions[0], false, func() {
 			b.chatPinned = true
 		}},
-		{"chat_ctrl_lock", "L", b.chatLocked, func() {
+		{"chat_ctrl_lock", chatControlCaptions[1], b.chatLocked, func() {
 			b.chatLocked = !b.chatLocked
 		}},
-		{"chat_ctrl_minus", "-", false, func() {
+		{"chat_ctrl_minus", chatControlCaptions[2], false, func() {
 			b.stepChatHeight(-chatStepLines)
 		}},
-		{"chat_ctrl_plus", "+", false, func() {
+		{"chat_ctrl_plus", chatControlCaptions[3], false, func() {
 			b.stepChatHeight(chatStepLines)
 		}},
 	}
@@ -367,18 +444,23 @@ func (b *UI2DBackend) drawChatControls(x, y, w float32) {
 			break
 		}
 
-		bg := chatTabIdle
-		if c.on {
-			bg = chatTabActive
+		box := ui2d.Rect{X: btnX, Y: btnY, W: btnW, H: chatCtrlBtn}
+		hot := box.Contains(b.ctx.Input().MouseX, b.ctx.Input().MouseY)
+
+		// Pictograms, not buttons: the original puts the marks straight on
+		// the strip with nothing drawn around them. Hovering brightens the
+		// glyph, which is the only chrome it gets.
+		glyph := chatCtrlIdle
+		switch {
+		case c.on:
+			glyph = chatCtrlOn
+		case hot:
+			glyph = chatCtrlHot
 		}
-		r.DrawRect(btnX, btnY, btnW, chatCtrlBtn, bg)
-		r.DrawRect(btnX, btnY, btnW, 1, chatBorder)
-		r.DrawRect(btnX, btnY+chatCtrlBtn-1, btnW, 1, chatBorder)
-		r.DrawRect(btnX, btnY, 1, chatCtrlBtn, chatBorder)
-		r.DrawRect(btnX+btnW-1, btnY, 1, chatCtrlBtn, chatBorder)
 
 		capX, capY := btnX+(btnW-capW)/2, btnY+(chatCtrlBtn-capH)/2
-		r.DrawText(capX, capY, c.caption, 1, ui2d.ColorTextOnDark)
+		r.DrawText(capX+1, capY+1, c.caption, 1, chatShadow)
+		r.DrawText(capX, capY, c.caption, 1, glyph)
 
 		if b.ctx.InvisibleButtonAt("hud_"+c.id, btnX, btnY, btnW, chatCtrlBtn) {
 			c.click()
@@ -401,7 +483,7 @@ func (b *UI2DBackend) drawChatLines(state InGameUIState, x, y, w, h float32) {
 	r := b.ctx.Renderer()
 
 	textW := w - 2*chatPadding - chatScrollW
-	wrapped := b.wrapChat(state.ChatLines, textW)
+	wrapped := b.wrapChat(b.chatTabLines(state.ChatLines), textW)
 
 	usableH := h - 2*chatPadding
 	visible := int(usableH / b.chatLineH())
@@ -550,4 +632,41 @@ func max32(a, b float32) float32 {
 // descenders of one message ran into the next.
 func (b *UI2DBackend) chatLineH() float32 {
 	return b.ctx.Renderer().FontLineHeight(1) + chatLineGap
+}
+
+// chatControlsW is how much of the tab strip the control panel occupies, which
+// the drag handle has to stay clear of.
+func (b *UI2DBackend) chatControlsW() float32 {
+	r := b.ctx.Renderer()
+
+	var total float32
+	for _, caption := range chatControlCaptions {
+		capW, _ := r.MeasureText(caption, 1)
+		total += max32(chatCtrlBtn, capW+6) + chatCtrlGap
+	}
+
+	return total
+}
+
+// chatTabLines is the scrollback the selected tab shows.
+//
+// The tabs were decoration until now: switching them changed which one was
+// lit and nothing else. Public carries what people said and what the server
+// announced; Battle carries the damage and the messages about fighting, which
+// is what you want out of the way while talking.
+func (b *UI2DBackend) chatTabLines(lines []states.ChatLine) []states.ChatLine {
+	if b.chatTab < 0 || b.chatTab >= len(chatTabs) {
+		return lines
+	}
+
+	battle := chatTabs[b.chatTab] == "Battle"
+
+	filtered := make([]states.ChatLine, 0, len(lines))
+	for _, line := range lines {
+		if (line.Kind == packets.ChatDamage) == battle {
+			filtered = append(filtered, line)
+		}
+	}
+
+	return filtered
 }
