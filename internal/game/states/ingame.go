@@ -1282,6 +1282,31 @@ func (s *InGameState) addChat(msg *packets.ChatMessage) error {
 	return nil
 }
 
+// SendChat says something in public chat.
+//
+// The server checks that the line begins with our own character's name, so the
+// name comes from the session rather than from anything the caller passes —
+// getting it wrong forces a relog rather than showing an error.
+func (s *InGameState) SendChat(message string) error {
+	name := ""
+	if s.manager != nil && s.manager.Session.Char != nil {
+		name = s.manager.Session.Char.GetName()
+	}
+
+	pkt := packets.EncodeChat(name, message)
+	if pkt == nil {
+		logger.Warn("not sending an unsendable chat line",
+			zap.String("name", name), zap.Int("bytes", len(message)))
+
+		return nil
+	}
+
+	trace.Emit(trace.HUD, "chat-send",
+		zap.String("name", name), zap.Int("bytes", len(message)))
+
+	return s.client.Send(pkt)
+}
+
 // ChatLines returns the chat scrollback for the UI, oldest first.
 func (s *InGameState) ChatLines() []ChatLine {
 	return s.chat.Lines()

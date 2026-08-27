@@ -834,6 +834,14 @@ func (g *Game) renderUI() {
 		populateDebugFields(&uiState, state, g.client)
 		g.uiBackend.RenderInGameUI(uiState, g.dt, viewportWidth, viewportHeight)
 
+		// A line the player typed goes out here rather than from the widget:
+		// the interface has no client to send with.
+		if msg := g.uiBackend.TakeChatMessage(); msg != "" {
+			if err := state.SendChat(msg); err != nil {
+				logger.Warn("could not send chat", zap.Error(err))
+			}
+		}
+
 	default:
 		// Show placeholder for unknown state (using ImGui directly for simplicity)
 		imgui.SetNextWindowPos(imgui.NewVec2(viewportWidth/2-100, viewportHeight/2-20))

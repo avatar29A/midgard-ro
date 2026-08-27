@@ -129,3 +129,46 @@ func splitSpeaker(message string) (speaker, text string) {
 
 	return message[:idx], message[idx+len(sep):]
 }
+
+// CZ_REQUEST_CHAT sends a line of public chat.
+//
+// The id is shuffled per packet version. At PACKETVER 20211103 it is 0x00F3:
+// rAthena declares clif_parse_GlobalMessage several times behind version
+// guards, and this is the last one whose guard we satisfy — the shuffle block
+// our client already speaks (the one with 0x035F WalkToXY) does not redefine
+// it.
+const CZ_REQUEST_CHAT uint16 = 0x00F3
+
+// ChatSeparator is what sits between a speaker and what they said, on the wire
+// in both directions.
+const ChatSeparator = " : "
+
+// EncodeChat builds a public chat packet.
+//
+// The message must be "<the speaker's own name> : <text>", and this is not a
+// display convention — the server verifies it. clif_process_message compares
+// the prefix against the character's name and, on a mismatch, logs "sent a
+// message using an incorrect name!" and forces a relog. Sending a bare message
+// disconnects you.
+//
+// Returns nil when there is no name or nothing to say, since neither can
+// produce a packet the server will accept.
+func EncodeChat(charName, message string) []byte {
+	if charName == "" || message == "" {
+		return nil
+	}
+
+	body := charName + ChatSeparator + message
+
+	// Header, the line, and the terminator the server reads to.
+	length := 4 + len(body) + 1
+	pkt := make([]byte, length)
+
+	pkt[0] = byte(CZ_REQUEST_CHAT)
+	pkt[1] = byte(CZ_REQUEST_CHAT >> 8)
+	pkt[2] = byte(length)
+	pkt[3] = byte(length >> 8)
+	copy(pkt[4:], body)
+
+	return pkt
+}

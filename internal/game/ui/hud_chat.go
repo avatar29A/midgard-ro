@@ -1,14 +1,18 @@
 package ui
 
 import (
+	"strings"
+
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
 	"github.com/Faultbox/midgard-ro/internal/game/states"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
 )
 
 // The chat box sits along the bottom left, as the original does.
+// The chat window, sized as the original is (roBrowser's ChatBox.css, which
+// transcribes it).
 const (
-	chatWidth   float32 = 400
+	chatWidth   float32 = 595
 	chatHeight  float32 = 120
 	chatMargin  float32 = 10
 	chatPadding float32 = 6
@@ -18,7 +22,29 @@ const (
 
 	// chatScrollW is the gutter the scrollbar occupies.
 	chatScrollW float32 = 14
+
+	// chatTabH is the tab strip above the box; chatTabW one tab.
+	chatTabH float32 = 17
+	chatTabW float32 = 75
+
+	// chatInputH is the bar along the bottom, which carries dialog_bg.bmp.
+	chatInputH float32 = 25
+
+	// chatNameW is the speaker field at the left of that bar.
+	chatNameW float32 = 90
+
+	// chatStatusBarH is the strip along the bottom of the screen the chat has
+	// to sit above. Kept here rather than shared, so the two do not have to
+	// know about each other beyond this number.
+	chatStatusBarH float32 = 25
 )
+
+// chatInputBG is the bar's background, a 600x24 strip in the archive.
+const chatInputBG = basicInterfacePath + "dialog_bg.bmp"
+
+// chatTabs are the tabs across the top. The original lets you rename and add
+// them; these two are what it opens with.
+var chatTabs = []string{"Public", "Battle"}
 
 // Chat colors. RO tints a line by where it came from, which is how you tell
 // your own words from someone else's at a glance.
@@ -27,7 +53,11 @@ var (
 	chatColorSelf      = ui2d.Color{R: 0.6, G: 0.9, B: 1, A: 1}
 	chatColorBroadcast = ui2d.Color{R: 1, G: 0.9, B: 0.4, A: 1}
 	chatColorSpeaker   = ui2d.Color{R: 0.7, G: 1, B: 0.7, A: 1}
-	chatBackground     = ui2d.Color{R: 0, G: 0, B: 0, A: 0.45}
+	chatBackground     = ui2d.Color{R: 0, G: 0, B: 0, A: 0.5}
+	chatBorder         = ui2d.Color{R: 1, G: 1, B: 1, A: 0.85}
+	chatTabActive      = ui2d.Color{R: 0, G: 0, B: 0, A: 0.5}
+	chatTabIdle        = ui2d.Color{R: 0, G: 0, B: 0, A: 0.75}
+	chatShadow         = ui2d.Color{R: 0, G: 0, B: 0, A: 0.9}
 )
 
 // chatKindColor is the color a line is drawn in.
@@ -106,16 +136,65 @@ func (b *UI2DBackend) wrapChat(lines []states.ChatLine, maxWidth float32) [][]Te
 // chat will appear.
 func (b *UI2DBackend) drawChat(state InGameUIState, screenH float32) {
 	x := chatMargin
-	y := screenH - chatHeight - chatMargin
+	// The whole thing: tabs, then the scrollback, then the input bar.
+	top := screenH - chatStatusBarH - chatMargin - chatInputH - chatHeight - chatTabH
+	bodyY := top + chatTabH
+
+	b.drawChatTabs(x, top)
 
 	r := b.ctx.Renderer()
-	r.DrawRect(x, y, chatWidth, chatHeight, chatBackground)
+	r.DrawRect(x, bodyY, chatWidth, chatHeight, chatBackground)
+
+	// A white edge down each side, as the original has. The top is the tab
+	// strip's and the bottom is the input bar's, so neither is drawn here.
+	r.DrawRect(x, bodyY, 1, chatHeight, chatBorder)
+	r.DrawRect(x+chatWidth-1, bodyY, 1, chatHeight, chatBorder)
+
+	b.drawChatLines(state, x, bodyY)
+	b.drawChatInput(state, x, bodyY+chatHeight)
+}
+
+// drawChatTabs puts the tab strip above the box, the active one lighter.
+func (b *UI2DBackend) drawChatTabs(x, y float32) {
+	r := b.ctx.Renderer()
+
+	for i, name := range chatTabs {
+		tabX := x + float32(i)*(chatTabW+1)
+
+		bg := chatTabIdle
+		if i == b.chatTab {
+			bg = chatTabActive
+		}
+		r.DrawRect(tabX, y, chatTabW, chatTabH, bg)
+
+		// The inactive tabs are underlined, the active one is not — that is
+		// what joins it to the box below.
+		if i != b.chatTab {
+			r.DrawRect(tabX, y+chatTabH-1, chatTabW, 1, chatBorder)
+		}
+
+		if b.ctx.InvisibleButtonAt("hud_chat_tab_"+name, tabX, y, chatTabW, chatTabH) {
+			b.chatTab = i
+		}
+
+		w, h := r.MeasureText(name, 1)
+		capX, capY := tabX+(chatTabW-w)/2, y+(chatTabH-h)/2
+		r.DrawText(capX+1, capY+1, name, 1, chatShadow)
+		r.DrawText(capX, capY, name, 1, ui2d.ColorTextOnDark)
+	}
+
+	// The strip continues to the window's edge so the box has a lid.
+	tabsEnd := x + float32(len(chatTabs))*(chatTabW+1)
+	r.DrawRect(tabsEnd, y+chatTabH-1, x+chatWidth-tabsEnd, 1, chatBorder)
+}
+
+// drawChatLines draws the scrollback, newest at the bottom.
+func (b *UI2DBackend) drawChatLines(state InGameUIState, x, y float32) {
+	r := b.ctx.Renderer()
 
 	textW := chatWidth - 2*chatPadding - chatScrollW
 	wrapped := b.wrapChat(state.ChatLines, textW)
 
-	// Through a variable: dividing two constants gives a constant, and Go will
-	// not truncate one to int implicitly.
 	usableH := chatHeight - 2*chatPadding
 	visible := int(usableH / chatLineH)
 	if visible < 1 {
@@ -127,8 +206,6 @@ func (b *UI2DBackend) drawChat(state InGameUIState, screenH float32) {
 		maxOffset = 0
 	}
 
-	// Pinned to the bottom: chat follows what was just said, and the offset is
-	// only consulted once there is more than fits.
 	offset := b.chatScroll
 	if offset > maxOffset {
 		offset = maxOffset
@@ -142,7 +219,6 @@ func (b *UI2DBackend) drawChat(state InGameUIState, screenH float32) {
 			chatHeight, offset, maxOffset, visible)
 		if newOffset != offset {
 			b.chatScroll = newOffset
-			// Following again only once the reader returns to the bottom.
 			b.chatPinned = newOffset >= maxOffset
 			offset = newOffset
 		}
@@ -153,9 +229,62 @@ func (b *UI2DBackend) drawChat(state InGameUIState, screenH float32) {
 		runX := x + chatPadding
 
 		for _, run := range wrapped[offset+i] {
+			// Shadowed, as the original is. The panel is half transparent and
+			// Prontera's pavement is bright; without this the text competes
+			// with whatever is behind it and loses.
+			r.DrawText(runX+1, lineY+1, run.Text, 1.0, chatShadow)
 			r.DrawText(runX, lineY, run.Text, 1.0, run.Color)
+
 			w, _ := r.MeasureText(run.Text, 1.0)
 			runX += w
 		}
 	}
+}
+
+// drawChatInput puts the bar along the bottom: who is speaking, then what they
+// are about to say.
+//
+// Enter sends and clears. An empty line is not sent — the server would refuse
+// it, and the encoder declines to build one.
+func (b *UI2DBackend) drawChatInput(state InGameUIState, x, y float32) {
+	r := b.ctx.Renderer()
+
+	if tex, err := b.texCache.Load(chatInputBG); err == nil {
+		r.DrawImage(tex.ID, x, y, chatWidth, chatInputH, ui2d.ColorWhite)
+	} else {
+		r.DrawRect(x, y, chatWidth, chatInputH, chatBackground)
+	}
+
+	// The speaker's own name, which the server requires on every line, shown
+	// so it is clear what is being prefixed rather than hidden in the packet.
+	name := state.PlayerName
+	if name == "" {
+		name = "..."
+	}
+	r.DrawText(x+8, y+6, name, 1, ui2d.ColorTextOnDark)
+
+	msgX := x + chatNameW
+	msgW := chatWidth - chatNameW - 8
+
+	value, _, submitted := b.ctx.TextInputBareAt("hud_chat_input",
+		msgX, y+3, msgW, chatInputH-6, 1, b.chatInput)
+	b.chatInput = value
+
+	if submitted {
+		b.chatPending = strings.TrimSpace(b.chatInput)
+		b.chatInput = ""
+		// Back to following the newest line: you just added one.
+		b.chatPinned = true
+	}
+}
+
+// TakeChatMessage returns a line the player has entered, and clears it.
+//
+// The backend collects it and the game layer sends it: the UI has no client
+// to send with, and threading one in would put the network inside the widget.
+func (b *UI2DBackend) TakeChatMessage() string {
+	msg := b.chatPending
+	b.chatPending = ""
+
+	return msg
 }
