@@ -1,8 +1,11 @@
 package ui
 
 import (
+	"image"
 	"math"
 	"testing"
+
+	"github.com/Faultbox/midgard-ro/internal/engine/charsprite"
 )
 
 // TestMinimapProjectCentersTheMiddleCell is the check that catches the mistake
@@ -164,5 +167,72 @@ func TestMinimapViewIsWholeAtZoomOne(t *testing.T) {
 	u0, v0, u1, v1 := minimapViewUV(150, 200, 312, 392, 1)
 	if u0 != 0 || v0 != 0 || u1 != 1 || v1 != 1 {
 		t.Errorf("zoom 1 views (%v,%v)-(%v,%v), want the whole image", u0, v0, u1, v1)
+	}
+}
+
+// TestRotateRGBAKeepsTheImage: a rotation that lost pixels would thin the
+// arrow at some facings and not others, which reads as flicker while turning.
+func TestRotateRGBAKeepsTheImage(t *testing.T) {
+	const size = 12
+
+	src := image.NewRGBA(image.Rect(0, 0, size, size))
+	// A solid block in the middle, well inside the circle the rotation sweeps.
+	for y := 4; y < 8; y++ {
+		for x := 4; x < 8; x++ {
+			copy(src.Pix[src.PixOffset(x, y):][:4], []byte{255, 0, 0, 255})
+		}
+	}
+
+	count := func(img *image.RGBA) int {
+		n := 0
+		for i := 3; i < len(img.Pix); i += 4 {
+			if img.Pix[i] != 0 {
+				n++
+			}
+		}
+
+		return n
+	}
+
+	want := count(src)
+	for dir := 0; dir < charsprite.Directions; dir++ {
+		got := count(rotateRGBA(src, arrowAngleFor(dir)))
+
+		// Nearest sampling can drop or double a pixel at the edges; a
+		// rotation that halved the block would be a real fault.
+		if got < want*3/4 || got > want*5/4 {
+			t.Errorf("facing %d kept %d of %d pixels", dir, got, want)
+		}
+	}
+}
+
+// TestRotateRGBASizeIsStable: every facing has to draw at the same size, or
+// the arrow grows and shrinks as the player turns.
+func TestRotateRGBASizeIsStable(t *testing.T) {
+	src := image.NewRGBA(image.Rect(0, 0, 12, 12))
+
+	for dir := 0; dir < charsprite.Directions; dir++ {
+		got := rotateRGBA(src, arrowAngleFor(dir)).Bounds()
+		if got.Dx() != 12 || got.Dy() != 12 {
+			t.Errorf("facing %d rotated to %dx%d, want 12x12", dir, got.Dx(), got.Dy())
+		}
+	}
+}
+
+// TestArrowAnglesAreDistinct: eight facings should give eight headings, a
+// whole turn between them and no two the same.
+func TestArrowAnglesAreDistinct(t *testing.T) {
+	seen := map[int]bool{}
+
+	for dir := 0; dir < charsprite.Directions; dir++ {
+		deg := int(arrowAngleFor(dir)*180/math.Pi) % 360
+		if seen[deg] {
+			t.Errorf("facing %d repeats a heading already used (%d degrees)", dir, deg)
+		}
+		seen[deg] = true
+	}
+
+	if len(seen) != charsprite.Directions {
+		t.Errorf("got %d distinct headings, want %d", len(seen), charsprite.Directions)
 	}
 }

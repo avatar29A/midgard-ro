@@ -104,6 +104,10 @@ type UI2DBackend struct {
 	minimapTried   string
 	minimapZoomIdx int
 
+	// The player arrow, one texture per facing, baked on first use.
+	minimapArrowTex    []uint32
+	minimapArrowsTried bool
+
 	// Cached widget states
 	loginUsername string
 	loginPassword string

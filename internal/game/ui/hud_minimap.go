@@ -1,11 +1,16 @@
 package ui
 
 import (
+	"bytes"
 	"fmt"
+	"image"
+	"math"
 	"strings"
 
 	"go.uber.org/zap"
 
+	"github.com/Faultbox/midgard-ro/internal/engine/charsprite"
+	"github.com/Faultbox/midgard-ro/internal/engine/texture"
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
 	"github.com/Faultbox/midgard-ro/internal/logger"
 	"github.com/Faultbox/midgard-ro/internal/trace"
@@ -22,6 +27,9 @@ const (
 
 	// minimapBtn is the size of the zoom buttons under the map.
 	minimapBtn = 16.0
+
+	// minimapEdgeInset keeps the buttons off the map image's own border.
+	minimapEdgeInset = 10.0
 )
 
 // minimapZooms are the steps the + and - buttons move through. 1 shows the
@@ -35,6 +43,18 @@ var minimapZooms = []float32{1, 2, 4}
 // pale stone and pale road, and a white dot on it is invisible at four pixels.
 // Red reads against every part of it.
 var minimapDot = ui2d.Color{R: 1, G: 0.15, B: 0.15, A: 1}
+
+// The minimap's own furniture, alongside the map images.
+const (
+	minimapArrowAsset = "map_arrow.bmp"
+	minimapPlusAsset  = "map_plus0.bmp"
+	minimapPlusDown   = "map_plus1.bmp"
+	minimapMinusAsset = "map_minus0.bmp"
+	minimapMinusDown  = "map_minus1.bmp"
+
+	// minimapArrowSize is what those assets measure, all of them 12x12.
+	minimapArrowSize = 12.0
+)
 
 // minimapPath is where the pre-rendered map images live.
 //
@@ -162,7 +182,7 @@ func (b *UI2DBackend) drawMinimap(state InGameUIState, screenW float32) {
 		state.MapCellsX, state.MapCellsY, zoom)
 	r.DrawImageUV(tex.ID, x, y, minimapSize, minimapSize, u0, v0, u1, v1, ui2d.ColorWhite)
 
-	b.drawMinimapZoomButtons(x, y+minimapSize+2)
+	b.drawMinimapZoomButtons(x, y)
 
 	if state.MapCellsX <= 0 || state.MapCellsY <= 0 {
 		return
@@ -173,8 +193,30 @@ func (b *UI2DBackend) drawMinimap(state InGameUIState, screenW float32) {
 
 	// Centered on the cell rather than starting at it, so the marker sits on
 	// the player instead of below and to the right of them.
-	r.DrawRect(x+px-minimapDotSize/2, y+py-minimapDotSize/2,
-		minimapDotSize, minimapDotSize, minimapDot)
+	b.drawMinimapArrow(x+px, y+py, state.PlayerDirection)
+}
+
+// drawMinimapArrow marks the player, pointing where they face.
+//
+// The original uses one arrow bitmap turned to the facing. RO has exactly
+// eight of those, so the rotations are baked once at load rather than done per
+// frame — and being exact multiples of 45 degrees, baking loses nothing.
+//
+// Falls back to a plain marker if the arrow will not load, since a player who
+// cannot find themselves on the map is worse off than one with a square.
+func (b *UI2DBackend) drawMinimapArrow(cx, cy float32, direction uint8) {
+	arrows := b.minimapArrows()
+	if arrows == nil {
+		r := b.ctx.Renderer()
+		r.DrawRect(cx-minimapDotSize/2, cy-minimapDotSize/2,
+			minimapDotSize, minimapDotSize, minimapDot)
+
+		return
+	}
+
+	tex := arrows[int(direction)%len(arrows)]
+	b.ctx.Renderer().DrawImage(tex, cx-minimapArrowSize/2, cy-minimapArrowSize/2,
+		minimapArrowSize, minimapArrowSize, ui2d.ColorWhite)
 }
 
 // minimapZoom is the current zoom factor.
@@ -191,15 +233,60 @@ func (b *UI2DBackend) minimapZoom() float32 {
 // Laid out right to left from the map's right edge, so they sit under it
 // rather than beside it whatever the screen width.
 func (b *UI2DBackend) drawMinimapZoomButtons(x, y float32) {
-	plusX := x + minimapSize - minimapBtn
-	minusX := plusX - minimapBtn - 2
+	plus := b.minimapAsset(minimapPlusAsset)
+	plusDown := b.minimapAsset(minimapPlusDown)
+	minus := b.minimapAsset(minimapMinusAsset)
+	minusDown := b.minimapAsset(minimapMinusDown)
 
-	if b.ctx.ButtonAt("hud_minimap_out", minusX, y, minimapBtn, minimapBtn, "-") {
+	// Inside the map's top-right corner, as the original places them, minus
+	// then plus.
+	//
+	// Inset well clear of the edge rather than hugging it. The map image
+	// carries its own border, so buttons flush to the quad's edge sit on that
+	// border instead of on the map — which is where they first landed.
+	plusX := x + minimapSize - minimapArrowSize - minimapEdgeInset
+	minusX := plusX - minimapArrowSize - 2
+	btnY := y + minimapEdgeInset
+
+	if plus == nil || minus == nil {
+		// No art: fall back to letters so the map can still be zoomed.
+		if b.ctx.ButtonAt("hud_minimap_out", minusX, btnY, minimapArrowSize, minimapArrowSize, "-") {
+			b.setMinimapZoom(b.minimapZoomIdx - 1)
+		}
+		if b.ctx.ButtonAt("hud_minimap_in", plusX, btnY, minimapArrowSize, minimapArrowSize, "+") {
+			b.setMinimapZoom(b.minimapZoomIdx + 1)
+		}
+
+		return
+	}
+
+	down := func(t *TextureInfo, fallback *TextureInfo) uint32 {
+		if t != nil {
+			return t.ID
+		}
+
+		return fallback.ID
+	}
+
+	if b.ctx.ImageButtonAt("hud_minimap_out", minusX, btnY, minimapArrowSize, minimapArrowSize,
+		minus.ID, minus.ID, down(minusDown, minus)) {
 		b.setMinimapZoom(b.minimapZoomIdx - 1)
 	}
-	if b.ctx.ButtonAt("hud_minimap_in", plusX, y, minimapBtn, minimapBtn, "+") {
+	if b.ctx.ImageButtonAt("hud_minimap_in", plusX, btnY, minimapArrowSize, minimapArrowSize,
+		plus.ID, plus.ID, down(plusDown, plus)) {
 		b.setMinimapZoom(b.minimapZoomIdx + 1)
 	}
+}
+
+// minimapAsset loads one of the minimap's own bitmaps, cached by the texture
+// cache like any other.
+func (b *UI2DBackend) minimapAsset(name string) *TextureInfo {
+	tex, err := b.texCache.Load(minimapPath + name)
+	if err != nil {
+		return nil
+	}
+
+	return tex
 }
 
 // setMinimapZoom moves to a zoom step, ignoring anything past either end.
@@ -244,4 +331,87 @@ func (b *UI2DBackend) minimapTexture(mapName string) *TextureInfo {
 		zap.Int("width", tex.Width), zap.Int("height", tex.Height))
 
 	return tex
+}
+
+// minimapArrows returns the player arrow baked into one texture per facing,
+// loading them the first time they are needed.
+//
+// A failure is remembered as an empty set rather than retried every frame; the
+// caller falls back to a plain marker.
+func (b *UI2DBackend) minimapArrows() []uint32 {
+	if b.minimapArrowsTried {
+		return b.minimapArrowTex
+	}
+	b.minimapArrowsTried = true
+
+	data, err := b.texCache.loadFunc(minimapPath + minimapArrowAsset)
+	if err != nil {
+		logger.Warn("no minimap player arrow",
+			zap.String("path", minimapPath+minimapArrowAsset), zap.Error(err))
+
+		return nil
+	}
+
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		logger.Warn("minimap arrow will not decode", zap.Error(err))
+
+		return nil
+	}
+
+	// Magenta is RO's transparency key in these bitmaps, the same as every
+	// other interface texture.
+	src := texture.ImageToRGBA(img, true)
+
+	arrows := make([]uint32, 0, charsprite.Directions)
+	for dir := 0; dir < charsprite.Directions; dir++ {
+		rotated := rotateRGBA(src, arrowAngleFor(dir))
+		bounds := rotated.Bounds()
+		arrows = append(arrows,
+			b.texCache.renderer.CreateTextureNearest(bounds.Dx(), bounds.Dy(), rotated.Pix))
+	}
+
+	b.minimapArrowTex = arrows
+
+	return arrows
+}
+
+// arrowAngleFor is how far to turn the arrow for a facing, in radians.
+//
+// The bitmap points one way; direction 0 is south in RO's ordering, so the
+// facings run round from there. Same relationship roBrowser uses.
+func arrowAngleFor(direction int) float64 {
+	return float64(direction+4) * 45 * math.Pi / 180
+}
+
+// rotateRGBA turns an image about its center, sampling nearest.
+//
+// Nearest is right here rather than a compromise: these are twelve-pixel
+// bitmaps with hard edges, and smoothing them would blur an arrow into a
+// smudge at the size it is drawn.
+func rotateRGBA(src *image.RGBA, angle float64) *image.RGBA {
+	bounds := src.Bounds()
+	w, h := bounds.Dx(), bounds.Dy()
+	dst := image.NewRGBA(image.Rect(0, 0, w, h))
+
+	cx, cy := float64(w)/2, float64(h)/2
+	sin, cos := math.Sin(angle), math.Cos(angle)
+
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			// Sampled backwards — for each destination pixel, where in the
+			// source did it come from — so no gaps are left behind.
+			dx, dy := float64(x)+0.5-cx, float64(y)+0.5-cy
+			sx := int(cx + dx*cos + dy*sin)
+			sy := int(cy - dx*sin + dy*cos)
+
+			if sx < 0 || sy < 0 || sx >= w || sy >= h {
+				continue
+			}
+
+			copy(dst.Pix[dst.PixOffset(x, y):][:4], src.Pix[src.PixOffset(sx, sy):][:4])
+		}
+	}
+
+	return dst
 }
