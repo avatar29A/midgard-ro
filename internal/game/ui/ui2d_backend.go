@@ -918,6 +918,7 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 
 	b.drawMinimap(state, width)
 	b.drawChat(state, height)
+	b.drawHotkeys(width, height)
 	b.renderNPCDialog(state, width, height)
 	b.renderNPCMenu(state, width, height)
 
