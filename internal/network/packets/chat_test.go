@@ -1,6 +1,10 @@
 package packets
 
-import "testing"
+import (
+	"encoding/binary"
+	"strings"
+	"testing"
+)
 
 // chatPacket builds a variable-length chat packet the way the server does:
 // header, declared length, optional GID, then a NUL-terminated message.
@@ -206,5 +210,50 @@ func TestEncodeChatRefusesWhatCannotBeSent(t *testing.T) {
 	}
 	if EncodeChat("MidgardTest", "") != nil {
 		t.Error("encoded an empty line")
+	}
+}
+
+func TestEncodeWhisperLayout(t *testing.T) {
+	pkt := EncodeWhisper("Kafra", "hi")
+
+	if pkt == nil {
+		t.Fatal("EncodeWhisper returned nil for a valid whisper")
+	}
+
+	// id, length, name[24], message, terminator.
+	want := 4 + 24 + len("hi") + 1
+	if len(pkt) != want {
+		t.Fatalf("len = %d, want %d", len(pkt), want)
+	}
+	if got := binary.LittleEndian.Uint16(pkt[0:2]); got != CZ_WHISPER {
+		t.Errorf("id = 0x%04X, want 0x%04X", got, CZ_WHISPER)
+	}
+	if got := int(binary.LittleEndian.Uint16(pkt[2:4])); got != want {
+		t.Errorf("declared length = %d, want %d", got, want)
+	}
+
+	// The server rejects an unterminated name, so the field must be padded.
+	name := pkt[4:28]
+	if string(name[:5]) != "Kafra" {
+		t.Errorf("name = %q, want it to start with Kafra", name)
+	}
+	if name[5] != 0 {
+		t.Error("the name field must be zero-terminated")
+	}
+	if string(pkt[28:30]) != "hi" {
+		t.Errorf("message = %q, want hi", pkt[28:30])
+	}
+	if pkt[len(pkt)-1] != 0 {
+		t.Error("the message must be zero-terminated")
+	}
+}
+
+// TestEncodeWhisperRejectsOverlongName guards the terminator: a name that
+// fills the field leaves no room for one, and the server drops the line.
+func TestEncodeWhisperRejectsOverlongName(t *testing.T) {
+	long := strings.Repeat("a", 24)
+
+	if pkt := EncodeWhisper(long, "hi"); pkt != nil {
+		t.Error("a 24-character name cannot be terminated and must be refused")
 	}
 }

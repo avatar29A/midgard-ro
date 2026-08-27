@@ -95,16 +95,19 @@ type UI2DBackend struct {
 
 	// Chat scrollback position. Pinned means following the newest line, which
 	// is where it starts and where it returns once scrolled back to the bottom.
-	chatScroll  int
-	chatPinned  bool
-	chatTab     int
-	chatX       float32
-	chatY       float32
-	chatW       float32
-	chatH       float32
-	chatPlaced  bool
-	chatInput   string
-	chatPending string
+	chatScroll    int
+	chatPinned    bool
+	chatTab       int
+	chatX         float32
+	chatY         float32
+	chatW         float32
+	chatH         float32
+	chatPlaced    bool
+	chatInput     string
+	chatName      string
+	chatLocked    bool
+	chatPending   string
+	chatPendingTo string
 
 	// The minimap image for the map we are on. minimapTried is the path last
 	// attempted, so a map that ships no image is not retried every frame.

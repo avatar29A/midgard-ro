@@ -836,8 +836,14 @@ func (g *Game) renderUI() {
 
 		// A line the player typed goes out here rather than from the widget:
 		// the interface has no client to send with.
-		if msg := g.uiBackend.TakeChatMessage(); msg != "" {
-			if err := state.SendChat(msg); err != nil {
+		if to, msg := g.uiBackend.TakeChatMessage(); msg != "" {
+			var err error
+			if to != "" {
+				err = state.SendWhisper(to, msg)
+			} else {
+				err = state.SendChat(msg)
+			}
+			if err != nil {
 				logger.Warn("could not send chat", zap.Error(err))
 			}
 		}
@@ -969,35 +975,9 @@ func (g *Game) handleInGameInput(state *states.InGameState) {
 	g.lastMouseX = mouseX
 	g.lastMouseY = mouseY
 
-	// WASD walking. Movement is relative to where the camera is looking, so
-	// W always walks away from the viewer no matter how the camera is turned.
-	// Each press asks the server for one cell; StepToward ignores us while a
-	// walk is already in flight, so holding a key walks continuously.
-	if !io.WantCaptureKeyboard() {
-		var forward, strafe float32
-		if imgui.IsKeyDown(imgui.KeyW) {
-			forward++
-		}
-		if imgui.IsKeyDown(imgui.KeyS) {
-			forward--
-		}
-		if imgui.IsKeyDown(imgui.KeyD) {
-			strafe++
-		}
-		if imgui.IsKeyDown(imgui.KeyA) {
-			strafe--
-		}
-
-		if forward != 0 || strafe != 0 {
-			camDirX, camDirZ := camera.ForwardDirection()
-			camRightX, camRightZ := camera.RightDirection()
-			moveX := camDirX*forward + camRightX*strafe
-			moveZ := camDirZ*forward + camRightZ*strafe
-			if err := state.StepToward(moveX, moveZ); err != nil {
-				logger.Warn("keyboard step failed", zap.Error(err))
-			}
-		}
-	}
+	// No keyboard walking. RO moves by mouse, and the letters belong to chat:
+	// with WASD bound to the character, typing "was" into the chat box walked
+	// you across the map. The state's StepToward went with it.
 
 	// The pointer changes over an NPC, the way the original tells you a thing
 	// can be talked to before you click it. Runs every frame, so it uses the

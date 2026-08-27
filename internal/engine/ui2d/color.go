@@ -47,7 +47,10 @@ var (
 	ColorInputBorderFocus = Color{0.21, 0.36, 0.80, 1}
 	// ColorText is the default text color, tuned for legibility on the cream
 	// win_msgbox.bmp body (which is the dominant text surface).
-	ColorText       = Color{0.1, 0.1, 0.15, 1}
+	ColorText = Color{0.1, 0.1, 0.15, 1}
+	// ColorSelection is the wash behind selected text — pale enough that
+	// ColorText still reads through it.
+	ColorSelection  = Color{0.35, 0.55, 0.95, 0.45}
 	ColorTextOnDark = Color{0.9, 0.9, 0.9, 1}
 	ColorTextDim    = Color{0.4, 0.4, 0.5, 1}
 	ColorHighlight  = Color{0.2, 0.6, 0.9, 1}
