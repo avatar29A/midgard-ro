@@ -126,24 +126,29 @@ func (c *Context) drawWindowFrame(ws *WindowState, title string) bool {
 	r.DrawImage(f.TitleMid, ws.X+frameCapW, ws.Y, midW, FrameTitleH, ColorWhite)
 	r.DrawImage(f.TitleRight, ws.X+ws.W-frameCapW, ws.Y, frameCapW, FrameTitleH, ColorWhite)
 
-	// Body.
-	bodyY := ws.Y + FrameTitleH
-	bodyH := ws.H - FrameTitleH - c.frameFooterHeight(ws)
-	if bodyH < 0 {
-		bodyH = 0
-	}
+	// Body — skipped entirely when minimized, which is what minimized means.
+	// Drawing its edges anyway left the outline of a window with nothing in
+	// it: a bordered empty box below the title bar, and on a window whose
+	// body is a bitmap that is all you saw.
+	if !ws.Minimized {
+		bodyY := ws.Y + FrameTitleH
+		bodyH := ws.H - FrameTitleH - c.frameFooterHeight(ws)
+		if bodyH < 0 {
+			bodyH = 0
+		}
 
-	if !ws.BitmapBody {
-		r.DrawRect(ws.X, bodyY, ws.W, bodyH, ColorWindowBody)
-	}
+		if !ws.BitmapBody {
+			r.DrawRect(ws.X, bodyY, ws.W, bodyH, ColorWindowBody)
+		}
 
-	r.DrawRect(ws.X, bodyY, 1, bodyH, ColorPanelBorder)
-	r.DrawRect(ws.X+ws.W-1, bodyY, 1, bodyH, ColorPanelBorder)
+		r.DrawRect(ws.X, bodyY, 1, bodyH, ColorPanelBorder)
+		r.DrawRect(ws.X+ws.W-1, bodyY, 1, bodyH, ColorPanelBorder)
 
-	if footerH := c.frameFooterHeight(ws); footerH > 0 {
-		r.DrawImage(f.FooterMid, ws.X, bodyY+bodyH, ws.W, footerH, ColorWhite)
-	} else {
-		r.DrawRect(ws.X, bodyY+bodyH-1, ws.W, 1, ColorPanelBorder)
+		if footerH := c.frameFooterHeight(ws); footerH > 0 {
+			r.DrawImage(f.FooterMid, ws.X, bodyY+bodyH, ws.W, footerH, ColorWhite)
+		} else {
+			r.DrawRect(ws.X, bodyY+bodyH-1, ws.W, 1, ColorPanelBorder)
+		}
 	}
 
 	// Title text, left of the system buttons where the original puts it.

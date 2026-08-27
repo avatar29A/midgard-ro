@@ -71,7 +71,7 @@ func (b *UI2DBackend) drawStatsWindow(state InGameUIState, screenW, screenH floa
 		// Minimized is not closed: the frame has already drawn its title bar
 		// and the window is still open, just collapsed. Only a real close
 		// takes the menu button back out.
-		if !b.ctx.WindowMinimized(statsWindowID) {
+		if b.ctx.WindowClosed(statsWindowID) {
 			b.ToggleWindow(WindowInfo)
 		}
 
