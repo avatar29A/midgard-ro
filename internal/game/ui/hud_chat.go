@@ -88,13 +88,21 @@ const (
 	chatResizeW       float32 = 6
 )
 
+// The control pictograms. The plus and minus are the archive's own — the same
+// pair the minimap zooms with, and the icons the original draws here. The
+// chevron is built from the interface's right arrow, doubled. Nothing in the
+// archive under any name I could find is a padlock, so that one is drawn.
+const (
+	chatIconMinus = minimapPath + minimapMinusAsset
+	chatIconPlus  = minimapPath + minimapPlusAsset
+	chatIconArrow = basicInterfacePath + "arw_right.bmp"
+
+	chatIconSize float32 = 12
+)
+
 // chatTabs are the tabs across the top. The original lets you rename and add
 // them; these two are what it opens with.
 var chatTabs = []string{"Public", "Battle"}
-
-// chatControlCaptions is the panel at the right of the tab strip, in the order
-// it is drawn: rightmost first.
-var chatControlCaptions = []string{">>", "L", "-", "+"}
 
 // Chat colors. RO tints a line by where it came from, which is how you tell
 // your own words from someone else's at a glance.
@@ -246,38 +254,8 @@ func (b *UI2DBackend) chatDragAndResize(screenH float32) {
 		return
 	}
 
-	// Dragged by the strip above the box, past the tabs and short of the
-	// controls at its right, both of which are buttons. Hovering it asks for
-	// the hand, because a bare strip gives no other sign it can be grabbed.
-	tabsEnd := float32(len(chatTabs)) * (chatTabW + 1)
-	stripW := b.chatW - tabsEnd - chatGripHit - b.chatControlsW()
-	handle := ui2d.Rect{X: b.chatX + tabsEnd, Y: b.chatY, W: stripW, H: chatTabH}
-
-	// The original drags by the input bar as well (roBrowser makes exactly
-	// that element draggable), which is the part of the box most obviously
-	// grabbable — everything else in it is a control.
-	barY := b.chatY + chatTabH + b.chatH
-	bar := ui2d.Rect{X: b.chatX, Y: barY, W: b.chatW * chatNameBoxL, H: chatInputH}
-
-	for _, h := range []ui2d.Rect{handle, bar} {
-		if h.W > 0 && h.Contains(b.ctx.Input().MouseX, b.ctx.Input().MouseY) {
-			b.wantCursor(cursor.StateClick)
-		}
-	}
-
-	beforeX, beforeDragY := b.chatX, b.chatY
-
-	b.ctx.DragHandle("hud_chat_drag", handle, &b.chatX, &b.chatY)
-	b.ctx.DragHandle("hud_chat_drag_bar", bar, &b.chatX, &b.chatY)
-
-	// Traced because "it does not move" has two very different causes: the
-	// handle never being hit, and the box being dragged into a clamp. The
-	// second still reports movement here, so the log tells them apart.
-	if b.chatX != beforeX || b.chatY != beforeDragY {
-		trace.Emit(trace.HUD, "chat-drag",
-			zap.Float32("x", b.chatX), zap.Float32("y", b.chatY))
-	}
-
+	// The corner comes first: it sits inside the window, so if the window
+	// took the press there would be nothing left to resize with.
 	grip := ui2d.Rect{X: b.chatX + b.chatW - chatGrip, Y: b.chatY, W: chatGrip, H: chatGrip}
 	hit := ui2d.Rect{X: b.chatX + b.chatW - chatGripHit, Y: b.chatY, W: chatGripHit, H: chatGripHit}
 	b.drawChatGrip(grip, hit)
@@ -291,6 +269,38 @@ func (b *UI2DBackend) chatDragAndResize(screenH float32) {
 
 	if b.chatY != beforeY {
 		b.chatH += beforeY - b.chatY
+	}
+
+	// The whole box drags, not a strip of it. Picking out the bare parts of
+	// the tab row left a target that was easy to miss and gave no sign of
+	// where it was; pressing anywhere that is not itself a control is what
+	// the box is expected to do.
+	//
+	// DragHandleFree is what makes that safe: it takes the press only if no
+	// tab, pictogram, scrollbar, text field or the corner above has already
+	// claimed it, all of which are handled before this runs.
+	window := ui2d.Rect{
+		X: b.chatX,
+		Y: b.chatY,
+		W: b.chatW,
+		H: chatTabH + b.chatH + chatInputH,
+	}
+
+	if window.Contains(b.ctx.Input().MouseX, b.ctx.Input().MouseY) {
+		b.wantCursor(cursor.StateClick)
+	}
+
+	beforeX, beforeDragY := b.chatX, b.chatY
+
+	b.ctx.DragHandleFree("hud_chat_drag", window, &b.chatX, &b.chatY)
+
+	// Traced because "it does not move" has two very different causes: the
+	// press never reaching the handle, and the box being dragged into a
+	// clamp. The second still reports movement here, so the log tells them
+	// apart.
+	if b.chatX != beforeX || b.chatY != beforeDragY {
+		trace.Emit(trace.HUD, "chat-drag",
+			zap.Float32("x", b.chatX), zap.Float32("y", b.chatY))
 	}
 
 	b.clampChatToScreen(screenH)
@@ -408,64 +418,116 @@ func (b *UI2DBackend) drawChatControls(x, y, w float32) {
 	right := x + w - chatGrip - chatCtrlGap
 
 	type control struct {
-		id      string
-		caption string
-		on      bool
-		click   func()
+		id    string
+		w     float32
+		on    bool
+		icon  func(box ui2d.Rect, tint ui2d.Color)
+		click func()
 	}
 
 	controls := []control{
-		{"chat_ctrl_last", chatControlCaptions[0], false, func() {
-			b.chatPinned = true
-		}},
-		{"chat_ctrl_lock", chatControlCaptions[1], b.chatLocked, func() {
+		{"chat_ctrl_lock", chatCtrlBtn, b.chatLocked, b.drawPadlock, func() {
 			b.chatLocked = !b.chatLocked
 		}},
-		{"chat_ctrl_minus", chatControlCaptions[2], false, func() {
+		{"chat_ctrl_minus", chatCtrlBtn, false, b.icon(chatIconMinus), func() {
 			b.stepChatHeight(-chatStepLines)
 		}},
-		{"chat_ctrl_plus", chatControlCaptions[3], false, func() {
+		{"chat_ctrl_plus", chatCtrlBtn, false, b.icon(chatIconPlus), func() {
 			b.stepChatHeight(chatStepLines)
+		}},
+		{"chat_ctrl_last", chatCtrlBtn + 6, false, b.drawChevrons, func() {
+			b.chatPinned = true
 		}},
 	}
 
-	r := b.ctx.Renderer()
 	btnY := y + (chatTabH-chatCtrlBtn)/2
 
 	for _, c := range controls {
-		// Sized to its caption: ">>" does not fit the square the other three
-		// sit in, and centring it in one just spills over the borders.
-		capW, capH := r.MeasureText(c.caption, 1)
-		btnW := max32(chatCtrlBtn, capW+6)
-		btnX := right - btnW
-		right -= btnW + chatCtrlGap
+		btnX := right - c.w
+		right -= c.w + chatCtrlGap
 
 		if btnX < x {
 			break
 		}
 
-		box := ui2d.Rect{X: btnX, Y: btnY, W: btnW, H: chatCtrlBtn}
-		hot := box.Contains(b.ctx.Input().MouseX, b.ctx.Input().MouseY)
+		box := ui2d.Rect{X: btnX, Y: btnY, W: c.w, H: chatCtrlBtn}
 
 		// Pictograms, not buttons: the original puts the marks straight on
-		// the strip with nothing drawn around them. Hovering brightens the
-		// glyph, which is the only chrome it gets.
-		glyph := chatCtrlIdle
+		// the strip with nothing drawn around them. The archive's icons carry
+		// their own color, so hovering lights them to full brightness rather
+		// than tinting them something else.
+		tint := chatCtrlIdle
 		switch {
 		case c.on:
-			glyph = chatCtrlOn
-		case hot:
-			glyph = chatCtrlHot
+			tint = chatCtrlOn
+		case box.Contains(b.ctx.Input().MouseX, b.ctx.Input().MouseY):
+			tint = chatCtrlHot
 		}
 
-		capX, capY := btnX+(btnW-capW)/2, btnY+(chatCtrlBtn-capH)/2
-		r.DrawText(capX+1, capY+1, c.caption, 1, chatShadow)
-		r.DrawText(capX, capY, c.caption, 1, glyph)
+		c.icon(box, tint)
 
-		if b.ctx.InvisibleButtonAt("hud_"+c.id, btnX, btnY, btnW, chatCtrlBtn) {
+		if b.ctx.InvisibleButtonAt("hud_"+c.id, box.X, box.Y, box.W, box.H) {
 			c.click()
 		}
 	}
+}
+
+// icon draws one of the archive's bitmaps centered in the box.
+func (b *UI2DBackend) icon(path string) func(ui2d.Rect, ui2d.Color) {
+	return func(box ui2d.Rect, tint ui2d.Color) {
+		tex, err := b.texCache.Load(path)
+		if err != nil {
+			return
+		}
+
+		x := box.X + (box.W-chatIconSize)/2
+		y := box.Y + (box.H-chatIconSize)/2
+		b.ctx.Renderer().DrawImage(tex.ID, x, y, chatIconSize, chatIconSize, tint)
+	}
+}
+
+// drawChevrons is the jump-to-newest mark: the interface's right arrow twice,
+// overlapped, which is the doubled chevron the original uses.
+func (b *UI2DBackend) drawChevrons(box ui2d.Rect, tint ui2d.Color) {
+	tex, err := b.texCache.Load(chatIconArrow)
+	if err != nil {
+		return
+	}
+
+	const size float32 = 11
+
+	y := box.Y + (box.H-size)/2
+	x := box.X + (box.W-size-size/2)/2
+
+	r := b.ctx.Renderer()
+	r.DrawImage(tex.ID, x, y, size, size, tint)
+	r.DrawImage(tex.ID, x+size/2, y, size, size, tint)
+}
+
+// drawPadlock draws the lock from primitives: a body with a shackle over it.
+// The archive has no padlock I could find under any plausible name, and a
+// letter L in its place was the thing that could not be read.
+func (b *UI2DBackend) drawPadlock(box ui2d.Rect, tint ui2d.Color) {
+	r := b.ctx.Renderer()
+
+	const (
+		bodyW float32 = 10
+		bodyH float32 = 7
+		arch  float32 = 4
+	)
+
+	bodyX := box.X + (box.W-bodyW)/2
+	bodyY := box.Y + (box.H-bodyH-arch)/2 + arch
+
+	// The shackle: two uprights and a bar across them, inset so it reads as
+	// an arch rather than a second box.
+	shackleX := bodyX + 2
+	shackleW := bodyW - 4
+	r.DrawRect(shackleX, bodyY-arch, shackleW, 2, tint)
+	r.DrawRect(shackleX, bodyY-arch, 2, arch, tint)
+	r.DrawRect(shackleX+shackleW-2, bodyY-arch, 2, arch, tint)
+
+	r.DrawRect(bodyX, bodyY, bodyW, bodyH, tint)
 }
 
 // stepChatHeight grows or shrinks the box by whole lines, keeping the input
@@ -617,35 +679,12 @@ func (b *UI2DBackend) outlineIfFocused(id string, box ui2d.Rect) {
 	r.DrawRect(box.X+box.W-1, box.Y, 1, box.H, chatFocusBorder)
 }
 
-// max32 is the float32 max the standard library only offers for float64.
-func max32(a, b float32) float32 {
-	if a > b {
-		return a
-	}
-
-	return b
-}
-
 // chatLineH is how far apart two messages sit: the font's own line advance
 // plus a gap. Measured rather than fixed, because a constant that looks right
 // on one font at one pixel density crowds the lines on another — at 14px the
 // descenders of one message ran into the next.
 func (b *UI2DBackend) chatLineH() float32 {
 	return b.ctx.Renderer().FontLineHeight(1) + chatLineGap
-}
-
-// chatControlsW is how much of the tab strip the control panel occupies, which
-// the drag handle has to stay clear of.
-func (b *UI2DBackend) chatControlsW() float32 {
-	r := b.ctx.Renderer()
-
-	var total float32
-	for _, caption := range chatControlCaptions {
-		capW, _ := r.MeasureText(caption, 1)
-		total += max32(chatCtrlBtn, capW+6) + chatCtrlGap
-	}
-
-	return total
 }
 
 // chatTabLines is the scrollback the selected tab shows.

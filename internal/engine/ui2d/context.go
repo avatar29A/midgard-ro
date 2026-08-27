@@ -977,6 +977,20 @@ func (c *Context) DragHandle(id string, handle Rect, x, y *float32) {
 	}
 }
 
+// DragHandleFree is DragHandle for a surface that lies underneath other
+// widgets: it takes the press only when nothing else has claimed it.
+//
+// A window whose whole body drags needs this. Plain DragHandle claims on any
+// press inside its rectangle, and since the body sits under the controls it
+// would start a drag from a click on a tab or in a text field.
+func (c *Context) DragHandleFree(id string, handle Rect, x, y *float32) {
+	if c.activeWidget != "" && c.activeWidget != id {
+		return
+	}
+
+	c.DragHandle(id, handle, x, y)
+}
+
 // GetScreenSize returns the current screen dimensions.
 func (c *Context) GetScreenSize() (float32, float32) {
 	w, h := c.renderer.GetScreenSize()
