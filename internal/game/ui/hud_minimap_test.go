@@ -24,7 +24,7 @@ func TestMinimapProjectCentersTheMiddleCell(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			px, py := minimapProject(tt.cellsX/2, tt.cellsY/2, tt.cellsX, tt.cellsY)
+			px, py := minimapProject(tt.cellsX/2, tt.cellsY/2, tt.cellsX, tt.cellsY, 1, 0, 0)
 
 			if math.Abs(float64(px)-box/2) > 0.5 {
 				t.Errorf("the middle cell sits at x=%v, want the box center %v", px, box/2)
@@ -40,8 +40,8 @@ func TestMinimapProjectCentersTheMiddleCell(t *testing.T) {
 // this wrong is not obvious on a square map — the marker just moves the wrong
 // way as you walk.
 func TestMinimapProjectFlipsY(t *testing.T) {
-	_, southY := minimapProject(100, 10, 312, 392)
-	_, northY := minimapProject(100, 380, 312, 392)
+	_, southY := minimapProject(100, 10, 312, 392, 1, 0, 0)
+	_, northY := minimapProject(100, 380, 312, 392, 1, 0, 0)
 
 	if !(northY < southY) {
 		t.Errorf("walking north moved the marker from y=%v to y=%v; north should be up", southY, northY)
@@ -56,7 +56,7 @@ func TestMinimapProjectStaysInTheBox(t *testing.T) {
 
 	corners := [][2]int{{0, 0}, {cellsX - 1, 0}, {0, cellsY - 1}, {cellsX - 1, cellsY - 1}}
 	for _, c := range corners {
-		px, py := minimapProject(c[0], c[1], cellsX, cellsY)
+		px, py := minimapProject(c[0], c[1], cellsX, cellsY, 1, 0, 0)
 		if px < 0 || px > box || py < 0 || py > box {
 			t.Errorf("cell (%d,%d) projects to (%v,%v), outside the %v box", c[0], c[1], px, py, box)
 		}
@@ -71,14 +71,14 @@ func TestMinimapProjectLetterboxesTheShortAxis(t *testing.T) {
 	// left edge sits (392-312)/2/392 of the way in.
 	wantLeft := float32((392.0 - 312.0) / 2 / 392.0 * box)
 
-	px, _ := minimapProject(0, 0, 312, 392)
+	px, _ := minimapProject(0, 0, 312, 392, 1, 0, 0)
 	if math.Abs(float64(px-wantLeft)) > 0.5 {
 		t.Errorf("cell x=0 projects to %v, want %v — the short axis is not centered", px, wantLeft)
 	}
 }
 
 func TestMinimapProjectHandlesAnEmptyMap(t *testing.T) {
-	if px, py := minimapProject(5, 5, 0, 0); px != 0 || py != 0 {
+	if px, py := minimapProject(5, 5, 0, 0, 1, 0, 0); px != 0 || py != 0 {
 		t.Errorf("a map with no cells projected to (%v,%v), want the origin", px, py)
 	}
 }
@@ -98,5 +98,71 @@ func TestMinimapImagePath(t *testing.T) {
 		if got := minimapImagePath(tt.mapName); got != tt.want {
 			t.Errorf("minimapImagePath(%q) = %q, want %q", tt.mapName, got, tt.want)
 		}
+	}
+}
+
+// TestMinimapZoomKeepsThePlayerCentered: zooming in shows a slice of the map
+// around the player, and the whole point is that the marker stays put while
+// the map moves under it.
+func TestMinimapZoomKeepsThePlayerCentered(t *testing.T) {
+	const cellsX, cellsY = 312, 392
+
+	for _, zoom := range minimapZooms[1:] {
+		px, py := minimapProject(100, 200, cellsX, cellsY, zoom, 100, 200)
+
+		if px != minimapSize/2 || py != minimapSize/2 {
+			t.Errorf("at zoom %v the centered cell drew at (%v,%v), want the box center %v",
+				zoom, px, py, minimapSize/2)
+		}
+	}
+}
+
+// TestMinimapZoomSpreadsTheMap: a cell a fixed distance from the player should
+// sit further from the marker the further you zoom in.
+func TestMinimapZoomSpreadsTheMap(t *testing.T) {
+	const cellsX, cellsY = 312, 392
+
+	near, _ := minimapProject(120, 200, cellsX, cellsY, 1, 100, 200)
+	far, _ := minimapProject(120, 200, cellsX, cellsY, 4, 100, 200)
+
+	centerAt1, _ := minimapProject(100, 200, cellsX, cellsY, 1, 100, 200)
+
+	spread1 := near - centerAt1
+	spread4 := far - minimapSize/2
+
+	if !(spread4 > spread1*3) {
+		t.Errorf("zooming 4x spread a cell from %v to %v; it should be about four times further",
+			spread1, spread4)
+	}
+}
+
+// TestMinimapViewStaysInsideTheImage: the window must never run off the edge,
+// or walking into a corner shows blank space beside the map.
+func TestMinimapViewStaysInsideTheImage(t *testing.T) {
+	const cellsX, cellsY = 312, 392
+
+	corners := [][2]int{{0, 0}, {cellsX - 1, 0}, {0, cellsY - 1}, {cellsX - 1, cellsY - 1}}
+
+	for _, zoom := range minimapZooms {
+		for _, c := range corners {
+			u0, v0, u1, v1 := minimapViewUV(c[0], c[1], cellsX, cellsY, zoom)
+
+			if u0 < 0 || v0 < 0 || u1 > 1.0001 || v1 > 1.0001 {
+				t.Errorf("at zoom %v cell (%d,%d) views (%v,%v)-(%v,%v), outside the image",
+					zoom, c[0], c[1], u0, v0, u1, v1)
+			}
+			if u1 <= u0 || v1 <= v0 {
+				t.Errorf("at zoom %v cell (%d,%d) views an empty rect", zoom, c[0], c[1])
+			}
+		}
+	}
+}
+
+// TestMinimapViewIsWholeAtZoomOne: zoom 1 shows the entire map, which is what
+// the minimap has always done and what the - button returns to.
+func TestMinimapViewIsWholeAtZoomOne(t *testing.T) {
+	u0, v0, u1, v1 := minimapViewUV(150, 200, 312, 392, 1)
+	if u0 != 0 || v0 != 0 || u1 != 1 || v1 != 1 {
+		t.Errorf("zoom 1 views (%v,%v)-(%v,%v), want the whole image", u0, v0, u1, v1)
 	}
 }
