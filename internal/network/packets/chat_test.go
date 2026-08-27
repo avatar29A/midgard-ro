@@ -257,3 +257,42 @@ func TestEncodeWhisperRejectsOverlongName(t *testing.T) {
 		t.Error("a 24-character name cannot be terminated and must be refused")
 	}
 }
+
+// TestDecodeWhisperAck covers the packet that says whether a whisper landed.
+// Its length is what the framing table already declares for 0x09DF: the id,
+// the result, and our own character id.
+func TestDecodeWhisperAck(t *testing.T) {
+	if n, ok := Length(ZC_ACK_WHISPER); !ok || n != 7 {
+		t.Fatalf("length table says %d, %v; want 7, true", n, ok)
+	}
+
+	pkt := []byte{0xDF, 0x09, WhisperOffline, 1, 0, 0, 0}
+
+	got, ok := DecodeWhisperAck(pkt)
+	if !ok {
+		t.Fatal("a full packet must decode")
+	}
+	if got != WhisperOffline {
+		t.Errorf("result = %d, want %d", got, WhisperOffline)
+	}
+}
+
+func TestDecodeWhisperAckShort(t *testing.T) {
+	if _, ok := DecodeWhisperAck([]byte{0xDF, 0x09}); ok {
+		t.Error("a packet with no result byte must not decode")
+	}
+}
+
+// TestWhisperFailureOnlyForFailures: a successful whisper is displayed as the
+// line you sent, so treating result 0 as an error message would replace it.
+func TestWhisperFailureOnlyForFailures(t *testing.T) {
+	if got := WhisperFailure(WhisperOK, "Kafra"); got != "" {
+		t.Errorf("WhisperFailure(ok) = %q, want empty", got)
+	}
+	if got := WhisperFailure(WhisperOffline, "Kafra"); got == "" {
+		t.Error("an offline target must produce a message")
+	}
+	if got := WhisperFailure(200, "Kafra"); got != "" {
+		t.Errorf("WhisperFailure(unknown) = %q, want empty", got)
+	}
+}

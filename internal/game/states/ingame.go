@@ -91,6 +91,11 @@ type InGameState struct {
 	// chat is the scrollback the chat box shows.
 	chat ChatLog
 
+	// pendingWhisper is the private message waiting on its acknowledgement,
+	// which is what says whether it reached anyone. One at a time is enough:
+	// the server answers each before the box can send another.
+	pendingWhisper pendingWhisper
+
 	// unitTraceAt rate limits the unit render statistics.
 	unitTraceAt time.Time
 
@@ -1001,6 +1006,7 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_NOTIFY_PLAYERCHAT, s.handlePlayerChat)
 	s.client.RegisterHandler(packets.ZC_BROADCAST, s.handleBroadcast)
 	s.client.RegisterHandler(packets.ZC_WHISPER, s.handleWhisper)
+	s.client.RegisterHandler(packets.ZC_ACK_WHISPER, s.handleWhisperAck)
 	s.client.RegisterHandler(packets.ZC_PAR_CHANGE, s.handleStatusChange)
 	s.client.RegisterHandler(packets.ZC_LONGPAR_CHANGE, s.handleStatusChange)
 	s.client.RegisterHandler(packets.ZC_LONGLONGPAR_CHANGE, s.handleStatusChange)
@@ -1271,6 +1277,50 @@ func (s *InGameState) handleWhisper(data []byte) error {
 	return s.addChat(packets.DecodeWhisper(data))
 }
 
+// pendingWhisper is a sent private message held until the server says what
+// became of it.
+type pendingWhisper struct {
+	target string
+	text   string
+}
+
+// handleWhisperAck reports what became of the whisper we sent.
+//
+// The line you send is displayed here rather than when you send it: the server
+// echoes public chat back but not private messages, so this acknowledgement is
+// the only confirmation that anyone received it.
+func (s *InGameState) handleWhisperAck(data []byte) error {
+	result, ok := packets.DecodeWhisperAck(data)
+	if !ok {
+		return nil
+	}
+
+	pending := s.pendingWhisper
+	s.pendingWhisper = pendingWhisper{}
+
+	// Nothing outstanding means the ack is not ours to display — a stale one
+	// after a relog, say. Better silent than attributed to the wrong name.
+	if pending.target == "" {
+		return nil
+	}
+
+	trace.Emit(trace.HUD, "whisper-ack",
+		zap.Uint8("result", result), zap.String("target", pending.target))
+
+	if failure := packets.WhisperFailure(result, pending.target); failure != "" {
+		return s.addChat(&packets.ChatMessage{
+			Kind: packets.ChatWhisper,
+			Text: failure,
+		})
+	}
+
+	return s.addChat(&packets.ChatMessage{
+		Kind:    packets.ChatWhisper,
+		Speaker: "To " + pending.target,
+		Text:    pending.text,
+	})
+}
+
 // addChat folds one decoded message into the scrollback.
 func (s *InGameState) addChat(msg *packets.ChatMessage) error {
 	if msg == nil {
@@ -1313,8 +1363,12 @@ func (s *InGameState) SendChat(message string) error {
 	return s.client.Send(pkt)
 }
 
-// SendWhisper sends a private message to target. The echo of our own line
-// comes back from the server as ZC_ACK_WHISPER, so nothing is added locally.
+// SendWhisper sends a private message to target.
+//
+// Nothing is added to the scrollback here. The line is held until the server
+// acknowledges it, because the acknowledgement is what says whether the target
+// exists — displaying it on send would show a message to a name that is not
+// online as though it had arrived.
 func (s *InGameState) SendWhisper(target, message string) error {
 	pkt := packets.EncodeWhisper(target, message)
 	if pkt == nil {
@@ -1327,7 +1381,13 @@ func (s *InGameState) SendWhisper(target, message string) error {
 	trace.Emit(trace.HUD, "whisper-send",
 		zap.String("target", target), zap.Int("bytes", len(message)))
 
-	return s.client.Send(pkt)
+	if err := s.client.Send(pkt); err != nil {
+		return err
+	}
+
+	s.pendingWhisper = pendingWhisper{target: target, text: message}
+
+	return nil
 }
 
 // ChatLines returns the chat scrollback for the UI, oldest first.
