@@ -92,6 +92,11 @@ type UI2DBackend struct {
 	// each window draws itself when its entry is set.
 	hudOpen map[HUDWindow]bool
 
+	// The minimap image for the map we are on. minimapTried is the path last
+	// attempted, so a map that ships no image is not retried every frame.
+	minimapTex   *TextureInfo
+	minimapTried string
+
 	// Cached widget states
 	loginUsername string
 	loginPassword string
@@ -899,6 +904,7 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 	}
 
 	b.renderBasicInfo(state)
+	b.drawMinimap(state, width)
 	b.renderNPCDialog(state, width, height)
 	b.renderNPCMenu(state, width, height)
 
@@ -1005,6 +1011,12 @@ func (b *UI2DBackend) RenderFPSOverlay(fps float64, width, height float32) {
 
 	x := width - textW - 10
 	y := float32(5)
+
+	// The minimap owns the top-right corner, as it does in the original, so
+	// the counter drops below it rather than printing over the map.
+	if b.minimapTex != nil {
+		y += minimapSize + minimapMargin
+	}
 
 	// Semi-transparent background
 	b.ctx.Renderer().DrawRect(x-5, y-2, textW+10, 20, ui2d.ColorPanelBg.WithAlpha(0.5))

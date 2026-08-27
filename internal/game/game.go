@@ -686,8 +686,15 @@ func (g *Game) renderUI() {
 		stats := state.Stats()
 		dialog := state.Dialog()
 
+		mapCellsX, mapCellsY := 0, 0
+		if gat := state.GetGAT(); gat != nil {
+			mapCellsX, mapCellsY = int(gat.Width), int(gat.Height)
+		}
+
 		uiState := ui.InGameUIState{
 			MapName:         state.GetMapName(),
+			MapCellsX:       mapCellsX,
+			MapCellsY:       mapCellsY,
 			PlayerX:         playerX,
 			PlayerY:         playerY,
 			PlayerZ:         playerZ,

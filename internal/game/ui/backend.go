@@ -109,6 +109,10 @@ type InGameUIState struct {
 	// Map info
 	MapName string
 
+	// MapCellsX/Y are the map's size in cells, which the minimap needs to put
+	// the player marker in the right place.
+	MapCellsX, MapCellsY int
+
 	// Player position
 	PlayerX, PlayerY, PlayerZ float32
 	PlayerTileX, PlayerTileY  int
