@@ -969,30 +969,6 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 		}
 	}
 
-	// Bottom status bar (drawn as simple text, not a window)
-	statusText := state.MapName
-	if state.StatusMessage != "" {
-		statusText = state.StatusMessage
-	}
-	scale := float32(1.0)
-	const barHeight = 25
-	barY := height - barHeight
-	b.ctx.Renderer().DrawRect(0, barY, width, barHeight, ui2d.ColorPanelBg)
-
-	// Viewport size, zoom and cell position, right-aligned. Zoom is shown
-	// because it is remembered between sessions — without a readout there is
-	// no way to tell what was restored, or to get back to a distance you liked.
-	posText := fmt.Sprintf("%.0fx%.0f   Zoom %.0f   (%d, %d)",
-		width, height, state.CamDistance, state.PlayerTileX, state.PlayerTileY)
-	posW, textH := b.ctx.Renderer().MeasureText(posText, scale)
-
-	// Center both ends on the bar rather than offsetting by a fixed few
-	// pixels: text height depends on the font and the display's pixel density,
-	// so a constant only happens to look right on one machine.
-	textY := barY + (barHeight-textH)/2
-
-	b.ctx.Renderer().DrawText(10, textY, statusText, scale, ui2d.ColorTextOnDark)
-	b.ctx.Renderer().DrawText(width-posW-10, textY, posText, scale, ui2d.ColorTextOnDark)
 }
 
 // describeDialog is the debug overlay's one-line account of the conversation.
