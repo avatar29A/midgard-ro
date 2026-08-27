@@ -60,6 +60,9 @@ type InGameState struct {
 	TileX   int // Current tile X
 	TileY   int // Current tile Y
 
+	// chat is the scrollback the chat box shows.
+	chat ChatLog
+
 	// unitTraceAt rate limits the unit render statistics.
 	unitTraceAt time.Time
 
@@ -641,6 +644,9 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_NPCACK_MAPMOVE, s.handleMapChange)
 	s.client.RegisterHandler(packets.ZC_NOTIFY_PLAYERMOVE, s.handlePlayerMove)
 	s.client.RegisterHandler(packets.ZC_NOTIFY_TIME, s.handleServerTick)
+	s.client.RegisterHandler(packets.ZC_NOTIFY_CHAT, s.handleChat)
+	s.client.RegisterHandler(packets.ZC_NOTIFY_PLAYERCHAT, s.handlePlayerChat)
+	s.client.RegisterHandler(packets.ZC_BROADCAST, s.handleBroadcast)
 	s.client.RegisterHandler(packets.ZC_PAR_CHANGE, s.handleStatusChange)
 	s.client.RegisterHandler(packets.ZC_LONGPAR_CHANGE, s.handleStatusChange)
 	s.client.RegisterHandler(packets.ZC_LONGLONGPAR_CHANGE, s.handleStatusChange)
@@ -884,6 +890,44 @@ func (s *InGameState) applyUnit(u *packets.Entity, kind string) error {
 		zap.Int("units", s.entityManager.Count()),
 		zap.Int("sheets", sheets))
 	return nil
+}
+
+// handleChat handles a line someone else spoke.
+func (s *InGameState) handleChat(data []byte) error {
+	return s.addChat(packets.DecodeChat(data))
+}
+
+// handlePlayerChat handles our own line echoed back, and the messages the
+// server sends us directly — rAthena's welcome lines arrive this way.
+func (s *InGameState) handlePlayerChat(data []byte) error {
+	return s.addChat(packets.DecodePlayerChat(data))
+}
+
+// handleBroadcast handles a server-wide announcement.
+func (s *InGameState) handleBroadcast(data []byte) error {
+	return s.addChat(packets.DecodeBroadcast(data))
+}
+
+// addChat folds one decoded message into the scrollback.
+func (s *InGameState) addChat(msg *packets.ChatMessage) error {
+	if msg == nil {
+		return nil
+	}
+
+	s.chat.Add(msg)
+
+	trace.Emit(trace.HUD, "chat",
+		zap.Uint8("kind", uint8(msg.Kind)),
+		zap.String("speaker", msg.Speaker),
+		zap.Int("bytes", len(msg.Text)),
+		zap.Int("lines", s.chat.Len()))
+
+	return nil
+}
+
+// ChatLines returns the chat scrollback for the UI, oldest first.
+func (s *InGameState) ChatLines() []ChatLine {
+	return s.chat.Lines()
 }
 
 // selfAID returns our own account id, which is what identifies our character

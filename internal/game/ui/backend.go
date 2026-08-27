@@ -4,6 +4,7 @@ package ui
 import (
 	"github.com/Faultbox/midgard-ro/internal/engine/cursor"
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
+	"github.com/Faultbox/midgard-ro/internal/game/states"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
 )
 
@@ -112,6 +113,9 @@ type InGameUIState struct {
 	// MapCellsX/Y are the map's size in cells, which the minimap needs to put
 	// the player marker in the right place.
 	MapCellsX, MapCellsY int
+
+	// ChatLines is the chat scrollback, oldest first.
+	ChatLines []states.ChatLine
 
 	// Player position
 	PlayerX, PlayerY, PlayerZ float32
