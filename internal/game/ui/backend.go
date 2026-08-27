@@ -190,8 +190,10 @@ type InGameUIState struct {
 	StatusPoints int
 	SkillPoints  int
 
-	// Skills is what the character can do, as the server listed it.
-	Skills []packets.Skill
+	// Skills is what the character can do, as the server listed it, and
+	// Inventory what it is carrying.
+	Skills    []packets.Skill
+	Inventory []packets.InventoryItem
 
 	// The numbers derived from those six, down the right of the window.
 	Atk, AtkBonus    int

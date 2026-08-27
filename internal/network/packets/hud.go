@@ -150,3 +150,135 @@ func DecodeSkillList(data []byte) []Skill {
 
 	return list
 }
+
+// The inventory.
+//
+// It arrives as two lists, because the client shows stackables and equipment
+// differently: ZC_INVENTORY_ITEMLIST_NORMAL for things that stack and
+// ZC_INVENTORY_ITEMLIST_EQUIP for things that are worn. Both share a 5-byte
+// header — type, length, and which inventory it is — and then a run of
+// fixed-size entries.
+//
+// Entry sizes are where this packet punishes guesswork: they grew with the
+// packet version, and at ours the card slots are four uint32 rather than four
+// uint16, which alone is eight bytes a row.
+const (
+	// ZC_INVENTORY_ITEMLIST_NORMAL is the stackables. 34-byte entries.
+	ZC_INVENTORY_ITEMLIST_NORMAL uint16 = 0x0B09
+
+	// ZC_INVENTORY_ITEMLIST_EQUIP is the equipment. 68-byte entries.
+	ZC_INVENTORY_ITEMLIST_EQUIP uint16 = 0x0B39
+
+	itemListHeaderLen = 5
+	normalItemLen     = 34
+	equipItemLen      = 68
+)
+
+// InventoryItem is one line of the inventory.
+type InventoryItem struct {
+	// Index is the slot the server keeps it in, which is how everything else
+	// refers to it.
+	Index int
+
+	// ID is the item, and Count how many. Equipment always counts one.
+	ID    uint32
+	Count int
+
+	// Equipped is set for a worn item, which the list marks with a place on
+	// the body rather than a count.
+	Equipped bool
+}
+
+// ItemListRemainder reports how many bytes are left over when a list's body
+// is cut into entries of the given size.
+//
+// Zero means the size fits. Anything else means the layout this was built for
+// is not the layout that arrived, and the caller should say so rather than
+// display whatever fell out.
+func ItemListRemainder(data []byte, entryLen int) int {
+	if len(data) < itemListHeaderLen {
+		return 0
+	}
+
+	length := min(int(readU16(data, 2)), len(data))
+
+	body := length - itemListHeaderLen
+	if body <= 0 {
+		return 0
+	}
+
+	return body % entryLen
+}
+
+// NormalItemLen and EquipItemLen are the entry sizes this decodes, exported so
+// a caller can report a mismatch against them.
+const (
+	NormalItemLen = normalItemLen
+	EquipItemLen  = equipItemLen
+)
+
+// DecodeInventoryNormal reads the stackable half of the inventory.
+func DecodeInventoryNormal(data []byte) []InventoryItem {
+	return decodeItemList(data, normalItemLen, func(entry []byte) InventoryItem {
+		return InventoryItem{
+			Index: int(readU16(entry, 0)),
+			ID:    readU32(entry, 2),
+			Count: int(int16(readU16(entry, 7))),
+		}
+	})
+}
+
+// DecodeInventoryEquip reads the worn half. These have no count — one of each
+// — and carry where on the body they sit instead.
+func DecodeInventoryEquip(data []byte) []InventoryItem {
+	return decodeItemList(data, equipItemLen, func(entry []byte) InventoryItem {
+		return InventoryItem{
+			Index: int(readU16(entry, 0)),
+			ID:    readU32(entry, 2),
+			Count: 1,
+			// WearState is zero for something carried and non-zero for
+			// something worn.
+			Equipped: readU32(entry, 11) != 0,
+		}
+	})
+}
+
+// decodeItemList walks the entries a list packet carries.
+//
+// The declared length wins over the buffer's, and a tail too short for a
+// whole entry is dropped rather than read past — a list whose entry size does
+// not divide its body is a version mismatch, not something to improvise on.
+func decodeItemList(data []byte, entryLen int, read func([]byte) InventoryItem) []InventoryItem {
+	if len(data) < itemListHeaderLen {
+		return nil
+	}
+
+	length := int(readU16(data, 2))
+	if length > len(data) {
+		length = len(data)
+	}
+
+	body := length - itemListHeaderLen
+	if body <= 0 {
+		return nil
+	}
+
+	// A body that does not divide by the entry size means the entry size is
+	// wrong for this server's packet version — the layout grew and shrank
+	// across versions, and at ours the card slots alone are eight bytes wider
+	// than they were. Reporting it is the point: a silent misparse shows up
+	// as an inventory of nonsense, which is far harder to trace back here.
+	if body%entryLen != 0 {
+		return nil
+	}
+
+	count := body / entryLen
+
+	items := make([]InventoryItem, 0, count)
+	for i := 0; i < count; i++ {
+		at := itemListHeaderLen + i*entryLen
+		items = append(items, read(data[at:at+entryLen]))
+	}
+
+	return items
+}
