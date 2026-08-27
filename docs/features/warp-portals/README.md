@@ -502,19 +502,44 @@ change; the character, stats, camera and handlers are not.
   `render` trace shows no `render.sheet` for job 45; `entities_test.go`.
 - **Reference:** ref-01 ①, ref-04 ③, grf-ring-blue ⑥, current-prontera-door ⑫
 
-![step4-portal — our client at prontera 136,219: the portal in the doorway of prt04, tinted to the original's blue](./step4-portal.jpg)
+![step4-portal — our client inside prt_in beside the return warp: the portal's rings and sparkles on a dark floor](./step4-portal.jpg)
+![step4-portal-street — the same portal in prt04's doorway on Prontera's pale pavement](./step4-portal-street.jpg)
 
-Done. `internal/engine/scene/portal.go` is roBrowser's cylinder — twenty
-segments, the top ring half a segment ahead of the bottom so the spikes lean,
-`ring_blue.tga` wrapped once around, a quarter degree per millisecond of spin
-— plus a soft procedural disc on the ground, which the real-client frames
-show and the texture alone would not give. Added light over a sunlit doorway
-came out white in the first capture, so the tube is tinted `(0.55, 0.8, 1.0)`
-at nine tenths. Class 45 and 139 are `TypeWarp`; only 45 is drawn, never as
-a sprite (`render.sheet` lists no job 45), with no name and no shadow. The
-renderer belongs to the state, like the player's, so a warp costs no
-reload. Proportions are by eye against ref-04 — the thing to adjust in
-review, if anything.
+Done, and **rebuilt once after testing** (see below). `internal/engine/scene/portal.go`
+draws the effect flat on the ground: three broad rings of pale blue light
+with a swirl through them, six four-pointed sparkles set around the widest,
+a point at the middle, turning a tenth of a degree per millisecond — a
+little over three seconds for a full turn — and about four cells across.
+The texture is **generated**, not loaded: the archive has no picture of this
+effect, and what it ships under the likely names (`ring_blue.tga` and its
+siblings) is the vertical spikes of other effects. Class 45 and 139 are
+`TypeWarp`; only 45 is drawn, never as a sprite (`render.sheet` lists no job
+45), with no name and no shadow. The renderer belongs to the state, like the
+player's, so a warp costs no reload.
+
+**What the first build got wrong.** It was a tall spinning tube, built from
+roBrowser's `Cylinder.js` — the primitive the original uses for *casting
+circles*, not for a warp. The reference frames had shown a flat ringed disc
+all along, and Boris's own capture of the original settled it: flat, wide,
+ringed, sparkling. Two further faults came out of rebuilding it:
+
+- **Added light cannot hold a pattern on a pale floor.** On Prontera's
+  pavement everything above about a third of full brightness clipped to
+  white and the rings vanished into one smear. It is blended over the floor
+  now, which reads on dark stone and pale pavement alike.
+- **Blending alpha the ordinary way punched a hole in the scene.** The scene
+  is drawn into an offscreen buffer the interface later composites *by its
+  alpha*, and everything else in it writes alpha 1. `ONE_MINUS_SRC_ALPHA`
+  wrote the portal's own shape into that alpha channel, and what showed
+  through the hole was the interface behind it — hard bands of cyan and
+  black in the middle of the street. `BlendFuncSeparate(SRC_ALPHA,
+  ONE_MINUS_SRC_ALPHA, ZERO, ONE)` leaves the destination alpha alone. The
+  additive version had hidden this by saturating alpha to 1; **any future
+  effect that blends into the scene has to do the same**.
+
+`PORTAL_DUMP=<file> go test ./internal/engine/scene/ -run TestDumpPortalTexture`
+writes the generated texture composited over a pale and a dark floor, which
+is how the pattern was tuned without a round trip through the client.
 
 ### Step 5 — The door cursor, and clicking a portal walks onto it ✅
 - **Changes:** `game.go` (`updateCursor`: `TypeWarp` → `cursor.StateWarp`), `npcpick.go` (`isClickable` excludes warps; `ClickWorld` walks to a warp's tile)
@@ -656,6 +681,11 @@ None open.
 
 ## Revision log
 
+- 2026-08-27 — **Portal rebuilt after testing:** flat ringed disc with
+  sparkles, as the original draws it, instead of the tall tube the plan took
+  from roBrowser's casting-circle primitive; blended rather than added; and
+  `BlendFuncSeparate` so it stops punching its own shape out of the scene's
+  alpha.
 - 2026-08-27 — **Indoor rule reversed in testing:** zoom held at the default
   distance and rotation allowed, instead of the original's rotation-off /
   zoom-free. Snapping to the default on entry so the street's zoom is not
