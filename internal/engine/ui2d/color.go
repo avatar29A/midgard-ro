@@ -47,10 +47,25 @@ var (
 	ColorInputBorderFocus = Color{0.21, 0.36, 0.80, 1}
 	// ColorText is the default text color, tuned for legibility on the cream
 	// win_msgbox.bmp body (which is the dominant text surface).
-	ColorText       = Color{0.1, 0.1, 0.15, 1}
-	ColorTextOnDark = Color{0.9, 0.9, 0.9, 1}
-	ColorTextDim    = Color{0.4, 0.4, 0.5, 1}
-	ColorHighlight  = Color{0.2, 0.6, 0.9, 1}
+	ColorText = Color{0.1, 0.1, 0.15, 1}
+	// ColorSelection is the wash behind selected text — pale enough that
+	// ColorText still reads through it.
+	ColorSelection = Color{0.35, 0.55, 0.95, 0.45}
+
+	// The sound dialog's trackbar and checkbox, which the original draws as
+	// Windows controls rather than as painted RO widgets: a pale face inside
+	// a thin border, with a blue-grey grip.
+	ColorTrackFace    = Color{0.898, 0.898, 0.906, 1}
+	ColorTrackBorder  = Color{0.502, 0.502, 0.514, 1}
+	ColorSliderEdge   = Color{0.376, 0.427, 0.706, 1}
+	ColorKnobFace     = Color{0.545, 0.588, 0.784, 1}
+	ColorCheckFace    = Color{1, 1, 1, 1}
+	ColorCheckFaceHot = Color{0.937, 0.949, 0.98, 1}
+	ColorCheckBorder  = Color{0.286, 0.286, 0.298, 1}
+	ColorCheckMark    = Color{0.235, 0.290, 0.588, 1}
+	ColorTextOnDark   = Color{0.9, 0.9, 0.9, 1}
+	ColorTextDim      = Color{0.4, 0.4, 0.5, 1}
+	ColorHighlight    = Color{0.2, 0.6, 0.9, 1}
 	// ColorTitleText is used on the win_msgbox light-blue title bar.
 	// The RO accent (rgb 53,93,204) is too saturated for thin glyphs at
 	// 14px; this is a deeper navy that reads as a window-chrome label.

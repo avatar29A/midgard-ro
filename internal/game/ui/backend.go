@@ -4,6 +4,7 @@ package ui
 import (
 	"github.com/Faultbox/midgard-ro/internal/engine/cursor"
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
+	"github.com/Faultbox/midgard-ro/internal/game/states"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
 )
 
@@ -11,6 +12,25 @@ import (
 // This abstraction allows switching between different UI implementations
 // (e.g., ImGui, custom ui2d) without changing game logic.
 type UIBackend interface {
+	// ToggleEscMenu opens the menu Escape shows, or closes it.
+	ToggleEscMenu()
+
+	// EscMenuOpen reports whether that menu is showing.
+	EscMenuOpen() bool
+
+	// TakeEscAction returns what the player picked in it and clears it.
+	TakeEscAction() EscAction
+
+	// SetSoundSettings seeds the sound dialog from what is actually playing.
+	SetSoundSettings(s SoundSettings)
+
+	// TakeSoundSettings returns the sound settings when they have changed.
+	TakeSoundSettings() (SoundSettings, bool)
+
+	// TakeChatMessage returns a line the player has entered and clears it,
+	// so the game layer can send it — the interface has no client of its own.
+	TakeChatMessage() (target, message string)
+
 	// Begin starts a new UI frame.
 	Begin()
 
@@ -29,6 +49,10 @@ type UIBackend interface {
 
 	// SetCursorState switches which of the original's cursors is drawn.
 	SetCursorState(state cursor.State)
+
+	// WantCursor is the cursor an interface element under the pointer asked
+	// for while drawing, and whether anything asked at all.
+	WantCursor() (cursor.State, bool)
 
 	// Input returns the input state for the current frame.
 	// Note: This returns the ui2d InputState; ImGui backends should provide
@@ -112,6 +136,17 @@ type LoadingUIState struct {
 type InGameUIState struct {
 	// Map info
 	MapName string
+
+	// MapCellsX/Y are the map's size in cells, which the minimap needs to put
+	// the player marker in the right place.
+	MapCellsX, MapCellsY int
+
+	// ChatLines is the chat scrollback, oldest first.
+	ChatLines []states.ChatLine
+
+	// EntityBars are the HP/SP bars to draw under units, already projected
+	// into viewport pixels.
+	EntityBars []states.EntityBar
 
 	// Player position
 	PlayerX, PlayerY, PlayerZ float32

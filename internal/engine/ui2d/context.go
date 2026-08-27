@@ -14,6 +14,11 @@ type Context struct {
 	hotWidget    string
 	activeWidget string
 
+	// selectAll names the text field whose whole value is selected, and
+	// focusNext is a Tab looking for the next field to land on.
+	selectAll string
+	focusNext bool
+
 	// Window state
 	windows map[string]*WindowState
 
@@ -178,6 +183,12 @@ func (c *Context) CaptureMouse(rect Rect) {
 // the interface has to be drawn before anyone can click on it.
 func (c *Context) MouseCaptured() bool {
 	return c.mouseCaptured
+}
+
+// Focused reports whether the widget owns keyboard focus, so a caller drawing
+// its own chrome can show which of several fields the typing goes to.
+func (c *Context) Focused(id string) bool {
+	return c.activeWidget == id
 }
 
 // DoubleClickedIn reports a double click inside rect, attributed to id.
@@ -964,6 +975,44 @@ func (c *Context) DragHandle(id string, handle Rect, x, y *float32) {
 	if c.input.MouseLeftReleased {
 		c.activeWidget = ""
 	}
+}
+
+// Held claims the press inside handle and reports true for as long as the
+// button stays down.
+//
+// It is for a drag whose effect is not a position: the hotkey bar's corner
+// sets a row count from where the pointer has got to, which DragHandle's pair
+// of floats cannot express.
+func (c *Context) Held(id string, handle Rect) bool {
+	if c.input.MouseLeftPressed && handle.Contains(c.input.MouseX, c.input.MouseY) {
+		c.activeWidget = id
+	}
+
+	if c.activeWidget != id {
+		return false
+	}
+
+	if !c.input.MouseLeftDown {
+		c.activeWidget = ""
+
+		return false
+	}
+
+	return true
+}
+
+// DragHandleFree is DragHandle for a surface that lies underneath other
+// widgets: it takes the press only when nothing else has claimed it.
+//
+// A window whose whole body drags needs this. Plain DragHandle claims on any
+// press inside its rectangle, and since the body sits under the controls it
+// would start a drag from a click on a tab or in a text field.
+func (c *Context) DragHandleFree(id string, handle Rect, x, y *float32) {
+	if c.activeWidget != "" && c.activeWidget != id {
+		return
+	}
+
+	c.DragHandle(id, handle, x, y)
 }
 
 // GetScreenSize returns the current screen dimensions.

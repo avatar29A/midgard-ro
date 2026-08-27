@@ -36,6 +36,12 @@ type TexLoaderFunc func(path string) ([]byte, error)
 // in-game state reads walk speed, job and appearance back out of it.
 type Session struct {
 	Char *packets.CharInfo
+
+	// Where the character server is. Login works it out of the login
+	// server's answer and then hands us on; going back to character select
+	// from in-game has to dial it again, and nothing else remembers it.
+	CharServerHost string
+	CharServerPort int
 }
 
 // WalkSpeedMs returns the character's `speed` stat (milliseconds per cell),

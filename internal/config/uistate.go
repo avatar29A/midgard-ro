@@ -24,6 +24,32 @@ type UIState struct {
 	// CameraZoom is the third-person camera distance. Zero means "unset", in
 	// which case the state's default applies.
 	CameraZoom float32 `json:"camera_zoom,omitempty"`
+
+	// Where the chat box was left, and whether it was pinned there. A zero
+	// width or height means unset, and the box takes its default corner.
+	ChatX      float32 `json:"chat_x,omitempty"`
+	ChatY      float32 `json:"chat_y,omitempty"`
+	ChatW      float32 `json:"chat_w,omitempty"`
+	ChatH      float32 `json:"chat_h,omitempty"`
+	ChatLocked bool    `json:"chat_locked,omitempty"`
+
+	// Where the hotkey bar was left and how many of its rows were open. Zero
+	// rows means unset, and the bar opens with one beside the info panel.
+	HotkeyX    float32 `json:"hotkey_x,omitempty"`
+	HotkeyY    float32 `json:"hotkey_y,omitempty"`
+	HotkeyRows int     `json:"hotkey_rows,omitempty"`
+
+	// The sound dialog's levels and switches.
+	//
+	// The switches are written even when false — no omitempty — so that "off"
+	// survives a reload. Omitted, it would be indistinguishable from never
+	// having been set, and every start would turn the sound back on. Sound
+	// being set at all is what SoundSet records.
+	SoundSet  bool    `json:"sound_set,omitempty"`
+	BGMVolume float32 `json:"bgm_volume,omitempty"`
+	SFXVolume float32 `json:"sfx_volume,omitempty"`
+	BGMOn     bool    `json:"bgm_on"`
+	SFXOn     bool    `json:"sfx_on"`
 }
 
 // LoadUIState reads remembered UI state. A missing or unreadable file is not
@@ -40,6 +66,20 @@ func LoadUIState() UIState {
 		return UIState{}
 	}
 	return state
+}
+
+// UpdateUIState reads what is remembered, applies a change, and writes it
+// back.
+//
+// Whole-struct saves are how the chat's position would get erased: the camera
+// records its zoom on the way out, and a save that only knew about the zoom
+// would write zeroes over everything else. Callers change the field they own
+// and leave the rest alone.
+func UpdateUIState(apply func(*UIState)) error {
+	state := LoadUIState()
+	apply(&state)
+
+	return SaveUIState(state)
 }
 
 // SaveUIState writes remembered UI state, creating the directory if needed.

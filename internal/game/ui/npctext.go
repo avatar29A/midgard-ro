@@ -81,12 +81,20 @@ func removeTagPairs(message, open, close string, withBody bool) string {
 // A caret that is not followed by six hex digits is just a caret: scripts use
 // it in ordinary prose, and swallowing it would eat their punctuation.
 func ParseNPCText(message string) []TextRun {
+	return ParseNPCTextColored(message, npcTextColor)
+}
+
+// ParseNPCTextColored is ParseNPCText for text that is not on the dialog's
+// parchment, where black is the wrong thing to start in. The chat box passes
+// the color the line would have had, so text with no color codes in it keeps
+// that color rather than being blackened.
+func ParseNPCTextColored(message string, base ui2d.Color) []TextRun {
 	message = StripNPCMarkup(message)
 
 	var (
 		runs    []TextRun
 		current strings.Builder
-		color   = npcTextColor
+		color   = base
 	)
 
 	flush := func() {

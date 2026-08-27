@@ -60,8 +60,20 @@ type InGameState struct {
 
 	// portals draws the warp portal effect for every class-45 unit. Like
 	// playerRender it outlives the map, so a warp costs no reload.
-	portals      *scene.PortalRenderer
-	effectTimeMs float32
+	portals *scene.PortalRenderer
+
+	// marker is the cell highlight under the cursor. hoverCellX/Y is the cell
+	// it sits on and hoverValid whether the cursor is over the ground at all;
+	// markerPulse counts down the flourish a click sets off.
+	marker      *scene.GroundMarker
+	hoverCellX  int
+	hoverCellY  int
+	hoverValid  bool
+	markerPulse float32
+
+	// markerTraceAt rate limits the marker diagnostics.
+	markerTraceAt time.Time
+	effectTimeMs  float32
 
 	// Entities
 	entityManager *entity.Manager
@@ -75,6 +87,17 @@ type InGameState struct {
 	MapName string
 	TileX   int // Current tile X
 	TileY   int // Current tile Y
+
+	// chat is the scrollback the chat box shows.
+	chat ChatLog
+
+	// pendingWhisper is the private message waiting on its acknowledgement,
+	// which is what says whether it reached anyone. One at a time is enough:
+	// the server answers each before the box can send another.
+	pendingWhisper pendingWhisper
+
+	// quit ends the process, once the server has agreed to let us go.
+	quit QuitFunc
 
 	// unitTraceAt rate limits the unit render statistics.
 	unitTraceAt time.Time
@@ -246,6 +269,20 @@ func (s *InGameState) loadPortalRenderer() {
 		return
 	}
 	s.portals = pr
+
+	m, err := scene.NewGroundMarker()
+	if err != nil {
+		logger.Warn("no click marker", zap.Error(err))
+
+		return
+	}
+	s.marker = m
+
+	if err := s.marker.LoadTexture(s.manager.TexLoader); err != nil {
+		// Warned, not fatal: everything else still works, and a click just
+		// goes back to having no feedback.
+		logger.Warn("no click marker texture", zap.Error(err))
+	}
 }
 
 // beginMapLoad starts loading a map and drops the one we were on.
@@ -564,6 +601,10 @@ func (s *InGameState) Exit() error {
 		s.portals.Destroy()
 		s.portals = nil
 	}
+	if s.marker != nil {
+		s.marker.Destroy()
+		s.marker = nil
+	}
 	if s.scene != nil {
 		s.scene.Destroy()
 		s.scene = nil
@@ -635,6 +676,14 @@ func (s *InGameState) Update(dt float64) error {
 
 		// Update cell position
 		s.TileX, s.TileY = s.player.CurrentCell()
+	}
+
+	// The click flourish runs down on its own; nothing else clears it.
+	if s.markerPulse > 0 {
+		s.markerPulse -= deltaMs
+		if s.markerPulse < 0 {
+			s.markerPulse = 0
+		}
 	}
 
 	// Map models with animation — windmills, clock towers — are rebuilt here.
@@ -714,7 +763,55 @@ func (s *InGameState) renderUnits(viewProj math.Mat4) {
 		s.playerRender.RenderUnit(viewProj, e.Body, s.camera.PosX, s.camera.PosZ, load, unitSpec(e), e.Alpha())
 	}
 
+	s.drawGroundMarker(viewProj)
 	s.traceUnitStats(tracked, drawn)
+}
+
+// SetHoverCell records the cell the cursor is over, or that it is over nothing.
+// The marker follows this rather than the pointer, so it snaps cell to cell as
+// the original does.
+func (s *InGameState) SetHoverCell(cellX, cellY int, ok bool) {
+	if ok && (cellX != s.hoverCellX || cellY != s.hoverCellY) {
+		trace.Emit(trace.HUD, "target", zap.Int("x", cellX), zap.Int("y", cellY))
+	}
+
+	s.hoverCellX, s.hoverCellY, s.hoverValid = cellX, cellY, ok
+}
+
+// PulseMarker starts the flourish that answers a click.
+func (s *InGameState) PulseMarker() {
+	s.markerPulse = scene.MarkerPulseMs
+}
+
+// drawGroundMarker puts the cell highlight under the cursor.
+func (s *InGameState) drawGroundMarker(viewProj math.Mat4) {
+	if s.marker == nil || !s.hoverValid {
+		return
+	}
+
+	worldX, worldZ := entity.CellToWorld(s.hoverCellX, s.hoverCellY)
+	worldY := s.terrainHeight(worldX, worldZ)
+
+	// Progress runs 0 at the click and 1 when the flourish is spent, which is
+	// also the size a marker that is merely following the cursor draws at.
+	progress := float32(1)
+	if s.markerPulse > 0 {
+		progress = 1 - s.markerPulse/scene.MarkerPulseMs
+	}
+
+	s.marker.Render(viewProj, worldX, worldY, worldZ, entity.CellSize, progress, 1)
+
+	// Reported once a second while a marker is on screen. The cell alone does
+	// not say whether it is being drawn anywhere you can see — this does, and
+	// is what separates "no marker" from "marker behind the camera".
+	if trace.On(trace.HUD) && time.Since(s.markerTraceAt) >= time.Second {
+		s.markerTraceAt = time.Now()
+		trace.Emit(trace.HUD, "marker",
+			zap.Int("cellX", s.hoverCellX), zap.Int("cellY", s.hoverCellY),
+			zap.Float32("worldX", worldX), zap.Float32("worldY", worldY),
+			zap.Float32("worldZ", worldZ),
+			zap.Float32("scale", scene.MarkerScale(progress)))
+	}
 }
 
 // traceUnitStats reports how many units we hold against how many we draw, once
@@ -768,7 +865,10 @@ func (s *InGameState) SaveUIState() {
 	if s.camera == nil {
 		return
 	}
-	if err := config.SaveUIState(config.UIState{CameraZoom: s.camera.Distance}); err != nil {
+	err := config.UpdateUIState(func(state *config.UIState) {
+		state.CameraZoom = s.camera.Distance
+	})
+	if err != nil {
 		logger.Warn("could not save ui state", zap.Error(err))
 	}
 }
@@ -908,6 +1008,13 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_NPCACK_SERVERMOVE, s.handleServerMove)
 	s.client.RegisterHandler(packets.ZC_NOTIFY_PLAYERMOVE, s.handlePlayerMove)
 	s.client.RegisterHandler(packets.ZC_NOTIFY_TIME, s.handleServerTick)
+	s.client.RegisterHandler(packets.ZC_NOTIFY_CHAT, s.handleChat)
+	s.client.RegisterHandler(packets.ZC_NOTIFY_PLAYERCHAT, s.handlePlayerChat)
+	s.client.RegisterHandler(packets.ZC_BROADCAST, s.handleBroadcast)
+	s.client.RegisterHandler(packets.ZC_WHISPER, s.handleWhisper)
+	s.client.RegisterHandler(packets.ZC_ACK_WHISPER, s.handleWhisperAck)
+	s.client.RegisterHandler(packets.ZC_RESTART_ACK, s.handleRestartAck)
+	s.client.RegisterHandler(packets.ZC_ACK_REQ_DISCONNECT, s.handleDisconnectAck)
 	s.client.RegisterHandler(packets.ZC_PAR_CHANGE, s.handleStatusChange)
 	s.client.RegisterHandler(packets.ZC_LONGPAR_CHANGE, s.handleStatusChange)
 	s.client.RegisterHandler(packets.ZC_LONGLONGPAR_CHANGE, s.handleStatusChange)
@@ -1157,6 +1264,145 @@ func (s *InGameState) applyUnit(u *packets.Entity, kind string) error {
 	return nil
 }
 
+// handleChat handles a line someone else spoke.
+func (s *InGameState) handleChat(data []byte) error {
+	return s.addChat(packets.DecodeChat(data))
+}
+
+// handlePlayerChat handles our own line echoed back, and the messages the
+// server sends us directly — rAthena's welcome lines arrive this way.
+func (s *InGameState) handlePlayerChat(data []byte) error {
+	return s.addChat(packets.DecodePlayerChat(data))
+}
+
+// handleBroadcast handles a server-wide announcement.
+func (s *InGameState) handleBroadcast(data []byte) error {
+	return s.addChat(packets.DecodeBroadcast(data))
+}
+
+// handleWhisper handles a private message.
+func (s *InGameState) handleWhisper(data []byte) error {
+	return s.addChat(packets.DecodeWhisper(data))
+}
+
+// pendingWhisper is a sent private message held until the server says what
+// became of it.
+type pendingWhisper struct {
+	target string
+	text   string
+}
+
+// handleWhisperAck reports what became of the whisper we sent.
+//
+// The line you send is displayed here rather than when you send it: the server
+// echoes public chat back but not private messages, so this acknowledgement is
+// the only confirmation that anyone received it.
+func (s *InGameState) handleWhisperAck(data []byte) error {
+	result, ok := packets.DecodeWhisperAck(data)
+	if !ok {
+		return nil
+	}
+
+	pending := s.pendingWhisper
+	s.pendingWhisper = pendingWhisper{}
+
+	// Nothing outstanding means the ack is not ours to display — a stale one
+	// after a relog, say. Better silent than attributed to the wrong name.
+	if pending.target == "" {
+		return nil
+	}
+
+	trace.Emit(trace.HUD, "whisper-ack",
+		zap.Uint8("result", result), zap.String("target", pending.target))
+
+	if failure := packets.WhisperFailure(result, pending.target); failure != "" {
+		return s.addChat(&packets.ChatMessage{
+			Kind: packets.ChatWhisper,
+			Text: failure,
+		})
+	}
+
+	return s.addChat(&packets.ChatMessage{
+		Kind:    packets.ChatWhisper,
+		Speaker: "To " + pending.target,
+		Text:    pending.text,
+	})
+}
+
+// addChat folds one decoded message into the scrollback.
+func (s *InGameState) addChat(msg *packets.ChatMessage) error {
+	if msg == nil {
+		return nil
+	}
+
+	s.chat.Add(msg)
+
+	trace.Emit(trace.HUD, "chat",
+		zap.Uint8("kind", uint8(msg.Kind)),
+		zap.String("speaker", msg.Speaker),
+		zap.Int("bytes", len(msg.Text)),
+		zap.Int("lines", s.chat.Len()))
+
+	return nil
+}
+
+// SendChat says something in public chat.
+//
+// The server checks that the line begins with our own character's name, so the
+// name comes from the session rather than from anything the caller passes —
+// getting it wrong forces a relog rather than showing an error.
+func (s *InGameState) SendChat(message string) error {
+	name := ""
+	if s.manager != nil && s.manager.Session.Char != nil {
+		name = s.manager.Session.Char.GetName()
+	}
+
+	pkt := packets.EncodeChat(name, message)
+	if pkt == nil {
+		logger.Warn("not sending an unsendable chat line",
+			zap.String("name", name), zap.Int("bytes", len(message)))
+
+		return nil
+	}
+
+	trace.Emit(trace.HUD, "chat-send",
+		zap.String("name", name), zap.Int("bytes", len(message)))
+
+	return s.client.Send(pkt)
+}
+
+// SendWhisper sends a private message to target.
+//
+// Nothing is added to the scrollback here. The line is held until the server
+// acknowledges it, because the acknowledgement is what says whether the target
+// exists — displaying it on send would show a message to a name that is not
+// online as though it had arrived.
+func (s *InGameState) SendWhisper(target, message string) error {
+	pkt := packets.EncodeWhisper(target, message)
+	if pkt == nil {
+		logger.Warn("not sending an unsendable whisper",
+			zap.String("target", target), zap.Int("bytes", len(message)))
+
+		return nil
+	}
+
+	trace.Emit(trace.HUD, "whisper-send",
+		zap.String("target", target), zap.Int("bytes", len(message)))
+
+	if err := s.client.Send(pkt); err != nil {
+		return err
+	}
+
+	s.pendingWhisper = pendingWhisper{target: target, text: message}
+
+	return nil
+}
+
+// ChatLines returns the chat scrollback for the UI, oldest first.
+func (s *InGameState) ChatLines() []ChatLine {
+	return s.chat.Lines()
+}
+
 // selfAID returns our own account id, which is what identifies our character
 // among the units the server reports.
 func (s *InGameState) selfAID() uint32 {
@@ -1259,61 +1505,6 @@ func (s *InGameState) handleServerMove(data []byte) error {
 	trace.Emit(trace.Map, "server-move",
 		zap.String("map", sm.MapName), zap.String("server", sm.Address()))
 	return nil
-}
-
-// StepToward asks the server to walk one cell in the direction of the given
-// world-space vector, which the caller has already rotated into the camera's
-// frame so "forward" means away from the viewer.
-//
-// Keyboard walking in RO is not free movement — it is a walk request per cell,
-// same as a click. Issuing one step at a time keeps us on the server's path
-// and stops the moment the key is released. Requests are skipped while a walk
-// is already in flight so we don't spam the server mid-step.
-func (s *InGameState) StepToward(dirX, dirZ float32) error {
-	if s.player == nil || s.player.IsWalkingPath() {
-		return nil
-	}
-	if dirX == 0 && dirZ == 0 {
-		return nil
-	}
-
-	// Rate-limit. IsWalkingPath only goes true once the server's ack comes
-	// back, so between sending a request and hearing about it we'd fire one
-	// per frame — 40+ walk requests a second, each restarting the walk server
-	// side so the character never finishes a step. One request per
-	// moveTickRate is plenty to walk continuously at 150ms per cell.
-	if time.Since(s.lastMoveSent) < s.moveTickRate {
-		return nil
-	}
-
-	// Taking manual control abandons wherever the last click was headed.
-	s.hasDest = false
-
-	dir := entity.CalculateDirection(dirX, dirZ)
-	dx, dy := entity.CellDeltaForDirection(dir)
-	if dx == 0 && dy == 0 {
-		return nil
-	}
-
-	cellX, cellY := s.player.CurrentCell()
-	targetX, targetY := cellX+dx, cellY+dy
-
-	// Don't bother the server with a step into a wall.
-	if s.pathFinder != nil && !s.pathFinder.IsWalkable(targetX, targetY) {
-		trace.Emit(trace.Move, "step-blocked",
-			zap.Int("cellX", cellX), zap.Int("cellY", cellY),
-			zap.Int("targetX", targetX), zap.Int("targetY", targetY),
-			zap.Int("facing", dir))
-		return nil
-	}
-
-	trace.Emit(trace.Move, "step",
-		zap.Float32("inputX", dirX), zap.Float32("inputZ", dirZ),
-		zap.Int("facing", dir),
-		zap.Int("cellX", cellX), zap.Int("cellY", cellY),
-		zap.Int("targetX", targetX), zap.Int("targetY", targetY))
-
-	return s.RequestMove(targetX, targetY)
 }
 
 // ScreenToTile maps a screen-space click (in viewport pixels) to a tile
@@ -1466,6 +1657,11 @@ func (s *InGameState) ClickWorld(mouseX, mouseY, viewportW, viewportH float32) {
 		trace.Emit(trace.Pick, "miss")
 		return
 	}
+
+	// The flourish answers the click itself, whether or not the walk is
+	// accepted — the marker is feedback that the click landed on a cell, and
+	// the server's refusal comes later if at all.
+	s.PulseMarker()
 
 	if err := s.RequestMove(tileX, tileY); err != nil {
 		logger.Warn("click-to-move RequestMove failed", zap.Error(err))
@@ -1706,4 +1902,63 @@ func (s *InGameState) CaptureScene() ([]byte, int32, int32) {
 // msSinceStart is the elapsed time since t in milliseconds, for traces.
 func msSinceStart(t time.Time) float64 {
 	return float64(time.Since(t).Microseconds()) / 1000
+}
+
+// EntityBars returns the bars to draw under each unit, already projected into
+// viewport pixels.
+//
+// Projection lives here because the view matrix does. The UI layer gets
+// finished positions and needs nothing from the scene.
+//
+// The player is always included: their own bars are what the request was for,
+// and their HP and SP are the only ones the server keeps current. Other units
+// are included when their kind says so — Entity.ShowHP, which NewEntity
+// already sets per type — and their HP is whatever the spawn packet said until
+// Track F starts calling Manager.SetVitals.
+func (s *InGameState) EntityBars(viewportW, viewportH float32) []EntityBar {
+	if s.scene == nil || !s.SceneReady {
+		return nil
+	}
+
+	var bars []EntityBar
+
+	if s.player != nil && s.stats.MaxHP > 0 {
+		if x, y := s.projectToScreen(s.player.RenderX, s.player.RenderY, s.player.RenderZ,
+			viewportW, viewportH); x >= 0 {
+			bars = append(bars, EntityBar{
+				ScreenX: x, ScreenY: y,
+				Type:  entity.TypePlayer,
+				HP:    s.stats.HP,
+				MaxHP: s.stats.MaxHP,
+				HasSP: s.stats.MaxSP > 0,
+				SP:    s.stats.SP,
+				MaxSP: s.stats.MaxSP,
+				Alpha: 1,
+			})
+		}
+	}
+
+	for _, e := range s.entityManager.All() {
+		if e.Body == nil || !e.ShowHP || e.MaxHP <= 0 || e.ID == s.selfAID() {
+			continue
+		}
+
+		x, y := s.projectToScreen(e.Body.RenderX, e.Body.RenderY, e.Body.RenderZ,
+			viewportW, viewportH)
+		if x < 0 {
+			continue
+		}
+
+		bars = append(bars, EntityBar{
+			ScreenX: x, ScreenY: y,
+			Type:  e.Type,
+			HP:    e.HP,
+			MaxHP: e.MaxHP,
+			// The server never tells us another unit's SP, so they get one bar.
+			HasSP: false,
+			Alpha: e.Alpha(),
+		})
+	}
+
+	return bars
 }

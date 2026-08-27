@@ -67,6 +67,29 @@ func (b *ImGuiBackend) MouseCaptured() bool {
 // the game's own.
 func (b *ImGuiBackend) SetCursorState(cursor.State) {}
 
+// ToggleEscMenu does nothing here: the ESC menu is a 2D-backend widget and
+// this backend has no such thing.
+func (b *ImGuiBackend) ToggleEscMenu() {}
+
+// EscMenuOpen is always false here, for the same reason.
+func (b *ImGuiBackend) EscMenuOpen() bool { return false }
+
+// TakeEscAction never has one to give here, for the same reason.
+func (b *ImGuiBackend) TakeEscAction() EscAction { return EscNone }
+
+// SetSoundSettings does nothing here: there is no sound dialog to seed.
+func (b *ImGuiBackend) SetSoundSettings(SoundSettings) {}
+
+// TakeSoundSettings never has any to give here, for the same reason.
+func (b *ImGuiBackend) TakeSoundSettings() (SoundSettings, bool) {
+	return SoundSettings{}, false
+}
+
+// WantCursor never asks for one: this backend draws the system cursor.
+func (b *ImGuiBackend) WantCursor() (cursor.State, bool) {
+	return cursor.StateDefault, false
+}
+
 // Input returns the input state.
 func (b *ImGuiBackend) Input() *ui2d.InputState {
 	return b.input

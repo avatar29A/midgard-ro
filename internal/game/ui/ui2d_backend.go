@@ -38,8 +38,13 @@ type UI2DBackend struct {
 	loginWinPlaced       bool
 
 	// The game's own mouse cursor, drawn over everything else.
-	cursor     *cursor.Cursor
+	cursor *cursor.Cursor
+
 	cursorTick time.Time
+
+	// What the interface wants the pointer to look like this frame.
+	hudCursor    cursor.State
+	hudCursorSet bool
 
 	// Raw archive reader, for assets that are not textures — character
 	// sprites are composited from SPR and ACT before they can be uploaded.
@@ -88,6 +93,51 @@ type UI2DBackend struct {
 	hudX, hudY float32
 	hudPlaced  bool
 	hudReduced bool
+
+	// Which menu windows are open. The buttons under the panel toggle these;
+	// each window draws itself when its entry is set.
+	hudOpen map[HUDWindow]bool
+
+	// Chat scrollback position. Pinned means following the newest line, which
+	// is where it starts and where it returns once scrolled back to the bottom.
+	chatScroll int
+	chatPinned bool
+	chatTab    int
+	chatX      float32
+	chatY      float32
+	chatW      float32
+	chatH      float32
+	chatPlaced bool
+	chatInput  string
+	chatName   string
+	chatLocked bool
+	chatDirty  bool
+
+	hotkeyX      float32
+	hotkeyY      float32
+	hotkeyRows   int
+	hotkeyPlaced bool
+	hotkeyDirty  bool
+
+	escOpen   bool
+	escAction EscAction
+
+	soundOpen     bool
+	soundSeeded   bool
+	soundDirty    bool
+	sound         SoundSettings
+	chatPending   string
+	chatPendingTo string
+
+	// The minimap image for the map we are on. minimapTried is the path last
+	// attempted, so a map that ships no image is not retried every frame.
+	minimapTex     *TextureInfo
+	minimapTried   string
+	minimapZoomIdx int
+
+	// The player arrow, one texture per facing, baked on first use.
+	minimapArrowTex    []uint32
+	minimapArrowsTried bool
 
 	// Cached widget states
 	loginUsername string
@@ -220,6 +270,24 @@ func (b *UI2DBackend) End() {
 	b.drawCursor()
 
 	b.ctx.End()
+}
+
+// WantCursor is the cursor an interface element under the pointer asks for,
+// and whether anything asked. Set while drawing and read afterwards, so a
+// widget can say what it is without knowing what else is on screen.
+func (b *UI2DBackend) WantCursor() (cursor.State, bool) {
+	return b.hudCursor, b.hudCursorSet
+}
+
+// wantCursor is how a widget asks. First asker wins, so a grip inside a
+// window does not have its request overwritten by the window behind it.
+func (b *UI2DBackend) wantCursor(state cursor.State) {
+	if b.hudCursorSet {
+		return
+	}
+
+	b.hudCursor = state
+	b.hudCursorSet = true
 }
 
 // SetCursorState switches which cursor is shown.
@@ -872,12 +940,27 @@ func (b *UI2DBackend) RenderCharSelectUI(state CharSelectUIState, width, height 
 
 // RenderInGameUI renders the in-game HUD.
 func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, height float32) {
+	// Cleared each frame: a request only holds while the pointer is still on
+	// the thing that made it.
+	b.hudCursor, b.hudCursorSet = cursor.StateDefault, false
+
 	// Draw scene texture as background
 	if state.SceneReady && state.SceneTexture != 0 {
 		b.ctx.Renderer().DrawSceneTexture(0, 0, width, height, state.SceneTexture)
 	}
 
 	b.renderBasicInfo(state)
+	// Under the units, before the panels: a bar belongs to the world, and the
+	// interface sits over it.
+	for _, bar := range state.EntityBars {
+		b.drawEntityBars(bar)
+	}
+
+	b.drawMinimap(state, width)
+	b.drawChat(state, height)
+	b.drawHotkeys(width, height)
+	b.drawEscMenu(width, height)
+	b.drawSoundConfig(width, height)
 	b.renderNPCDialog(state, width, height)
 	b.renderNPCMenu(state, width, height)
 
@@ -911,6 +994,8 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 			b.ctx.Separator()
 			b.ctx.Row(16)
 			b.ctx.Label("Dialog: " + describeDialog(state))
+			b.ctx.Row(16)
+			b.ctx.Label("HUD: " + b.describeHUD())
 			b.ctx.EndWindow()
 		}
 	}
@@ -929,30 +1014,6 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 		}
 	}
 
-	// Bottom status bar (drawn as simple text, not a window)
-	statusText := state.MapName
-	if state.StatusMessage != "" {
-		statusText = state.StatusMessage
-	}
-	scale := float32(1.0)
-	const barHeight = 25
-	barY := height - barHeight
-	b.ctx.Renderer().DrawRect(0, barY, width, barHeight, ui2d.ColorPanelBg)
-
-	// Viewport size, zoom and cell position, right-aligned. Zoom is shown
-	// because it is remembered between sessions — without a readout there is
-	// no way to tell what was restored, or to get back to a distance you liked.
-	posText := fmt.Sprintf("%.0fx%.0f   Zoom %.0f   (%d, %d)",
-		width, height, state.CamDistance, state.PlayerTileX, state.PlayerTileY)
-	posW, textH := b.ctx.Renderer().MeasureText(posText, scale)
-
-	// Center both ends on the bar rather than offsetting by a fixed few
-	// pixels: text height depends on the font and the display's pixel density,
-	// so a constant only happens to look right on one machine.
-	textY := barY + (barHeight-textH)/2
-
-	b.ctx.Renderer().DrawText(10, textY, statusText, scale, ui2d.ColorTextOnDark)
-	b.ctx.Renderer().DrawText(width-posW-10, textY, posText, scale, ui2d.ColorTextOnDark)
 }
 
 // describeDialog is the debug overlay's one-line account of the conversation.
@@ -1010,6 +1071,13 @@ func (b *UI2DBackend) RenderFPSOverlay(fps float64, width, height float32) {
 
 	x := width - textW - 10
 	y := float32(5)
+
+	// The minimap owns the top-right corner, as it does in the original, so
+	// the counter drops below it — past its zoom buttons too, which sit under
+	// the map and were the second thing this printed over.
+	if b.minimapTex != nil {
+		y += minimapSize + minimapBtn + minimapMargin
+	}
 
 	// Semi-transparent background
 	b.ctx.Renderer().DrawRect(x-5, y-2, textW+10, 20, ui2d.ColorPanelBg.WithAlpha(0.5))

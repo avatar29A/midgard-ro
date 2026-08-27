@@ -338,6 +338,21 @@ func (g *Game) initAudio(cfg *config.Config) {
 	manager.SetBGMVolume(float64(cfg.Audio.MusicVolume))
 	manager.SetSFXVolume(float64(cfg.Audio.SFXVolume))
 
+	// What the sound dialog was last left at wins over the configured
+	// levels: config.yaml is what the file says, this is what the player did.
+	if saved := config.LoadUIState(); saved.SoundSet {
+		bgm, sfx := saved.BGMVolume, saved.SFXVolume
+		if !saved.BGMOn {
+			bgm = 0
+		}
+		if !saved.SFXOn {
+			sfx = 0
+		}
+
+		manager.SetBGMVolume(float64(bgm))
+		manager.SetSFXVolume(float64(sfx))
+	}
+
 	g.audioManager = manager
 
 	if config.NoBGM() {
@@ -447,14 +462,11 @@ func (g *Game) frame() {
 		}
 	}
 
-	// Handle ESC to quit. The cimgui-go SDL backend's SetShouldClose is
-	// currently a no-op TODO upstream, so we exit the process directly.
-	// Deferred a frame so the input event finishes processing cleanly.
-	if imgui.IsKeyPressedBoolV(imgui.KeyEscape, false) {
-		g.pendingAction = func() {
-			logger.Info("escape pressed, exiting")
-			os.Exit(0)
-		}
+	// Escape opens the menu rather than quitting outright. Leaving used to
+	// call os.Exit from here, which told the server nothing and left rAthena
+	// holding the session until it timed out.
+	if imgui.IsKeyPressedBoolV(imgui.KeyEscape, false) && g.uiBackend != nil {
+		g.uiBackend.ToggleEscMenu()
 	}
 
 	// Handle F12 for screenshot (will capture at start of NEXT frame)
@@ -771,8 +783,17 @@ func (g *Game) renderUI() {
 		stats := state.Stats()
 		dialog := state.Dialog()
 
+		mapCellsX, mapCellsY := 0, 0
+		if gat := state.GetGAT(); gat != nil {
+			mapCellsX, mapCellsY = int(gat.Width), int(gat.Height)
+		}
+
 		uiState := ui.InGameUIState{
 			MapName:         state.GetMapName(),
+			MapCellsX:       mapCellsX,
+			MapCellsY:       mapCellsY,
+			ChatLines:       state.ChatLines(),
+			EntityBars:      state.EntityBars(viewportWidth, viewportHeight),
 			PlayerX:         playerX,
 			PlayerY:         playerY,
 			PlayerZ:         playerZ,
@@ -824,6 +845,46 @@ func (g *Game) renderUI() {
 		}
 		populateDebugFields(&uiState, state, g.client)
 		g.uiBackend.RenderInGameUI(uiState, g.dt, viewportWidth, viewportHeight)
+
+		g.applySoundSettings()
+
+		// What the ESC menu was asked for goes out here for the same reason
+		// the chat line below does: the interface has no connection.
+		//
+		// Neither request ends anything by itself. The server answers both,
+		// and can refuse both, so the state acts on the answer.
+		switch g.uiBackend.TakeEscAction() {
+		case ui.EscCharSelect:
+			if err := state.RequestCharSelect(); err != nil {
+				logger.Warn("could not ask for character select", zap.Error(err))
+			}
+		case ui.EscQuit:
+			state.SetQuitFunc(func() {
+				g.pendingAction = func() {
+					logger.Info("server released the session, exiting")
+					os.Exit(0)
+				}
+			})
+
+			if err := state.RequestQuit(); err != nil {
+				logger.Warn("could not ask to quit", zap.Error(err))
+			}
+		case ui.EscNone:
+		}
+
+		// A line the player typed goes out here rather than from the widget:
+		// the interface has no client to send with.
+		if to, msg := g.uiBackend.TakeChatMessage(); msg != "" {
+			var err error
+			if to != "" {
+				err = state.SendWhisper(to, msg)
+			} else {
+				err = state.SendChat(msg)
+			}
+			if err != nil {
+				logger.Warn("could not send chat", zap.Error(err))
+			}
+		}
 
 	default:
 		// Show placeholder for unknown state (using ImGui directly for simplicity)
@@ -952,35 +1013,9 @@ func (g *Game) handleInGameInput(state *states.InGameState) {
 	g.lastMouseX = mouseX
 	g.lastMouseY = mouseY
 
-	// WASD walking. Movement is relative to where the camera is looking, so
-	// W always walks away from the viewer no matter how the camera is turned.
-	// Each press asks the server for one cell; StepToward ignores us while a
-	// walk is already in flight, so holding a key walks continuously.
-	if !io.WantCaptureKeyboard() {
-		var forward, strafe float32
-		if imgui.IsKeyDown(imgui.KeyW) {
-			forward++
-		}
-		if imgui.IsKeyDown(imgui.KeyS) {
-			forward--
-		}
-		if imgui.IsKeyDown(imgui.KeyD) {
-			strafe++
-		}
-		if imgui.IsKeyDown(imgui.KeyA) {
-			strafe--
-		}
-
-		if forward != 0 || strafe != 0 {
-			camDirX, camDirZ := camera.ForwardDirection()
-			camRightX, camRightZ := camera.RightDirection()
-			moveX := camDirX*forward + camRightX*strafe
-			moveZ := camDirZ*forward + camRightZ*strafe
-			if err := state.StepToward(moveX, moveZ); err != nil {
-				logger.Warn("keyboard step failed", zap.Error(err))
-			}
-		}
-	}
+	// No keyboard walking. RO moves by mouse, and the letters belong to chat:
+	// with WASD bound to the character, typing "was" into the chat box walked
+	// you across the map. The state's StepToward went with it.
 
 	// The pointer changes over an NPC, the way the original tells you a thing
 	// can be talked to before you click it. Runs every frame, so it uses the
@@ -1005,6 +1040,17 @@ func (g *Game) handleInGameInput(state *states.InGameState) {
 			zap.Float32("viewportW", viewportW), zap.Float32("viewportH", viewportH))
 
 		state.ClickWorld(mouseX, mouseY, viewportW, viewportH)
+	}
+
+	// The marker follows the cursor whether or not anything is clicked, so
+	// the cell you are about to walk to is shown before you commit to it.
+	if !io.WantCaptureMouse() && !g.uiBackend.MouseCaptured() {
+		viewportW, viewportH := g.uiBackend.GetScreenSize()
+		tileX, tileY, ok := state.ScreenToTile(mouseX, mouseY, viewportW, viewportH)
+		state.SetHoverCell(tileX, tileY, ok)
+	} else {
+		// Over the interface: no cell is being pointed at.
+		state.SetHoverCell(0, 0, false)
 	}
 }
 
@@ -1182,13 +1228,68 @@ func (g *Game) updateCursor(state *states.InGameState, io *imgui.IO, mouseX, mou
 
 	want := cursor.StateDefault
 
-	// Over the interface the pointer belongs to the interface.
-	if !io.WantCaptureMouse() && !g.uiBackend.MouseCaptured() {
+	hudCursor, hudAsked := g.uiBackend.WantCursor()
+
+	switch {
+	// An interface element under the pointer has first say: a resize corner
+	// asking for the hand is the only thing that knows it is one.
+	case hudAsked:
+		want = hudCursor
+
+	// Otherwise the pointer belongs to whatever is under it in the world.
+	case !io.WantCaptureMouse() && !g.uiBackend.MouseCaptured():
 		viewportW, viewportH := g.uiBackend.GetScreenSize()
 		want = cursorFor(state.HoverEntity(mouseX, mouseY, viewportW, viewportH))
 	}
 
 	g.uiBackend.SetCursorState(want)
+}
+
+// applySoundSettings seeds the sound dialog from the audio manager and puts
+// back whatever the player changed.
+//
+// A channel switched off is played at zero rather than having its level
+// zeroed, so the slider keeps its position and switching back on returns to
+// the level that was there.
+func (g *Game) applySoundSettings() {
+	if g.audioManager == nil || g.uiBackend == nil {
+		return
+	}
+
+	bgm := float32(g.audioManager.GetBGMVolume())
+	sfx := float32(g.audioManager.GetSFXVolume())
+
+	g.uiBackend.SetSoundSettings(ui.SoundSettings{
+		BGMVolume: bgm,
+		SFXVolume: sfx,
+		BGMOn:     bgm > 0,
+		SFXOn:     sfx > 0,
+	})
+
+	settings, changed := g.uiBackend.TakeSoundSettings()
+	if !changed {
+		return
+	}
+
+	bgmVol, sfxVol := settings.BGMVolume, settings.SFXVolume
+	if !settings.BGMOn {
+		bgmVol = 0
+	}
+	if !settings.SFXOn {
+		sfxVol = 0
+	}
+
+	g.audioManager.SetBGMVolume(float64(bgmVol))
+	g.audioManager.SetSFXVolume(float64(sfxVol))
+
+	err := config.UpdateUIState(func(state *config.UIState) {
+		state.SoundSet = true
+		state.BGMVolume, state.SFXVolume = settings.BGMVolume, settings.SFXVolume
+		state.BGMOn, state.SFXOn = settings.BGMOn, settings.SFXOn
+	})
+	if err != nil {
+		logger.Warn("could not save sound settings", zap.Error(err))
+	}
 }
 
 // cursorFor is the cursor the original shows over a unit of each kind, or
