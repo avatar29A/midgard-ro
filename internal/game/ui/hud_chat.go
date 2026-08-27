@@ -3,7 +3,6 @@ package ui
 import (
 	"strings"
 
-	"github.com/Faultbox/midgard-ro/internal/engine/cursor"
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
 	"github.com/Faultbox/midgard-ro/internal/game/states"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
@@ -130,8 +129,15 @@ var (
 	// The control pictograms: dimmed until the pointer reaches them, and lit
 	// while the thing they toggle is on.
 	chatCtrlIdle = ui2d.Color{R: 0.82, G: 0.82, B: 0.80, A: 0.85}
-	chatCtrlHot  = ui2d.Color{R: 1, G: 1, B: 1, A: 1}
-	chatCtrlOn   = ui2d.Color{R: 1, G: 0.9, B: 0.4, A: 1}
+
+	// The blue inside the archive's icons, sampled from map_plus0.bmp, and
+	// the white they are outlined in. The outline is why they stay legible
+	// over pavement as well as over the dark strip, so the drawn lock is
+	// built the same way — plain white vanished on Prontera.
+	chatIconBlue    = ui2d.Color{R: 0.098, G: 0.443, B: 0.898, A: 1}
+	chatIconOutline = ui2d.Color{R: 1, G: 1, B: 1, A: 1}
+	chatCtrlHot     = ui2d.Color{R: 1, G: 1, B: 1, A: 1}
+	chatCtrlOn      = ui2d.Color{R: 1, G: 0.9, B: 0.4, A: 1}
 )
 
 // chatKindColor is the color a line is drawn in.
@@ -286,10 +292,6 @@ func (b *UI2DBackend) chatDragAndResize(screenH float32) {
 		H: chatTabH + b.chatH + chatInputH,
 	}
 
-	if window.Contains(b.ctx.Input().MouseX, b.ctx.Input().MouseY) {
-		b.wantCursor(cursor.StateClick)
-	}
-
 	beforeX, beforeDragY := b.chatX, b.chatY
 
 	b.ctx.DragHandleFree("hud_chat_drag", window, &b.chatX, &b.chatY)
@@ -325,11 +327,6 @@ func (b *UI2DBackend) drawChatGrip(grip, hit ui2d.Rect) {
 	color := chatBorder
 	if hot {
 		color = chatGripHot
-
-		// RO has no dedicated resize pointer, so the hand it shows for
-		// anything you press is the closest thing to "you can grab this" —
-		// and the pointer changing at all is what says the corner is live.
-		b.wantCursor(cursor.StateClick)
 	}
 
 	r := b.ctx.Renderer()
@@ -504,14 +501,25 @@ func (b *UI2DBackend) drawChevrons(box ui2d.Rect, tint ui2d.Color) {
 	r.DrawImage(tex.ID, x+size/2, y, size, size, tint)
 }
 
-// drawPadlock draws the lock from primitives: a body with a shackle over it.
-// The archive has no padlock I could find under any plausible name, and a
-// letter L in its place was the thing that could not be read.
+// drawPadlock draws the lock from primitives, in the archive's own icon
+// colors: a blue shape inside a white outline. The archive has no padlock I
+// could find under any plausible name, and a plain white one was unreadable
+// against pale ground.
 func (b *UI2DBackend) drawPadlock(box ui2d.Rect, tint ui2d.Color) {
-	r := b.ctx.Renderer()
+	fill := chatIconBlue
+	if b.chatLocked {
+		fill = chatCtrlOn
+	}
+
+	// Hovering brightens the outline, which is the only feedback a pictogram
+	// with no chrome around it can give.
+	outline := chatIconOutline
+	if tint == chatCtrlIdle {
+		outline = ui2d.Color{R: 0.85, G: 0.85, B: 0.83, A: 0.9}
+	}
 
 	const (
-		bodyW float32 = 10
+		bodyW float32 = 9
 		bodyH float32 = 7
 		arch  float32 = 4
 	)
@@ -519,15 +527,24 @@ func (b *UI2DBackend) drawPadlock(box ui2d.Rect, tint ui2d.Color) {
 	bodyX := box.X + (box.W-bodyW)/2
 	bodyY := box.Y + (box.H-bodyH-arch)/2 + arch
 
-	// The shackle: two uprights and a bar across them, inset so it reads as
-	// an arch rather than a second box.
-	shackleX := bodyX + 2
-	shackleW := bodyW - 4
-	r.DrawRect(shackleX, bodyY-arch, shackleW, 2, tint)
-	r.DrawRect(shackleX, bodyY-arch, 2, arch, tint)
-	r.DrawRect(shackleX+shackleW-2, bodyY-arch, 2, arch, tint)
+	// Outline first, as a shape one pixel larger all round, then the fill on
+	// top of it.
+	shackleX := bodyX + 1.5
+	shackleW := bodyW - 3
 
-	r.DrawRect(bodyX, bodyY, bodyW, bodyH, tint)
+	drawLock := func(inset float32, c ui2d.Color) {
+		r := b.ctx.Renderer()
+
+		// The shackle: two uprights and a bar across them.
+		r.DrawRect(shackleX-inset, bodyY-arch-inset, shackleW+2*inset, 2, c)
+		r.DrawRect(shackleX-inset, bodyY-arch-inset, 2, arch+inset, c)
+		r.DrawRect(shackleX+shackleW+inset-2, bodyY-arch-inset, 2, arch+inset, c)
+
+		r.DrawRect(bodyX-inset, bodyY-inset, bodyW+2*inset, bodyH+2*inset, c)
+	}
+
+	drawLock(1, outline)
+	drawLock(0, fill)
 }
 
 // stepChatHeight grows or shrinks the box by whole lines, keeping the input
