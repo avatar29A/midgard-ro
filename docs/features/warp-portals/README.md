@@ -1,6 +1,6 @@
 # Feature: Warp portals — moving across locations
 
-**Branch:** `feature/warp-portals` · **Issue:** _(filled after creation)_ · **Parent:** #49 (MVP scope), #51 (Track B, task **B2**: "`ZC_NPCACK_MAPMOVE` (0x0091) → map change handling")
+**Branch:** `feature/warp-portals` · **Issue:** #91 · **Parent:** #49 (MVP scope), #51 (Track B, task **B2**: "`ZC_NPCACK_MAPMOVE` (0x0091) → map change handling")
 **Status:** Planned · **Created:** 2026-08-27
 
 ## Goal
