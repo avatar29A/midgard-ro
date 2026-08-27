@@ -20,8 +20,11 @@ func TestMapRulesFor(t *testing.T) {
 	if mc := rules.For("prontera.gat"); mc.Indoor || mc.Limits.YawLocked || mc.Limits.Arc {
 		t.Fatalf("prontera restricted: %+v", mc)
 	}
-	if mc := rules.For("prt_in.gat"); !mc.Indoor || !mc.Limits.YawLocked {
-		t.Fatalf("prt_in not locked: %+v", mc)
+	if mc := rules.For("prt_in.gat"); !mc.Indoor || !mc.Limits.ZoomLocked || mc.Limits.YawLocked {
+		t.Fatalf("prt_in should hold the zoom and allow turning: %+v", mc)
+	}
+	if mc := rules.For("prt_in.gat"); mc.Limits.FixedDistance != DefaultCameraZoom {
+		t.Fatalf("indoor fixed distance %v, want the default %v", mc.Limits.FixedDistance, DefaultCameraZoom)
 	}
 	if mc := rules.For("PRT_IN"); !mc.Indoor {
 		t.Fatal("the lookup must not care about case or extension")

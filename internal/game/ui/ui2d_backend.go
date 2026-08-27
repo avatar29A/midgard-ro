@@ -966,11 +966,18 @@ func describeCameraRules(state InGameUIState) string {
 	if state.Indoor {
 		s = "yes"
 	}
+	var rules []string
+	if state.CameraZoomLocked {
+		rules = append(rules, "zoom locked")
+	}
 	switch {
 	case state.CameraYawLocked:
-		s += " (yaw locked)"
+		rules = append(rules, "yaw locked")
 	case state.CameraArc:
-		s += " (arc)"
+		rules = append(rules, "arc")
+	}
+	if len(rules) > 0 {
+		s += " (" + strings.Join(rules, ", ") + ")"
 	}
 	return s
 }

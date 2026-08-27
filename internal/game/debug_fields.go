@@ -37,6 +37,7 @@ func populateDebugFields(out *ui.InGameUIState, state *states.InGameState, clien
 	rules := state.CameraRules()
 	out.Indoor = rules.Indoor
 	out.CameraYawLocked = rules.Limits.YawLocked
+	out.CameraZoomLocked = rules.Limits.ZoomLocked
 	out.CameraArc = rules.Limits.Arc
 	out.WaterCells = state.WaterCells()
 

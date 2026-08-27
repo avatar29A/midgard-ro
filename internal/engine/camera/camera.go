@@ -161,9 +161,9 @@ type ThirdPersonCamera struct {
 	limits Limits
 }
 
-// Limits are a map's rules for the third-person camera, from the client's
-// own tables: an indoor map (indoorrswtable.txt) may not orbit at all, and a
-// few maps (viewpointtable.txt) allow only an arc.
+// Limits are a map's rules for the third-person camera: indoors the zoom is
+// held at a fixed distance (indoorrswtable.txt), and a few maps
+// (viewpointtable.txt) allow orbiting only through an arc or not at all.
 type Limits struct {
 	// YawLocked forbids orbiting entirely.
 	YawLocked bool
@@ -171,12 +171,21 @@ type Limits struct {
 	// Arc bounds the yaw between YawMin and YawMax, in radians, when set.
 	Arc            bool
 	YawMin, YawMax float32
+
+	// ZoomLocked forbids zooming; FixedDistance, when set with it, is the
+	// distance the camera is held at.
+	ZoomLocked    bool
+	FixedDistance float32
 }
 
-// SetLimits applies a map's rules, pulling the yaw inside them if it is not.
+// SetLimits applies a map's rules, pulling the yaw inside them if it is not
+// and moving the camera to a locked distance.
 func (c *ThirdPersonCamera) SetLimits(l Limits) {
 	c.limits = l
 	c.clampYaw()
+	if l.ZoomLocked && l.FixedDistance > 0 {
+		c.Distance = l.FixedDistance
+	}
 }
 
 // Limits returns the rules in force.
@@ -263,8 +272,11 @@ func (c *ThirdPersonCamera) HandleYaw(deltaX float32) {
 	c.clampYaw()
 }
 
-// HandleZoom updates distance from target.
+// HandleZoom updates distance from target, unless the map holds it.
 func (c *ThirdPersonCamera) HandleZoom(delta float32) {
+	if c.limits.ZoomLocked {
+		return
+	}
 	c.Distance -= delta * c.Distance * c.ZoomSensitivity
 	if c.Distance < c.MinDistance {
 		c.Distance = c.MinDistance

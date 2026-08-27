@@ -48,6 +48,13 @@ every run back to `main`. Not fixed here; it is a `tools/packetlen` entry.
 the sea between `prt_in`'s rooms and exposed the scene's sky-blue clear.
 Indoor maps now clear to black, as the original does.
 
+**The indoor rule was reversed on the first interactive run.** The plan
+followed the original: rotation off indoors, zoom free. Boris zoomed out to
+377 in `prt_in` and saw every room of the building complex floating in
+black — the "seeing aside" the feature was meant to stop, and it is the
+zoom that causes it, not the turning. Indoors now hold the zoom at the
+default distance (snapping there on entry) and allow rotation.
+
 ## What no reference client had
 
 Nothing in the archive describes the warp portal: the original draws
@@ -70,7 +77,8 @@ the original's primitive that was never wired up — and `ring_blue.tga`.
 - `0x01D7` length in `lengths.go` (above).
 - `0x0AC7` map-server change is decoded and logged, not followed.
 - The portal's proportions are by eye against the real-client frames.
-- The indoor zoom range is unchanged, as decided; only rotation is locked.
+- The zoom range outdoors is still 100–800 against the original's ~1.75×
+  the default; a global cap is a separate decision.
 - Async (goroutine) parsing: the loader is phased so it could move, but the
   numbers did not need it.
 - Two captures within one second share a filename (`screenshot-HHMMSS.png`);
