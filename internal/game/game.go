@@ -781,6 +781,7 @@ func (g *Game) renderUI() {
 			MapCellsX:       mapCellsX,
 			MapCellsY:       mapCellsY,
 			ChatLines:       state.ChatLines(),
+			EntityBars:      state.EntityBars(viewportWidth, viewportHeight),
 			PlayerX:         playerX,
 			PlayerY:         playerY,
 			PlayerZ:         playerZ,

@@ -1842,3 +1842,62 @@ func (s *InGameState) CaptureScene() ([]byte, int32, int32) {
 func msSinceStart(t time.Time) float64 {
 	return float64(time.Since(t).Microseconds()) / 1000
 }
+
+// EntityBars returns the bars to draw under each unit, already projected into
+// viewport pixels.
+//
+// Projection lives here because the view matrix does. The UI layer gets
+// finished positions and needs nothing from the scene.
+//
+// The player is always included: their own bars are what the request was for,
+// and their HP and SP are the only ones the server keeps current. Other units
+// are included when their kind says so — Entity.ShowHP, which NewEntity
+// already sets per type — and their HP is whatever the spawn packet said until
+// Track F starts calling Manager.SetVitals.
+func (s *InGameState) EntityBars(viewportW, viewportH float32) []EntityBar {
+	if s.scene == nil || !s.SceneReady {
+		return nil
+	}
+
+	var bars []EntityBar
+
+	if s.player != nil && s.stats.MaxHP > 0 {
+		if x, y := s.projectToScreen(s.player.RenderX, s.player.RenderY, s.player.RenderZ,
+			viewportW, viewportH); x >= 0 {
+			bars = append(bars, EntityBar{
+				ScreenX: x, ScreenY: y,
+				Type:  entity.TypePlayer,
+				HP:    s.stats.HP,
+				MaxHP: s.stats.MaxHP,
+				HasSP: s.stats.MaxSP > 0,
+				SP:    s.stats.SP,
+				MaxSP: s.stats.MaxSP,
+				Alpha: 1,
+			})
+		}
+	}
+
+	for _, e := range s.entityManager.All() {
+		if e.Body == nil || !e.ShowHP || e.MaxHP <= 0 || e.ID == s.selfAID() {
+			continue
+		}
+
+		x, y := s.projectToScreen(e.Body.RenderX, e.Body.RenderY, e.Body.RenderZ,
+			viewportW, viewportH)
+		if x < 0 {
+			continue
+		}
+
+		bars = append(bars, EntityBar{
+			ScreenX: x, ScreenY: y,
+			Type:  e.Type,
+			HP:    e.HP,
+			MaxHP: e.MaxHP,
+			// The server never tells us another unit's SP, so they get one bar.
+			HasSP: false,
+			Alpha: e.Alpha(),
+		})
+	}
+
+	return bars
+}

@@ -892,6 +892,12 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 	}
 
 	b.renderBasicInfo(state)
+	// Under the units, before the panels: a bar belongs to the world, and the
+	// interface sits over it.
+	for _, bar := range state.EntityBars {
+		b.drawEntityBars(bar)
+	}
+
 	b.drawMinimap(state, width)
 	b.drawChat(state, height)
 	b.renderNPCDialog(state, width, height)
