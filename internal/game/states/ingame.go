@@ -419,6 +419,7 @@ func (s *InGameState) applyMapRules() {
 		zap.String("map", packets.MapBaseName(s.MapName)),
 		zap.Bool("indoor", s.mapCamera.Indoor),
 		zap.Bool("yawLocked", s.mapCamera.Limits.YawLocked),
+		zap.Bool("zoomLocked", s.mapCamera.Limits.ZoomLocked),
 		zap.Bool("arc", s.mapCamera.Limits.Arc),
 		zap.Float32("yawIn", s.mapCamera.YawIn))
 }

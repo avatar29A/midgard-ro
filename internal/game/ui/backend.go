@@ -152,10 +152,11 @@ type InGameUIState struct {
 	MapLoadPhases string
 
 	// The map's camera rules and water, as applied (debug).
-	Indoor          bool
-	CameraYawLocked bool
-	CameraArc       bool
-	WaterCells      int
+	Indoor           bool
+	CameraYawLocked  bool
+	CameraZoomLocked bool
+	CameraArc        bool
+	WaterCells       int
 
 	// Entity counts
 	EntityCount  int

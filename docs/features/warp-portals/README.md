@@ -10,9 +10,9 @@ Every gate and door shows the blue swirling portal; the cursor turns into a door
 over one; stepping on it changes the map. Leaving for the next location shows the
 loading screen while the field loads and the server re-sends its NPCs and
 monsters; walking into a building shows the same loading screen for the moment
-the room takes to load — the original's behaviour — and inside, the camera is
-the original's indoor camera: no orbiting, and black beyond the walls rather
-than water.
+the room takes to load — the original's behaviour — and inside, the zoom is
+held so a room is never seen from outside, the camera may turn, and beyond
+the walls is black rather than water.
 
 Advances the MVP's **walking** item (Track B2 of #51 — the one task left open
 there) and turns "Prontera + fields" from a list of maps into a place you can
@@ -560,10 +560,18 @@ a hand would cause reaches the input layer.
 
 Done. `pkg/formats/maptables.go` reads both tables (142 indoor maps, 25
 presets in this archive); `Manager.MapRules()` loads them once per session;
-`applyMapRules` gives the camera its `Limits` — yaw locked indoors, an arc
-where a preset says so, the map's entry angle on every change, as the
-original resets its camera — and the scene clears to **black** indoors
-instead of sky, which per-cell water had exposed. Water is `BuildCells`:
+`applyMapRules` gives the camera its `Limits` — an arc where a preset says
+so, the map's entry angle on every change, as the original resets its camera
+— and the scene clears to **black** indoors instead of sky, which per-cell
+water had exposed.
+
+**Indoor rule, revised while testing (Boris, 2026-08-27):** the original
+locks rotation and allows zoom; we do the reverse. Indoors the **zoom is
+held at the default distance** (snapping there on entry, so a far-out zoom
+from the street is not carried in) and **rotation is allowed**. The first
+interactive run showed why: at zoom 377 the whole of `prt_in` — every room
+floating in black — was on screen, which is the "seeing aside" the feature
+set out to stop, and it is the zoom that does it, not the turning. Water is `BuildCells`:
 a quad per cell with ground below the level (roBrowser's rule), so `prt_in`
 reports 0 cells and Prontera 477. The camera lock is proven by
 `camera_test.go` (an unattended run has no hand to drag with); the rest by
@@ -583,7 +591,7 @@ All steps land on `feature/warp-portals` in one PR (one or a few commits per ste
 - The cursor is the animated door over a portal, talk over an NPC, default over the ground
 - Walking onto the south gate shows the original's loading screen (random image, stepping bar) and arrives in `prt_fild08` with NPCs and monsters; walking back returns to Prontera
 - Walking into a door shows the same loading screen, briefly, and lands in `prt_in`; walking out returns the same way
-- Inside `prt_in` the camera cannot orbit, and beyond the walls there is black, not water; outside, camera and water are as before
+- Inside `prt_in` the camera cannot zoom (it is held at the default distance) and may turn; beyond the walls there is black, not water; outside, camera and water are as before
 - **Any map works:** with the character placed by DB on `geffen 119,59`, `morocc 156,93` and `prt_castle 102,20` (indoor-listed) in turn, each loads through the same path with the right camera rules; nothing in the feature names a map
 - The login-time `0x0091` no longer shows as `net.unhandled`; `--trace=map` reads as a story from `map.change` to `map.ready`
 - No freeze longer than one frame anywhere in the flow; no disconnect in a 5-minute walk `prontera → prt_fild08 → prontera → prt_in → prontera`
@@ -603,10 +611,11 @@ All steps land on `feature/warp-portals` in one PR (one or a few commits per ste
 1. ~~"Instant" buildings — preload, or the original's loading screen?~~
    **Answered (Boris, 2026-08-27): the original is fine.** The preload/cache
    step is dropped; buildings get the loading screen like any other map.
-2. ~~What should indoor restrict, and is the void fix in scope?~~ **Answered:
-   keep it like the original, and fix the void here.** Rotation off per
-   `indoorrswtable`, the normal zoom range, and water drawn per GND cell so the
-   void is black — all in Step 6.
+2. ~~What should indoor restrict, and is the void fix in scope?~~ **Answered,
+   then revised in testing.** First: like the original (rotation off, zoom
+   free) plus the void fix. Then, on seeing all of `prt_in` from zoom 377:
+   **zoom held, rotation allowed** — the reverse of the original, by
+   decision. Water per GND cell so the void is black. All in Step 6.
 3. ~~Portal proportions and sound.~~ **Withdrawn** — it was a note, not a
    request: Step 4 tunes the portal by eye against ref-01/ref-04; nothing is
    needed from Boris.
@@ -647,6 +656,10 @@ None open.
 
 ## Revision log
 
+- 2026-08-27 — **Indoor rule reversed in testing:** zoom held at the default
+  distance and rotation allowed, instead of the original's rotation-off /
+  zoom-free. Snapping to the default on entry so the street's zoom is not
+  carried in.
 - 2026-08-27 — **Steps 6 and 7 done; ready for review.** Indoor maps lock the
   camera and clear to black; water is per cell (`prt_in` 0, Prontera 477);
   docs, session log and the PRD field list.

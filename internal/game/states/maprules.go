@@ -19,7 +19,12 @@ const (
 )
 
 // MapRules are the client's own per-map camera rules: which maps are indoor
-// (no orbiting) and which have a preset (an arc, and an angle to enter at).
+// and which have a preset (an arc, and an angle to enter at).
+//
+// Indoors the original disables orbiting and allows zoom. We do the reverse,
+// by decision (Boris, 2026-08-27, while testing): the zoom is held at the
+// default distance so a room is never seen from outside, and the camera may
+// turn. Presets are applied as the table says.
 // Missing tables are not an error — every map is then outdoor — but they are
 // said once in the log, because a client that silently lost its indoor rules
 // would look like a bug in the camera.
@@ -47,7 +52,8 @@ func (r *MapRules) For(mapName string) MapCamera {
 
 	if r.Indoor[name] {
 		mc.Indoor = true
-		mc.Limits.YawLocked = true
+		mc.Limits.ZoomLocked = true
+		mc.Limits.FixedDistance = DefaultCameraZoom
 	}
 	if vp, ok := r.Presets[name]; ok {
 		mc.YawIn = degToRad(vp.RotationIn)

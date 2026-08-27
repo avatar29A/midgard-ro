@@ -44,3 +44,23 @@ func TestArcLimitsClampTheYaw(t *testing.T) {
 		t.Fatalf("yaw %v after applying an arc, want 1", c.Yaw)
 	}
 }
+
+func TestZoomLockHoldsTheDistance(t *testing.T) {
+	c := NewThirdPersonCamera()
+	c.Distance = 377
+	c.SetLimits(Limits{ZoomLocked: true, FixedDistance: 145})
+	if c.Distance != 145 {
+		t.Fatalf("distance %v after locking, want the fixed 145", c.Distance)
+	}
+	c.HandleZoom(10)
+	c.HandleZoom(-10)
+	if c.Distance != 145 {
+		t.Fatalf("a locked zoom moved to %v", c.Distance)
+	}
+
+	c.SetLimits(Limits{})
+	c.HandleZoom(10)
+	if c.Distance == 145 {
+		t.Fatal("lifting the lock should let it zoom again")
+	}
+}
