@@ -223,6 +223,11 @@ func (s *LoginState) handleLoginAccept(data []byte) error {
 	// Disconnect from login server before connecting to char server
 	s.client.Disconnect()
 
+	// Remembered so the ESC menu can dial it again: from in-game this is the
+	// only way back to character select.
+	s.manager.Session.CharServerHost = charServerIP
+	s.manager.Session.CharServerPort = charServerPort
+
 	// Transition to connecting state with char server info
 	s.manager.Change(NewConnectingState(ConnectingStateConfig{
 		NextState:  "charselect",
@@ -341,6 +346,11 @@ func (s *LoginState) handleLoginAccept2(data []byte) error {
 
 	// Disconnect from login server before connecting to char server
 	s.client.Disconnect()
+
+	// Remembered so the ESC menu can dial it again: from in-game this is the
+	// only way back to character select.
+	s.manager.Session.CharServerHost = charServerIP
+	s.manager.Session.CharServerPort = charServerPort
 
 	// Transition to connecting state with char server info
 	s.manager.Change(NewConnectingState(ConnectingStateConfig{

@@ -447,14 +447,11 @@ func (g *Game) frame() {
 		}
 	}
 
-	// Handle ESC to quit. The cimgui-go SDL backend's SetShouldClose is
-	// currently a no-op TODO upstream, so we exit the process directly.
-	// Deferred a frame so the input event finishes processing cleanly.
-	if imgui.IsKeyPressedBoolV(imgui.KeyEscape, false) {
-		g.pendingAction = func() {
-			logger.Info("escape pressed, exiting")
-			os.Exit(0)
-		}
+	// Escape opens the menu rather than quitting outright. Leaving used to
+	// call os.Exit from here, which told the server nothing and left rAthena
+	// holding the session until it timed out.
+	if imgui.IsKeyPressedBoolV(imgui.KeyEscape, false) && g.uiBackend != nil {
+		g.uiBackend.ToggleEscMenu()
 	}
 
 	// Handle F12 for screenshot (will capture at start of NEXT frame)
@@ -833,6 +830,30 @@ func (g *Game) renderUI() {
 		}
 		populateDebugFields(&uiState, state, g.client)
 		g.uiBackend.RenderInGameUI(uiState, g.dt, viewportWidth, viewportHeight)
+
+		// What the ESC menu was asked for goes out here for the same reason
+		// the chat line below does: the interface has no connection.
+		//
+		// Neither request ends anything by itself. The server answers both,
+		// and can refuse both, so the state acts on the answer.
+		switch g.uiBackend.TakeEscAction() {
+		case ui.EscCharSelect:
+			if err := state.RequestCharSelect(); err != nil {
+				logger.Warn("could not ask for character select", zap.Error(err))
+			}
+		case ui.EscQuit:
+			state.SetQuitFunc(func() {
+				g.pendingAction = func() {
+					logger.Info("server released the session, exiting")
+					os.Exit(0)
+				}
+			})
+
+			if err := state.RequestQuit(); err != nil {
+				logger.Warn("could not ask to quit", zap.Error(err))
+			}
+		case ui.EscNone:
+		}
 
 		// A line the player typed goes out here rather than from the widget:
 		// the interface has no client to send with.

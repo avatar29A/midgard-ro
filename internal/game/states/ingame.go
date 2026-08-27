@@ -96,6 +96,9 @@ type InGameState struct {
 	// the server answers each before the box can send another.
 	pendingWhisper pendingWhisper
 
+	// quit ends the process, once the server has agreed to let us go.
+	quit QuitFunc
+
 	// unitTraceAt rate limits the unit render statistics.
 	unitTraceAt time.Time
 
@@ -1010,6 +1013,8 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_BROADCAST, s.handleBroadcast)
 	s.client.RegisterHandler(packets.ZC_WHISPER, s.handleWhisper)
 	s.client.RegisterHandler(packets.ZC_ACK_WHISPER, s.handleWhisperAck)
+	s.client.RegisterHandler(packets.ZC_RESTART_ACK, s.handleRestartAck)
+	s.client.RegisterHandler(packets.ZC_ACK_REQ_DISCONNECT, s.handleDisconnectAck)
 	s.client.RegisterHandler(packets.ZC_PAR_CHANGE, s.handleStatusChange)
 	s.client.RegisterHandler(packets.ZC_LONGPAR_CHANGE, s.handleStatusChange)
 	s.client.RegisterHandler(packets.ZC_LONGLONGPAR_CHANGE, s.handleStatusChange)
