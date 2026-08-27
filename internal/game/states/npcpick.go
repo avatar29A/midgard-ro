@@ -158,6 +158,68 @@ func (s *InGameState) unitBox(e *entity.Entity) picking.AABB {
 	}
 }
 
+// maxWarpApproach is how far from a warp we will look for somewhere to stand.
+//
+// A warp's trigger is a box around its cell — rAthena's xs, ys, which are
+// half-extents of one to three cells in the scripts we run — so a cell this
+// close is inside it. Looking further would walk the player to a warp they
+// then fail to take.
+const maxWarpApproach = 3
+
+// WarpApproach returns the cell to walk to in order to take a warp.
+//
+// It is not always the warp's own cell: warps sit where the map wants the
+// player to leave from, which is often somewhere nobody can stand. The gate
+// out of prt_fild08 is at 170,378, inside the arch of Prontera's wall, and
+// the walkable ground stops at 377. Asking the server to walk onto it is
+// asking for the one thing rAthena answers with silence — an unpathable
+// walk — so the click did nothing at all.
+//
+// The trigger box saves us: standing next to the warp is standing in it. So
+// when the warp's cell cannot be stood on, this looks outward for the
+// walkable cell closest to it, preferring the one nearest the player, and
+// walks there instead.
+func (s *InGameState) WarpApproach(warpX, warpY int) (x, y int, ok bool) {
+	if s.gat == nil {
+		// Without a walkability grid the warp's own cell is the only guess
+		// we have, and the server will tell us if it is wrong.
+		return warpX, warpY, true
+	}
+	if s.gat.IsWalkable(warpX, warpY) {
+		return warpX, warpY, true
+	}
+
+	fromX, fromY := warpX, warpY
+	if s.player != nil {
+		fromX, fromY = s.player.CurrentCell()
+	}
+
+	for r := 1; r <= maxWarpApproach; r++ {
+		bestX, bestY, bestDist, found := 0, 0, 0, false
+		for dy := -r; dy <= r; dy++ {
+			for dx := -r; dx <= r; dx++ {
+				// The ring at this radius; the inside was covered already.
+				if abs(dx) != r && abs(dy) != r {
+					continue
+				}
+				cx, cy := warpX+dx, warpY+dy
+				if !s.gat.IsWalkable(cx, cy) {
+					continue
+				}
+				d := (cx-fromX)*(cx-fromX) + (cy-fromY)*(cy-fromY)
+				if !found || d < bestDist {
+					bestX, bestY, bestDist, found = cx, cy, d, true
+				}
+			}
+		}
+		if found {
+			return bestX, bestY, true
+		}
+	}
+
+	return 0, 0, false
+}
+
 // ContactNPC asks the server to start a conversation.
 func (s *InGameState) ContactNPC(e *entity.Entity) {
 	if s == nil || e == nil || s.client == nil {

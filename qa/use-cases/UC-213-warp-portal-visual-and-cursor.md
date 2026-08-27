@@ -18,7 +18,7 @@ Every server warp (NPC class 45) is drawn as the original's blue swirling portal
 - Step 1: a translucent blue column of rising light spikes stands in the doorway, slowly rotating, with a soft blue disc on the ground; **no** `1_ETC_01` NPC sprite, no name label, no shadow; the `render` trace shows the warp drawn as an effect, not a sprite sheet
 - Step 2: the cursor becomes the animated **door** (`cursors.act` action 7, ~10 frames looping at 100 ms)
 - Step 3: talk cursor over the NPC, door cursor over the portal, default cursor over the ground — each switch immediate
-- Step 4: the character **walks** to the portal's tile and is warped (UC-212); no `CZ_CONTACTNPC` is sent (`npc` trace shows no `npc.contact`)
+- Step 4: the character **walks** to the portal and is warped (UC-212); no `CZ_CONTACTNPC` is sent (`npc` trace shows no `npc.contact`). This must also hold where the warp itself cannot be stood on — the gate back into Prontera from `prt_fild08` (`prtf004`, 170,378) is inside the wall's arch, and the click has to aim at a walkable cell in its trigger box (`map.warp-click` reports both the warp's cell and the cell chosen)
 - Step 5: `latest.png` shows the portal and the door cursor together
 - Standing at `prontera 156,191` (fountain) nothing is drawn for warps that are hidden (class 139) — none in view, none in the entity count
 

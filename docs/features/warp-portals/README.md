@@ -552,8 +552,20 @@ is how the pattern was tuned without a round trip through the client.
 ![step5-door-cursor — the door cursor over the portal in prt04's doorway, placed by --mouse-at 690,430](./step5-door-cursor.jpg)
 
 Done. `cursorFor` returns `StateWarp` for a warp; `isClickable` admits visible
-warps and refuses hidden ones; `ClickWorld` walks to a warp's cell instead
-of contacting it (`map.warp-click` in the trace, no `npc.contact`). The
+warps and refuses hidden ones; `ClickWorld` walks *into* a warp instead of
+contacting it (`map.warp-click` in the trace, no `npc.contact`).
+
+**Not to the warp's own cell, though — that was a dead click.** Found in
+testing: from `prt_fild08` the gate back into Prontera is `prtf004` at
+170,378, which is **inside the arch of the city wall and not walkable** —
+the ground stops at y=377. We asked the server to walk onto it, and an
+unpathable walk is the one thing rAthena answers with silence, so the cursor
+turned into a door and clicking did nothing at all, over and over. The
+trigger box saves it: a warp's `xs,ys` covers the cells around it, so
+standing *next* to the warp is standing in it. `WarpApproach` takes the
+warp's cell when it can be stood on and otherwise searches outward, up to
+three cells, for the walkable cell nearest the warp and then nearest the
+player. Verified: walking to 170,377 warps to `prontera 156,26`. The
 capture needed a pointer over the portal with nobody at the mouse, so there
 is now **`--mouse-at x,y`** beside `--walk-to`: once the map is up it moves
 the pointer through the OS (`SDL_WarpMouseGlobal`), so the same motion event
@@ -681,6 +693,10 @@ None open.
 
 ## Revision log
 
+- 2026-08-27 — **Dead click into a warp fixed.** A warp's own cell is often
+  unwalkable (the gate out of `prt_fild08` sits inside the wall), and rAthena
+  answers an unpathable walk with nothing at all. Clicks now aim at the
+  nearest walkable cell inside the warp's trigger box.
 - 2026-08-27 — **Portal rebuilt after testing:** flat ringed disc with
   sparkles, as the original draws it, instead of the tall tube the plan took
   from roBrowser's casting-circle primitive; blended rather than added; and
