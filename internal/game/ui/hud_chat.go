@@ -95,16 +95,22 @@ const (
 // input bar, twice.
 const chatInputOrb = basicInterfacePath + "sys_base_off.bmp"
 
-// chatInputBG is the bar's background, and chatInputSepBG the same bar in the
-// archive's other color.
+// chatInputList is what sits between the two fields.
 //
-// The two are pixel-identical in geometry and differ only in palette: grey and
-// blue. The bar is the grey one, but the ribbed separator between the fields
-// is cut out of the blue — that piece alone is colored, not the whole row.
+// It is not a separator, which is why drawing one never looked right: it is a
+// button, 8x18, a blue face with four ribs down it and a bevel around it.
+// roBrowser calls it .list and it opens the names you have whispered before.
+// We keep no such list yet, so it is drawn and does nothing.
 const (
-	chatInputBG    = basicInterfacePath + "dialog_bg.bmp"
-	chatInputSepBG = basicInterfacePath + "dialog_bg2.bmp"
+	chatInputList         = basicInterfacePath + "dialog_btn0.bmp"
+	chatListW     float32 = 8
+	chatListH     float32 = 18
 )
+
+// chatInputBG is the bar's background. The archive carries it in two colors at
+// identical geometry, dialog_bg.bmp in grey and dialog_bg2.bmp in blue; the
+// chat uses the grey one, which is what the original draws under this bar.
+const chatInputBG = basicInterfacePath + "dialog_bg.bmp"
 
 // chatResizeTexture is the hatched bar the original marks a resizable dialog
 // with, 6x24 in the archive.
@@ -712,11 +718,12 @@ func (b *UI2DBackend) drawChatInput(x, y, w float32) {
 		msgBox.X, msgBox.Y, msgBox.W, msgBox.H, chatInputScale, b.chatInput)
 	b.chatInput = msg
 
-	// The separator, taken out of the blue copy of this same bar: the grey
-	// one draws it so faintly that the two fields read as one long box.
-	if tex, err := b.texCache.Load(chatInputSepBG); err == nil {
-		r.DrawImageUV(tex.ID, x+chatSepL, y, chatSepR-chatSepL, chatInputH,
-			chatSepL/chatBGW, 0, chatSepR/chatBGW, 1, ui2d.ColorWhite)
+	// The button between the fields, centered in the gap the background
+	// leaves for it.
+	if tex, err := b.texCache.Load(chatInputList); err == nil {
+		listX := x + chatSepL + (chatSepR-chatSepL-chatListW)/2
+		listY := y + (chatInputH-chatListH)/2
+		r.DrawImage(tex.ID, listX, listY, chatListW, chatListH, ui2d.ColorWhite)
 	}
 
 	b.drawChatOrbs(x+w-chatCapR, y)
