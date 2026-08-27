@@ -18,12 +18,18 @@ const (
 	skillsWindowID = "hud_win_skills"
 
 	skillsW float32 = 280
-	skillsH float32 = 232
+	skillsH float32 = 250
 
 	skillsPad     float32 = 6
-	skillsRowH    float32 = 34
-	skillsIcon    float32 = 24
+	skillsRowH    float32 = 40
+	skillsIcon    float32 = 28
 	skillsScrollW float32 = 14
+
+	// skillsIconGap is the air between the icon and the text beside it, and
+	// skillsLineGap the air between a skill's name and its level. The two
+	// lines are one block: set apart they read as separate rows.
+	skillsIconGap float32 = 10
+	skillsLineGap float32 = 2
 
 	// skillsFooterH is the strip along the bottom, with the points on the
 	// left and the buttons on the right.
@@ -125,8 +131,8 @@ func (b *UI2DBackend) drawSkillRow(skill packets.Skill, x, y, w float32) {
 
 	b.drawSkillIcon(skill.ID, x, y+(skillsRowH-skillsIcon)/2)
 
-	textX := x + skillsIcon + skillsPad
-	textW := w - skillsIcon - skillsPad - skillsRightW
+	textX := x + skillsIcon + skillsIconGap
+	textW := w - skillsIcon - skillsIconGap - skillsRightW
 
 	// An id the table does not know is a skill newer than the table, so it
 	// shows as its id rather than as a blank row.
@@ -135,11 +141,14 @@ func (b *UI2DBackend) drawSkillRow(skill packets.Skill, x, y, w float32) {
 		name = "Skill #" + strconv.Itoa(int(skill.ID))
 	}
 
-	_, capH := r.MeasureText(name, skillsTextScale)
-	nameY := y + skillsRowH/2 - capH - 1
+	level := "Lv : " + strconv.Itoa(skill.Level)
 
-	r.DrawText(textX, nameY, fitTextEnd(r, name, skillsTextScale, textW), skillsTextScale, ui2d.ColorText)
-	r.DrawText(textX, y+skillsRowH/2+1, "Lv : "+strconv.Itoa(skill.Level), skillsTextScale, ui2d.ColorText)
+	// The name and the level are one block, centered in the row together.
+	_, lineH := r.MeasureText(name, skillsTextScale)
+	top := y + (skillsRowH-(2*lineH+skillsLineGap))/2
+
+	r.DrawText(textX, top, fitTextEnd(r, name, skillsTextScale, textW), skillsTextScale, ui2d.ColorText)
+	r.DrawText(textX, top+lineH+skillsLineGap, level, skillsTextScale, ui2d.ColorText)
 
 	// A skill that targets nothing is passive and has no cost to show.
 	cost := "Passive"
@@ -147,8 +156,10 @@ func (b *UI2DBackend) drawSkillRow(skill packets.Skill, x, y, w float32) {
 		cost = "Sp : " + strconv.Itoa(skill.SP)
 	}
 
-	costW, costH := r.MeasureText(cost, skillsTextScale)
-	r.DrawText(x+w-costW, y+(skillsRowH-costH)/2, cost, skillsTextScale, ui2d.ColorText)
+	// Against the right, on the level's line: that is where the original
+	// lines them up, not against the name above it.
+	costW, _ := r.MeasureText(cost, skillsTextScale)
+	r.DrawText(x+w-costW, top+lineH+skillsLineGap, cost, skillsTextScale, ui2d.ColorText)
 }
 
 // drawSkillIcon draws a skill's icon, or the empty frame the original leaves
