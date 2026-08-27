@@ -170,6 +170,10 @@ var (
 	chatIconOutline = ui2d.Color{R: 1, G: 1, B: 1, A: 1}
 	chatCtrlHot     = ui2d.Color{R: 1, G: 1, B: 1, A: 1}
 	chatCtrlOn      = ui2d.Color{R: 1, G: 0.9, B: 0.4, A: 1}
+
+	// chatLockOn is the lock's own on-color, dark enough to read against the
+	// white it is outlined in.
+	chatLockOn = ui2d.Color{R: 0.35, G: 0.35, B: 0.38, A: 1}
 )
 
 // chatKindColor is the color a line is drawn in.
@@ -582,9 +586,13 @@ func (b *UI2DBackend) drawChevrons(box ui2d.Rect, tint ui2d.Color) {
 // could find under any plausible name, and a plain white one was unreadable
 // against pale ground.
 func (b *UI2DBackend) drawPadlock(box ui2d.Rect, tint ui2d.Color) {
+	// Grey while it is on. Yellow was the obvious "active" color and the
+	// wrong one here: against the white it is outlined in, over pale ground,
+	// it had almost nothing to contrast with, so engaging the lock made it
+	// disappear.
 	fill := chatIconBlue
 	if b.chatLocked {
-		fill = chatCtrlOn
+		fill = chatLockOn
 	}
 
 	// Hovering brightens the outline, which is the only feedback a pictogram
