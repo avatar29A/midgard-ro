@@ -107,6 +107,7 @@ type UI2DBackend struct {
 	chatInput     string
 	chatName      string
 	chatLocked    bool
+	chatDirty     bool
 	chatPending   string
 	chatPendingTo string
 
