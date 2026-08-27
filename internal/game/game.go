@@ -1014,6 +1014,17 @@ func (g *Game) handleInGameInput(state *states.InGameState) {
 
 		state.ClickWorld(mouseX, mouseY, viewportW, viewportH)
 	}
+
+	// The marker follows the cursor whether or not anything is clicked, so
+	// the cell you are about to walk to is shown before you commit to it.
+	if !io.WantCaptureMouse() && !g.uiBackend.MouseCaptured() {
+		viewportW, viewportH := g.uiBackend.GetScreenSize()
+		tileX, tileY, ok := state.ScreenToTile(mouseX, mouseY, viewportW, viewportH)
+		state.SetHoverCell(tileX, tileY, ok)
+	} else {
+		// Over the interface: no cell is being pointed at.
+		state.SetHoverCell(0, 0, false)
+	}
 }
 
 // LoadAsset loads an asset from GRF archives.

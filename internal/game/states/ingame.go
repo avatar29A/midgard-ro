@@ -60,8 +60,20 @@ type InGameState struct {
 
 	// portals draws the warp portal effect for every class-45 unit. Like
 	// playerRender it outlives the map, so a warp costs no reload.
-	portals      *scene.PortalRenderer
-	effectTimeMs float32
+	portals *scene.PortalRenderer
+
+	// marker is the cell highlight under the cursor. hoverCellX/Y is the cell
+	// it sits on and hoverValid whether the cursor is over the ground at all;
+	// markerPulse counts down the flourish a click sets off.
+	marker      *scene.GroundMarker
+	hoverCellX  int
+	hoverCellY  int
+	hoverValid  bool
+	markerPulse float32
+
+	// markerTraceAt rate limits the marker diagnostics.
+	markerTraceAt time.Time
+	effectTimeMs  float32
 
 	// Entities
 	entityManager *entity.Manager
@@ -249,6 +261,20 @@ func (s *InGameState) loadPortalRenderer() {
 		return
 	}
 	s.portals = pr
+
+	m, err := scene.NewGroundMarker()
+	if err != nil {
+		logger.Warn("no click marker", zap.Error(err))
+
+		return
+	}
+	s.marker = m
+
+	if err := s.marker.LoadTexture(s.manager.TexLoader); err != nil {
+		// Warned, not fatal: everything else still works, and a click just
+		// goes back to having no feedback.
+		logger.Warn("no click marker texture", zap.Error(err))
+	}
 }
 
 // beginMapLoad starts loading a map and drops the one we were on.
@@ -567,6 +593,10 @@ func (s *InGameState) Exit() error {
 		s.portals.Destroy()
 		s.portals = nil
 	}
+	if s.marker != nil {
+		s.marker.Destroy()
+		s.marker = nil
+	}
 	if s.scene != nil {
 		s.scene.Destroy()
 		s.scene = nil
@@ -638,6 +668,14 @@ func (s *InGameState) Update(dt float64) error {
 
 		// Update cell position
 		s.TileX, s.TileY = s.player.CurrentCell()
+	}
+
+	// The click flourish runs down on its own; nothing else clears it.
+	if s.markerPulse > 0 {
+		s.markerPulse -= deltaMs
+		if s.markerPulse < 0 {
+			s.markerPulse = 0
+		}
 	}
 
 	// Map models with animation — windmills, clock towers — are rebuilt here.
@@ -717,7 +755,55 @@ func (s *InGameState) renderUnits(viewProj math.Mat4) {
 		s.playerRender.RenderUnit(viewProj, e.Body, s.camera.PosX, s.camera.PosZ, load, unitSpec(e), e.Alpha())
 	}
 
+	s.drawGroundMarker(viewProj)
 	s.traceUnitStats(tracked, drawn)
+}
+
+// SetHoverCell records the cell the cursor is over, or that it is over nothing.
+// The marker follows this rather than the pointer, so it snaps cell to cell as
+// the original does.
+func (s *InGameState) SetHoverCell(cellX, cellY int, ok bool) {
+	if ok && (cellX != s.hoverCellX || cellY != s.hoverCellY) {
+		trace.Emit(trace.HUD, "target", zap.Int("x", cellX), zap.Int("y", cellY))
+	}
+
+	s.hoverCellX, s.hoverCellY, s.hoverValid = cellX, cellY, ok
+}
+
+// PulseMarker starts the flourish that answers a click.
+func (s *InGameState) PulseMarker() {
+	s.markerPulse = scene.MarkerPulseMs
+}
+
+// drawGroundMarker puts the cell highlight under the cursor.
+func (s *InGameState) drawGroundMarker(viewProj math.Mat4) {
+	if s.marker == nil || !s.hoverValid {
+		return
+	}
+
+	worldX, worldZ := entity.CellToWorld(s.hoverCellX, s.hoverCellY)
+	worldY := s.terrainHeight(worldX, worldZ)
+
+	// Progress runs 0 at the click and 1 when the flourish is spent, which is
+	// also the size a marker that is merely following the cursor draws at.
+	progress := float32(1)
+	if s.markerPulse > 0 {
+		progress = 1 - s.markerPulse/scene.MarkerPulseMs
+	}
+
+	s.marker.Render(viewProj, worldX, worldY, worldZ, entity.CellSize, progress, 1)
+
+	// Reported once a second while a marker is on screen. The cell alone does
+	// not say whether it is being drawn anywhere you can see — this does, and
+	// is what separates "no marker" from "marker behind the camera".
+	if trace.On(trace.HUD) && time.Since(s.markerTraceAt) >= time.Second {
+		s.markerTraceAt = time.Now()
+		trace.Emit(trace.HUD, "marker",
+			zap.Int("cellX", s.hoverCellX), zap.Int("cellY", s.hoverCellY),
+			zap.Float32("worldX", worldX), zap.Float32("worldY", worldY),
+			zap.Float32("worldZ", worldZ),
+			zap.Float32("scale", scene.MarkerScale(progress)))
+	}
 }
 
 // traceUnitStats reports how many units we hold against how many we draw, once
@@ -1510,6 +1596,11 @@ func (s *InGameState) ClickWorld(mouseX, mouseY, viewportW, viewportH float32) {
 		trace.Emit(trace.Pick, "miss")
 		return
 	}
+
+	// The flourish answers the click itself, whether or not the walk is
+	// accepted — the marker is feedback that the click landed on a cell, and
+	// the server's refusal comes later if at all.
+	s.PulseMarker()
 
 	if err := s.RequestMove(tileX, tileY); err != nil {
 		logger.Warn("click-to-move RequestMove failed", zap.Error(err))
