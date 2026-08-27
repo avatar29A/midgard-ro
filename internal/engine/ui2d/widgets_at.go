@@ -502,16 +502,30 @@ func (c *Context) WindowRect(id string) (Rect, bool) {
 	return Rect{X: ws.X, Y: ws.Y, W: ws.W, H: ws.H}, true
 }
 
-// OpenWindow reopens a window that was closed from its own X.
+// OpenWindow reopens a window that was closed or minimized from its own
+// title bar.
 //
-// Closing sets a flag on the window's remembered state, and BeginWindow
-// returns false while it is set — for good, since the state outlives the
-// window. Anything that offers a way to open a window again has to clear it,
-// or the window opens once per session and never more.
+// Both set a flag on the window's remembered state, and BeginWindow returns
+// false while either is set — for good, since the state outlives the window.
+// Anything that offers a way to open a window again has to clear them, or the
+// window opens once per session and never more.
 func (c *Context) OpenWindow(id string) {
 	if ws, ok := c.windows[id]; ok {
 		ws.Open = true
+		ws.Minimized = false
 	}
+}
+
+// WindowMinimized reports whether a window is collapsed to its title bar.
+//
+// BeginWindow returns false for a minimized window as well as a closed one,
+// and the two mean opposite things: the minimized one is still on screen and
+// still the caller's to draw next frame. Telling them apart is what stops a
+// minimize from reading as a close.
+func (c *Context) WindowMinimized(id string) bool {
+	ws, ok := c.windows[id]
+
+	return ok && ws.Minimized
 }
 
 // CheckboxAt is Checkbox at a position of the caller's choosing, for a dialog

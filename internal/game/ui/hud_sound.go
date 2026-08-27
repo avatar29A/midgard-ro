@@ -85,8 +85,11 @@ func (b *UI2DBackend) drawSoundConfig(screenW, screenH float32) {
 	}
 
 	if !b.ctx.BeginWindow(soundWindowID, openX, openY, soundW, soundH, "Sound Configuration") {
-		// Closed from its own title bar.
-		b.soundOpen = false
+		// Minimized is not closed: the title bar is drawn and the dialog is
+		// still open, so only a real close puts it away.
+		if !b.ctx.WindowMinimized(soundWindowID) {
+			b.soundOpen = false
+		}
 
 		return
 	}
