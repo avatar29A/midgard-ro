@@ -38,6 +38,18 @@ type UIState struct {
 	HotkeyX    float32 `json:"hotkey_x,omitempty"`
 	HotkeyY    float32 `json:"hotkey_y,omitempty"`
 	HotkeyRows int     `json:"hotkey_rows,omitempty"`
+
+	// The sound dialog's levels and switches.
+	//
+	// The switches are written even when false — no omitempty — so that "off"
+	// survives a reload. Omitted, it would be indistinguishable from never
+	// having been set, and every start would turn the sound back on. Sound
+	// being set at all is what SoundSet records.
+	SoundSet  bool    `json:"sound_set,omitempty"`
+	BGMVolume float32 `json:"bgm_volume,omitempty"`
+	SFXVolume float32 `json:"sfx_volume,omitempty"`
+	BGMOn     bool    `json:"bgm_on"`
+	SFXOn     bool    `json:"sfx_on"`
 }
 
 // LoadUIState reads remembered UI state. A missing or unreadable file is not

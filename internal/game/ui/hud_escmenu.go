@@ -20,6 +20,10 @@ const (
 
 	// EscQuit is leaving the game.
 	EscQuit
+
+	// EscSound opens the sound dialog, which the menu handles itself rather
+	// than handing back: nothing outside the interface is involved.
+	EscSound
 )
 
 // The window and its buttons, sized and colored from the archive's own.
@@ -29,6 +33,9 @@ const (
 // look is taken from them rather than the images themselves: the border,
 // face, hover wash and text colors below are sampled out of esc_01a and its
 // hover twin esc_01b.
+// escWindowID is the frame's id, needed to read its position back.
+const escWindowID = "hud_esc_menu"
+
 const (
 	escBtnW float32 = 221
 	escBtnH float32 = 20
@@ -62,8 +69,8 @@ var escMenuItems = []struct {
 	disabled bool
 }{
 	{"esc_charselect", "Character Select", EscCharSelect, false},
-	{"esc_video", "Video Configuration", EscNone, true},
-	{"esc_sound", "Sound Configuration", EscNone, true},
+	{"esc_game", "Game Configuration", EscNone, true},
+	{"esc_sound", "Sound Configuration", EscSound, false},
 	{"esc_shortcut", "Shortcut Configuration", EscNone, true},
 	{"esc_quit", "Exit to Windows", EscQuit, false},
 	{"esc_cancel", "Return to game", EscNone, false},
@@ -101,11 +108,18 @@ func (b *UI2DBackend) drawEscMenu(screenW, screenH float32) {
 	x := (screenW - escMenuW) / 2
 	y := (screenH - escMenuH) / 2
 
+	// Where the window actually is, which is only the position above until it
+	// has been dragged. Reading it back is what keeps the buttons with the
+	// frame; drawn at the caller's position they stayed behind when it moved.
+	if rect, ok := b.ctx.WindowRect(escWindowID); ok {
+		x, y = rect.X, rect.Y
+	}
+
 	// The whole menu claims the pointer: a click meant for a button must not
 	// also walk the character to whatever is behind it.
 	b.ctx.CaptureMouse(ui2d.Rect{X: x, Y: y, W: escMenuW, H: escMenuH})
 
-	if !b.ctx.BeginWindow("hud_esc_menu", x, y, escMenuW, escMenuH, "Game setting window") {
+	if !b.ctx.BeginWindow(escWindowID, x, y, escMenuW, escMenuH, "Game setting window") {
 		return
 	}
 
@@ -122,12 +136,21 @@ func (b *UI2DBackend) drawEscMenu(screenW, screenH float32) {
 			continue
 		}
 
-		if b.ctx.InvisibleButtonAt(item.id, box.X, box.Y, box.W, box.H) {
-			// Return to game just closes; the other two are handed to the
-			// caller, which has the connection to send them on.
-			b.escAction = item.action
-			b.escOpen = false
+		if !b.ctx.InvisibleButtonAt(item.id, box.X, box.Y, box.W, box.H) {
+			continue
 		}
+
+		// Sound opens a dialog of its own and leaves the menu up. Return to
+		// game just closes. The other two are handed to the caller, which has
+		// the connection to send them on.
+		if item.action == EscSound {
+			b.soundOpen = true
+
+			continue
+		}
+
+		b.escAction = item.action
+		b.escOpen = false
 	}
 
 	b.ctx.EndWindow()

@@ -21,6 +21,12 @@ type UIBackend interface {
 	// TakeEscAction returns what the player picked in it and clears it.
 	TakeEscAction() EscAction
 
+	// SetSoundSettings seeds the sound dialog from what is actually playing.
+	SetSoundSettings(s SoundSettings)
+
+	// TakeSoundSettings returns the sound settings when they have changed.
+	TakeSoundSettings() (SoundSettings, bool)
+
 	// TakeChatMessage returns a line the player has entered and clears it,
 	// so the game layer can send it — the interface has no client of its own.
 	TakeChatMessage() (target, message string)
