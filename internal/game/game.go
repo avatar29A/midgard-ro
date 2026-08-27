@@ -3,10 +3,7 @@ package game
 
 import (
 	"fmt"
-	"image"
-	"image/png"
 	"os"
-	"path/filepath"
 	"runtime"
 	"sync"
 	"time"
@@ -22,6 +19,7 @@ import (
 	"github.com/Faultbox/midgard-ro/internal/config"
 	"github.com/Faultbox/midgard-ro/internal/engine/audio"
 	"github.com/Faultbox/midgard-ro/internal/engine/cursor"
+	"github.com/Faultbox/midgard-ro/internal/game/entity"
 	"github.com/Faultbox/midgard-ro/internal/game/states"
 	"github.com/Faultbox/midgard-ro/internal/game/ui"
 	"github.com/Faultbox/midgard-ro/internal/logger"
@@ -84,6 +82,18 @@ type Game struct {
 	// Debug overlay toggle (F3). Default off so the HUD isn't cluttered;
 	// turn on to inspect player/camera/scene/network telemetry live.
 	showDebug bool
+
+	// screenshots writes captured frames off the render thread.
+	screenshots screenshotWriter
+
+	// A cell to walk to once the map is up, from --walk-to. Fired once.
+	walkToX, walkToY int
+	walkToPending    bool
+
+	// Where to put the pointer once the map is up, from --mouse-at, in window
+	// points. Fired once.
+	mouseAtX, mouseAtY int
+	mouseAtPending     bool
 
 	// toggleBasicInfo is set for the frame Ctrl+V was pressed.
 	toggleBasicInfo bool
@@ -488,6 +498,9 @@ func (g *Game) frame() {
 	}
 	updateMs := msSince(updateStart)
 
+	g.runWalkTo()
+	g.runMouseAt()
+
 	// Render 3D scene (if applicable)
 	sceneStart := time.Now()
 	if err := g.stateManager.Render(); err != nil {
@@ -506,6 +519,63 @@ func (g *Game) frame() {
 	if g.screenshotRequested {
 		g.screenshotRequested = false
 		g.captureScreenshot()
+	}
+}
+
+// SetWalkTo asks for one click-to-move to a cell as soon as the first map is
+// up, from --walk-to. It goes through the same path a real click takes.
+func (g *Game) SetWalkTo(x, y int) {
+	g.walkToX, g.walkToY = x, y
+	g.walkToPending = true
+}
+
+// SetMouseAt asks for the pointer to be placed at a window position once the
+// first map is up, from --mouse-at. What the pointer is over decides which
+// cursor is drawn, and that is the one thing an unattended capture could not
+// otherwise show.
+func (g *Game) SetMouseAt(x, y int) {
+	g.mouseAtX, g.mouseAtY = x, y
+	g.mouseAtPending = true
+}
+
+// runMouseAt moves the pointer for --mouse-at once the map is up. It goes
+// through the OS, so the same motion event a hand would cause reaches the
+// input layer.
+func (g *Game) runMouseAt() {
+	if !g.mouseAtPending {
+		return
+	}
+	state, ok := g.stateManager.Current().(*states.InGameState)
+	if !ok || !state.MapReady() {
+		return
+	}
+	g.mouseAtPending = false
+
+	winPos := imgui.MainViewport().Pos()
+	x := int32(winPos.X) + int32(g.mouseAtX)
+	y := int32(winPos.Y) + int32(g.mouseAtY)
+	if err := sdl.WarpMouseGlobal(x, y); err != nil {
+		logger.Warn("--mouse-at could not move the pointer", zap.Error(err))
+		return
+	}
+	logger.Info("pointer placed for --mouse-at", zap.Int("x", g.mouseAtX), zap.Int("y", g.mouseAtY))
+}
+
+// runWalkTo fires the --walk-to click once the map can take it.
+func (g *Game) runWalkTo() {
+	if !g.walkToPending {
+		return
+	}
+	state, ok := g.stateManager.Current().(*states.InGameState)
+	if !ok || !state.MapReady() {
+		return
+	}
+	g.walkToPending = false
+
+	logger.Info("walking to the cell asked for on the command line",
+		zap.Int("x", g.walkToX), zap.Int("y", g.walkToY))
+	if err := state.RequestMove(g.walkToX, g.walkToY); err != nil {
+		logger.Warn("--walk-to request failed", zap.Error(err))
 	}
 }
 
@@ -670,9 +740,24 @@ func (g *Game) renderUI() {
 			ErrorMessage:  state.GetErrorMessage(),
 			Progress:      state.GetProgress(),
 			Phase:         state.GetLoadingPhase(),
+			ImageIndex:    state.GetLoadingImage(),
 		}, viewportWidth, viewportHeight)
 
 	case *states.InGameState:
+		// While a map loads there is nothing to draw but the loading screen;
+		// the HUD comes back with the map.
+		if state.IsLoadingMap() {
+			g.uiBackend.RenderLoadingUI(ui.LoadingUIState{
+				MapName:       state.GetMapName(),
+				StatusMessage: state.GetStatusMessage(),
+				ErrorMessage:  state.GetErrorMessage(),
+				Progress:      state.MapLoadProgress(),
+				Phase:         state.MapLoadPhase(),
+				ImageIndex:    state.MapLoadImage(),
+			}, viewportWidth, viewportHeight)
+			break
+		}
+
 		var playerX, playerY, playerZ float32
 		var playerTileX, playerTileY int
 		var playerDirection uint8
@@ -775,6 +860,9 @@ func (g *Game) renderUI() {
 func (g *Game) Close() {
 	logger.Info("closing game")
 
+	// A capture asked for just before exit is still worth having.
+	g.screenshots.flush(5 * time.Second)
+
 	if g.uiBackend != nil {
 		g.uiBackend.Close()
 	}
@@ -792,26 +880,25 @@ func (g *Game) Close() {
 	}
 }
 
-// captureScreenshot captures the current frame to a PNG file.
+// captureScreenshot reads the current frame back and hands it to the
+// screenshot writer. Only the readback and the flip happen here; the PNG
+// encoding is the expensive part and runs off the render thread.
 func (g *Game) captureScreenshot() {
-	var pixels []byte
-	var width, height int
-
 	// Get actual viewport size from OpenGL (handles HiDPI correctly)
 	var viewport [4]int32
 	gl.GetIntegerv(gl.VIEWPORT, &viewport[0])
-	width = int(viewport[2])
-	height = int(viewport[3])
+	width := int(viewport[2])
+	height := int(viewport[3])
 
 	if width <= 0 || height <= 0 {
 		logger.Warn("screenshot failed: invalid viewport")
 		return
 	}
 
-	pixels = make([]byte, width*height*4)
+	pixels := make([]byte, width*height*4)
 	gl.ReadPixels(0, 0, int32(width), int32(height), gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(pixels))
 
-	// Flip vertically for default framebuffer
+	// Flip vertically: OpenGL reads the bottom row first.
 	rowSize := width * 4
 	flipped := make([]byte, len(pixels))
 	for y := 0; y < height; y++ {
@@ -819,46 +906,14 @@ func (g *Game) captureScreenshot() {
 		dstRow := y * rowSize
 		copy(flipped[dstRow:dstRow+rowSize], pixels[srcRow:srcRow+rowSize])
 	}
-	pixels = flipped
 
-	// Create screenshot directory if needed
-	if err := os.MkdirAll(g.screenshotDir, 0755); err != nil {
-		logger.Warn("failed to create screenshot dir", zap.Error(err))
+	name := screenshotName(time.Now())
+	if !g.screenshots.enqueue(screenshotJob{pixels: flipped, width: width, height: height, dir: g.screenshotDir, name: name}) {
 		return
 	}
 
-	// Create image (pixels are already in correct orientation from CaptureScene or flipped above)
-	img := image.NewRGBA(image.Rect(0, 0, width, height))
-	copy(img.Pix, pixels)
-
-	// Generate filename with timestamp
-	timestamp := time.Now().Format("20060102-150405")
-	filename := fmt.Sprintf("screenshot-%s.png", timestamp)
-	savePath := filepath.Join(g.screenshotDir, filename)
-
-	// Save to file
-	file, err := os.Create(savePath)
-	if err != nil {
-		logger.Warn("failed to create screenshot file", zap.Error(err))
-		return
-	}
-	defer file.Close()
-
-	if err := png.Encode(file, img); err != nil {
-		logger.Warn("failed to encode screenshot", zap.Error(err))
-		return
-	}
-
-	// Also save as "latest.png" for easy access
-	latestPath := filepath.Join(g.screenshotDir, "latest.png")
-	if latestFile, err := os.Create(latestPath); err == nil {
-		_ = png.Encode(latestFile, img)
-		latestFile.Close()
-	}
-
-	g.screenshotMsg = fmt.Sprintf("Saved: %s", filename)
+	g.screenshotMsg = fmt.Sprintf("Saved: %s", name)
 	g.screenshotMsgTime = time.Now()
-	logger.Info("screenshot saved", zap.String("path", savePath))
 }
 
 // handleInGameInput handles camera and movement input when in game.
@@ -1125,11 +1180,9 @@ func fileExists(path string) bool {
 
 // updateCursor picks the cursor for whatever the pointer is over.
 //
-// The original signals a talkable NPC before you click it, which is the only
-// way to tell scenery from something with a script behind it. Warps come out
-// of this as talkable too — they are NPC entities like any other, and nothing
-// in what the server sends distinguishes them — so they get the same cursor
-// until something does.
+// The original signals what a click would do before you click: talk, for an
+// NPC, is the only way to tell scenery from something with a script behind
+// it. Which cursor each kind of unit gets is cursorFor's decision.
 func (g *Game) updateCursor(state *states.InGameState, io *imgui.IO, mouseX, mouseY float32) {
 	if g.uiBackend == nil {
 		return
@@ -1140,10 +1193,24 @@ func (g *Game) updateCursor(state *states.InGameState, io *imgui.IO, mouseX, mou
 	// Over the interface the pointer belongs to the interface.
 	if !io.WantCaptureMouse() && !g.uiBackend.MouseCaptured() {
 		viewportW, viewportH := g.uiBackend.GetScreenSize()
-		if state.HoverEntity(mouseX, mouseY, viewportW, viewportH) != nil {
-			want = cursor.StateTalk
-		}
+		want = cursorFor(state.HoverEntity(mouseX, mouseY, viewportW, viewportH))
 	}
 
 	g.uiBackend.SetCursorState(want)
+}
+
+// cursorFor is the cursor the original shows over a unit of each kind, or
+// the default over nothing.
+func cursorFor(e *entity.Entity) cursor.State {
+	if e == nil {
+		return cursor.StateDefault
+	}
+	switch e.Type {
+	case entity.TypeNPC:
+		return cursor.StateTalk
+	case entity.TypeWarp:
+		return cursor.StateWarp
+	default:
+		return cursor.StateDefault
+	}
 }

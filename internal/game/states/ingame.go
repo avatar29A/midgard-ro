@@ -4,7 +4,6 @@ package states
 import (
 	"fmt"
 	gomath "math"
-	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -33,6 +32,18 @@ type InGameStateConfig struct {
 	SpawnDir  uint8
 	CharID    uint32
 	TexLoader func(string) ([]byte, error)
+
+	// LoadingImage is which loading screen the handshake already showed, so
+	// the load that follows keeps it rather than cutting to another. Zero
+	// lets the loader pick.
+	LoadingImage int
+}
+
+// spawnPoint is where the server put us on a map: a cell, and a facing in
+// the server's numbering.
+type spawnPoint struct {
+	x, y int
+	dir  uint8
 }
 
 // InGameState handles the main gameplay state.
@@ -46,6 +57,11 @@ type InGameState struct {
 	camera       *camera.ThirdPersonCamera
 	gat          *formats.GAT // Walkability + minimap shape
 	playerRender *playerrender.Renderer
+
+	// portals draws the warp portal effect for every class-45 unit. Like
+	// playerRender it outlives the map, so a warp costs no reload.
+	portals      *scene.PortalRenderer
+	effectTimeMs float32
 
 	// Entities
 	entityManager *entity.Manager
@@ -102,6 +118,22 @@ type InGameState struct {
 	// rather than on every update the server sends for it.
 	unknownStats map[uint16]bool
 
+	// The map being loaded, when one is — see beginMapLoad. While it is set
+	// there is no scene, and the loading screen is what the player sees.
+	mapLoader     *MapLoader
+	loadingScene  *scene.Scene
+	mapLoadOrigin string
+	pendingSpawn  spawnPoint
+	lastLoadMs    float64
+	lastLoadPhase string
+
+	// What the current map asks of the camera; see applyMapRules.
+	mapCamera MapCamera
+
+	// OnMapChanged is called once a map is up — the first, and every one a
+	// warp brings — with its name. The per-map pieces of the HUD hang on it.
+	OnMapChanged func(mapName string)
+
 	// State
 	ErrorMsg   string
 	StatusMsg  string
@@ -125,6 +157,12 @@ func NewInGameState(cfg InGameStateConfig, client *network.Client, manager *Mana
 }
 
 // Enter is called when entering this state.
+//
+// Everything that does not depend on the map is set up here: the camera, the
+// unit renderer, the player's stats, the packet handlers. The map itself is
+// loaded over the following frames by a MapLoader — see beginMapLoad and
+// finishMapLoad — so the loading screen can draw between its phases instead
+// of the last frame of the previous screen freezing for a second.
 func (s *InGameState) Enter() error {
 	logger.Info("entering InGameState",
 		zap.String("map", s.MapName),
@@ -132,76 +170,6 @@ func (s *InGameState) Enter() error {
 		zap.Int("spawnY", s.config.SpawnY))
 
 	s.ErrorMsg = ""
-	s.StatusMsg = fmt.Sprintf("Loading %s...", s.MapName)
-
-	// Create scene
-	var err error
-	s.scene, err = scene.New(scene.DefaultConfig())
-	if err != nil {
-		logger.Error("failed to create scene", zap.Error(err))
-		s.ErrorMsg = fmt.Sprintf("Failed to create scene: %v", err)
-		return err
-	}
-
-	// Load map data from GRF
-	if err := s.loadMap(); err != nil {
-		logger.Warn("failed to load map", zap.Error(err))
-		// Continue without map - just show player position
-		s.StatusMsg = fmt.Sprintf("Map not loaded: %v", err)
-	} else {
-		s.MapLoaded = true
-		s.SceneReady = true
-	}
-
-	// Pathfinder over the map's walkability grid. The server tells us only
-	// where a walk starts and ends, so we re-derive the cells in between.
-	s.pathFinder = world.NewPathFinder(s.gat)
-
-	// The map is up, so its background music replaces the title theme and
-	// repeats until the player leaves for another map.
-	s.manager.PlayLocationBGM(s.MapName)
-
-	// Create player character at the spawn cell's center.
-	worldX, worldZ := entity.CellToWorld(s.config.SpawnX, s.config.SpawnY)
-
-	// Get terrain height at spawn position
-	var worldY float32
-	if s.scene != nil && s.MapLoaded {
-		worldY = s.scene.GetTerrainHeight(worldX, worldZ)
-	}
-
-	s.player = entity.NewCharacter(worldX, worldY, worldZ)
-
-	// The server numbers directions the opposite way round the compass from
-	// the sprite sheets, so this needs converting rather than assigning.
-	s.player.Direction = entity.DirectionFromServer(s.config.SpawnDir)
-
-	// Walk timing comes from the character's `speed` stat (ms per cell).
-	s.player.WalkSpeedMs = s.manager.Session.WalkSpeedMs()
-
-	// Let the character follow the ground as it walks.
-	if s.scene != nil && s.MapLoaded {
-		s.player.TerrainHeight = s.terrainHeight
-	}
-
-	logger.Info("player walk speed",
-		zap.Float32("msPerCell", s.player.WalkSpeedMs),
-		zap.Bool("hasPathfinder", s.pathFinder != nil))
-
-	s.stats = PlayerStatsFromChar(s.CharInfo())
-	s.traceInitialStats()
-
-	logger.Debug("created player character",
-		zap.Float32("worldX", worldX),
-		zap.Float32("worldY", worldY),
-		zap.Float32("worldZ", worldZ))
-
-	// Create entity wrapper for the player
-	playerEntity := entity.NewEntity(s.config.CharID, entity.TypePlayer)
-	playerEntity.Position.X = worldX
-	playerEntity.Position.Y = worldY
-	playerEntity.Position.Z = worldZ
-	s.entityManager.SetPlayer(playerEntity)
 
 	// Create third-person camera following player (RO-style)
 	s.camera = camera.NewThirdPersonCamera()
@@ -226,12 +194,20 @@ func (s *InGameState) Enter() error {
 		s.loadPlayerSprites()
 	}
 
-	s.StatusMsg = fmt.Sprintf("Entered %s", s.MapName)
+	s.loadPortalRenderer()
+
+	s.stats = PlayerStatsFromChar(s.CharInfo())
+	s.traceInitialStats()
 
 	// Mark entry time — used as the local epoch for ClientTick and as the
 	// gate for the keep-alive ticker (only run after we're actually in-game).
 	s.enterTime = time.Now()
 	s.lastKeepAlive = s.enterTime
+
+	// The load starts before the handlers exist: registering them delivers
+	// whatever was held for us, and the login-time ZC_NPCACK_MAPMOVE is in
+	// there. It must find the map already loading, or it reads as a teleport.
+	s.beginMapLoad(s.config.MapName, spawnPoint{s.config.SpawnX, s.config.SpawnY, s.config.SpawnDir}, "login")
 
 	// Register packet handlers
 	s.registerPacketHandlers()
@@ -263,71 +239,333 @@ func (s *InGameState) loadPlayerSprites() {
 		zap.Int("walkFrames", s.playerRender.FrameCount(entity.ActionWalk, entity.DirS)))
 }
 
-// loadMap loads the map data from GRF archives.
-func (s *InGameState) loadMap() error {
+// loadPortalRenderer builds the warp portal effect. It needs nothing from
+// the archive — the effect is generated — so the only way it fails is the
+// shader, and then the warps are still there to walk into.
+func (s *InGameState) loadPortalRenderer() {
+	pr, err := scene.NewPortalRenderer()
+	if err != nil {
+		logger.Warn("no warp portal effect", zap.Error(err))
+		return
+	}
+	s.portals = pr
+}
+
+// beginMapLoad starts loading a map and drops the one we were on.
+//
+// The old map's units, scene and any walk in progress go now rather than when
+// the new one is ready: the server has already moved us, and nothing about
+// where we were is true any more. The character itself survives — it is put
+// down again by finishMapLoad — as do the stats, the camera and the packet
+// handlers, which is what keeps a warp from being a login.
+func (s *InGameState) beginMapLoad(mapName string, at spawnPoint, origin string) {
+	from := s.MapName
+	if origin == "login" {
+		from = ""
+	}
+	s.MapName = mapName
+	s.pendingSpawn = at
+	s.mapLoadOrigin = origin
+	s.MapLoaded = false
+	s.SceneReady = false
+	s.StatusMsg = fmt.Sprintf("Loading %s...", packets.MapBaseName(mapName))
+
+	if s.mapLoader != nil {
+		// A change ordered while another was still loading: the server's
+		// later word wins, and the half-built scene goes with the earlier one.
+		s.abortMapLoad()
+	}
+	if s.scene != nil {
+		s.scene.Destroy()
+		s.scene = nil
+	}
+	s.gat = nil
+	s.pathFinder = nil
+	s.dropDialog()
+	s.cancelWalk()
+	s.entityManager.Clear()
+
+	trace.Emit(trace.Map, "change",
+		zap.String("from", from), zap.String("to", mapName),
+		zap.Int("x", at.x), zap.Int("y", at.y),
+		zap.String("origin", origin), zap.Bool("same", false))
+
 	if s.manager.TexLoader == nil {
-		return fmt.Errorf("no texture loader available")
+		logger.Warn("no asset loader; the map cannot be loaded")
+		s.ErrorMsg = "Map not loaded: no asset loader"
+		s.placePlayer(at)
+		s.sendLoadingComplete()
+		return
 	}
 
-	// Get base map name (remove .gat extension)
-	baseName := strings.TrimSuffix(s.MapName, ".gat")
-
-	// Load GAT (walkability + minimap shape).  Non-fatal — log and continue.
-	gatPath := "data\\" + baseName + ".gat"
-	if gatData, gatErr := s.manager.TexLoader(gatPath); gatErr == nil {
-		if gat, parseErr := formats.ParseGAT(gatData); parseErr == nil {
-			s.gat = gat
-		} else {
-			logger.Warn("failed to parse GAT", zap.Error(parseErr))
-		}
-	} else {
-		logger.Warn("failed to load GAT", zap.Error(gatErr))
-	}
-
-	// Load GND (terrain)
-	gndPath := "data\\" + baseName + ".gnd"
-	gndData, err := s.manager.TexLoader(gndPath)
+	sc, err := scene.New(scene.DefaultConfig())
 	if err != nil {
-		return fmt.Errorf("loading GND: %w", err)
+		logger.Error("failed to create scene", zap.Error(err))
+		s.ErrorMsg = fmt.Sprintf("Failed to create scene: %v", err)
+		s.placePlayer(at)
+		s.sendLoadingComplete()
+		return
 	}
-	gnd, err := formats.ParseGND(gndData)
-	if err != nil {
-		return fmt.Errorf("parsing GND: %w", err)
+	s.loadingScene = sc
+	s.mapLoader = NewMapLoader(mapName, s.manager.TexLoader, sc)
+	if s.config.LoadingImage > 0 {
+		s.mapLoader.ImageIndex = s.config.LoadingImage
+		s.config.LoadingImage = 0
 	}
+}
 
-	// Load RSW (map resources)
-	rswPath := "data\\" + baseName + ".rsw"
-	rswData, err := s.manager.TexLoader(rswPath)
-	var rsw *formats.RSW
-	if err == nil {
-		rsw, err = formats.ParseRSW(rswData)
-		if err != nil {
-			logger.Warn("failed to parse RSW", zap.Error(err))
+// abortMapLoad drops a load in progress and the scene it was building.
+func (s *InGameState) abortMapLoad() {
+	if s.loadingScene != nil {
+		s.loadingScene.Destroy()
+		s.loadingScene = nil
+	}
+	s.mapLoader = nil
+}
+
+// finishMapLoad installs the loaded map, puts the character on it and tells
+// the server we are ready.
+//
+// On failure the map is simply absent: the character stands on nothing at
+// the given cell so the error can be read, and the server is still answered,
+// since leaving it waiting would time the session out on top of the error.
+func (s *InGameState) finishMapLoad() {
+	l := s.mapLoader
+	sc := s.loadingScene
+	s.mapLoader, s.loadingScene = nil, nil
+	at := s.pendingSpawn
+
+	if err := l.Err(); err != nil {
+		logger.Error("failed to load map", zap.String("map", l.Name), zap.Error(err))
+		s.ErrorMsg = fmt.Sprintf("Map not loaded: %v", err)
+		if sc != nil {
+			sc.Destroy()
 		}
-	} else {
-		logger.Warn("failed to load RSW", zap.Error(err))
+		s.placePlayer(at)
+		s.sendLoadingComplete()
+		return
 	}
 
-	// Load map into scene
-	if err := s.scene.LoadMap(gnd, rsw, s.manager.TexLoader); err != nil {
-		return fmt.Errorf("loading map into scene: %w", err)
-	}
+	s.scene = sc
+	s.gat = l.GAT()
+	s.pathFinder = world.NewPathFinder(s.gat)
+	s.MapLoaded = true
+	s.SceneReady = true
+	s.lastLoadMs = l.TotalMs()
+	s.lastLoadPhase = l.TimingSummary()
 
-	logger.Info("map loaded successfully",
-		zap.String("map", baseName),
+	logger.Info("map loaded",
+		zap.String("map", l.Name),
+		zap.Float64("ms", s.lastLoadMs),
+		zap.Int("models", s.scene.LoadedModels()),
+		zap.Int("terrainGroups", s.scene.TerrainGroups()),
 		zap.Float32("width", s.scene.MapWidth),
-		zap.Float32("height", s.scene.MapHeight))
+		zap.Float32("height", s.scene.MapHeight),
+		zap.Bool("hasGAT", s.gat != nil),
+		zap.String("phases", s.lastLoadPhase))
+	trace.Emit(trace.Map, "loaded",
+		zap.String("map", l.Name),
+		zap.Float64("ms", s.lastLoadMs),
+		zap.Int("models", s.scene.LoadedModels()),
+		zap.String("phases", s.lastLoadPhase))
 
-	return nil
+	// The map is up, so its background music replaces whatever was playing
+	// and repeats until the player leaves for another map.
+	s.manager.PlayLocationBGM(s.MapName)
+
+	s.applyMapRules()
+	trace.Emit(trace.Map, "water",
+		zap.String("map", l.Name), zap.Int("cells", s.scene.WaterCells()))
+
+	s.placePlayer(at)
+	s.StatusMsg = fmt.Sprintf("Entered %s", s.MapName)
+
+	s.sendLoadingComplete()
+	trace.Emit(trace.Map, "ready",
+		zap.String("map", l.Name),
+		zap.String("origin", s.mapLoadOrigin),
+		zap.Float64("loadMs", s.lastLoadMs))
+
+	if s.OnMapChanged != nil {
+		s.OnMapChanged(s.MapName)
+	}
+}
+
+// applyMapRules gives the camera the map's rules — no orbiting indoors, an
+// arc where the presets say so — and turns it to the map's entry angle, as
+// the original does on every map change.
+func (s *InGameState) applyMapRules() {
+	s.mapCamera = s.manager.MapRules().For(s.MapName)
+	if s.camera != nil {
+		s.camera.SetLimits(s.mapCamera.Limits)
+		s.camera.SetYaw(s.mapCamera.YawIn)
+	}
+	if s.scene != nil {
+		// Beyond an indoor map's rooms the original shows black, not sky.
+		if s.mapCamera.Indoor {
+			s.scene.SetClearColor(scene.IndoorClearColor)
+		} else {
+			s.scene.SetClearColor(scene.SkyClearColor)
+		}
+	}
+	trace.Emit(trace.Map, "indoor",
+		zap.String("map", packets.MapBaseName(s.MapName)),
+		zap.Bool("indoor", s.mapCamera.Indoor),
+		zap.Bool("yawLocked", s.mapCamera.Limits.YawLocked),
+		zap.Bool("zoomLocked", s.mapCamera.Limits.ZoomLocked),
+		zap.Bool("arc", s.mapCamera.Limits.Arc),
+		zap.Float32("yawIn", s.mapCamera.YawIn))
+}
+
+// IsIndoor reports whether the current map is one the original treats as
+// indoor.
+func (s *InGameState) IsIndoor() bool {
+	return s.mapCamera.Indoor
+}
+
+// CameraRules is what the current map asks of the camera.
+func (s *InGameState) CameraRules() MapCamera {
+	return s.mapCamera
+}
+
+// WaterCells is how many cells of the current map carry water.
+func (s *InGameState) WaterCells() int {
+	if s.scene == nil {
+		return 0
+	}
+	return s.scene.WaterCells()
+}
+
+// placePlayer puts the character on a cell of the current map, creating it
+// the first time.
+func (s *InGameState) placePlayer(at spawnPoint) {
+	worldX, worldZ := entity.CellToWorld(at.x, at.y)
+	worldY := s.terrainHeight(worldX, worldZ)
+
+	if s.player == nil {
+		s.player = entity.NewCharacter(worldX, worldY, worldZ)
+
+		// Walk timing comes from the character's `speed` stat (ms per cell).
+		s.player.WalkSpeedMs = s.manager.Session.WalkSpeedMs()
+		logger.Info("player walk speed",
+			zap.Float32("msPerCell", s.player.WalkSpeedMs),
+			zap.Bool("hasPathfinder", s.pathFinder != nil))
+
+		// Create entity wrapper for the player
+		s.entityManager.SetPlayer(entity.NewEntity(s.config.CharID, entity.TypePlayer))
+	} else {
+		// A correction, not a step: any walk is abandoned and the drawn
+		// position comes along.
+		s.player.SetPosition(worldX, worldY, worldZ)
+	}
+
+	// Let the character follow the ground as it walks.
+	s.player.TerrainHeight = s.terrainHeight
+
+	// The server numbers directions the opposite way round the compass from
+	// the sprite sheets, so this needs converting rather than assigning.
+	s.player.Direction = entity.DirectionFromServer(at.dir)
+
+	if pe := s.entityManager.Player(); pe != nil {
+		pe.Position = math.Vec3{X: worldX, Y: worldY, Z: worldZ}
+	}
+	s.TileX, s.TileY = at.x, at.y
+
+	logger.Debug("placed player",
+		zap.Int("cellX", at.x), zap.Int("cellY", at.y),
+		zap.Float32("worldX", worldX),
+		zap.Float32("worldY", worldY),
+		zap.Float32("worldZ", worldZ))
+}
+
+// sendLoadingComplete tells the server the map is up. It answers with
+// everything in view, so this must not go out before the handlers exist and
+// there is a map to put the units on.
+func (s *InGameState) sendLoadingComplete() {
+	pkt := &packets.LoadingComplete{PacketID: packets.CZ_NOTIFY_ACTORINIT}
+	if err := s.client.Send(pkt.Encode()); err != nil {
+		logger.Warn("could not report the map loaded", zap.Error(err))
+	}
+}
+
+// dropDialog closes a conversation the server has already ended by moving us.
+// Nothing is sent: the script is over on its side.
+func (s *InGameState) dropDialog() {
+	if s.dialog.Phase == 0 {
+		return
+	}
+	trace.Emit(trace.NPC, "dropped", zap.Uint32("npcID", s.dialog.NPCID), zap.String("reason", "map change"))
+	s.dialog = NPCDialog{}
+}
+
+// cancelWalk forgets where we were going. The server has moved us, so the
+// destination, the prediction and the path are all about a place we are no
+// longer in.
+func (s *InGameState) cancelWalk() {
+	s.hasDest = false
+	s.hasPrediction = false
+	s.chainCellX, s.chainCellY = -1, -1
+	if s.player != nil {
+		s.player.StopWalking()
+		s.player.ClearDestination()
+	}
+}
+
+// IsLoadingMap reports whether a map is being loaded — when the loading
+// screen stands in for the scene.
+func (s *InGameState) IsLoadingMap() bool {
+	return s.mapLoader != nil
+}
+
+// MapReady reports whether the map is up and the character is standing on it.
+func (s *InGameState) MapReady() bool {
+	return s.mapLoader == nil && s.MapLoaded && s.player != nil
+}
+
+// MapLoadProgress is how far the load in progress has got, 0 to 1.
+func (s *InGameState) MapLoadProgress() float32 {
+	if s.mapLoader == nil {
+		return 1
+	}
+	return s.mapLoader.Progress()
+}
+
+// MapLoadPhase names the phase in progress, for the overlay.
+func (s *InGameState) MapLoadPhase() string {
+	if s.mapLoader == nil {
+		return ""
+	}
+	return s.mapLoader.Phase().String()
+}
+
+// MapLoadImage is which loading screen the load in progress shows, 1-based,
+// or zero when nothing is loading.
+func (s *InGameState) MapLoadImage() int {
+	if s.mapLoader == nil {
+		return 0
+	}
+	return s.mapLoader.ImageIndex
+}
+
+// LastMapLoad reports how long the last map took and where the time went.
+func (s *InGameState) LastMapLoad() (ms float64, phases string) {
+	return s.lastLoadMs, s.lastLoadPhase
 }
 
 // Exit is called when leaving this state.
 func (s *InGameState) Exit() error {
 	s.SaveUIState()
 
+	if s.mapLoader != nil {
+		s.abortMapLoad()
+	}
 	if s.playerRender != nil {
 		s.playerRender.Destroy()
 		s.playerRender = nil
+	}
+	if s.portals != nil {
+		s.portals.Destroy()
+		s.portals = nil
 	}
 	if s.scene != nil {
 		s.scene.Destroy()
@@ -350,6 +588,24 @@ func (s *InGameState) Update(dt float64) error {
 	if !s.enterTime.IsZero() && time.Since(s.lastKeepAlive) >= s.keepAliveInterval {
 		s.sendKeepAlive()
 		s.lastKeepAlive = time.Now()
+	}
+
+	// Bring the map in, a phase or a few models per frame. Nothing else
+	// moves until it is up: the units went with the old map, and the
+	// character is put down when this finishes.
+	if s.mapLoader != nil {
+		stepStart := time.Now()
+		done := s.mapLoader.Step()
+		if trace.On(trace.Map) {
+			trace.Emit(trace.Map, "step",
+				zap.String("phase", s.mapLoader.Phase().String()),
+				zap.Float64("ms", msSinceStart(stepStart)),
+				zap.Float32("progress", s.mapLoader.Progress()))
+		}
+		if done {
+			s.finishMapLoad()
+		}
+		return nil
 	}
 
 	// Update player movement. Walking is server-authoritative: this advances
@@ -392,6 +648,7 @@ func (s *InGameState) Update(dt float64) error {
 	// Update all entities
 	s.entityManager.Update(dt)
 	updateUnits(s.entityManager, deltaMs, s.unitAnim)
+	s.effectTimeMs += deltaMs
 
 	return nil
 }
@@ -401,7 +658,9 @@ func (s *InGameState) Update(dt float64) error {
 // rather than the player's fixed one. Zero until the sheet for that appearance
 // has been baked, which parks it on frame 0.
 func (s *InGameState) unitAnim(e *entity.Entity, action, direction int) (int, float32) {
-	if s.playerRender == nil || !unitIsDrawable(e) {
+	// A warp is an effect, not a sheet: asking would bake the sprite the
+	// table names for class 45, which nobody wants to see.
+	if s.playerRender == nil || e.Type == entity.TypeWarp || !unitIsDrawable(e) {
 		return 0, 0
 	}
 	spec := unitSpec(e)
@@ -448,6 +707,13 @@ func (s *InGameState) renderUnits(viewProj math.Mat4) {
 			continue
 		}
 		drawn++
+		if e.Type == entity.TypeWarp {
+			// The portal, not a sprite: no name, no shadow, no sheet.
+			if s.portals != nil {
+				s.portals.Render(viewProj, e.Body.RenderX, e.Body.RenderY, e.Body.RenderZ, s.effectTimeMs, e.Alpha())
+			}
+			continue
+		}
 		s.playerRender.RenderUnit(viewProj, e.Body, s.camera.PosX, s.camera.PosZ, load, unitSpec(e), e.Alpha())
 	}
 
@@ -642,6 +908,7 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_NOTIFY_MOVEENTRY, s.handleEntityMove)
 	s.client.RegisterHandler(packets.ZC_NOTIFY_VANISH, s.handleEntityVanish)
 	s.client.RegisterHandler(packets.ZC_NPCACK_MAPMOVE, s.handleMapChange)
+	s.client.RegisterHandler(packets.ZC_NPCACK_SERVERMOVE, s.handleServerMove)
 	s.client.RegisterHandler(packets.ZC_NOTIFY_PLAYERMOVE, s.handlePlayerMove)
 	s.client.RegisterHandler(packets.ZC_NOTIFY_TIME, s.handleServerTick)
 	s.client.RegisterHandler(packets.ZC_NOTIFY_CHAT, s.handleChat)
@@ -694,6 +961,10 @@ func (s *InGameState) PingMs() float64 {
 // exactly that and then walk it on the server's clock (`speed` ms per cell),
 // so our position stays in step with the server's instead of beelining.
 func (s *InGameState) handlePlayerMove(data []byte) error {
+	if s.player == nil || s.mapLoader != nil {
+		return nil
+	}
+
 	mv := packets.DecodePlayerMove(data)
 	if mv == nil {
 		trace.Emit(trace.Move, "ack-undecodable",
@@ -960,9 +1231,77 @@ func (s *InGameState) unitPath(fromX, fromY, toX, toY int) [][2]int {
 	return s.pathFinder.FindPath(fromX, fromY, toX, toY)
 }
 
+// warpFacing is the server's numbering for south — facing the viewer — which
+// is how the original stands a character that has just arrived through a
+// warp; the packet carries no direction of its own.
+const warpFacing = 4
+
+// handleMapChange handles ZC_NPCACK_MAPMOVE: the server has moved us.
+//
+// Three cases, and only the last is a load. rAthena sends one on every login
+// for the map being entered (pc_authok), and it arrives while that map is
+// loading: noted, not acted on. One naming the map we are already standing
+// on is a teleport within it — a staircase, or the server warping us again on
+// arrival — which the original handles without reloading. Anything else is a
+// warp to another map.
 func (s *InGameState) handleMapChange(data []byte) error {
-	// Handle map change request from server
-	// This would trigger a transition to loading state for the new map
+	mc := packets.DecodeMapChange(data)
+	if mc == nil {
+		return fmt.Errorf("invalid ZC_NPCACK_MAPMOVE: %d bytes", len(data))
+	}
+
+	at := spawnPoint{x: mc.X, y: mc.Y, dir: warpFacing}
+	same := mc.BaseName() == packets.MapBaseName(s.MapName)
+
+	switch {
+	case same && !s.MapLoaded:
+		// The map is loading, or about to: this is the login echo.
+		s.pendingSpawn = at
+		trace.Emit(trace.Map, "change",
+			zap.String("from", s.MapName), zap.String("to", mc.MapName),
+			zap.Int("x", mc.X), zap.Int("y", mc.Y),
+			zap.String("origin", "login"), zap.Bool("same", true),
+			zap.String("note", "already loading"))
+	case same:
+		s.localTeleport(at)
+	default:
+		s.beginMapLoad(mc.MapName, at, "warp")
+	}
+	return nil
+}
+
+// localTeleport moves us within the current map. Nothing is reloaded: the
+// units are dropped, since the server describes the new surroundings when we
+// report ready, and the character is put where it was told.
+func (s *InGameState) localTeleport(at spawnPoint) {
+	s.dropDialog()
+	s.cancelWalk()
+	s.entityManager.Clear()
+	s.placePlayer(at)
+
+	trace.Emit(trace.Map, "change",
+		zap.String("from", s.MapName), zap.String("to", s.MapName),
+		zap.Int("x", at.x), zap.Int("y", at.y),
+		zap.String("origin", "teleport"), zap.Bool("same", true))
+
+	s.sendLoadingComplete()
+	trace.Emit(trace.Map, "ready", zap.String("map", s.MapName), zap.String("origin", "teleport"))
+}
+
+// handleServerMove handles ZC_NPCACK_SERVERMOVE: the destination lives on
+// another map server. We run one, so this is reported rather than followed —
+// reconnecting to a second server is a feature of its own.
+func (s *InGameState) handleServerMove(data []byte) error {
+	sm := packets.DecodeServerMove(data)
+	if sm == nil {
+		return fmt.Errorf("invalid ZC_NPCACK_SERVERMOVE: %d bytes", len(data))
+	}
+
+	logger.Warn("map server change is not supported",
+		zap.String("map", sm.MapName), zap.Int("x", sm.X), zap.Int("y", sm.Y),
+		zap.String("server", sm.Address()), zap.String("domain", sm.Domain))
+	trace.Emit(trace.Map, "server-move",
+		zap.String("map", sm.MapName), zap.String("server", sm.Address()))
 	return nil
 }
 
@@ -1126,15 +1465,42 @@ func abs(v int) int {
 // already are — is what lets it, without the game loop growing a second copy
 // of the ray cast.
 func (s *InGameState) ClickWorld(mouseX, mouseY, viewportW, viewportH float32) {
-	// An NPC under the pointer takes the click. Walking there instead would be
-	// the wrong thing twice over: the conversation would not start, and the
-	// server would refuse a step into the cell the NPC is standing on.
-	if npc := s.PickEntity(mouseX, mouseY, viewportW, viewportH); npc != nil {
+	// There is no world to click on until the map is up.
+	if s.mapLoader != nil || s.player == nil {
+		return
+	}
+
+	// A unit under the pointer takes the click. For an NPC, walking there
+	// instead would be the wrong thing twice over: the conversation would not
+	// start, and the server would refuse a step into the cell the NPC is
+	// standing on. For a warp it is the other way round — there is nothing to
+	// say to it; you walk into it, and the server does the rest.
+	if e := s.PickEntity(mouseX, mouseY, viewportW, viewportH); e != nil {
+		if e.Type == entity.TypeWarp {
+			cellX, cellY := e.Body.CurrentCell()
+			stepX, stepY, reachable := s.WarpApproach(cellX, cellY)
+			trace.Emit(trace.Map, "warp-click",
+				zap.Uint32("aid", e.ID), zap.String("name", e.Name),
+				zap.Int("cellX", cellX), zap.Int("cellY", cellY),
+				zap.Int("stepX", stepX), zap.Int("stepY", stepY),
+				zap.Bool("reachable", reachable))
+			if !reachable {
+				logger.Warn("no way to stand in this warp",
+					zap.String("name", e.Name),
+					zap.Int("cellX", cellX), zap.Int("cellY", cellY))
+				return
+			}
+			if err := s.RequestMove(stepX, stepY); err != nil {
+				logger.Warn("walk to warp failed", zap.Error(err))
+			}
+			return
+		}
+
 		trace.Emit(trace.NPC, "click",
-			zap.Uint32("npcID", npc.ID), zap.String("name", npc.Name),
+			zap.Uint32("npcID", e.ID), zap.String("name", e.Name),
 			zap.Float32("screenX", mouseX), zap.Float32("screenY", mouseY))
 
-		s.ContactNPC(npc)
+		s.ContactNPC(e)
 
 		return
 	}
@@ -1379,4 +1745,9 @@ func (s *InGameState) CaptureScene() ([]byte, int32, int32) {
 		return nil, 0, 0
 	}
 	return s.scene.CaptureImage()
+}
+
+// msSinceStart is the elapsed time since t in milliseconds, for traces.
+func msSinceStart(t time.Time) float64 {
+	return float64(time.Since(t).Microseconds()) / 1000
 }

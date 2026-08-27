@@ -1,5 +1,67 @@
-// Package water provides water plane geometry and animation utilities.
+// Package water provides water geometry and animation utilities.
 package water
+
+import "github.com/Faultbox/midgard-ro/pkg/formats"
+
+// Mesh is water geometry ready for upload: one quad per cell that has water.
+type Mesh struct {
+	Vertices []float32 // x, y, z per vertex, six per cell
+	Cells    int
+	Level    float32
+}
+
+// BuildCells builds water for the cells that have it, by the original
+// client's rule (roBrowser Ground.js:471-483): a cell gets water when it has
+// ground — a top surface — and any corner of that ground lies below the
+// water surface, allowing for the wave height. A cell with no ground gets
+// none, which is what keeps the void between an indoor map's rooms black
+// instead of flooding it.
+//
+// RO altitudes are positive downwards and the water level is given the same
+// way, so "below the surface" is a corner altitude greater than the level.
+func BuildCells(gnd *formats.GND, level, waveHeight float32) *Mesh {
+	m := &Mesh{Level: level}
+	if gnd == nil {
+		return m
+	}
+
+	y := -level
+	threshold := level - waveHeight
+	width, height := int(gnd.Width), int(gnd.Height)
+	for ty := 0; ty < height; ty++ {
+		for tx := 0; tx < width; tx++ {
+			tile := gnd.GetTile(tx, ty)
+			if tile == nil || tile.TopSurface < 0 {
+				continue
+			}
+			under := false
+			for _, a := range tile.Altitude {
+				if a > threshold {
+					under = true
+					break
+				}
+			}
+			if !under {
+				continue
+			}
+
+			x0 := float32(tx) * gnd.Zoom
+			z0 := float32(ty) * gnd.Zoom
+			x1 := x0 + gnd.Zoom
+			z1 := z0 + gnd.Zoom
+			m.Vertices = append(m.Vertices,
+				x0, y, z0,
+				x1, y, z0,
+				x1, y, z1,
+				x0, y, z0,
+				x1, y, z1,
+				x0, y, z1,
+			)
+			m.Cells++
+		}
+	}
+	return m
+}
 
 // Vertex represents a water surface vertex (position only).
 type Vertex struct {
