@@ -79,6 +79,16 @@ const (
 	offWalkName        = 90
 )
 
+// Job ids of the two warp NPC classes — JT_WARPNPC and JT_HIDDEN_WARP_NPC in
+// rAthena. The server sends both as ordinary NPCs (objecttype 0x6); only the
+// job tells them apart from a Kafra. The client's own sprite table names a
+// sprite for 45 (1_ETC_01) that the original never draws for it: class 45 is
+// the portal effect, and 139 is invisible.
+const (
+	JobWarpPortal = 45
+	JobHiddenWarp = 139
+)
+
 // EntityKind is the packet's objecttype, which says what the unit is and so
 // which sprite to draw. Values are rAthena's clif_bl_type (src/map/clif.cpp).
 type EntityKind uint8

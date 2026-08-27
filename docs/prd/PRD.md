@@ -33,7 +33,7 @@ By end of March 2025, the client must:
 |----------|----------|
 | **Authentication** | Account registration, login, character selection |
 | **Character** | Creation (6 base classes), basic stats display |
-| **World** | Prontera city, prt_fild01-03 (surrounding fields) |
+| **World** | Prontera city and the fields its gates open onto: prt_fild05 (west), prt_fild06 (east), prt_fild08 (south) |
 | **Rendering** | 2.5D isometric maps, sprites, basic lighting |
 | **Entities** | Player movement, NPC display, mob spawns |
 | **Network** | Hercules protocol, state synchronization |
@@ -132,9 +132,13 @@ Flow:
 | Map ID | Name | Type |
 |--------|------|------|
 | prontera | Prontera City | Town |
-| prt_fild01 | Prontera Field 1 | Field |
-| prt_fild02 | Prontera Field 2 | Field |
-| prt_fild03 | Prontera Field 3 | Field |
+| prt_fild05 | Prontera Field 5 (west gate) | Field |
+| prt_fild06 | Prontera Field 6 (east gate) | Field |
+| prt_fild08 | Prontera Field 8 (south gate) | Field |
+
+*Corrected 2026-08-27 (#91): the original list named prt_fild01–03, but in the
+server's warp scripts Prontera's gates open onto 05, 06 and 08; prt_fild01 is
+not reachable from town on foot.*
 
 #### 4.3.2 Rendering Features
 - **Ground**: Textured tiles with height variation

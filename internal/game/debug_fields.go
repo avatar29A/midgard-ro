@@ -33,6 +33,14 @@ func populateDebugFields(out *ui.InGameUIState, state *states.InGameState, clien
 		}
 	}
 
+	out.MapLoadMs, out.MapLoadPhases = state.LastMapLoad()
+	rules := state.CameraRules()
+	out.Indoor = rules.Indoor
+	out.CameraYawLocked = rules.Limits.YawLocked
+	out.CameraZoomLocked = rules.Limits.ZoomLocked
+	out.CameraArc = rules.Limits.Arc
+	out.WaterCells = state.WaterCells()
+
 	if cam := state.GetCamera(); cam != nil {
 		out.CamX = cam.PosX
 		out.CamY = cam.PosY

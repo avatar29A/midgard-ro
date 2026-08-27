@@ -13,6 +13,8 @@ import (
 	"github.com/Faultbox/midgard-ro/internal/engine/scene/shaders"
 	"github.com/Faultbox/midgard-ro/internal/engine/shader"
 	"github.com/Faultbox/midgard-ro/internal/engine/texture"
+	"github.com/Faultbox/midgard-ro/internal/engine/water"
+	"github.com/Faultbox/midgard-ro/pkg/formats"
 	"github.com/Faultbox/midgard-ro/pkg/math"
 )
 
@@ -35,6 +37,8 @@ type WaterRenderer struct {
 	// Water properties
 	waterLevel     float32
 	hasWater       bool
+	cells          int
+	vertexCount    int32
 	waterTime      float32
 	waterTextures  []uint32
 	waterFrame     int
@@ -64,38 +68,32 @@ func NewWaterRenderer() (*WaterRenderer, error) {
 	return wr, nil
 }
 
-// SetupWater creates a water plane at the specified level.
-func (wr *WaterRenderer) SetupWater(level float32, minBounds, maxBounds [3]float32, texLoader func(string) ([]byte, error)) {
-	wr.waterLevel = level
-	wr.hasWater = true
+// SetupWater builds the map's water: a quad for every cell the original's
+// rule gives water to (see water.BuildCells), at the RSW's level. A map whose
+// rule yields no cells has no water drawn — an indoor map's void stays black.
+func (wr *WaterRenderer) SetupWater(gnd *formats.GND, settings formats.RSWWater, texLoader func(string) ([]byte, error)) {
+	wr.waterLevel = settings.Level
+	wr.clearMesh()
 
-	// Create water plane mesh
-	wr.createWaterPlane(minBounds, maxBounds)
+	mesh := water.BuildCells(gnd, settings.Level, settings.WaveHeight)
+	wr.cells = mesh.Cells
+	if mesh.Cells == 0 {
+		wr.hasWater = false
+		return
+	}
+	wr.hasWater = true
+	wr.uploadMesh(mesh.Vertices)
 
 	// Load water textures
 	wr.loadWaterTextures(texLoader)
 }
 
-func (wr *WaterRenderer) createWaterPlane(minBounds, maxBounds [3]float32) {
-	// Extend water plane slightly beyond terrain bounds
-	padding := float32(50.0)
-	minX := minBounds[0] - padding
-	maxX := maxBounds[0] + padding
-	minZ := minBounds[2] - padding
-	maxZ := maxBounds[2] + padding
-	y := -wr.waterLevel
+// Cells is how many cells carry water, for the log and the overlay.
+func (wr *WaterRenderer) Cells() int {
+	return wr.cells
+}
 
-	// Simple quad vertices (position only)
-	vertices := []float32{
-		minX, y, minZ,
-		maxX, y, minZ,
-		maxX, y, maxZ,
-		minX, y, maxZ,
-		minX, y, minZ,
-		maxX, y, maxZ,
-	}
-
-	// Create VAO/VBO
+func (wr *WaterRenderer) uploadMesh(vertices []float32) {
 	gl.GenVertexArrays(1, &wr.vao)
 	gl.BindVertexArray(wr.vao)
 
@@ -108,6 +106,19 @@ func (wr *WaterRenderer) createWaterPlane(minBounds, maxBounds [3]float32) {
 	gl.EnableVertexAttribArray(0)
 
 	gl.BindVertexArray(0)
+	wr.vertexCount = int32(len(vertices) / 3)
+}
+
+func (wr *WaterRenderer) clearMesh() {
+	if wr.vao != 0 {
+		gl.DeleteVertexArrays(1, &wr.vao)
+		wr.vao = 0
+	}
+	if wr.vbo != 0 {
+		gl.DeleteBuffers(1, &wr.vbo)
+		wr.vbo = 0
+	}
+	wr.vertexCount = 0
 }
 
 func (wr *WaterRenderer) loadWaterTextures(texLoader func(string) ([]byte, error)) {
@@ -214,7 +225,7 @@ func (wr *WaterRenderer) Render(viewProj math.Mat4) {
 	}
 
 	gl.BindVertexArray(wr.vao)
-	gl.DrawArrays(gl.TRIANGLES, 0, 6)
+	gl.DrawArrays(gl.TRIANGLES, 0, wr.vertexCount)
 	gl.BindVertexArray(0)
 }
 

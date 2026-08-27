@@ -76,16 +76,17 @@ model.InterpolateRotKeys(keys []formats.RSMRotKeyframe, timeMs float32) math.Qua
 
 ## 4. Water System (`internal/engine/water/`)
 
-Animated water plane generation.
+Water geometry, built per cell by the original client's rule.
 
 | File | Features |
 |------|----------|
-| **water.go** | Water mesh generation with wave animation |
+| **water.go** | `BuildCells`: a quad for every GND cell that has ground with a corner below the water level (roBrowser `Ground.js:471-483`); cells with no ground get none, so an indoor map's void stays black. `BuildPlane` is the older map-sized quad, kept for grfbrowser. |
 
 ### Key Functions
 ```go
-water.GenerateWaterMesh(rsw *formats.RSW, gnd *formats.GND) []WaterVertex
-water.CalculateWaveOffset(time, x, z, amplitude, frequency float32) float32
+water.BuildCells(gnd *formats.GND, level, waveHeight float32) *water.Mesh   // Vertices, Cells
+water.BuildPlaneWithPadding(minX, maxX, minZ, maxZ, level, padding float32) *water.Plane
+water.CalculateAnimFrame(time, speed float32, numFrames int) int
 ```
 
 ---
@@ -277,6 +278,49 @@ The values come from `states.PlayerStats`, seeded from the character list and
 kept current by the server's parameter packets — `0x00B0`, `0x00B1` and, for
 experience at `PACKETVER >= 20170830`, `0x0ACB`. `--trace=status` shows each
 update as it arrives.
+
+---
+
+### Map loading (`internal/game/states/maploader.go`, `internal/engine/scene/scene.go`)
+
+A map is loaded in phases — GAT, GND, RSW, prepare, terrain, models in
+chunks, finish — by a `MapLoader` that `InGameState` steps once per frame with
+a 24 ms budget, so the loading screen (`internal/game/ui/loading_screen.go`:
+one of the archive's `loading01..10.jpg`, the original's 240×15 bar) draws
+between phases with a bar that moves because work was done. `Scene` exposes
+the phases (`BeginMap`, `LoadTerrain`, `BeginModels`, `LoadModelRange`,
+`EndMap`); `LoadMap` runs them back to back. The state survives a map change:
+`ZC_NPCACK_MAPMOVE` drops the units, the dialog and the walk, loads the new
+map, and only then sends `CZ_NOTIFY_ACTORINIT`. Prontera loads in ~1.3 s.
+
+```go
+l := states.NewMapLoader("prontera", load, scene)   // scene satisfies MapSink
+for !l.Step() { /* draw the loading screen; l.Progress(), l.Phase() */ }
+l.Err(); l.GAT(); l.TimingSummary()
+```
+
+### Warp portals (`internal/engine/scene/portal.go`)
+
+Class-45 NPCs are drawn as the original's portal effect (`EF_WARPZONE2`)
+rather than the sprite the client's job table names: a twenty-sided tube
+wrapped in `data/texture/effect/ring_blue.tga`, spun a quarter degree per
+millisecond, tinted blue, over a soft disc. `PortalRenderer` belongs to
+`InGameState` alongside the player renderer.
+
+```go
+pr, _ := scene.NewPortalRenderer()
+pr.LoadTextures(load)
+pr.Render(viewProj, x, y, z, timeMs, alpha)
+```
+
+### Map camera rules (`pkg/formats/maptables.go`, `internal/engine/camera`, `internal/game/states/maprules.go`)
+
+`data/indoorrswtable.txt` lists the maps where the original disables orbital
+rotation; `data/viewpointtable.txt` gives a few maps an arc and an entry
+angle. `formats.ParseIndoorRSWTable` / `ParseViewpointTable` read them,
+`Manager.MapRules()` loads them once per session, and `InGameState` applies
+them to the `ThirdPersonCamera` as `camera.Limits` on every map. Indoor maps
+also clear to black instead of sky.
 
 ---
 

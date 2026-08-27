@@ -103,6 +103,10 @@ type ModelRenderer struct {
 	// Models
 	models []*MapModel
 
+	// rsmCache holds each RSM file parsed once between BeginModels and
+	// EndModels, since a map places the same model many times over.
+	rsmCache map[string]*formats.RSM
+
 	// Map dimensions for coordinate conversion
 	mapWidth  float32
 	mapHeight float32
@@ -160,30 +164,51 @@ func NewModelRenderer() (*ModelRenderer, error) {
 	return mr, nil
 }
 
-// LoadModels loads all RSM models from RSW.
-func (mr *ModelRenderer) LoadModels(rsw *formats.RSW, texLoader func(string) ([]byte, error), fallbackTex uint32,
-	mapWidth, mapHeight float32, terrainAltitudes [][]float32, terrainTileZoom float32, terrainTilesX, terrainTilesZ int) error {
+// MaxMapModels caps how many model instances a map may place, for performance.
+const MaxMapModels = 1500
 
+// ModelCount is how many of a map's model instances will be loaded.
+func (mr *ModelRenderer) ModelCount(rsw *formats.RSW) int {
+	n := len(rsw.GetModels())
+	if n > MaxMapModels {
+		n = MaxMapModels
+	}
+	return n
+}
+
+// BeginModels drops the previous map's models and prepares for LoadModelRange.
+func (mr *ModelRenderer) BeginModels(fallbackTex uint32, mapWidth, mapHeight float32) {
 	mr.clearModels()
 	mr.fallbackTex = fallbackTex
 	mr.mapWidth = mapWidth
 	mr.mapHeight = mapHeight
+	mr.rsmCache = make(map[string]*formats.RSM)
+}
 
-	allModels := rsw.GetModels()
-
-	// Limit models for performance
-	maxModels := 1500
-	models := allModels
-	if len(models) > maxModels {
-		models = models[:maxModels]
+// LoadModelRange builds and uploads the instances with indices in [from, to),
+// so a map can be brought in a few models per frame. Indices past ModelCount
+// are ignored.
+func (mr *ModelRenderer) LoadModelRange(rsw *formats.RSW, texLoader func(string) ([]byte, error), from, to int) {
+	models := rsw.GetModels()
+	if to > len(models) {
+		to = len(models)
+	}
+	if to > MaxMapModels {
+		to = MaxMapModels
+	}
+	if from < 0 {
+		from = 0
+	}
+	if from >= to {
+		return
+	}
+	if mr.rsmCache == nil {
+		mr.rsmCache = make(map[string]*formats.RSM)
 	}
 
-	// Cache loaded RSM files
-	rsmCache := make(map[string]*formats.RSM)
-
-	for _, modelRef := range models {
+	for _, modelRef := range models[from:to] {
 		rsmPath := "data/model/" + modelRef.ModelName
-		rsm, ok := rsmCache[rsmPath]
+		rsm, ok := mr.rsmCache[rsmPath]
 		if !ok {
 			data, err := texLoader(rsmPath)
 			if err != nil {
@@ -193,7 +218,7 @@ func (mr *ModelRenderer) LoadModels(rsw *formats.RSW, texLoader func(string) ([]
 			if err != nil {
 				continue
 			}
-			rsmCache[rsmPath] = rsm
+			mr.rsmCache[rsmPath] = rsm
 		}
 
 		mapModel := mr.buildMapModel(rsm, modelRef, texLoader)
@@ -201,11 +226,14 @@ func (mr *ModelRenderer) LoadModels(rsw *formats.RSW, texLoader func(string) ([]
 			mr.models = append(mr.models, mapModel)
 		}
 	}
+}
 
+// EndModels finishes a map's models: depth biases against overlap and world
+// bounds for culling. The parse cache is dropped with it.
+func (mr *ModelRenderer) EndModels() {
 	mr.assignDepthBiases()
 	mr.computeWorldBounds()
-
-	return nil
+	mr.rsmCache = nil
 }
 
 // computeWorldBounds places each model's bounding sphere in world space.
