@@ -26,13 +26,17 @@ const (
 	statsBoxH     float32 = 13
 	statsBoxPitch float32 = 16
 
-	// statsPointsX is where the status point total goes, at the right end of
-	// its own row on the other side of the window.
-	statsPointsX float32 = 236
-	statsPointsW float32 = 38
+	// statsCostX is where the cost of raising a stat goes, in the gap between
+	// the value box and the right column.
+	statsCostRight float32 = 115
 
-	// statsPointsRow is which row that is, counting from the top.
-	statsPointsRow = 4
+	// The right column is two sub-columns, each ending at an underline the
+	// bitmap draws: x 118 to 192 and 200 to 273. The bottom two rows run the
+	// full width instead.
+	statsRightL    float32 = 118
+	statsRightLEnd float32 = 192
+	statsRightR    float32 = 200
+	statsRightREnd float32 = 273
 
 	statsTextScale float32 = 0.75
 )
@@ -89,47 +93,100 @@ func (b *UI2DBackend) drawStatValues(state InGameUIState, x, y float32) {
 	r := b.ctx.Renderer()
 
 	for i := 0; i < packets.PrimaryStatCount; i++ {
-		box := ui2d.Rect{
-			X: x + statsBoxX,
-			Y: y + statsBoxY + float32(i)*statsBoxPitch,
-			W: statsBoxW,
-			H: statsBoxH,
-		}
+		// The box's left edge and its middle. Its width is the bitmap's
+		// business: the text runs from the left and the cost sits outside it.
+		boxX := x + statsBoxX
+		boxY := y + statsBoxY + float32(i)*statsBoxPitch
 
-		// The stat itself against the left of its box.
+		// The stat and what equipment adds to it, as the original writes it:
+		// "60+6" in the box, with the bonus colored so the two read apart.
 		value := strconv.Itoa(state.PrimaryStats[i])
 		_, capH := r.MeasureText(value, statsTextScale)
-		textY := box.Y + (box.H-capH)/2
+		textY := boxY + (statsBoxH-capH)/2
 
-		r.DrawText(box.X+4, textY, value, statsTextScale, ui2d.ColorText)
+		r.DrawText(boxX+4, textY, value, statsTextScale, ui2d.ColorText)
 
-		// What equipment and buffs add, against the right, and only when
-		// there is something to say: every stat reading "+0" is noise.
-		bonus := state.PrimaryBonus[i]
-		if bonus == 0 {
-			continue
+		if bonus := state.PrimaryBonus[i]; bonus != 0 {
+			valueW, _ := r.MeasureText(value, statsTextScale)
+
+			label := "+" + strconv.Itoa(bonus)
+			color := statsBonusUp
+			if bonus < 0 {
+				// Already carries its own minus sign.
+				label = strconv.Itoa(bonus)
+				color = statsBonusDown
+			}
+
+			r.DrawText(boxX+4+valueW, textY, label, statsTextScale, color)
 		}
 
-		label := "+" + strconv.Itoa(bonus)
-		color := statsBonusUp
-		if bonus < 0 {
-			// Already carries its own minus sign.
-			label = strconv.Itoa(bonus)
-			color = statsBonusDown
-		}
+		// What raising it by one would cost, in the gap the bitmap leaves
+		// between the box and the right column.
+		cost := strconv.Itoa(state.PrimaryCost[i])
+		costW, _ := r.MeasureText(cost, statsTextScale)
 
-		capW, _ := r.MeasureText(label, statsTextScale)
-		r.DrawText(box.X+box.W-capW-4, textY, label, statsTextScale, color)
+		r.DrawText(x+statsCostRight-costW, textY, cost, statsTextScale, ui2d.ColorText)
 	}
 
-	points := strconv.Itoa(state.StatusPoints)
-	capW, capH := r.MeasureText(points, statsTextScale)
+	b.drawDerivedStats(state, x, y)
+}
 
-	r.DrawText(
-		x+statsPointsX+statsPointsW-capW,
-		y+statsBoxY+statsPointsRow*statsBoxPitch+(statsBoxH-capH)/2,
-		points, statsTextScale, ui2d.ColorText,
-	)
+// drawDerivedStats fills the right of the window: the numbers worked out from
+// the six, each right-aligned on the underline the bitmap draws for it.
+func (b *UI2DBackend) drawDerivedStats(state InGameUIState, x, y float32) {
+	// Two sub-columns of four, then Status Point across the full width. Guild
+	// is left blank: we do not track one yet.
+	rows := []struct {
+		row   int
+		right float32
+		text  string
+	}{
+		{0, statsRightLEnd, pairText(state.Atk, state.AtkBonus)},
+		{1, statsRightLEnd, rangeText(state.MatkMin, state.MatkMax)},
+		{2, statsRightLEnd, strconv.Itoa(state.Hit)},
+		{3, statsRightLEnd, strconv.Itoa(state.Critical)},
+		{0, statsRightREnd, pairText(state.Def, state.DefBonus)},
+		{1, statsRightREnd, pairText(state.Mdef, state.MdefBonus)},
+		{2, statsRightREnd, pairText(state.Flee, state.FleeBonus)},
+		{3, statsRightREnd, strconv.Itoa(state.Aspd)},
+		{4, statsRightREnd, strconv.Itoa(state.StatusPoints)},
+	}
+
+	r := b.ctx.Renderer()
+	for _, row := range rows {
+		capW, capH := r.MeasureText(row.text, statsTextScale)
+		textY := y + statsBoxY + float32(row.row)*statsBoxPitch + (statsBoxH-capH)/2
+
+		r.DrawText(x+row.right-capW, textY, row.text, statsTextScale, ui2d.ColorText)
+	}
+}
+
+// pairText is how the window writes a number and what equipment adds to it —
+// "245 + 21" — and just the number when nothing is added.
+func pairText(base, bonus int) string {
+	if bonus == 0 {
+		return strconv.Itoa(base)
+	}
+
+	if bonus < 0 {
+		return strconv.Itoa(base) + " - " + strconv.Itoa(-bonus)
+	}
+
+	return strconv.Itoa(base) + " + " + strconv.Itoa(bonus)
+}
+
+// rangeText is how the window writes Matk, which is a span rather than a sum.
+//
+// Ordered rather than taken as given: a character with no attack magic can
+// arrive with the two the wrong way round — a fresh Novice comes through as
+// max 0, min 1 — and "1 ~ 0" reads as a fault rather than as no magic.
+func rangeText(a, b int) string {
+	low, high := a, b
+	if low > high {
+		low, high = high, low
+	}
+
+	return strconv.Itoa(low) + " ~ " + strconv.Itoa(high)
 }
 
 // statsWindowID is the frame's id, needed to read its position back.

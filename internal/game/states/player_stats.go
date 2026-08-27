@@ -42,6 +42,16 @@ type PlayerStats struct {
 
 	// StatusPoints is what there is left to spend on them.
 	StatusPoints int
+
+	// The derived numbers down the right of the status window.
+	Atk, AtkBonus    int
+	MatkMin, MatkMax int
+	Def, DefBonus    int
+	Mdef, MdefBonus  int
+	Flee, FleeBonus  int
+	Hit              int
+	Critical         int
+	Aspd             int
 }
 
 // ApplyStatus takes the whole status window, as ZC_STATUS sends it.
@@ -53,6 +63,13 @@ func (s *PlayerStats) ApplyStatus(status *packets.PrimaryStats) {
 	s.StatusPoints = status.StatusPoints
 	s.Primary = status.Values
 	s.PrimaryCost = status.Costs
+
+	s.Atk, s.AtkBonus = status.Atk, status.AtkBonus
+	s.MatkMin, s.MatkMax = status.MatkMin, status.MatkMax
+	s.Def, s.DefBonus = status.Def, status.DefBonus
+	s.Mdef, s.MdefBonus = status.Mdef, status.MdefBonus
+	s.Flee, s.FleeBonus = status.Flee, status.FleeBonus
+	s.Hit, s.Critical, s.Aspd = status.Hit, status.Critical, status.Aspd
 }
 
 // ApplyCoupleStatus takes one stat and its bonus, as ZC_COUPLESTATUS sends
@@ -135,6 +152,37 @@ func (s *PlayerStats) Apply(varID uint16, value int64) bool {
 		s.Class = int(value)
 	case packets.SP_STATUSPOINT:
 		s.StatusPoints = int(value)
+
+	// The derived numbers, which arrive one at a time as gear and buffs
+	// change. ZC_STATUS carries them once; without these the right of the
+	// window would show whatever was true at login for the rest of the
+	// session.
+	case packets.SP_ATK1:
+		s.Atk = int(value)
+	case packets.SP_ATK2:
+		s.AtkBonus = int(value)
+	case packets.SP_MATK1:
+		s.MatkMax = int(value)
+	case packets.SP_MATK2:
+		s.MatkMin = int(value)
+	case packets.SP_DEF1:
+		s.Def = int(value)
+	case packets.SP_DEF2:
+		s.DefBonus = int(value)
+	case packets.SP_MDEF1:
+		s.Mdef = int(value)
+	case packets.SP_MDEF2:
+		s.MdefBonus = int(value)
+	case packets.SP_HIT:
+		s.Hit = int(value)
+	case packets.SP_FLEE1:
+		s.Flee = int(value)
+	case packets.SP_FLEE2:
+		s.FleeBonus = int(value)
+	case packets.SP_CRITICAL:
+		s.Critical = int(value)
+	case packets.SP_ASPD:
+		s.Aspd = packets.AspdFromAmotion(int(value))
 	default:
 		// The six primary stats arrive this way as well as in their own
 		// packets, and this is the only one of the three that reports the

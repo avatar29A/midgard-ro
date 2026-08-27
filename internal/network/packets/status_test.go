@@ -206,3 +206,67 @@ func TestPrimaryStatIndex(t *testing.T) {
 		}
 	}
 }
+
+// TestDecodeStatusDerived walks a real ZC_STATUS off the wire — a level-1
+// Novice on a renewal server — so the derived offsets are pinned to bytes the
+// server actually sent rather than to a reading of the struct.
+//
+// The two that look wrong are not: renewal HIT is 175 + level + DEX and FLEE
+// is 100 + level + AGI, which is why a brand new character has 177 and 102.
+func TestDecodeStatusDerived(t *testing.T) {
+	pkt := []byte{
+		0xbd, 0x00, 0x00, 0x00,
+		1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2,
+		0x01, 0x00, 0x00, 0x00, // atk 1, refine 0
+		0x00, 0x00, 0x01, 0x00, // matk max 0, min 1
+		0x01, 0x00, 0x00, 0x00, // def 1, +0
+		0x01, 0x00, 0x00, 0x00, // mdef 1, +0
+		0xb1, 0x00, // hit 177
+		0x66, 0x00, 0x01, 0x00, // flee 102, +1
+		0x01, 0x00, // critical 1
+		0xb8, 0x01, 0x00, 0x00, // amotion 440
+	}
+
+	got := DecodeStatus(pkt)
+	if got == nil {
+		t.Fatal("a full packet must decode")
+	}
+
+	for _, c := range []struct {
+		name string
+		got  int
+		want int
+	}{
+		{"Atk", got.Atk, 1},
+		{"AtkBonus", got.AtkBonus, 0},
+		{"MatkMax", got.MatkMax, 0},
+		{"MatkMin", got.MatkMin, 1},
+		{"Def", got.Def, 1},
+		{"Mdef", got.Mdef, 1},
+		{"Hit", got.Hit, 177},
+		{"Flee", got.Flee, 102},
+		{"FleeBonus", got.FleeBonus, 1},
+		{"Critical", got.Critical, 1},
+		// 200 - 440/10.
+		{"Aspd", got.Aspd, 156},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s = %d, want %d", c.name, c.got, c.want)
+		}
+	}
+}
+
+// TestDecodeStatusWithoutDerived: a packet with the six stats but nothing
+// after them leaves the derived numbers zero rather than reading past its end.
+func TestDecodeStatusWithoutDerived(t *testing.T) {
+	pkt := make([]byte, 16)
+	binary.LittleEndian.PutUint16(pkt[0:], ZC_STATUS)
+
+	got := DecodeStatus(pkt)
+	if got == nil {
+		t.Fatal("the six stats alone must still decode")
+	}
+	if got.Hit != 0 || got.Aspd != 0 {
+		t.Errorf("derived read from a short packet: Hit=%d Aspd=%d", got.Hit, got.Aspd)
+	}
+}
