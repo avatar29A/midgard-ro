@@ -27,6 +27,9 @@ are the always-on HUD (minimap, chat, click marker, the bars under the
 character, hotkey bar, ESC menu) and steps 7–11 are the windows behind the menu
 buttons. Each half stands alone.
 
+**That cut was taken.** Steps 1–6 shipped as one PR; steps 7–11 follow as
+another. UC-210 and UC-212 cover the first half, UC-211 the second.
+
 ## What #87 already did — and deliberately did not
 
 PR #87 (**merged today**) built the Basic Info panel and, importantly, **the menu
@@ -100,8 +103,12 @@ widgets and adds no new ImGui; it does not claim to remove the dependency.
 
 7. **Status window** — `basic_interface/statwin_bg.bmp`, **280×103**. Siblings
    `statwin0/1/2_bg.bmp` are the tab variants.
-8. **Hotkey bar** — `basic_interface/shortcut_bg.bmp`, **280×29**. One strip; the
-   slots are drawn into it.
+8. **Hotkey bar** — `basic_interface/shortitem_bg.bmp`, **280×34**. One row,
+   repeated down for as many as are open, with nine 24×24 cells at x=5,y=5
+   every 29 and the row number in what is left at the right.
+
+   Not `shortcut_bg.bmp`, which this said first: that is a single 29px strip
+   without the arrows under each cell, and it is not what the original tiles.
 9. **Click target** — `data/texture/grid.tga`, **32×32** with alpha. This is the
    green square, and it is a *texture on the ground*, not a cursor state —
    roBrowser draws it the same way (`Renderer/Map/GridSelector.js:103`).
@@ -158,7 +165,7 @@ today.
 | Asset | GRF path | Exists? |
 |-------|----------|---------|
 | Status window | `…/basic_interface/statwin_bg.bmp` (+`0/1/2`) | ✅ 280×103 |
-| Hotkey bar | `…/basic_interface/shortcut_bg.bmp` | ✅ 280×29 |
+| Hotkey bar | `…/basic_interface/shortitem_bg.bmp` | ✅ 280×34 |
 | Click target | `data/texture/grid.tga` | ✅ 32×32 RGBA |
 | Minimap (Prontera) | `…/유저인터페이스/map/prontera.bmp` | ✅ 512×512 |
 | Menu buttons | `…/basic_interface/btn_{status,skill,items,map}_{on,off,dis}.bmp` | ✅ all three states |
