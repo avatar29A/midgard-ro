@@ -182,6 +182,12 @@ type InGameUIState struct {
 	PlayerZeny                       int64
 	PlayerWeight, PlayerMaxWeight    int
 
+	// The six primary stats, what equipment and buffs add to them, and the
+	// points left to spend — indexed the same way the model holds them.
+	PrimaryStats [packets.PrimaryStatCount]int
+	PrimaryBonus [packets.PrimaryStatCount]int
+	StatusPoints int
+
 	// The last map load: how long, and where the time went (debug).
 	MapLoadMs     float64
 	MapLoadPhases string

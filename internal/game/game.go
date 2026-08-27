@@ -842,6 +842,10 @@ func (g *Game) renderUI() {
 			PlayerZeny:        stats.Zeny,
 			PlayerWeight:      stats.Weight,
 			PlayerMaxWeight:   stats.MaxWeight,
+
+			PrimaryStats: stats.Primary,
+			PrimaryBonus: stats.PrimaryBonus,
+			StatusPoints: stats.StatusPoints,
 		}
 		populateDebugFields(&uiState, state, g.client)
 		g.uiBackend.RenderInGameUI(uiState, g.dt, viewportWidth, viewportHeight)

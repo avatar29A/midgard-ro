@@ -961,6 +961,7 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 	b.drawHotkeys(width, height)
 	b.drawEscMenu(width, height)
 	b.drawSoundConfig(width, height)
+	b.drawStatsWindow(state, width, height)
 	b.renderNPCDialog(state, width, height)
 	b.renderNPCMenu(state, width, height)
 

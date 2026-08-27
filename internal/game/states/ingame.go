@@ -923,6 +923,49 @@ func (s *InGameState) Stats() PlayerStats {
 // These arrive constantly — every point of HP regenerated is one — so the
 // handler stays cheap and says nothing at info level; --trace=status is how
 // you watch them.
+// handleStatus takes the whole status window: the six primary stats, what
+// raising each costs, and the points left to spend.
+func (s *InGameState) handleStatus(data []byte) error {
+	status := packets.DecodeStatus(data)
+	if status == nil {
+		logger.Warn("malformed status window packet", zap.Int("bytes", len(data)))
+
+		return nil
+	}
+
+	s.stats.ApplyStatus(status)
+
+	trace.Emit(trace.Status, "window",
+		zap.Int("points", status.StatusPoints),
+		zap.Ints("values", status.Values[:]))
+
+	return nil
+}
+
+// handleCoupleStatus takes one primary stat and the bonus on it, which is the
+// only packet that carries the bonus at all.
+func (s *InGameState) handleCoupleStatus(data []byte) error {
+	couple := packets.DecodeCoupleStatus(data)
+	if couple == nil {
+		logger.Warn("malformed couple status packet", zap.Int("bytes", len(data)))
+
+		return nil
+	}
+
+	if !s.stats.ApplyCoupleStatus(couple) {
+		// The server sends these for derived numbers too — attack, defense
+		// and the rest — which the window does not show yet.
+		return nil
+	}
+
+	trace.Emit(trace.Status, "couple",
+		zap.Uint16("varID", couple.VarID),
+		zap.Int("base", couple.Base),
+		zap.Int("bonus", couple.Bonus))
+
+	return nil
+}
+
 func (s *InGameState) handleStatusChange(data []byte) error {
 	change := packets.DecodeStatusChange(data)
 	if change == nil {
@@ -1016,6 +1059,8 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_RESTART_ACK, s.handleRestartAck)
 	s.client.RegisterHandler(packets.ZC_ACK_REQ_DISCONNECT, s.handleDisconnectAck)
 	s.client.RegisterHandler(packets.ZC_PAR_CHANGE, s.handleStatusChange)
+	s.client.RegisterHandler(packets.ZC_STATUS, s.handleStatus)
+	s.client.RegisterHandler(packets.ZC_COUPLESTATUS, s.handleCoupleStatus)
 	s.client.RegisterHandler(packets.ZC_LONGPAR_CHANGE, s.handleStatusChange)
 	s.client.RegisterHandler(packets.ZC_LONGLONGPAR_CHANGE, s.handleStatusChange)
 	s.client.RegisterHandler(packets.ZC_SAY_DIALOG, s.handleSayDialog)

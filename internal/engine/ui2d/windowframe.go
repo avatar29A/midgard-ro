@@ -55,6 +55,14 @@ type WindowOptions struct {
 
 	// Resizable gives the window a footer with a grip in its corner.
 	Resizable bool
+
+	// BitmapBody leaves the body unpainted, for a window whose background is
+	// an image the caller draws.
+	//
+	// It has to be an option rather than something the caller paints over,
+	// because rectangles and images are drawn in separate batches: the body
+	// fill lands on top of an image no matter which was asked for first.
+	BitmapBody bool
 }
 
 // DefaultWindowOptions is the ordinary window: it can be closed and minimized,
@@ -125,7 +133,10 @@ func (c *Context) drawWindowFrame(ws *WindowState, title string) bool {
 		bodyH = 0
 	}
 
-	r.DrawRect(ws.X, bodyY, ws.W, bodyH, ColorWindowBody)
+	if !ws.BitmapBody {
+		r.DrawRect(ws.X, bodyY, ws.W, bodyH, ColorWindowBody)
+	}
+
 	r.DrawRect(ws.X, bodyY, 1, bodyH, ColorPanelBorder)
 	r.DrawRect(ws.X+ws.W-1, bodyY, 1, bodyH, ColorPanelBorder)
 

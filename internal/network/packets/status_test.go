@@ -1,6 +1,9 @@
 package packets
 
-import "testing"
+import (
+	"encoding/binary"
+	"testing"
+)
 
 func TestDecodeStatusChange(t *testing.T) {
 	tests := []struct {
@@ -111,6 +114,95 @@ func TestStatusPacketLengths(t *testing.T) {
 		}
 		if got != tt.want {
 			t.Errorf("length of 0x%04X = %d, want %d", tt.id, got, tt.want)
+		}
+	}
+}
+
+// TestDecodeStatusLayout walks the status window packet against the layout
+// rAthena declares: a point total, then six value/cost pairs.
+func TestDecodeStatusLayout(t *testing.T) {
+	if n, ok := Length(ZC_STATUS); !ok || n != 44 {
+		t.Fatalf("ZC_STATUS length = %d, %v; want 44, true", n, ok)
+	}
+
+	pkt := make([]byte, 44)
+	binary.LittleEndian.PutUint16(pkt[0:], ZC_STATUS)
+	binary.LittleEndian.PutUint16(pkt[2:], 7) // status points
+
+	// value, cost for each of STR, AGI, VIT, INT, DEX, LUK.
+	pairs := []byte{9, 2, 8, 3, 7, 4, 6, 5, 5, 6, 4, 7}
+	copy(pkt[4:], pairs)
+
+	got := DecodeStatus(pkt)
+	if got == nil {
+		t.Fatal("a full packet must decode")
+	}
+	if got.StatusPoints != 7 {
+		t.Errorf("StatusPoints = %d, want 7", got.StatusPoints)
+	}
+
+	wantValues := [PrimaryStatCount]int{9, 8, 7, 6, 5, 4}
+	wantCosts := [PrimaryStatCount]int{2, 3, 4, 5, 6, 7}
+	if got.Values != wantValues {
+		t.Errorf("Values = %v, want %v", got.Values, wantValues)
+	}
+	if got.Costs != wantCosts {
+		t.Errorf("Costs = %v, want %v", got.Costs, wantCosts)
+	}
+}
+
+func TestDecodeStatusShort(t *testing.T) {
+	if DecodeStatus(make([]byte, 10)) != nil {
+		t.Error("a packet too short for the six pairs must not decode")
+	}
+}
+
+// TestDecodeCoupleStatus covers the packet that carries the bonus — the only
+// one that does. Its status id is four bytes wide, unlike ZC_PAR_CHANGE's two.
+func TestDecodeCoupleStatus(t *testing.T) {
+	if n, ok := Length(ZC_COUPLESTATUS); !ok || n != 14 {
+		t.Fatalf("ZC_COUPLESTATUS length = %d, %v; want 14, true", n, ok)
+	}
+
+	pkt := make([]byte, 14)
+	binary.LittleEndian.PutUint16(pkt[0:], ZC_COUPLESTATUS)
+	binary.LittleEndian.PutUint32(pkt[2:], uint32(SP_DEX))
+	binary.LittleEndian.PutUint32(pkt[6:], 12)
+	// A debuff subtracts from the stat, so the bonus goes out as a negative
+	// int32 in an unsigned field.
+	bonus := int32(-3)
+	binary.LittleEndian.PutUint32(pkt[10:], uint32(bonus))
+
+	got := DecodeCoupleStatus(pkt)
+	if got == nil {
+		t.Fatal("a full packet must decode")
+	}
+	if got.VarID != SP_DEX {
+		t.Errorf("VarID = %d, want %d", got.VarID, SP_DEX)
+	}
+	if got.Base != 12 {
+		t.Errorf("Base = %d, want 12", got.Base)
+	}
+	// Bonuses go negative: a debuff subtracts from the stat.
+	if got.Bonus != -3 {
+		t.Errorf("Bonus = %d, want -3", got.Bonus)
+	}
+}
+
+// TestPrimaryStatIndex pins the six to their ids. STR is 13 and LUK 18 in
+// rAthena's _sp enum, and anything outside that is not a primary stat — the
+// server sends couple-status packets for derived numbers on the same packet.
+func TestPrimaryStatIndex(t *testing.T) {
+	for want, id := range []uint16{SP_STR, SP_AGI, SP_VIT, SP_INT, SP_DEX, SP_LUK} {
+		got, ok := PrimaryStatIndex(id)
+		if !ok || got != want {
+			t.Errorf("PrimaryStatIndex(%d) = %d, %v; want %d, true", id, got, ok, want)
+		}
+	}
+
+	for _, id := range []uint16{SP_STATUSPOINT, SP_CLASS, SP_ZENY} {
+		if _, ok := PrimaryStatIndex(id); ok {
+			t.Errorf("PrimaryStatIndex(%d) reported a primary stat", id)
 		}
 	}
 }
