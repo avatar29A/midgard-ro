@@ -516,16 +516,18 @@ func (c *Context) OpenWindow(id string) {
 	}
 }
 
-// WindowMinimized reports whether a window is collapsed to its title bar.
+// WindowClosed reports whether a window has been closed from its own X.
 //
 // BeginWindow returns false for a minimized window as well as a closed one,
 // and the two mean opposite things: the minimized one is still on screen and
-// still the caller's to draw next frame. Telling them apart is what stops a
-// minimize from reading as a close.
-func (c *Context) WindowMinimized(id string) bool {
+// still the caller's to draw next frame. So the question to ask of a false
+// return is this one and not "is it minimized" — minimizing and then closing
+// leaves both flags set, and a caller watching the minimized flag would never
+// notice the close.
+func (c *Context) WindowClosed(id string) bool {
 	ws, ok := c.windows[id]
 
-	return ok && ws.Minimized
+	return ok && !ws.Open
 }
 
 // CheckboxAt is Checkbox at a position of the caller's choosing, for a dialog
