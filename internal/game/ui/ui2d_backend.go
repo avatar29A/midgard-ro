@@ -119,8 +119,13 @@ type UI2DBackend struct {
 	hotkeyPlaced bool
 	hotkeyDirty  bool
 
-	escOpen       bool
-	escAction     EscAction
+	escOpen   bool
+	escAction EscAction
+
+	soundOpen     bool
+	soundSeeded   bool
+	soundDirty    bool
+	sound         SoundSettings
 	chatPending   string
 	chatPendingTo string
 
@@ -955,6 +960,7 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 	b.drawChat(state, height)
 	b.drawHotkeys(width, height)
 	b.drawEscMenu(width, height)
+	b.drawSoundConfig(width, height)
 	b.renderNPCDialog(state, width, height)
 	b.renderNPCMenu(state, width, height)
 

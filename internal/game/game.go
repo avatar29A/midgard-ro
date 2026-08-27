@@ -338,6 +338,21 @@ func (g *Game) initAudio(cfg *config.Config) {
 	manager.SetBGMVolume(float64(cfg.Audio.MusicVolume))
 	manager.SetSFXVolume(float64(cfg.Audio.SFXVolume))
 
+	// What the sound dialog was last left at wins over the configured
+	// levels: config.yaml is what the file says, this is what the player did.
+	if saved := config.LoadUIState(); saved.SoundSet {
+		bgm, sfx := saved.BGMVolume, saved.SFXVolume
+		if !saved.BGMOn {
+			bgm = 0
+		}
+		if !saved.SFXOn {
+			sfx = 0
+		}
+
+		manager.SetBGMVolume(float64(bgm))
+		manager.SetSFXVolume(float64(sfx))
+	}
+
 	g.audioManager = manager
 
 	if config.NoBGM() {
@@ -831,6 +846,8 @@ func (g *Game) renderUI() {
 		populateDebugFields(&uiState, state, g.client)
 		g.uiBackend.RenderInGameUI(uiState, g.dt, viewportWidth, viewportHeight)
 
+		g.applySoundSettings()
+
 		// What the ESC menu was asked for goes out here for the same reason
 		// the chat line below does: the interface has no connection.
 		//
@@ -1226,6 +1243,53 @@ func (g *Game) updateCursor(state *states.InGameState, io *imgui.IO, mouseX, mou
 	}
 
 	g.uiBackend.SetCursorState(want)
+}
+
+// applySoundSettings seeds the sound dialog from the audio manager and puts
+// back whatever the player changed.
+//
+// A channel switched off is played at zero rather than having its level
+// zeroed, so the slider keeps its position and switching back on returns to
+// the level that was there.
+func (g *Game) applySoundSettings() {
+	if g.audioManager == nil || g.uiBackend == nil {
+		return
+	}
+
+	bgm := float32(g.audioManager.GetBGMVolume())
+	sfx := float32(g.audioManager.GetSFXVolume())
+
+	g.uiBackend.SetSoundSettings(ui.SoundSettings{
+		BGMVolume: bgm,
+		SFXVolume: sfx,
+		BGMOn:     bgm > 0,
+		SFXOn:     sfx > 0,
+	})
+
+	settings, changed := g.uiBackend.TakeSoundSettings()
+	if !changed {
+		return
+	}
+
+	bgmVol, sfxVol := settings.BGMVolume, settings.SFXVolume
+	if !settings.BGMOn {
+		bgmVol = 0
+	}
+	if !settings.SFXOn {
+		sfxVol = 0
+	}
+
+	g.audioManager.SetBGMVolume(float64(bgmVol))
+	g.audioManager.SetSFXVolume(float64(sfxVol))
+
+	err := config.UpdateUIState(func(state *config.UIState) {
+		state.SoundSet = true
+		state.BGMVolume, state.SFXVolume = settings.BGMVolume, settings.SFXVolume
+		state.BGMOn, state.SFXOn = settings.BGMOn, settings.SFXOn
+	})
+	if err != nil {
+		logger.Warn("could not save sound settings", zap.Error(err))
+	}
 }
 
 // cursorFor is the cursor the original shows over a unit of each kind, or

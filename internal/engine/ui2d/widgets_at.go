@@ -486,3 +486,149 @@ func (c *Context) ImageAt(x, y, w, h float32, texID uint32, tint Color) {
 	}
 	c.renderer.DrawImage(texID, x, y, w, h, tint)
 }
+
+// WindowRect is where a window actually is.
+//
+// BeginWindow takes a position, but only as an opening hint: once the window
+// has been dragged it keeps its own, and the caller's is ignored. Anything
+// drawn inside at the position it passed in therefore stays behind when the
+// frame is moved, which is what this is for.
+func (c *Context) WindowRect(id string) (Rect, bool) {
+	ws, ok := c.windows[id]
+	if !ok {
+		return Rect{}, false
+	}
+
+	return Rect{X: ws.X, Y: ws.Y, W: ws.W, H: ws.H}, true
+}
+
+// CheckboxAt is Checkbox at a position of the caller's choosing, for a dialog
+// laid out to match the original rather than by the cursor.
+func (c *Context) CheckboxAt(id string, x, y, size float32, label string, checked bool) bool {
+	rect := Rect{x, y, size, size}
+	hovered := rect.Contains(c.input.MouseX, c.input.MouseY)
+
+	if hovered && c.input.MouseLeftPressed {
+		c.activeWidget = id
+	}
+
+	if c.activeWidget == id && c.input.MouseLeftReleased {
+		if hovered {
+			checked = !checked
+		}
+		c.activeWidget = ""
+	}
+
+	bg := ColorInputBg
+	if hovered {
+		bg = ColorButtonHover
+	}
+	c.renderer.DrawRect(x, y, size, size, bg)
+	c.renderer.DrawRectOutline(x, y, size, size, 1, ColorPanelBorder)
+
+	if checked {
+		const inset float32 = 4
+		c.renderer.DrawRect(x+inset, y+inset, size-inset*2, size-inset*2, ColorHighlight)
+	}
+
+	if label != "" {
+		_, capH := c.renderer.MeasureText(label, 1)
+		c.renderer.DrawText(x+size+6, y+(size-capH)/2, label, 1, ColorText)
+	}
+
+	return checked
+}
+
+// SliderAt is a horizontal slider between 0 and 1, with the arrow caps the
+// original draws at each end.
+//
+// The value follows the pointer while the knob is held rather than moving by
+// how far the pointer traveled: a drag that leaves the track and comes back
+// then picks up where the pointer is, instead of somewhere behind it.
+func (c *Context) SliderAt(id string, x, y, w, h, value float32) (float32, bool) {
+	const (
+		cap   float32 = 9
+		knobW float32 = 9
+	)
+
+	trackX := x + cap
+	trackW := w - 2*cap
+
+	// The knob's center travels the track inset by half its own width, so it
+	// stops flush with each end rather than hanging over it.
+	span := trackW - knobW
+	if span < 1 {
+		span = 1
+	}
+
+	rect := Rect{x, y, w, h}
+	if c.input.MouseLeftPressed && rect.Contains(c.input.MouseX, c.input.MouseY) {
+		c.activeWidget = id
+	}
+
+	changed := false
+	if c.activeWidget == id {
+		if c.input.MouseLeftDown {
+			want := (c.input.MouseX - trackX - knobW/2) / span
+			want = clamp01(want)
+
+			if want != value {
+				value = want
+				changed = true
+			}
+		} else {
+			c.activeWidget = ""
+		}
+	}
+
+	value = clamp01(value)
+
+	// Track: a sunken bar between two arrow caps.
+	trackY := y + h/2 - 4
+	c.renderer.DrawRect(trackX, trackY, trackW, 8, ColorInputBg)
+	c.renderer.DrawRectOutline(trackX, trackY, trackW, 8, 1, ColorPanelBorder)
+
+	c.drawSliderCap(x, y+h/2, cap, true)
+	c.drawSliderCap(x+w-cap, y+h/2, cap, false)
+
+	knobX := trackX + value*span
+	c.renderer.DrawRect(knobX, y+h/2-5, knobW, 10, ColorHighlight)
+	c.renderer.DrawRectOutline(knobX, y+h/2-5, knobW, 10, 1, ColorPanelBorder)
+
+	return value, changed
+}
+
+// drawSliderCap draws one of the triangular ends, filling [x, x+size] and
+// pointing away from the track.
+func (c *Context) drawSliderCap(x, midY, size float32, left bool) {
+	// Stepped columns rather than a real triangle: the renderer draws
+	// rectangles, and at this size the steps read as the arrow the original
+	// has. Each column is tallest at the track side and a pixel at the point.
+	steps := int(size)
+	for i := 0; i < steps; i++ {
+		half := float32(i+1) / float32(steps) * size / 2
+		if half < 1 {
+			half = 1
+		}
+
+		// i counts from the point outward, so it maps to the far column on a
+		// left-pointing cap and the near one on a right-pointing cap.
+		col := x + size - float32(i) - 1
+		if left {
+			col = x + float32(i)
+		}
+
+		c.renderer.DrawRect(col, midY-half, 1, half*2, ColorHighlight)
+	}
+}
+
+func clamp01(v float32) float32 {
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+
+	return v
+}
