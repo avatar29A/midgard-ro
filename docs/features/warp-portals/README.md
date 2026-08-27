@@ -337,7 +337,7 @@ server   → inventory, weight, spawn(self), map property,
 
 ### 0a. Refactoring (only what this feature needs)
 
-- [ ] **Move the map load out of `InGameState.Enter()`** (`ingame.go:139-146,
+- [x] **Move the map load out of `InGameState.Enter()`** (`ingame.go:139-146,
       263-317`) into a loader that `LoadingState` drives **in phases, one or more
       per frame** — GAT, GND, RSW, terrain textures, models in chunks, water —
       so the loading screen renders between phases with a bar that moves.
@@ -345,57 +345,66 @@ server   → inventory, weight, spawn(self), map property,
       map and for every warp. (Phased-on-the-main-thread is what the original
       does; it keeps GL on one thread and needs no goroutine plumbing. Moving
       the parse phases to a goroutine later is a local change to the loader.)
-- [ ] **`Scene` gains phase methods** (`PrepareTerrain`, `LoadModels(from, n)`,
+      **Done, with one correction:** the loader is driven by `InGameState`, not `LoadingState`. Landmine 5 wanted the state — its handlers, stats and dialog — to survive a warp, and that only works if the state that owns the map also owns its loading. `LoadingState` is now the handshake only (`CZ_ENTER2` → accept); `InGameState.beginMapLoad`/`finishMapLoad` do the rest, for the first map and every warp alike. `0x007D` goes out from `finishMapLoad`, after the handlers exist and the scene is up.
+- [x] **`Scene` gains phase methods** (`PrepareTerrain`, `LoadModels(from, n)`,
       `Finish`) that `LoadMap` calls in sequence — `LoadMap` itself stays, so
       `cmd/grfbrowser/map_viewer.go` is untouched. Additive; no ADR.
-- [ ] **Delete `world.Manager` / `Map.Load`** (`world/world.go:33-96`): a stub
+      Done: `BeginMap`, `LoadTerrain`, `BeginModels`, `LoadModelRange`, `EndMap`; `LoadMap` wraps them. The model renderer keeps its RSM parse cache between chunks.
+- [x] **Delete `world.Manager` / `Map.Load`** (`world/world.go:33-96`): a stub
       nothing constructs, and a second "map loader" name in the tree would be
       confusing next to the real one.
-- [ ] **Entity kind on hover.** `HoverEntity` (`npcpick.go:39-43`) returns an
+      Done.
+- [x] **Entity kind on hover.** `HoverEntity` (`npcpick.go:39-43`) returns an
       entity; `updateCursor` (`game.go:1130-1140`) and `isClickable`
       (`npcpick.go:120-126`) both need its `Type`, not "is an NPC". Small seam,
       done once.
-- [ ] **`entity.Manager.Clear` keeps the player.** It exists (`entity.go:370`)
+      Done as `cursorFor(entity)` in `game.go`; Step 5 adds the warp case.
+- [x] **`entity.Manager.Clear` keeps the player.** It exists (`entity.go:370`)
       and is unused; make it the map-change primitive (korangar's
       truncate-to-one) and test that the player survives it.
-- [ ] `Scene.LoadMap`'s three `fmt.Printf` lines (`scene.go:218-220`) → the
+      Done; `manager_test.go` proves it.
+- [x] `Scene.LoadMap`'s three `fmt.Printf` lines (`scene.go:218-220`) → the
       logger, with the phase timings from 0b. Nothing else in the tree prints.
-- [ ] No ADR. Every change is inside `internal/game/states` or additive on
+      Done — the engine cannot import the logger, so the scene reports counts (`LoadedModels`, `TerrainGroups`) and the loader logs them with the phase timings.
+- [x] No ADR. Every change is inside `internal/game/states` or additive on
       `internal/engine/scene`/`camera`; no layer boundary in `CLAUDE.md` moves.
 
 ### 0b. Debug tooling & tests
 
-- [ ] **Trace channel `map`** in `internal/trace` — `map.change` (from, to, x, y,
+- [x] **Trace channel `map`** in `internal/trace` — `map.change` (from, to, x, y,
       `same` bool, origin `login|warp|rewarp`), `map.load.phase` (name, ms,
       count), `map.loaded` (map, total ms, models, textures), `map.ready`
       (`0x007D` sent, ms since `map.change`), `map.indoor` (map, rotation
       locked, zoom range), `map.water` (cells with water / total cells). The `net`
       channel still shows the raw packets; this one reads as the story of one
       warp. Movement stays on `move`, cursor on `pick`/`npc`.
+      Done: `map.change`, `map.step` (per frame: phase, ms, progress), `map.loaded`, `map.ready`, `map.server-move`. `map.indoor` and `map.water` arrive with Step 6.
 - [ ] **F3 overlay fields:** a `State:` line (`Login/CharSelect/Loading/InGame`),
       `Load: 1243 ms (gat 3 · gnd 210 · rsw 12 · tex 380 · models 620 · water 18)`,
       `Indoor: yes (yaw locked, zoom 230–400)`, `Water: 1240 cells`.
       A frozen load or a wrong camera is diagnosable from one screenshot.
-- [ ] **`--walk-to x,y` (QA aid)** in `internal/config/flags.go`, alongside
+- [x] **`--walk-to x,y` (QA aid)** in `internal/config/flags.go`, alongside
       `--autologin`: once in-game, issue one click-to-move to that tile through
       the same `RequestMove` path. It is what lets an unattended run step on a
       warp. Zero-code alternative for the packet steps: put the character **on**
       a warp cell in the DB — `LoadEndAck` fires the warp itself
       (`clif.cpp:11149`), so a `0x0091` arrives without anyone walking.
-- [ ] **Screenshot scenario:** from `prontera 156,30`,
+      Done; fires once through `RequestMove` when `MapReady()`.
+- [x] **Screenshot scenario:** from `prontera 156,30`,
       `./build/midgard --autologin --no-bgm --debug-overlay --trace=map,net --walk-to 156,22 --screenshot-every 2s`
       → the sequence of `latest.png` must show the street, the loading screen
       with the bar part-way, and `prt_fild08` with mobs. Doors: from
       `prontera 174,218`, `--walk-to 177,221` → the loading screen, then the
       room with the camera locked and black between the rooms. **`vsync: false` in the local `config.yaml`** (learned
       in #85).
+      **Correction:** `--screenshot-every` below one second starves the loader — each retina capture is a ~0.5 s PNG encode on the render thread, and a 1.3 s load became 7.4 s under a 300 ms cadence. Use `--screenshot-every 1s`, or `--screenshot-after`.
 - [ ] **Logs:** a loading image that fails to load → **warn** with the path and
       the `bgi_temp.bmp` fallback (the black-login-screen lesson); a map whose
       `.gnd` is missing → the loading screen shows the error (`ErrorMsg` exists,
       `loading.go:83-87`) instead of a hang; `indoorrswtable.txt` missing →
       warn once, every map is outdoor; `0x0AC7` received → warn with the address
       (we do not reconnect).
-- [ ] **Tests:** `internal/network/packets/mapchange_test.go` — `0x0091` decode
+- [x] **Tests:** `internal/network/packets/mapchange_test.go` — `0x0091` decode
       against hand-written bytes (NUL padding, `.gat` stripped, x/y), `0x0AC7`
       decode; `internal/game/states/maploader_test.go` — phase order, progress
       monotonic, error surfaces; `internal/engine/water/water_test.go` — cells only where the
@@ -405,13 +414,14 @@ server   → inventory, weight, spawn(self), map property,
       range); `entities_test.go` — job 45 → `TypeWarp`, 139 not drawable, warps
       not clickable-as-NPC; `game`'s cursor choice from entity type; `Clear`
       keeps the player.
-- [ ] **Use cases:** UC-211 (gate → field with loading screen), UC-212 (enter
+      Done for this step: `mapchange_test.go`, `maploader_test.go` (phase order, chunking, progress monotonic, GAT/RSW optional, GND fatal, terrain failure stops), `manager_test.go`. The rest land with their steps.
+- [x] **Use cases:** UC-211 (gate → field with loading screen), UC-212 (enter
       and leave a building, indoor camera), UC-213 (portal visual, door cursor,
       click-to-walk).
 
 ## Steps
 
-### Step 1 — Decode the map-change packets, and act on the one we already get
+### Step 1 — Decode the map-change packets, and act on the one we already get ✅
 - **Changes:** `internal/network/packets/mapchange.go` (+test), `internal/game/states/ingame.go` (`handleMapChange`), `loading.go`
 - **Done when:** `0x0091` and `0x0AC7` decode; the login-time `0x0091` for the
   current map repositions the player (no reload) and traces
@@ -421,6 +431,14 @@ server   → inventory, weight, spawn(self), map property,
 - **Proved by:** `go test ./internal/network/packets/`; `--autologin --trace=map,net`
   on login shows `net.recv 0x0091` followed by `map.change … same=true`, and
   `net.unhandled 0x0091` is gone from the log.
+
+Landed with Step 0, since the loader needed the handler. Two things the first
+run taught: the held login-time `0x0091` is delivered the instant its handler
+registers, so the load has to be *started* before the handlers are — otherwise
+the echo reads as a teleport and `0x007D` goes out early — and the same-map
+rule is therefore "same map and not yet loaded", not "same map and loading".
+A `0x0091` for another map already starts a load (that is most of Step 3);
+`0x0AC7` is decoded and logged at warn.
 
 ### Step 2 — A loading screen that loads
 - **Changes:** `internal/game/states/maploader.go` (new), `loading.go`, `ingame.go`,
@@ -557,6 +575,12 @@ None open.
 
 ## Revision log
 
+- 2026-08-27 — **Step 0 done, Step 1 with it.** Phased map loading measured
+  at **1307 ms** for Prontera across 32 frames (synchronous was 1243), with a
+  24 ms per-frame budget: a 12 ms budget cost 1444 ms because each frame
+  carries ~23 ms of its own. The loader is driven by `InGameState` (plan
+  correction, see 0a). `map` trace, `--walk-to`, `0x0091`/`0x0AC7` decoders,
+  the dead `world` stub gone, `Clear` proven.
 - 2026-08-27 — **Review answers applied** (from chat): buildings keep the
   original's loading screen — the preload step is dropped and the steps
   renumbered (7 + docs); indoor stays like the original, and the

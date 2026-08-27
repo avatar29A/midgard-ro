@@ -209,15 +209,16 @@ func (s *Scene) createFallbackTexture() {
 	gl.TexParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
 }
 
-// LoadMap loads terrain data from GND and RSW.
-func (s *Scene) LoadMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(string) ([]byte, error)) error {
-	// Store map dimensions
+// A map is loaded in phases so a loading screen can draw between them:
+// BeginMap, LoadTerrain, BeginModels, LoadModelRange (as many times as it
+// takes), EndMap. LoadMap runs them back to back for a caller that does not
+// need frames in between. Every phase runs on the GL thread.
+
+// BeginMap takes the map's dimensions, height data, walkability and lighting
+// from the parsed files. It does no GPU work.
+func (s *Scene) BeginMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(string) ([]byte, error)) {
 	s.MapWidth = float32(gnd.Width) * gnd.Zoom
 	s.MapHeight = float32(gnd.Height) * gnd.Zoom
-
-	fmt.Printf("=== Scene LoadMap ===\n")
-	fmt.Printf("GND: %dx%d tiles, zoom=%.1f\n", gnd.Width, gnd.Height, gnd.Zoom)
-	fmt.Printf("Map size: %.0fx%.0f world units\n", s.MapWidth, s.MapHeight)
 
 	// Build heightmap for terrain height queries
 	hm := terrain.BuildHeightmap(gnd)
@@ -247,11 +248,6 @@ func (s *Scene) LoadMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(strin
 		if s.LightOpacity <= 0 {
 			s.LightOpacity = 1.0
 		}
-		fmt.Printf("Lighting: LightDir(%.2f,%.2f,%.2f) Ambient(%.2f,%.2f,%.2f) Diffuse(%.2f,%.2f,%.2f) Opacity=%.2f\n",
-			s.LightDir[0], s.LightDir[1], s.LightDir[2],
-			s.AmbientColor[0], s.AmbientColor[1], s.AmbientColor[2],
-			s.DiffuseColor[0], s.DiffuseColor[1], s.DiffuseColor[2],
-			s.LightOpacity)
 
 		// Ensure minimum ambient
 		minAmbient := float32(0.3)
@@ -264,8 +260,10 @@ func (s *Scene) LoadMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(strin
 		// Extract point lights
 		s.extractPointLights(rsw)
 	}
+}
 
-	// Load terrain
+// LoadTerrain uploads the ground: its textures, lightmap atlas and mesh.
+func (s *Scene) LoadTerrain(gnd *formats.GND, texLoader func(string) ([]byte, error)) error {
 	if err := s.terrainRenderer.LoadTerrain(gnd, texLoader, s.fallbackTex); err != nil {
 		return fmt.Errorf("loading terrain: %w", err)
 	}
@@ -273,26 +271,73 @@ func (s *Scene) LoadMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(strin
 	// Get bounds from terrain
 	s.MinBounds = s.terrainRenderer.MinBounds
 	s.MaxBounds = s.terrainRenderer.MaxBounds
-	fmt.Printf("Terrain bounds: Min(%.0f,%.0f,%.0f) Max(%.0f,%.0f,%.0f)\n",
-		s.MinBounds[0], s.MinBounds[1], s.MinBounds[2],
-		s.MaxBounds[0], s.MaxBounds[1], s.MaxBounds[2])
-	fmt.Printf("Terrain groups: %d\n", len(s.terrainRenderer.groups))
+	return nil
+}
 
-	// Load models
-	if rsw != nil {
-		models := rsw.GetModels()
-		fmt.Printf("RSW has %d models\n", len(models))
-		if err := s.modelRenderer.LoadModels(rsw, texLoader, s.fallbackTex, s.MapWidth, s.MapHeight, s.terrainAltitudes, s.terrainTileZoom, s.terrainTilesX, s.terrainTilesZ); err != nil {
-			return fmt.Errorf("loading models: %w", err)
-		}
-		fmt.Printf("Loaded %d models\n", len(s.modelRenderer.models))
+// TerrainGroups reports how many texture groups the ground mesh has.
+func (s *Scene) TerrainGroups() int {
+	if s.terrainRenderer == nil {
+		return 0
 	}
+	return len(s.terrainRenderer.groups)
+}
 
-	// Load water
-	if rsw != nil && rsw.Water.Level > 0 {
+// ModelCount is how many of a map's model instances LoadModelRange will
+// accept: the RSW's count, capped.
+func (s *Scene) ModelCount(rsw *formats.RSW) int {
+	if rsw == nil {
+		return 0
+	}
+	return s.modelRenderer.ModelCount(rsw)
+}
+
+// BeginModels drops any previous models and prepares for LoadModelRange.
+func (s *Scene) BeginModels(rsw *formats.RSW) {
+	if rsw == nil {
+		return
+	}
+	s.modelRenderer.BeginModels(s.fallbackTex, s.MapWidth, s.MapHeight)
+}
+
+// LoadModelRange builds and uploads the model instances with indices in
+// [from, to).
+func (s *Scene) LoadModelRange(rsw *formats.RSW, texLoader func(string) ([]byte, error), from, to int) {
+	if rsw == nil {
+		return
+	}
+	s.modelRenderer.LoadModelRange(rsw, texLoader, from, to)
+}
+
+// EndMap finishes the models — depth biases against overlap, world bounds for
+// culling — and sets up the water.
+func (s *Scene) EndMap(rsw *formats.RSW, texLoader func(string) ([]byte, error)) {
+	if rsw == nil {
+		return
+	}
+	s.modelRenderer.EndModels()
+
+	if rsw.Water.Level > 0 {
 		s.waterRenderer.SetupWater(rsw.Water.Level, s.MinBounds, s.MaxBounds, texLoader)
 	}
+}
 
+// LoadedModels reports how many model instances the map placed.
+func (s *Scene) LoadedModels() int {
+	if s.modelRenderer == nil {
+		return 0
+	}
+	return len(s.modelRenderer.models)
+}
+
+// LoadMap loads a map in one call: every phase, back to back.
+func (s *Scene) LoadMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(string) ([]byte, error)) error {
+	s.BeginMap(gnd, rsw, texLoader)
+	if err := s.LoadTerrain(gnd, texLoader); err != nil {
+		return err
+	}
+	s.BeginModels(rsw)
+	s.LoadModelRange(rsw, texLoader, 0, s.ModelCount(rsw))
+	s.EndMap(rsw, texLoader)
 	return nil
 }
 
