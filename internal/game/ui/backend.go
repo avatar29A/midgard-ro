@@ -12,6 +12,15 @@ import (
 // This abstraction allows switching between different UI implementations
 // (e.g., ImGui, custom ui2d) without changing game logic.
 type UIBackend interface {
+	// ToggleEscMenu opens the menu Escape shows, or closes it.
+	ToggleEscMenu()
+
+	// EscMenuOpen reports whether that menu is showing.
+	EscMenuOpen() bool
+
+	// TakeEscAction returns what the player picked in it and clears it.
+	TakeEscAction() EscAction
+
 	// TakeChatMessage returns a line the player has entered and clears it,
 	// so the game layer can send it — the interface has no client of its own.
 	TakeChatMessage() (target, message string)

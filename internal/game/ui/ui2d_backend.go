@@ -113,11 +113,14 @@ type UI2DBackend struct {
 	chatLocked bool
 	chatDirty  bool
 
-	hotkeyX       float32
-	hotkeyY       float32
-	hotkeyRows    int
-	hotkeyPlaced  bool
-	hotkeyDirty   bool
+	hotkeyX      float32
+	hotkeyY      float32
+	hotkeyRows   int
+	hotkeyPlaced bool
+	hotkeyDirty  bool
+
+	escOpen       bool
+	escAction     EscAction
 	chatPending   string
 	chatPendingTo string
 
@@ -951,6 +954,7 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 	b.drawMinimap(state, width)
 	b.drawChat(state, height)
 	b.drawHotkeys(width, height)
+	b.drawEscMenu(width, height)
 	b.renderNPCDialog(state, width, height)
 	b.renderNPCMenu(state, width, height)
 
