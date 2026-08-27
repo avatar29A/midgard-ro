@@ -39,28 +39,34 @@ const (
 	// chatInputH is the bar along the bottom, which carries dialog_bg.bmp.
 	chatInputH float32 = 25
 
-	// The two boxes are painted into dialog_bg.bmp rather than drawn by us,
-	// and these are where they sit in it: a 600x24 image whose name box spans
-	// x 6-93 and whose message box spans x 110-568, both from y 5 to y 21.
+	// The bar is dialog_bg.bmp, 600x24, and it is drawn in three slices
+	// rather than stretched whole.
 	//
-	// They are fractions because the bar is one stretched image. At fixed
-	// offsets the fields drift out of their boxes as soon as the chat is
-	// resized, and even at the default width the message text started 14px
-	// left of its box, sitting on the divider between the two.
-	chatBGW = 600
-	chatBGH = 24
+	// Stretching it was wrong: the name field and the separator are a fixed
+	// size in the original, and the message field is what grows. Uniform
+	// scaling made a wide chat's name field balloon and carried the separator
+	// off with it, which is not where the original puts either.
+	//
+	// So the left cap up to x=110 and the right cap from x=568 are drawn at
+	// their own size, and only the middle stretches. Within the caps: the
+	// name box spans x 6-93, the ribbed separator 95-107, and the message box
+	// starts at 110. Vertically all of them run y 5 to 21 of 24.
+	chatBGW float32 = 600
+	chatBGH float32 = 24
 
-	chatNameBoxL = 6.0 / chatBGW
-	chatNameBoxR = 93.0 / chatBGW
-	chatMsgBoxL  = 110.0 / chatBGW
-	chatMsgBoxR  = 568.0 / chatBGW
-	chatBoxT     = 5.0 / chatBGH
-	chatBoxB     = 21.0 / chatBGH
+	chatCapL float32 = 110
+	chatCapR float32 = chatBGW - 568
 
-	// The ribbed separator between the two fields spans x 95 to 107, which is
-	// why the message box starts at 110.
-	chatSepL = 95.0 / chatBGW
-	chatSepR = 107.0 / chatBGW
+	chatNameL float32 = 6
+	chatNameR float32 = 93
+	chatSepL  float32 = 95
+	chatSepR  float32 = 107
+
+	chatBoxT float32 = 5
+	chatBoxB float32 = 21
+
+	// chatOrb is one of the two round buttons in the right cap.
+	chatOrb float32 = 11
 
 	// chatCtrlBtn is one control-panel button in the tab strip, and
 	// chatCtrlGap the space between them.
@@ -85,6 +91,10 @@ const (
 )
 
 // chatInputBG is the bar's background, a 600x24 strip in the archive.
+// chatInputOrb is the round button the original puts at the right of the
+// input bar, twice.
+const chatInputOrb = basicInterfacePath + "sys_base_off.bmp"
+
 // chatInputBG is the bar's background, and chatInputSepBG the same bar in the
 // archive's other color.
 //
@@ -679,18 +689,20 @@ func (b *UI2DBackend) drawChatLines(state InGameUIState, x, y, w, h float32) {
 // it, and the encoder declines to build one.
 func (b *UI2DBackend) drawChatInput(x, y, w float32) {
 	r := b.ctx.Renderer()
-
-	if tex, err := b.texCache.Load(chatInputBG); err == nil {
-		r.DrawImage(tex.ID, x, y, w, chatInputH, ui2d.ColorWhite)
-	} else {
-		r.DrawRect(x, y, w, chatInputH, chatBackground)
-	}
+	b.drawChatInputBG(x, y, w)
 
 	// Two fields, as the original has: a name and a message. Leaving the name
 	// blank talks to everyone; filling it in makes the line a whisper. They
 	// take focus independently, by click or by Tab.
-	nameBox := chatInputBox(x, y, w, chatNameBoxL, chatNameBoxR)
-	msgBox := chatInputBox(x, y, w, chatMsgBoxL, chatMsgBoxR)
+	//
+	// The name field keeps its size whatever the chat's width; the message
+	// field is the one that grows, ending short of the right cap the round
+	// buttons sit in.
+	top := y + chatInputH*(chatBoxT/chatBGH)
+	boxH := chatInputH * ((chatBoxB - chatBoxT) / chatBGH)
+
+	nameBox := ui2d.Rect{X: x + chatNameL, Y: top, W: chatNameR - chatNameL, H: boxH}
+	msgBox := ui2d.Rect{X: x + chatCapL, Y: top, W: w - chatCapL - chatCapR, H: boxH}
 
 	name, _, nameSubmit := b.ctx.TextInputBareAt("hud_chat_name",
 		nameBox.X, nameBox.Y, nameBox.W, nameBox.H, chatInputScale, b.chatName)
@@ -703,11 +715,11 @@ func (b *UI2DBackend) drawChatInput(x, y, w float32) {
 	// The separator, taken out of the blue copy of this same bar: the grey
 	// one draws it so faintly that the two fields read as one long box.
 	if tex, err := b.texCache.Load(chatInputSepBG); err == nil {
-		sepX := x + w*chatSepL
-		sepW := w * (chatSepR - chatSepL)
-		r.DrawImageUV(tex.ID, sepX, y, sepW, chatInputH,
-			chatSepL, 0, chatSepR, 1, ui2d.ColorWhite)
+		r.DrawImageUV(tex.ID, x+chatSepL, y, chatSepR-chatSepL, chatInputH,
+			chatSepL/chatBGW, 0, chatSepR/chatBGW, 1, ui2d.ColorWhite)
 	}
+
+	b.drawChatOrbs(x+w-chatCapR, y)
 
 	// The fields are drawn bare, into boxes the background already paints, so
 	// an outline is the only thing that says where the typing goes.
@@ -729,15 +741,55 @@ func (b *UI2DBackend) drawChatInput(x, y, w float32) {
 	}
 }
 
-// chatInputBox maps one of the boxes painted into dialog_bg.bmp onto the bar
-// as it is actually drawn, so the field lands inside its box whatever width
-// the chat has been dragged to.
-func chatInputBox(x, y, w, left, right float32) ui2d.Rect {
-	return ui2d.Rect{
-		X: x + w*left,
-		Y: y + chatInputH*chatBoxT,
-		W: w * (right - left),
-		H: chatInputH * (chatBoxB - chatBoxT),
+// drawChatInputBG lays the bar down in three slices, so the caps keep their
+// size and only the middle stretches.
+func (b *UI2DBackend) drawChatInputBG(x, y, w float32) {
+	r := b.ctx.Renderer()
+
+	tex, err := b.texCache.Load(chatInputBG)
+	if err != nil {
+		r.DrawRect(x, y, w, chatInputH, chatBackground)
+
+		return
+	}
+
+	capL, capR := chatCapL, chatCapR
+
+	// A box narrower than its own caps has nothing left to stretch; the caps
+	// share what there is rather than overlapping into each other.
+	if capL+capR > w {
+		capL, capR = w/2, w/2
+	}
+
+	r.DrawImageUV(tex.ID, x, y, capL, chatInputH,
+		0, 0, chatCapL/chatBGW, 1, ui2d.ColorWhite)
+
+	if mid := w - capL - capR; mid > 0 {
+		r.DrawImageUV(tex.ID, x+capL, y, mid, chatInputH,
+			chatCapL/chatBGW, 0, (chatBGW-chatCapR)/chatBGW, 1, ui2d.ColorWhite)
+	}
+
+	r.DrawImageUV(tex.ID, x+w-capR, y, capR, chatInputH,
+		(chatBGW-chatCapR)/chatBGW, 0, 1, 1, ui2d.ColorWhite)
+}
+
+// drawChatOrbs draws the pair of round buttons in the bar's right cap. The
+// original has them; what they open is not built yet, so they are drawn and
+// not wired to anything.
+func (b *UI2DBackend) drawChatOrbs(capX, y float32) {
+	tex, err := b.texCache.Load(chatInputOrb)
+	if err != nil {
+		return
+	}
+
+	r := b.ctx.Renderer()
+	orbY := y + (chatInputH-chatOrb)/2
+
+	// Right-aligned in the cap, with the same gap between them as after them.
+	const gap float32 = 3
+	for i := float32(0); i < 2; i++ {
+		orbX := capX + chatCapR - (i+1)*(chatOrb+gap)
+		r.DrawImage(tex.ID, orbX, orbY, chatOrb, chatOrb, ui2d.ColorWhite)
 	}
 }
 
