@@ -22,6 +22,9 @@ const (
 	ZC_NOTIFY_PLAYERCHAT uint16 = 0x008E
 	// ZC_BROADCAST is a server-wide announcement.
 	ZC_BROADCAST uint16 = 0x009A
+	// ZC_WHISPER is a private message. The id moves with the packet version;
+	// 0x09DE is ours, not the 0x0097 older clients use.
+	ZC_WHISPER uint16 = 0x09DE
 )
 
 // ChatKind says where a line came from, which is what decides its color.
@@ -35,6 +38,14 @@ const (
 	ChatSelf
 	// ChatBroadcast is a server-wide announcement.
 	ChatBroadcast
+	// ChatSystem is the server talking to us rather than a person — the
+	// welcome lines, and anything else with no speaker in front of it.
+	ChatSystem
+	// ChatWhisper is a private message.
+	ChatWhisper
+	// ChatDamage is a battle line. Nothing produces one yet — the combat
+	// packets are Track F — but the chat box already knows how to color it.
+	ChatDamage
 )
 
 // ChatMessage is one line for the chat box.
@@ -78,7 +89,44 @@ func DecodePlayerChat(data []byte) *ChatMessage {
 
 	speaker, text := splitSpeaker(chatText(data, 4))
 
-	return &ChatMessage{Kind: ChatSelf, Speaker: speaker, Text: text}
+	// A line with no speaker came from the server, not from us. The two
+	// arrive through the same packet and only the prefix tells them apart,
+	// which is why the split happens before the kind is decided.
+	kind := ChatSelf
+	if speaker == "" {
+		kind = ChatSystem
+	}
+
+	return &ChatMessage{Kind: kind, Speaker: speaker, Text: text}
+}
+
+// DecodeWhisper parses a private message (ZC_WHISPER). Returns nil on short
+// data.
+//
+// Unlike public chat the sender is a field of its own, so nothing has to be
+// split out of the text.
+func DecodeWhisper(data []byte) *ChatMessage {
+	const senderAt, messageAt = 8, 33
+
+	if len(data) < messageAt {
+		return nil
+	}
+
+	return &ChatMessage{
+		Kind:    ChatWhisper,
+		GID:     readU32(data, 4),
+		Speaker: trimName(data[senderAt : senderAt+nameLength]),
+		Text:    chatText(data, messageAt),
+	}
+}
+
+// trimName reads a fixed-width name field, which the server pads with NULs.
+func trimName(raw []byte) string {
+	if end := bytes.IndexByte(raw, 0); end >= 0 {
+		raw = raw[:end]
+	}
+
+	return string(raw)
 }
 
 // DecodeBroadcast parses a server-wide announcement (ZC_BROADCAST).

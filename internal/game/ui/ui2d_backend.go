@@ -98,6 +98,11 @@ type UI2DBackend struct {
 	chatScroll  int
 	chatPinned  bool
 	chatTab     int
+	chatX       float32
+	chatY       float32
+	chatW       float32
+	chatH       float32
+	chatPlaced  bool
 	chatInput   string
 	chatPending string
 

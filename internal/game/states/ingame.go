@@ -1000,6 +1000,7 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_NOTIFY_CHAT, s.handleChat)
 	s.client.RegisterHandler(packets.ZC_NOTIFY_PLAYERCHAT, s.handlePlayerChat)
 	s.client.RegisterHandler(packets.ZC_BROADCAST, s.handleBroadcast)
+	s.client.RegisterHandler(packets.ZC_WHISPER, s.handleWhisper)
 	s.client.RegisterHandler(packets.ZC_PAR_CHANGE, s.handleStatusChange)
 	s.client.RegisterHandler(packets.ZC_LONGPAR_CHANGE, s.handleStatusChange)
 	s.client.RegisterHandler(packets.ZC_LONGLONGPAR_CHANGE, s.handleStatusChange)
@@ -1263,6 +1264,11 @@ func (s *InGameState) handlePlayerChat(data []byte) error {
 // handleBroadcast handles a server-wide announcement.
 func (s *InGameState) handleBroadcast(data []byte) error {
 	return s.addChat(packets.DecodeBroadcast(data))
+}
+
+// handleWhisper handles a private message.
+func (s *InGameState) handleWhisper(data []byte) error {
+	return s.addChat(packets.DecodeWhisper(data))
 }
 
 // addChat folds one decoded message into the scrollback.
