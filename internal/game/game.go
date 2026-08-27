@@ -90,6 +90,11 @@ type Game struct {
 	walkToX, walkToY int
 	walkToPending    bool
 
+	// Where to put the pointer once the map is up, from --mouse-at, in window
+	// points. Fired once.
+	mouseAtX, mouseAtY int
+	mouseAtPending     bool
+
 	// toggleBasicInfo is set for the frame Ctrl+V was pressed.
 	toggleBasicInfo bool
 
@@ -494,6 +499,7 @@ func (g *Game) frame() {
 	updateMs := msSince(updateStart)
 
 	g.runWalkTo()
+	g.runMouseAt()
 
 	// Render 3D scene (if applicable)
 	sceneStart := time.Now()
@@ -521,6 +527,38 @@ func (g *Game) frame() {
 func (g *Game) SetWalkTo(x, y int) {
 	g.walkToX, g.walkToY = x, y
 	g.walkToPending = true
+}
+
+// SetMouseAt asks for the pointer to be placed at a window position once the
+// first map is up, from --mouse-at. What the pointer is over decides which
+// cursor is drawn, and that is the one thing an unattended capture could not
+// otherwise show.
+func (g *Game) SetMouseAt(x, y int) {
+	g.mouseAtX, g.mouseAtY = x, y
+	g.mouseAtPending = true
+}
+
+// runMouseAt moves the pointer for --mouse-at once the map is up. It goes
+// through the OS, so the same motion event a hand would cause reaches the
+// input layer.
+func (g *Game) runMouseAt() {
+	if !g.mouseAtPending {
+		return
+	}
+	state, ok := g.stateManager.Current().(*states.InGameState)
+	if !ok || !state.MapReady() {
+		return
+	}
+	g.mouseAtPending = false
+
+	winPos := imgui.MainViewport().Pos()
+	x := int32(winPos.X) + int32(g.mouseAtX)
+	y := int32(winPos.Y) + int32(g.mouseAtY)
+	if err := sdl.WarpMouseGlobal(x, y); err != nil {
+		logger.Warn("--mouse-at could not move the pointer", zap.Error(err))
+		return
+	}
+	logger.Info("pointer placed for --mouse-at", zap.Int("x", g.mouseAtX), zap.Int("y", g.mouseAtY))
 }
 
 // runWalkTo fires the --walk-to click once the map can take it.
@@ -1162,6 +1200,8 @@ func cursorFor(e *entity.Entity) cursor.State {
 	switch e.Type {
 	case entity.TypeNPC:
 		return cursor.StateTalk
+	case entity.TypeWarp:
+		return cursor.StateWarp
 	default:
 		return cursor.StateDefault
 	}

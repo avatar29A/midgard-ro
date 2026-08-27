@@ -57,6 +57,11 @@ func main() {
 	} else if spec := config.WalkToSpec(); spec != "" {
 		logger.Warn("--walk-to not understood, want x,y", zap.String("value", spec))
 	}
+	if x, y, ok := config.MouseAt(); ok {
+		g.SetMouseAt(x, y)
+	} else if spec := config.MouseAtSpec(); spec != "" {
+		logger.Warn("--mouse-at not understood, want x,y", zap.String("value", spec))
+	}
 
 	// Run the game loop
 	if err := g.Run(); err != nil {

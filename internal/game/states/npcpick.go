@@ -118,16 +118,22 @@ func (s *InGameState) projectToScreen(x, y, z, viewportW, viewportH float32) (fl
 		(0.5 - clip[1]/clip[3]*0.5) * viewportH
 }
 
-// isClickable reports whether a unit can be talked to.
-//
-// Only NPCs, and never the player: a click on yourself is a click on the
-// ground you are standing on.
+// isClickable reports whether a unit answers to the pointer: an NPC, which
+// can be talked to, or a visible warp, which can be walked into. Never the
+// player — a click on yourself is a click on the ground you are standing on
+// — and never a hidden warp, which the original shows nothing for.
 func (s *InGameState) isClickable(e *entity.Entity) bool {
-	if e == nil || e.Body == nil || e.Type != entity.TypeNPC {
+	if e == nil || e.Body == nil {
 		return false
 	}
-
-	return e.ID != s.selfAID()
+	switch e.Type {
+	case entity.TypeNPC:
+		return e.ID != s.selfAID()
+	case entity.TypeWarp:
+		return e.Job == packets.JobWarpPortal
+	default:
+		return false
+	}
 }
 
 // unitBox is the volume a unit occupies, matching the quad it is drawn as:
