@@ -156,6 +156,50 @@ type ThirdPersonCamera struct {
 
 	// Cached position for external access
 	PosX, PosY, PosZ float32
+
+	// limits are the current map's rules; see SetLimits.
+	limits Limits
+}
+
+// Limits are a map's rules for the third-person camera, from the client's
+// own tables: an indoor map (indoorrswtable.txt) may not orbit at all, and a
+// few maps (viewpointtable.txt) allow only an arc.
+type Limits struct {
+	// YawLocked forbids orbiting entirely.
+	YawLocked bool
+
+	// Arc bounds the yaw between YawMin and YawMax, in radians, when set.
+	Arc            bool
+	YawMin, YawMax float32
+}
+
+// SetLimits applies a map's rules, pulling the yaw inside them if it is not.
+func (c *ThirdPersonCamera) SetLimits(l Limits) {
+	c.limits = l
+	c.clampYaw()
+}
+
+// Limits returns the rules in force.
+func (c *ThirdPersonCamera) Limits() Limits {
+	return c.limits
+}
+
+// SetYaw turns the camera to an angle, within the rules.
+func (c *ThirdPersonCamera) SetYaw(yaw float32) {
+	c.Yaw = yaw
+	c.clampYaw()
+}
+
+func (c *ThirdPersonCamera) clampYaw() {
+	if !c.limits.Arc {
+		return
+	}
+	if c.Yaw < c.limits.YawMin {
+		c.Yaw = c.limits.YawMin
+	}
+	if c.Yaw > c.limits.YawMax {
+		c.Yaw = c.limits.YawMax
+	}
 }
 
 // NewThirdPersonCamera creates a new third-person camera with RO-style defaults.
@@ -209,9 +253,14 @@ func (c *ThirdPersonCamera) ViewMatrix(targetX, targetY, targetZ float32) math.M
 	return math.LookAt(pos, target, up)
 }
 
-// HandleYaw rotates camera horizontally around target.
+// HandleYaw rotates camera horizontally around target, unless the map
+// forbids it.
 func (c *ThirdPersonCamera) HandleYaw(deltaX float32) {
+	if c.limits.YawLocked {
+		return
+	}
 	c.Yaw -= deltaX * c.YawSensitivity
+	c.clampYaw()
 }
 
 // HandleZoom updates distance from target.

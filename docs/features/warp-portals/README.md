@@ -1,7 +1,7 @@
 # Feature: Warp portals — moving across locations
 
 **Branch:** `feature/warp-portals` · **Issue:** #91 · **Parent:** #49 (MVP scope), #51 (Track B, task **B2**: "`ZC_NPCACK_MAPMOVE` (0x0091) → map change handling")
-**Status:** Planned · **Created:** 2026-08-27
+**Status:** Steps 0–7 done, ready for review · **Created:** 2026-08-27
 
 ## Goal
 
@@ -534,7 +534,7 @@ is now **`--mouse-at x,y`** beside `--walk-to`: once the map is up it moves
 the pointer through the OS (`SDL_WarpMouseGlobal`), so the same motion event
 a hand would cause reaches the input layer.
 
-### Step 6 — Indoors, the camera behaves, and the void is black
+### Step 6 — Indoors, the camera behaves, and the void is black ✅
 - **Changes:** `internal/assets/maptables.go` (new: `indoorrswtable.txt`,
   `viewpointtable.txt`, CP949-safe), `internal/engine/camera/camera.go`
   (`Limits{YawLocked, MinDistance, MaxDistance, Pitch}` + `SetLimits`), `ingame.go`
@@ -555,11 +555,25 @@ a hand would cause reaches the input layer.
   `indoor_test.go`, `water_test.go`; `map.water` reports 0 cells for `prt_in`.
 - **Reference:** current-prt-in ⑭ (the before)
 
-### Step 7 — Docs
-- [ ] `docs/ENGINE_FEATURES.md` — the map loader and the portal primitive
-- [ ] `docs/features/warp-portals/README.md` — corrections found while building
-- [ ] Session log `docs/sessions/2026-08-DD-warp-portals.md`
-- [ ] RFC #49 / PRD §4.3.1 — Prontera's adjacent fields are `prt_fild05/06/08`, not `prt_fild01–03` (verified in the shared and the `re/` warp scripts; Open question 4)
+![step6-prt-in — prt_in at 168,128 after Step 6: Indoor: yes (yaw locked), Water: 0 cells, black beyond the walls](./step6-prt-in.jpg)
+![step6-prontera-water — Prontera's fountain still has its water: 477 cells](./step6-prontera-water.jpg)
+
+Done. `pkg/formats/maptables.go` reads both tables (142 indoor maps, 25
+presets in this archive); `Manager.MapRules()` loads them once per session;
+`applyMapRules` gives the camera its `Limits` — yaw locked indoors, an arc
+where a preset says so, the map's entry angle on every change, as the
+original resets its camera — and the scene clears to **black** indoors
+instead of sky, which per-cell water had exposed. Water is `BuildCells`:
+a quad per cell with ground below the level (roBrowser's rule), so `prt_in`
+reports 0 cells and Prontera 477. The camera lock is proven by
+`camera_test.go` (an unattended run has no hand to drag with); the rest by
+the captures and the `map.indoor` / `map.water` traces.
+
+### Step 7 — Docs ✅
+- [x] `docs/ENGINE_FEATURES.md` — map loading, the portal, per-cell water, the camera tables
+- [x] `docs/features/warp-portals/README.md` — corrections found while building (each step's note)
+- [x] Session log `docs/sessions/2026-08-27-warp-portals.md`
+- [x] PRD §2.1 and §4.3.1 corrected to `prt_fild05/06/08`; the correction posted on RFC #49 rather than editing an accepted RFC
 
 All steps land on `feature/warp-portals` in one PR (one or a few commits per step, in order). The PR closes the issue.
 
@@ -633,6 +647,9 @@ None open.
 
 ## Revision log
 
+- 2026-08-27 — **Steps 6 and 7 done; ready for review.** Indoor maps lock the
+  camera and clear to black; water is per cell (`prt_in` 0, Prontera 477);
+  docs, session log and the PRD field list.
 - 2026-08-27 — **Steps 3 and 5 done.** Walking into a Prontera door reaches
   `prt_in` in 0.6 s, loading screen included; the door cursor shows over a
   portal and clicking one walks into it. `--mouse-at` joins `--walk-to`.

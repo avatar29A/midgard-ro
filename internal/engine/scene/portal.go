@@ -38,7 +38,7 @@ const (
 	portalSpinDegPerMs = 0.25
 )
 
-// portalTint colours the light: the original's blue, at nine tenths.
+// portalTint colors the light: the original's blue, at nine tenths.
 var portalTint = [4]float32{0.55, 0.8, 1.0, 0.9}
 
 // ringTexturePath is the tube's texture; the archive has it in one place.
@@ -133,7 +133,7 @@ func discVertices() []float32 {
 	}
 }
 
-// discPixels is a soft disc: white-blue at the centre, transparent at the
+// discPixels is a soft disc: white-blue at the center, transparent at the
 // rim, falling off with the square of the distance so the edge is a glow
 // rather than a line.
 func discPixels(size int) []byte {

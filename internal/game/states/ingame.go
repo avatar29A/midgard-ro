@@ -124,6 +124,9 @@ type InGameState struct {
 	lastLoadMs    float64
 	lastLoadPhase string
 
+	// What the current map asks of the camera; see applyMapRules.
+	mapCamera MapCamera
+
 	// OnMapChanged is called once a map is up — the first, and every one a
 	// warp brings — with its name. The per-map pieces of the HUD hang on it.
 	OnMapChanged func(mapName string)
@@ -377,6 +380,10 @@ func (s *InGameState) finishMapLoad() {
 	// and repeats until the player leaves for another map.
 	s.manager.PlayLocationBGM(s.MapName)
 
+	s.applyMapRules()
+	trace.Emit(trace.Map, "water",
+		zap.String("map", l.Name), zap.Int("cells", s.scene.WaterCells()))
+
 	s.placePlayer(at)
 	s.StatusMsg = fmt.Sprintf("Entered %s", s.MapName)
 
@@ -389,6 +396,50 @@ func (s *InGameState) finishMapLoad() {
 	if s.OnMapChanged != nil {
 		s.OnMapChanged(s.MapName)
 	}
+}
+
+// applyMapRules gives the camera the map's rules — no orbiting indoors, an
+// arc where the presets say so — and turns it to the map's entry angle, as
+// the original does on every map change.
+func (s *InGameState) applyMapRules() {
+	s.mapCamera = s.manager.MapRules().For(s.MapName)
+	if s.camera != nil {
+		s.camera.SetLimits(s.mapCamera.Limits)
+		s.camera.SetYaw(s.mapCamera.YawIn)
+	}
+	if s.scene != nil {
+		// Beyond an indoor map's rooms the original shows black, not sky.
+		if s.mapCamera.Indoor {
+			s.scene.SetClearColor(scene.IndoorClearColor)
+		} else {
+			s.scene.SetClearColor(scene.SkyClearColor)
+		}
+	}
+	trace.Emit(trace.Map, "indoor",
+		zap.String("map", packets.MapBaseName(s.MapName)),
+		zap.Bool("indoor", s.mapCamera.Indoor),
+		zap.Bool("yawLocked", s.mapCamera.Limits.YawLocked),
+		zap.Bool("arc", s.mapCamera.Limits.Arc),
+		zap.Float32("yawIn", s.mapCamera.YawIn))
+}
+
+// IsIndoor reports whether the current map is one the original treats as
+// indoor.
+func (s *InGameState) IsIndoor() bool {
+	return s.mapCamera.Indoor
+}
+
+// CameraRules is what the current map asks of the camera.
+func (s *InGameState) CameraRules() MapCamera {
+	return s.mapCamera
+}
+
+// WaterCells is how many cells of the current map carry water.
+func (s *InGameState) WaterCells() int {
+	if s.scene == nil {
+		return 0
+	}
+	return s.scene.WaterCells()
 }
 
 // placePlayer puts the character on a cell of the current map, creating it

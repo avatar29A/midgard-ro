@@ -118,6 +118,13 @@ type Scene struct {
 	// GAT collision data
 	GAT *formats.GAT
 
+	// clearColor is what shows where the map has nothing: sky outdoors,
+	// black indoors, as the original does. See SetClearColor.
+	clearColor [3]float32
+
+	// gnd is the map's ground, kept between BeginMap and EndMap for the water.
+	gnd *formats.GND
+
 	// Fallback texture
 	fallbackTex uint32
 }
@@ -125,7 +132,8 @@ type Scene struct {
 // New creates a new scene with the given configuration.
 func New(cfg Config) (*Scene, error) {
 	s := &Scene{
-		config: cfg,
+		config:     cfg,
+		clearColor: SkyClearColor,
 		// Default lighting
 		LightDir:     [3]float32{0.5, 0.866, 0.0},
 		AmbientColor: [3]float32{0.3, 0.3, 0.3},
@@ -217,6 +225,7 @@ func (s *Scene) createFallbackTexture() {
 // BeginMap takes the map's dimensions, height data, walkability and lighting
 // from the parsed files. It does no GPU work.
 func (s *Scene) BeginMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(string) ([]byte, error)) {
+	s.gnd = gnd
 	s.MapWidth = float32(gnd.Width) * gnd.Zoom
 	s.MapHeight = float32(gnd.Height) * gnd.Zoom
 
@@ -317,8 +326,29 @@ func (s *Scene) EndMap(rsw *formats.RSW, texLoader func(string) ([]byte, error))
 	s.modelRenderer.EndModels()
 
 	if rsw.Water.Level > 0 {
-		s.waterRenderer.SetupWater(rsw.Water.Level, s.MinBounds, s.MaxBounds, texLoader)
+		s.waterRenderer.SetupWater(s.gnd, rsw.Water, texLoader)
 	}
+}
+
+// SkyClearColor is the sky blue that shows beyond an outdoor map's edge
+// (matches grfbrowser); IndoorClearColor is the black the original shows
+// between an indoor map's rooms.
+var (
+	SkyClearColor    = [3]float32{0.4, 0.6, 0.9}
+	IndoorClearColor = [3]float32{0, 0, 0}
+)
+
+// SetClearColor sets what is drawn where the map has nothing.
+func (s *Scene) SetClearColor(c [3]float32) {
+	s.clearColor = c
+}
+
+// WaterCells reports how many cells of the map carry water.
+func (s *Scene) WaterCells() int {
+	if s.waterRenderer == nil {
+		return 0
+	}
+	return s.waterRenderer.Cells()
 }
 
 // LoadedModels reports how many model instances the map placed.
@@ -427,8 +457,7 @@ func (s *Scene) RenderWithViewExtras(view math.Mat4, extras func(viewProj math.M
 	restore := s.framebuffer.BindWithViewport()
 	defer restore()
 
-	// Clear with sky blue (matches grfbrowser)
-	s.framebuffer.Clear(0.4, 0.6, 0.9, 1.0)
+	s.framebuffer.Clear(s.clearColor[0], s.clearColor[1], s.clearColor[2], 1.0)
 
 	// Enable depth testing
 	gl.Enable(gl.DEPTH_TEST)
