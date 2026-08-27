@@ -219,6 +219,48 @@ const CZ_REQUEST_CHAT uint16 = 0x00F3
 // in its own fixed-width field.
 const CZ_WHISPER uint16 = 0x0096
 
+// ZC_ACK_WHISPER reports what became of a whisper we sent.
+//
+// It carries a result code and our own character id — it is not an echo. The
+// server never sends the message back, so the client is what displays a line
+// you sent, and only once this says it arrived. The id moved with the packet
+// version: 0x0098 was three bytes, and from PACKETVER 20131223 it is 0x09DF
+// with the character id appended.
+const ZC_ACK_WHISPER uint16 = 0x09DF
+
+// Whisper results, from rAthena's e_ack_whisper.
+const (
+	WhisperOK uint8 = iota
+	WhisperOffline
+	WhisperIgnored
+	WhisperAllIgnored
+)
+
+// WhisperFailure describes a non-zero whisper result in the words the official
+// client uses for it. Returns "" for WhisperOK, which is not a failure.
+func WhisperFailure(result uint8, target string) string {
+	switch result {
+	case WhisperOffline:
+		return target + " is not online."
+	case WhisperIgnored:
+		return target + " is ignoring you."
+	case WhisperAllIgnored:
+		return target + " is ignoring everyone."
+	default:
+		return ""
+	}
+}
+
+// DecodeWhisperAck reads the result code. Reports false when the packet is too
+// short to hold one.
+func DecodeWhisperAck(data []byte) (uint8, bool) {
+	if len(data) < 3 {
+		return 0, false
+	}
+
+	return data[2], true
+}
+
 // whisperNameLen is NAME_LENGTH from the server. The name field is exactly
 // this wide and must hold a terminator, so 23 usable characters.
 const whisperNameLen = 24
