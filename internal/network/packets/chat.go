@@ -100,6 +100,33 @@ func DecodePlayerChat(data []byte) *ChatMessage {
 	return &ChatMessage{Kind: kind, Speaker: speaker, Text: text}
 }
 
+// EncodeWhisper builds a private message to target.
+//
+// clif_process_message reads this with whisperFormat set: the name is a fixed
+// 24-byte field that has to be zero-terminated, and the message follows it,
+// also terminated. A name that fills the field with no room for the
+// terminator is rejected as "an unterminated name" and the line is dropped.
+//
+// Returns nil when either half is missing or the name cannot fit, since none
+// of those produce a packet the server will accept.
+func EncodeWhisper(target, message string) []byte {
+	if target == "" || message == "" || len(target) >= whisperNameLen {
+		return nil
+	}
+
+	length := 4 + whisperNameLen + len(message) + 1
+	pkt := make([]byte, length)
+
+	pkt[0] = byte(CZ_WHISPER)
+	pkt[1] = byte(CZ_WHISPER >> 8)
+	pkt[2] = byte(length)
+	pkt[3] = byte(length >> 8)
+	copy(pkt[4:4+whisperNameLen], target)
+	copy(pkt[4+whisperNameLen:], message)
+
+	return pkt
+}
+
 // DecodeWhisper parses a private message (ZC_WHISPER). Returns nil on short
 // data.
 //
@@ -186,6 +213,15 @@ func splitSpeaker(message string) (speaker, text string) {
 // our client already speaks (the one with 0x035F WalkToXY) does not redefine
 // it.
 const CZ_REQUEST_CHAT uint16 = 0x00F3
+
+// CZ_WHISPER carries a private message: name[24] then the text. Unlike public
+// chat it does not want the "<name> : " prefix, because the recipient travels
+// in its own fixed-width field.
+const CZ_WHISPER uint16 = 0x0096
+
+// whisperNameLen is NAME_LENGTH from the server. The name field is exactly
+// this wide and must hold a terminator, so 23 usable characters.
+const whisperNameLen = 24
 
 // ChatSeparator is what sits between a speaker and what they said, on the wire
 // in both directions.

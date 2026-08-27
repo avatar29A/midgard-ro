@@ -1313,6 +1313,23 @@ func (s *InGameState) SendChat(message string) error {
 	return s.client.Send(pkt)
 }
 
+// SendWhisper sends a private message to target. The echo of our own line
+// comes back from the server as ZC_ACK_WHISPER, so nothing is added locally.
+func (s *InGameState) SendWhisper(target, message string) error {
+	pkt := packets.EncodeWhisper(target, message)
+	if pkt == nil {
+		logger.Warn("not sending an unsendable whisper",
+			zap.String("target", target), zap.Int("bytes", len(message)))
+
+		return nil
+	}
+
+	trace.Emit(trace.HUD, "whisper-send",
+		zap.String("target", target), zap.Int("bytes", len(message)))
+
+	return s.client.Send(pkt)
+}
+
 // ChatLines returns the chat scrollback for the UI, oldest first.
 func (s *InGameState) ChatLines() []ChatLine {
 	return s.chat.Lines()
@@ -1420,61 +1437,6 @@ func (s *InGameState) handleServerMove(data []byte) error {
 	trace.Emit(trace.Map, "server-move",
 		zap.String("map", sm.MapName), zap.String("server", sm.Address()))
 	return nil
-}
-
-// StepToward asks the server to walk one cell in the direction of the given
-// world-space vector, which the caller has already rotated into the camera's
-// frame so "forward" means away from the viewer.
-//
-// Keyboard walking in RO is not free movement — it is a walk request per cell,
-// same as a click. Issuing one step at a time keeps us on the server's path
-// and stops the moment the key is released. Requests are skipped while a walk
-// is already in flight so we don't spam the server mid-step.
-func (s *InGameState) StepToward(dirX, dirZ float32) error {
-	if s.player == nil || s.player.IsWalkingPath() {
-		return nil
-	}
-	if dirX == 0 && dirZ == 0 {
-		return nil
-	}
-
-	// Rate-limit. IsWalkingPath only goes true once the server's ack comes
-	// back, so between sending a request and hearing about it we'd fire one
-	// per frame — 40+ walk requests a second, each restarting the walk server
-	// side so the character never finishes a step. One request per
-	// moveTickRate is plenty to walk continuously at 150ms per cell.
-	if time.Since(s.lastMoveSent) < s.moveTickRate {
-		return nil
-	}
-
-	// Taking manual control abandons wherever the last click was headed.
-	s.hasDest = false
-
-	dir := entity.CalculateDirection(dirX, dirZ)
-	dx, dy := entity.CellDeltaForDirection(dir)
-	if dx == 0 && dy == 0 {
-		return nil
-	}
-
-	cellX, cellY := s.player.CurrentCell()
-	targetX, targetY := cellX+dx, cellY+dy
-
-	// Don't bother the server with a step into a wall.
-	if s.pathFinder != nil && !s.pathFinder.IsWalkable(targetX, targetY) {
-		trace.Emit(trace.Move, "step-blocked",
-			zap.Int("cellX", cellX), zap.Int("cellY", cellY),
-			zap.Int("targetX", targetX), zap.Int("targetY", targetY),
-			zap.Int("facing", dir))
-		return nil
-	}
-
-	trace.Emit(trace.Move, "step",
-		zap.Float32("inputX", dirX), zap.Float32("inputZ", dirZ),
-		zap.Int("facing", dir),
-		zap.Int("cellX", cellX), zap.Int("cellY", cellY),
-		zap.Int("targetX", targetX), zap.Int("targetY", targetY))
-
-	return s.RequestMove(targetX, targetY)
 }
 
 // ScreenToTile maps a screen-space click (in viewport pixels) to a tile

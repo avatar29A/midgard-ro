@@ -30,8 +30,18 @@ const (
 	// chatInputH is the bar along the bottom, which carries dialog_bg.bmp.
 	chatInputH float32 = 25
 
-	// chatNameW is the speaker field at the left of that bar.
+	// chatNameW is the whisper-target field at the left of that bar. Empty
+	// means the line goes to public chat; a name makes it private.
 	chatNameW float32 = 90
+
+	// chatCtrlBtn is one control-panel button in the tab strip, and
+	// chatCtrlGap the space between them.
+	chatCtrlBtn float32 = 15
+	chatCtrlGap float32 = 2
+
+	// chatStepLines is how much one +/- press changes the box, in lines. The
+	// original steps a ladder of 3-line stops rather than a free height.
+	chatStepLines = 3
 
 	// chatStatusBarH is the strip along the bottom of the screen the chat has
 	// to sit above. Kept here rather than shared, so the two do not have to
@@ -70,10 +80,13 @@ var (
 	chatColorSpeaker = ui2d.Color{R: 0.7, G: 1, B: 0.7, A: 1}
 	chatBackground   = ui2d.Color{R: 0, G: 0, B: 0, A: 0.5}
 	chatBorder       = ui2d.Color{R: 1, G: 1, B: 1, A: 0.85}
-	chatTabActive    = ui2d.Color{R: 0, G: 0, B: 0, A: 0.5}
-	chatTabIdle      = ui2d.Color{R: 0, G: 0, B: 0, A: 0.75}
-	chatShadow       = ui2d.Color{R: 0, G: 0, B: 0, A: 0.9}
-	chatGripHot      = ui2d.Color{R: 1, G: 0.9, B: 0.4, A: 1}
+
+	// chatFocusBorder frames whichever input field has the keyboard.
+	chatFocusBorder = ui2d.Color{R: 1, G: 0.85, B: 0.35, A: 0.95}
+	chatTabActive   = ui2d.Color{R: 0, G: 0, B: 0, A: 0.5}
+	chatTabIdle     = ui2d.Color{R: 0, G: 0, B: 0, A: 0.75}
+	chatShadow      = ui2d.Color{R: 0, G: 0, B: 0, A: 0.9}
+	chatGripHot     = ui2d.Color{R: 1, G: 0.9, B: 0.4, A: 1}
 )
 
 // chatKindColor is the color a line is drawn in.
@@ -171,6 +184,7 @@ func (b *UI2DBackend) drawChat(state InGameUIState, screenH float32) {
 	b.ctx.CaptureMouse(ui2d.Rect{X: x, Y: top, W: w, H: chatTabH + h + chatInputH})
 
 	b.drawChatTabs(x, top, w)
+	b.drawChatControls(x, top, w)
 
 	r := b.ctx.Renderer()
 	r.DrawRect(x, bodyY, w, h, chatBackground)
@@ -181,7 +195,7 @@ func (b *UI2DBackend) drawChat(state InGameUIState, screenH float32) {
 	r.DrawRect(x+w-1, bodyY, 1, h, chatBorder)
 
 	b.drawChatLines(state, x, bodyY, w, h)
-	b.drawChatInput(state, x, bodyY+h, w)
+	b.drawChatInput(x, bodyY+h, w)
 
 	b.chatDragAndResize(screenH)
 }
@@ -193,6 +207,16 @@ func (b *UI2DBackend) drawChat(state InGameUIState, screenH float32) {
 // grows upward: the input bar stays where it is and the scrollback gets
 // taller, which is what you want when the bar is what you type into.
 func (b *UI2DBackend) chatDragAndResize(screenH float32) {
+	// Locked means locked in place: no drag handle, no grip, so neither a
+	// stray drag on the strip nor one on the corner can shift the box. The
+	// clamp below still runs, because +/- resizes a locked box and would
+	// otherwise walk its top edge off the screen.
+	if b.chatLocked {
+		b.clampChatToScreen(screenH)
+
+		return
+	}
+
 	// Dragged by the strip above the box, past the tabs, which are buttons.
 	tabsEnd := float32(len(chatTabs)) * (chatTabW + 1)
 	handle := ui2d.Rect{X: b.chatX + tabsEnd, Y: b.chatY, W: b.chatW - tabsEnd - chatGrip, H: chatTabH}
@@ -212,6 +236,11 @@ func (b *UI2DBackend) chatDragAndResize(screenH float32) {
 		b.chatH += beforeY - b.chatY
 	}
 
+	b.clampChatToScreen(screenH)
+}
+
+// clampChatToScreen keeps the box a sane size and on the screen.
+func (b *UI2DBackend) clampChatToScreen(screenH float32) {
 	b.chatW = clampF(b.chatW, chatMinW, chatMaxW)
 	b.chatH = clampF(b.chatH, chatMinH, chatMaxH)
 
@@ -285,6 +314,83 @@ func (b *UI2DBackend) drawChatTabs(x, y, w float32) {
 	r.DrawRect(tabsEnd, y+chatTabH-1, x+w-tabsEnd, 1, chatBorder)
 }
 
+// drawChatControls draws the panel at the right of the tab strip: the two
+// height steps, the lock, and the jump to the newest line.
+//
+// The official client's captions are these four, and the two that are not
+// self-evident do what their tooltips describe: the lock pins the box so a
+// stray drag cannot move or resize it, and the arrows return to the bottom of
+// the scrollback after you have read back through it.
+func (b *UI2DBackend) drawChatControls(x, y, w float32) {
+	// Right-aligned, and left of the resize grip so the two never overlap.
+	right := x + w - chatGrip - chatCtrlGap
+
+	type control struct {
+		id      string
+		caption string
+		on      bool
+		click   func()
+	}
+
+	controls := []control{
+		{"chat_ctrl_last", ">>", false, func() {
+			b.chatPinned = true
+		}},
+		{"chat_ctrl_lock", "L", b.chatLocked, func() {
+			b.chatLocked = !b.chatLocked
+		}},
+		{"chat_ctrl_minus", "-", false, func() {
+			b.stepChatHeight(-chatStepLines)
+		}},
+		{"chat_ctrl_plus", "+", false, func() {
+			b.stepChatHeight(chatStepLines)
+		}},
+	}
+
+	r := b.ctx.Renderer()
+	btnY := y + (chatTabH-chatCtrlBtn)/2
+
+	for _, c := range controls {
+		// Sized to its caption: ">>" does not fit the square the other three
+		// sit in, and centring it in one just spills over the borders.
+		capW, capH := r.MeasureText(c.caption, 1)
+		btnW := max32(chatCtrlBtn, capW+6)
+		btnX := right - btnW
+		right -= btnW + chatCtrlGap
+
+		if btnX < x {
+			break
+		}
+
+		bg := chatTabIdle
+		if c.on {
+			bg = chatTabActive
+		}
+		r.DrawRect(btnX, btnY, btnW, chatCtrlBtn, bg)
+		r.DrawRect(btnX, btnY, btnW, 1, chatBorder)
+		r.DrawRect(btnX, btnY+chatCtrlBtn-1, btnW, 1, chatBorder)
+		r.DrawRect(btnX, btnY, 1, chatCtrlBtn, chatBorder)
+		r.DrawRect(btnX+btnW-1, btnY, 1, chatCtrlBtn, chatBorder)
+
+		capX, capY := btnX+(btnW-capW)/2, btnY+(chatCtrlBtn-capH)/2
+		r.DrawText(capX, capY, c.caption, 1, ui2d.ColorTextOnDark)
+
+		if b.ctx.InvisibleButtonAt("hud_"+c.id, btnX, btnY, btnW, chatCtrlBtn) {
+			c.click()
+		}
+	}
+}
+
+// stepChatHeight grows or shrinks the box by whole lines, keeping the input
+// bar where it is: the bar is what the eye tracks, and having it walk up the
+// screen every time the scrollback grew would be the wrong thing to move.
+func (b *UI2DBackend) stepChatHeight(lines float32) {
+	want := clampF(b.chatH+lines*chatLineH, chatMinH, chatMaxH)
+	b.chatY -= want - b.chatH
+	b.chatH = want
+	b.chatPinned = true
+}
+
 // drawChatLines draws the scrollback, newest at the bottom.
 func (b *UI2DBackend) drawChatLines(state InGameUIState, x, y, w, h float32) {
 	r := b.ctx.Renderer()
@@ -343,7 +449,7 @@ func (b *UI2DBackend) drawChatLines(state InGameUIState, x, y, w, h float32) {
 //
 // Enter sends and clears. An empty line is not sent — the server would refuse
 // it, and the encoder declines to build one.
-func (b *UI2DBackend) drawChatInput(state InGameUIState, x, y, w float32) {
+func (b *UI2DBackend) drawChatInput(x, y, w float32) {
 	r := b.ctx.Renderer()
 
 	if tex, err := b.texCache.Load(chatInputBG); err == nil {
@@ -352,36 +458,76 @@ func (b *UI2DBackend) drawChatInput(state InGameUIState, x, y, w float32) {
 		r.DrawRect(x, y, w, chatInputH, chatBackground)
 	}
 
-	// The speaker's own name, which the server requires on every line, shown
-	// so it is clear what is being prefixed rather than hidden in the packet.
-	name := state.PlayerName
-	if name == "" {
-		name = "..."
-	}
-	r.DrawText(x+8, y+6, name, 1, ui2d.ColorTextOnDark)
+	// Two fields, as the original has: a name and a message. Leaving the name
+	// blank talks to everyone; filling it in makes the line a whisper. They
+	// take focus independently, by click or by Tab.
+	nameW := chatNameW
+	msgX := x + nameW + chatCtrlGap
+	msgW := w - nameW - chatCtrlGap - chatPadding
 
-	msgX := x + chatNameW
-	msgW := w - chatNameW - 8
+	name, _, nameSubmit := b.ctx.TextInputBareAt("hud_chat_name",
+		x+chatPadding, y+3, nameW-chatPadding, chatInputH-6, 1, b.chatName)
+	b.chatName = name
 
-	value, _, submitted := b.ctx.TextInputBareAt("hud_chat_input",
+	msg, _, msgSubmit := b.ctx.TextInputBareAt("hud_chat_input",
 		msgX, y+3, msgW, chatInputH-6, 1, b.chatInput)
-	b.chatInput = value
+	b.chatInput = msg
 
-	if submitted {
-		b.chatPending = strings.TrimSpace(b.chatInput)
+	// A hairline between them, so it reads as two boxes rather than one long
+	// one with a gap in the text.
+	r.DrawRect(x+nameW, y+4, 1, chatInputH-8, chatBorder)
+
+	// The fields are drawn bare, on a background strip that already looks like
+	// a box, so an outline is the only thing that says where the typing goes.
+	b.outlineIfFocused("hud_chat_name", x+chatPadding-2, y+2, nameW-chatPadding+2, chatInputH-4)
+	b.outlineIfFocused("hud_chat_input", msgX-2, y+2, msgW+4, chatInputH-4)
+
+	// Enter sends from either field: with the caret in the name box there is
+	// nothing else Enter could sensibly mean.
+	if !nameSubmit && !msgSubmit {
+		return
+	}
+
+	if text := strings.TrimSpace(b.chatInput); text != "" {
+		b.chatPending = text
+		b.chatPendingTo = strings.TrimSpace(b.chatName)
 		b.chatInput = ""
 		// Back to following the newest line: you just added one.
 		b.chatPinned = true
 	}
 }
 
-// TakeChatMessage returns a line the player has entered, and clears it.
+// TakeChatMessage returns a line the player has entered, and clears it. The
+// target is the whisper recipient, empty for public chat.
 //
-// The backend collects it and the game layer sends it: the UI has no client
-// to send with, and threading one in would put the network inside the widget.
-func (b *UI2DBackend) TakeChatMessage() string {
-	msg := b.chatPending
-	b.chatPending = ""
+// The interface has no client to send with, so the line is handed back to the
+// caller rather than sent from the widget.
+func (b *UI2DBackend) TakeChatMessage() (target, message string) {
+	target, message = b.chatPendingTo, b.chatPending
+	b.chatPendingTo, b.chatPending = "", ""
 
-	return msg
+	return target, message
+}
+
+// outlineIfFocused frames a field that has the keyboard, so it is obvious
+// which of the two the next keystroke lands in.
+func (b *UI2DBackend) outlineIfFocused(id string, x, y, w, h float32) {
+	if !b.ctx.Focused(id) {
+		return
+	}
+
+	r := b.ctx.Renderer()
+	r.DrawRect(x, y, w, 1, chatFocusBorder)
+	r.DrawRect(x, y+h-1, w, 1, chatFocusBorder)
+	r.DrawRect(x, y, 1, h, chatFocusBorder)
+	r.DrawRect(x+w-1, y, 1, h, chatFocusBorder)
+}
+
+// max32 is the float32 max the standard library only offers for float64.
+func max32(a, b float32) float32 {
+	if a > b {
+		return a
+	}
+
+	return b
 }

@@ -222,35 +222,76 @@ func (c *Context) PasswordInputBareAt(id string, x, y, w, h, scale float32, valu
 func (c *Context) textFieldAt(id string, x, y, w, h float32, value string, masked, chrome bool, scale float32) (string, bool, bool) {
 	rect := Rect{x, y, w, h}
 	hovered := rect.Contains(c.input.MouseX, c.input.MouseY)
-	focused := c.activeWidget == id
 	changed := false
 	submitted := false
 
-	if hovered && c.input.MouseLeftPressed {
+	// Claim a pending Tab before this call can hand one on, so a lone field
+	// does not tab to itself and a field never steals the focus it just gave
+	// away. Fields drawn in call order are the tab order; a Tab from the last
+	// one survives into the next frame and wraps onto the first.
+	if c.focusNext {
 		c.activeWidget = id
-		focused = true
-	} else if !hovered && c.input.MouseLeftPressed {
-		// Clicking outside an active text field releases focus.
-		if focused {
+		c.focusNext = false
+		c.selectAll = ""
+	}
+	focused := c.activeWidget == id
+
+	if c.input.MouseLeftPressed {
+		switch {
+		case hovered:
+			c.activeWidget = id
+			focused = true
+			// A double click selects the whole value, which is the only way
+			// to clear a field in one gesture without a caret to drag.
+			if c.DoubleClickedIn(id, rect) {
+				c.selectAll = id
+			} else {
+				c.selectAll = ""
+			}
+		case focused:
 			c.activeWidget = ""
 			focused = false
+			c.selectAll = ""
 		}
 	}
 
+	selected := focused && c.selectAll == id && value != ""
+
 	if focused {
 		if len(c.input.TextInput) > 0 {
+			if selected {
+				value = ""
+				selected = false
+				c.selectAll = ""
+			}
 			value += c.input.TextInput
 			changed = true
 		}
-		if c.input.KeyBackspacePressed && len(value) > 0 {
-			value = value[:len(value)-1]
-			changed = true
+		if c.input.KeyBackspacePressed || c.input.KeyDeletePressed {
+			switch {
+			case selected:
+				value = ""
+				selected = false
+				c.selectAll = ""
+				changed = true
+			case c.input.KeyBackspacePressed && value != "":
+				value = trimLastRune(value)
+				changed = true
+			}
 		}
 		if c.input.KeyEnterPressed {
 			submitted = true
 		}
 		if c.input.KeyEscapePressed {
 			c.activeWidget = ""
+			c.selectAll = ""
+		}
+		if c.input.KeyTabPressed {
+			c.activeWidget = ""
+			c.selectAll = ""
+			c.focusNext = true
+			focused = false
+			selected = false
 		}
 	}
 
@@ -260,11 +301,15 @@ func (c *Context) textFieldAt(id string, x, y, w, h float32, value string, maske
 
 	displayed := value
 	if masked {
-		displayed = ""
-		for range value {
-			displayed += "*"
-		}
+		displayed = maskRunes(value)
 	}
+
+	// There is no scissor in the renderer, so overflow is handled by drawing
+	// only the tail that fits: the caret sits at the end of the value, and
+	// keeping it visible is what matters while typing.
+	const pad = 4
+	inner := w - 2*pad
+	displayed = fitTextTail(c.renderer, displayed, scale, inner)
 
 	// Body text scaled down so glyphs sit comfortably inside the field —
 	// at scale=1.0 cap-height was visually too tall for a 22-28px input.
@@ -272,15 +317,55 @@ func (c *Context) textFieldAt(id string, x, y, w, h float32, value string, maske
 	// line-height that includes leading + descender padding.
 	ascent := c.renderer.FontAscent(scale)
 	textY := y + (h-ascent)/2
-	c.renderer.DrawText(x+4, textY, displayed, scale, ColorText)
+	textW, _ := c.renderer.MeasureText(displayed, scale)
 
-	if focused {
-		textW, _ := c.renderer.MeasureText(displayed, scale)
-		cursorX := x + 4 + textW
-		c.renderer.DrawRect(cursorX, y+4, 2, h-8, ColorText)
+	if selected {
+		c.renderer.DrawRect(x+pad, y+3, textW, h-6, ColorSelection)
+	}
+	c.renderer.DrawText(x+pad, textY, displayed, scale, ColorText)
+
+	if focused && !selected {
+		c.renderer.DrawRect(x+pad+textW, y+4, 2, h-8, ColorText)
 	}
 
 	return value, changed, submitted
+}
+
+// fitTextTail returns the longest suffix of s that measures within maxW, so a
+// value longer than its field scrolls instead of spilling past the edge.
+func fitTextTail(r *Renderer, s string, scale, maxW float32) string {
+	if s == "" || maxW <= 0 {
+		return s
+	}
+	if w, _ := r.MeasureText(s, scale); w <= maxW {
+		return s
+	}
+	runes := []rune(s)
+	for i := 1; i < len(runes); i++ {
+		tail := string(runes[i:])
+		if w, _ := r.MeasureText(tail, scale); w <= maxW {
+			return tail
+		}
+	}
+	return ""
+}
+
+// trimLastRune drops the final rune, not the final byte: names arrive as UTF-8
+// and a byte-wise backspace would leave a broken sequence behind.
+func trimLastRune(s string) string {
+	runes := []rune(s)
+	if len(runes) == 0 {
+		return s
+	}
+	return string(runes[:len(runes)-1])
+}
+
+func maskRunes(s string) string {
+	masked := make([]rune, 0, len(s))
+	for range s {
+		masked = append(masked, '*')
+	}
+	return string(masked)
 }
 
 // InvisibleButtonAt is a hit area with no drawing of its own, for regions whose

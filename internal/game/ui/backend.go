@@ -14,7 +14,7 @@ import (
 type UIBackend interface {
 	// TakeChatMessage returns a line the player has entered and clears it,
 	// so the game layer can send it — the interface has no client of its own.
-	TakeChatMessage() string
+	TakeChatMessage() (target, message string)
 
 	// Begin starts a new UI frame.
 	Begin()
