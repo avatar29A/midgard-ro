@@ -14,7 +14,11 @@ type PathFunc func(fromX, fromY, toX, toY int) [][2]int
 // unitType maps a unit's wire objecttype onto the entity type the UI and the
 // renderer work in. Anything not drawn as a character or a monster is treated
 // as an NPC, which is the harmless default: it gets a name and no HP bar.
-func unitType(kind packets.EntityKind) entity.Type {
+//
+// Warps are the exception the server does not make for us: it sends them as
+// NPCs, and only the job says otherwise. Both warp classes come out as
+// TypeWarp; which of them is drawn is unitIsDrawable's decision.
+func unitType(kind packets.EntityKind, job int16) entity.Type {
 	switch kind {
 	case packets.EntityPlayer, packets.EntityDisguised:
 		return entity.TypePlayer
@@ -23,6 +27,9 @@ func unitType(kind packets.EntityKind) entity.Type {
 	case packets.EntityItem:
 		return entity.TypeItem
 	default:
+		if job == packets.JobWarpPortal || job == packets.JobHiddenWarp {
+			return entity.TypeWarp
+		}
 		return entity.TypeNPC
 	}
 }
@@ -45,12 +52,12 @@ func upsertUnit(m *entity.Manager, u *packets.Entity, path PathFunc) *entity.Ent
 
 	e := m.Get(u.AID)
 	if e == nil {
-		e = entity.NewEntity(u.AID, unitType(u.Kind))
+		e = entity.NewEntity(u.AID, unitType(u.Kind, u.Job))
 		m.Add(e)
 	}
 	e.CancelLeaving()
 
-	e.Type = unitType(u.Kind)
+	e.Type = unitType(u.Kind, u.Job)
 	e.Name = u.Name
 	e.Job = int(u.Job)
 	e.SpriteID = int(u.Job)
@@ -147,7 +154,7 @@ func unitSpec(e *entity.Entity) charsprite.Spec {
 	switch e.Type {
 	case entity.TypeMonster:
 		return charsprite.Spec{Kind: charsprite.KindMonster, Job: e.Job}
-	case entity.TypeNPC:
+	case entity.TypeNPC, entity.TypeWarp:
 		return charsprite.Spec{Kind: charsprite.KindNPC, Job: e.Job}
 	default:
 		return charsprite.Spec{
@@ -168,6 +175,10 @@ func unitSpec(e *entity.Entity) charsprite.Spec {
 // Dropped items are excluded outright. They are named by a different table
 // under a different directory, so a job id that happens to match a monster
 // would draw the wrong thing rather than nothing.
+//
+// A warp is drawn as the portal effect, never as a sprite — the table names
+// one for class 45, and the original ignores it. The hidden class is not
+// drawn at all.
 func unitIsDrawable(e *entity.Entity) bool {
 	if e == nil || e.Body == nil {
 		return false
@@ -178,6 +189,8 @@ func unitIsDrawable(e *entity.Entity) bool {
 	case entity.TypeMonster, entity.TypeNPC:
 		_, known := charsprite.SpriteName(e.Job)
 		return known
+	case entity.TypeWarp:
+		return e.Job == packets.JobWarpPortal
 	default:
 		return false
 	}

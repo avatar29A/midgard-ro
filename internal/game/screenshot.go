@@ -30,7 +30,7 @@ type screenshotJob struct {
 	dir, name     string
 }
 
-// screenshotWriter serialises the encoding and writing of captured frames.
+// screenshotWriter serializes the encoding and writing of captured frames.
 type screenshotWriter struct {
 	jobs chan screenshotJob
 	wg   sync.WaitGroup

@@ -4,6 +4,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/Faultbox/midgard-ro/internal/engine/picking"
+	"github.com/Faultbox/midgard-ro/internal/engine/scene"
 	"github.com/Faultbox/midgard-ro/internal/game/entity"
 	"github.com/Faultbox/midgard-ro/internal/logger"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
@@ -134,7 +135,10 @@ func (s *InGameState) isClickable(e *entity.Entity) bool {
 func (s *InGameState) unitBox(e *entity.Entity) picking.AABB {
 	halfWidth, height := fallbackUnitHalfWidth, fallbackUnitHeight
 
-	if s.playerRender != nil {
+	if e.Type == entity.TypeWarp {
+		// The portal's own size; there is no sprite to measure.
+		halfWidth, height = scene.PortalRadius, scene.PortalHeight
+	} else if s.playerRender != nil {
 		if w, h := s.playerRender.UnitQuadSize(unitSpec(e)); w > 0 && h > 0 {
 			halfWidth, height = w/2, h
 		}

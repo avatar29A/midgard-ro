@@ -480,7 +480,7 @@ here on is taken with that in place.
   map.load.phase… → map.ready → 0x09FF…`; `--walk-to 156,22` from `156,30`
   does it by walking. `Entities:` on F3 drops to 0 and grows again.
 
-### Step 4 — Warps look like warps
+### Step 4 — Warps look like warps ✅
 - **Changes:** `entities.go` (`unitType`: 45 → `TypeWarp`, 139 → hidden), `internal/engine/scene/portal.go` (new: the 20-segment cylinder, `ring_blue.tga`, spin at `tick/4`°, alpha blend, no depth write), `ingame.go` (`renderUnits` → portal for `TypeWarp`, drawn through `RenderWithThirdPersonExtras`), `charsprite` (never look 45/139 up)
 - **Done when:** every door and gate in Prontera shows the blue column; no
   `1_ETC_01` sprite, no name, no shadow for warps; hidden warps draw nothing but
@@ -489,6 +489,20 @@ here on is taken with that in place.
 - **Proved by:** screenshot at `prontera 136,219` (the capture above, redone);
   `render` trace shows no `render.sheet` for job 45; `entities_test.go`.
 - **Reference:** ref-01 ①, ref-04 ③, grf-ring-blue ⑥, current-prontera-door ⑫
+
+![step4-portal — our client at prontera 136,219: the portal in the doorway of prt04, tinted to the original's blue](./step4-portal.jpg)
+
+Done. `internal/engine/scene/portal.go` is roBrowser's cylinder — twenty
+segments, the top ring half a segment ahead of the bottom so the spikes lean,
+`ring_blue.tga` wrapped once around, a quarter degree per millisecond of spin
+— plus a soft procedural disc on the ground, which the real-client frames
+show and the texture alone would not give. Added light over a sunlit doorway
+came out white in the first capture, so the tube is tinted `(0.55, 0.8, 1.0)`
+at nine tenths. Class 45 and 139 are `TypeWarp`; only 45 is drawn, never as
+a sprite (`render.sheet` lists no job 45), with no name and no shadow. The
+renderer belongs to the state, like the player's, so a warp costs no
+reload. Proportions are by eye against ref-04 — the thing to adjust in
+review, if anything.
 
 ### Step 5 — The door cursor, and clicking a portal walks onto it
 - **Changes:** `game.go` (`updateCursor`: `TypeWarp` → `cursor.StateWarp`), `npcpick.go` (`isClickable` excludes warps; `ClickWorld` walks to a warp's tile)
@@ -597,6 +611,9 @@ None open.
 
 ## Revision log
 
+- 2026-08-27 — **Step 4 done.** The portal effect, rebuilt from roBrowser's
+  cylinder and the archive's `ring_blue.tga`; warps typed as `TypeWarp`,
+  hidden ones (139) not drawn.
 - 2026-08-27 — **Step 2 done.** The original's loading screen; screenshot
   encoding moved off the render thread after it turned a 1.3 s load into a
   7.3 s measurement. The `0x01D7` framing warning traced to a pre-existing

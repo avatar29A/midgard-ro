@@ -58,6 +58,11 @@ type InGameState struct {
 	gat          *formats.GAT // Walkability + minimap shape
 	playerRender *playerrender.Renderer
 
+	// portals draws the warp portal effect for every class-45 unit. Like
+	// playerRender it outlives the map, so a warp costs no reload.
+	portals      *scene.PortalRenderer
+	effectTimeMs float32
+
 	// Entities
 	entityManager *entity.Manager
 	player        *entity.Character
@@ -183,6 +188,8 @@ func (s *InGameState) Enter() error {
 		s.loadPlayerSprites()
 	}
 
+	s.loadPortalRenderer()
+
 	s.stats = PlayerStatsFromChar(s.CharInfo())
 	s.traceInitialStats()
 
@@ -224,6 +231,28 @@ func (s *InGameState) loadPlayerSprites() {
 		zap.String("sprite", s.playerRender.SpritePath()),
 		zap.Int("idleFrames", s.playerRender.FrameCount(entity.ActionIdle, entity.DirS)),
 		zap.Int("walkFrames", s.playerRender.FrameCount(entity.ActionWalk, entity.DirS)))
+}
+
+// loadPortalRenderer builds the warp portal effect. Without its texture no
+// portal is drawn and the log says which file was wanted; the warps are
+// still there to walk into.
+func (s *InGameState) loadPortalRenderer() {
+	pr, err := scene.NewPortalRenderer()
+	if err != nil {
+		logger.Warn("no warp portal effect", zap.Error(err))
+		return
+	}
+	if s.manager.TexLoader == nil {
+		logger.Warn("no asset loader; warp portals will not be drawn")
+		pr.Destroy()
+		return
+	}
+	if err := pr.LoadTextures(s.manager.TexLoader); err != nil {
+		logger.Warn("warp portals will not be drawn", zap.Error(err))
+		pr.Destroy()
+		return
+	}
+	s.portals = pr
 }
 
 // beginMapLoad starts loading a map and drops the one we were on.
@@ -489,6 +518,10 @@ func (s *InGameState) Exit() error {
 		s.playerRender.Destroy()
 		s.playerRender = nil
 	}
+	if s.portals != nil {
+		s.portals.Destroy()
+		s.portals = nil
+	}
 	if s.scene != nil {
 		s.scene.Destroy()
 		s.scene = nil
@@ -570,6 +603,7 @@ func (s *InGameState) Update(dt float64) error {
 	// Update all entities
 	s.entityManager.Update(dt)
 	updateUnits(s.entityManager, deltaMs, s.unitAnim)
+	s.effectTimeMs += deltaMs
 
 	return nil
 }
@@ -579,7 +613,9 @@ func (s *InGameState) Update(dt float64) error {
 // rather than the player's fixed one. Zero until the sheet for that appearance
 // has been baked, which parks it on frame 0.
 func (s *InGameState) unitAnim(e *entity.Entity, action, direction int) (int, float32) {
-	if s.playerRender == nil || !unitIsDrawable(e) {
+	// A warp is an effect, not a sheet: asking would bake the sprite the
+	// table names for class 45, which nobody wants to see.
+	if s.playerRender == nil || e.Type == entity.TypeWarp || !unitIsDrawable(e) {
 		return 0, 0
 	}
 	spec := unitSpec(e)
@@ -626,6 +662,13 @@ func (s *InGameState) renderUnits(viewProj math.Mat4) {
 			continue
 		}
 		drawn++
+		if e.Type == entity.TypeWarp {
+			// The portal, not a sprite: no name, no shadow, no sheet.
+			if s.portals != nil {
+				s.portals.Render(viewProj, e.Body.RenderX, e.Body.RenderY, e.Body.RenderZ, s.effectTimeMs, e.Alpha())
+			}
+			continue
+		}
 		s.playerRender.RenderUnit(viewProj, e.Body, s.camera.PosX, s.camera.PosZ, load, unitSpec(e), e.Alpha())
 	}
 

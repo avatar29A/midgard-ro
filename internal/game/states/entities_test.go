@@ -238,7 +238,7 @@ func TestUnitTypeMapping(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		if got := unitType(tt.kind); got != tt.want {
+		if got := unitType(tt.kind, 0); got != tt.want {
 			t.Errorf("unitType(0x%X) = %d, want %d", tt.kind, got, tt.want)
 		}
 	}
@@ -464,6 +464,7 @@ func TestDrawableNeedsANamedSprite(t *testing.T) {
 		{"disguised player", packets.EntityDisguised, 0, true},
 		{"poring", packets.EntityMob, 1002, true},
 		{"warp portal", packets.EntityNPC, 45, true},
+		{"hidden warp", packets.EntityNPC, 139, false},
 		{"monster with no sprite name", packets.EntityMob, 30000, false},
 		{"npc with no sprite name", packets.EntityNPC, 30000, false},
 		{"dropped item", packets.EntityItem, 1002, false},
@@ -513,5 +514,39 @@ func TestUnitSpecPicksTheSpriteFamily(t *testing.T) {
 				t.Errorf("spec kind = %d, want %d", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestWarpsAreTheirOwnType pins the one distinction the server does not make
+// for us: a class-45 or class-139 NPC is a warp, everything else an NPC.
+func TestWarpsAreTheirOwnType(t *testing.T) {
+	tests := []struct {
+		name string
+		kind packets.EntityKind
+		job  int16
+		want entity.Type
+	}{
+		{"portal", packets.EntityNPC, packets.JobWarpPortal, entity.TypeWarp},
+		{"hidden warp", packets.EntityNPC, packets.JobHiddenWarp, entity.TypeWarp},
+		{"kafra", packets.EntityNPC, 117, entity.TypeNPC},
+		{"a player with job 45 is still a player", packets.EntityPlayer, packets.JobWarpPortal, entity.TypePlayer},
+		{"a mob is still a mob", packets.EntityMob, packets.JobWarpPortal, entity.TypeMonster},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := unitType(tt.kind, tt.job); got != tt.want {
+				t.Fatalf("unitType(0x%X, %d) = %d, want %d", tt.kind, tt.job, got, tt.want)
+			}
+		})
+	}
+
+	// And through upsert, so the type on the entity is what the renderer sees.
+	m := entity.NewManager()
+	e := upsertUnit(m, &packets.Entity{Kind: packets.EntityNPC, AID: 110000001, Job: packets.JobWarpPortal, Name: "prt05"}, nil)
+	if e.Type != entity.TypeWarp {
+		t.Fatalf("upserted warp has type %d", e.Type)
+	}
+	if !unitIsDrawable(e) {
+		t.Fatal("a portal is drawn — as the effect")
 	}
 }
