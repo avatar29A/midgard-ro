@@ -80,6 +80,20 @@ per look. `PORTAL_DUMP=<file> go test ./internal/engine/scene/ -run
 TestDumpPortalTexture` writes the generated texture composited over a pale and
 a dark floor, which is where the pattern was actually settled.
 
+**Clicking a warp was a dead click, everywhere the warp sits in scenery.**
+The cursor turned into a door and nothing happened. The trace showed the
+click registering and the walk going out; what it did not show was a reply,
+because the destination was `prtf004` at `prt_fild08 170,378` — inside the
+arch of Prontera's wall, where the GAT says nobody can stand. An unpathable
+walk is exactly what rAthena answers with silence, which the movement work in
+PR #78 had already learned once. The trigger box is the way out: `xs,ys`
+covers the cells around a warp, so standing beside one is standing in it.
+Clicks now aim at the nearest walkable cell instead of the warp's own.
+
+Worth remembering as a shape of bug: **the client asked for something
+impossible and the server said nothing**, so nothing in the log looked wrong.
+Checking the GAT against the destination is what found it in a minute.
+
 ## What no reference client had
 
 Nothing in the archive describes the warp portal: the original draws

@@ -1434,10 +1434,19 @@ func (s *InGameState) ClickWorld(mouseX, mouseY, viewportW, viewportH float32) {
 	if e := s.PickEntity(mouseX, mouseY, viewportW, viewportH); e != nil {
 		if e.Type == entity.TypeWarp {
 			cellX, cellY := e.Body.CurrentCell()
+			stepX, stepY, reachable := s.WarpApproach(cellX, cellY)
 			trace.Emit(trace.Map, "warp-click",
 				zap.Uint32("aid", e.ID), zap.String("name", e.Name),
-				zap.Int("cellX", cellX), zap.Int("cellY", cellY))
-			if err := s.RequestMove(cellX, cellY); err != nil {
+				zap.Int("cellX", cellX), zap.Int("cellY", cellY),
+				zap.Int("stepX", stepX), zap.Int("stepY", stepY),
+				zap.Bool("reachable", reachable))
+			if !reachable {
+				logger.Warn("no way to stand in this warp",
+					zap.String("name", e.Name),
+					zap.Int("cellX", cellX), zap.Int("cellY", cellY))
+				return
+			}
+			if err := s.RequestMove(stepX, stepY); err != nil {
 				logger.Warn("walk to warp failed", zap.Error(err))
 			}
 			return
