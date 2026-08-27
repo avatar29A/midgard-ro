@@ -102,6 +102,10 @@ type LoadingUIState struct {
 	ErrorMessage  string
 	Progress      float32
 	Phase         string
+
+	// ImageIndex is which of the archive's loading screens to show, 1-based;
+	// zero falls back to the title backdrop.
+	ImageIndex int
 }
 
 // InGameUIState contains the data needed to render the in-game HUD.
@@ -142,6 +146,17 @@ type InGameUIState struct {
 	PlayerJobExp, PlayerNextJobExp   int64
 	PlayerZeny                       int64
 	PlayerWeight, PlayerMaxWeight    int
+
+	// The last map load: how long, and where the time went (debug).
+	MapLoadMs     float64
+	MapLoadPhases string
+
+	// The map's camera rules and water, as applied (debug).
+	Indoor           bool
+	CameraYawLocked  bool
+	CameraZoomLocked bool
+	CameraArc        bool
+	WaterCells       int
 
 	// Entity counts
 	EntityCount  int

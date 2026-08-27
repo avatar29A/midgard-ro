@@ -25,6 +25,7 @@ type UI2DBackend struct {
 
 	// Login screen textures (lazy-loaded)
 	loginBgTex    *TextureInfo
+	loadingTex    map[int]*TextureInfo // the loading screens, by 1-based index; nil for a missing one
 	loginSkin     *loginWindowSkin
 	loginTexTried bool // avoid repeated load attempts
 
@@ -869,24 +870,6 @@ func (b *UI2DBackend) RenderCharSelectUI(state CharSelectUIState, width, height 
 	}
 }
 
-// RenderLoadingUI renders the loading screen the same way the original
-// RO client does: just the title backdrop fills the screen and a single
-// short progress bar sits centered on the X-axis near the bottom — no
-// dialog chrome, no labels, no percentage caption.
-func (b *UI2DBackend) RenderLoadingUI(state LoadingUIState, width, height float32) {
-	b.loadLoginTextures()
-	if b.loginBgTex != nil {
-		b.ctx.Renderer().DrawImage(b.loginBgTex.ID, 0, 0, width, height, ui2d.ColorWhite)
-	}
-
-	barW := float32(280)
-	barH := float32(16)
-	barX := (width - barW) / 2
-	barY := height - 60
-
-	b.ctx.ProgressBarAt(barX, barY, barW, barH, state.Progress, fmt.Sprintf("%.0f%%", state.Progress*100))
-}
-
 // RenderInGameUI renders the in-game HUD.
 func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, height float32) {
 	// Draw scene texture as background
@@ -903,9 +886,15 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 		// Tall enough for the stat rows: the height is not derived from the
 		// content, so text past it draws outside the frame rather than
 		// growing it.
-		if b.ctx.BeginWindow("debug", 10, 10, 420, 272, "Debug") {
+		if b.ctx.BeginWindow("debug", 10, 10, 520, 320, "Debug") {
 			b.ctx.Row(16)
 			b.ctx.Label(fmt.Sprintf("Map: %s", state.MapName))
+			b.ctx.Row(16)
+			b.ctx.Label(fmt.Sprintf("Load: %.0f ms", state.MapLoadMs))
+			b.ctx.Row(16)
+			b.ctx.Label(state.MapLoadPhases)
+			b.ctx.Row(16)
+			b.ctx.Label(fmt.Sprintf("Indoor: %s   Water: %d cells", describeCameraRules(state), state.WaterCells))
 			b.ctx.Row(16)
 			b.ctx.Label(fmt.Sprintf("Tile: (%d, %d)", state.PlayerTileX, state.PlayerTileY))
 			b.ctx.Row(16)
@@ -971,6 +960,28 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 // A stuck dialog is the failure this is for: the phase says what the client
 // thinks the server last asked for, so a screenshot is enough to tell a packet
 // we ignored from a window we failed to draw.
+// describeCameraRules is the map's camera rules in a word or two.
+func describeCameraRules(state InGameUIState) string {
+	s := "no"
+	if state.Indoor {
+		s = "yes"
+	}
+	var rules []string
+	if state.CameraZoomLocked {
+		rules = append(rules, "zoom locked")
+	}
+	switch {
+	case state.CameraYawLocked:
+		rules = append(rules, "yaw locked")
+	case state.CameraArc:
+		rules = append(rules, "arc")
+	}
+	if len(rules) > 0 {
+		s += " (" + strings.Join(rules, ", ") + ")"
+	}
+	return s
+}
+
 func describeDialog(state InGameUIState) string {
 	if state.DialogNPCID == 0 {
 		return state.DialogPhase

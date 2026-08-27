@@ -3,6 +3,7 @@ package states
 
 import (
 	"fmt"
+	"math/rand/v2"
 	"strings"
 	"time"
 
@@ -41,6 +42,10 @@ type LoadingState struct {
 
 	// Timing
 	startTime time.Time
+
+	// Which loading screen this entry shows; the map load that follows keeps
+	// it, so the player sees one picture, not two.
+	loadingImage int
 }
 
 // NewLoadingState creates a new loading state.
@@ -51,6 +56,7 @@ func NewLoadingState(cfg LoadingStateConfig, client *network.Client, manager *Ma
 		manager:      manager,
 		StatusMsg:    "Loading map...",
 		LoadingPhase: "init",
+		loadingImage: rand.IntN(LoadingImages) + 1,
 	}
 }
 
@@ -91,16 +97,9 @@ func (s *LoadingState) Update(dt float64) error {
 		s.ErrorMsg = fmt.Sprintf("Network error: %v", err)
 	}
 
-	// Simulate loading progress for visual feedback
-	if !s.IsComplete && s.Progress < 0.95 {
-		s.Progress += float32(dt) * 0.5 // Progress over ~2 seconds
-		if s.Progress > 0.95 {
-			s.Progress = 0.95
-		}
-	}
-
+	// This state only waits for the server to accept us; the bar does not
+	// move until InGameState starts the real load.
 	if s.IsComplete {
-		s.Progress = 1.0
 		s.transitionToInGame()
 	}
 
@@ -176,29 +175,28 @@ func (s *LoadingState) handleMapAccept(data []byte) error {
 	s.LoadingPhase = "spawning"
 	s.MapLoaded = true
 
-	// Send loading complete notification
-	s.sendLoadingComplete()
-
+	// CZ_NOTIFY_ACTORINIT is not sent here: the map is not loaded yet, and
+	// the server answers it with everything in view. InGameState sends it
+	// once there is a map to put those units on.
 	s.IsComplete = true
 	return nil
 }
 
-func (s *LoadingState) sendLoadingComplete() {
-	pkt := &packets.LoadingComplete{
-		PacketID: packets.CZ_NOTIFY_ACTORINIT,
-	}
-	_ = s.client.Send(pkt.Encode())
-}
-
 func (s *LoadingState) transitionToInGame() {
 	s.manager.Change(NewInGameState(InGameStateConfig{
-		MapName:   s.config.MapName,
-		SpawnX:    s.config.SpawnX,
-		SpawnY:    s.config.SpawnY,
-		SpawnDir:  s.config.SpawnDir,
-		CharID:    s.config.CharID,
-		TexLoader: s.config.TexLoader,
+		MapName:      s.config.MapName,
+		SpawnX:       s.config.SpawnX,
+		SpawnY:       s.config.SpawnY,
+		SpawnDir:     s.config.SpawnDir,
+		CharID:       s.config.CharID,
+		TexLoader:    s.config.TexLoader,
+		LoadingImage: s.loadingImage,
 	}, s.client, s.manager))
+}
+
+// GetLoadingImage is which loading screen to show, 1-based.
+func (s *LoadingState) GetLoadingImage() int {
+	return s.loadingImage
 }
 
 func (s *LoadingState) getDisplayMapName() string {

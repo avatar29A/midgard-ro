@@ -42,6 +42,10 @@ const (
 	// of ids; this one reads as the conversation, which is what makes a
 	// dialog that stopped halfway legible.
 	NPC = "npc"
+	// Map covers a map change from the packet that orders it to the one that
+	// says we are ready: the load's phases and their timings, what was kept
+	// and dropped on the way, and the camera rules the new map brought.
+	Map = "map"
 )
 
 // All is the channel spec that turns everything on.
