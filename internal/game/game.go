@@ -21,6 +21,7 @@ import (
 	"github.com/Faultbox/midgard-ro/internal/assets"
 	"github.com/Faultbox/midgard-ro/internal/config"
 	"github.com/Faultbox/midgard-ro/internal/engine/audio"
+	"github.com/Faultbox/midgard-ro/internal/engine/cursor"
 	"github.com/Faultbox/midgard-ro/internal/game/states"
 	"github.com/Faultbox/midgard-ro/internal/game/ui"
 	"github.com/Faultbox/midgard-ro/internal/logger"
@@ -683,6 +684,7 @@ func (g *Game) renderUI() {
 		playerTileX, playerTileY = state.GetPlayerTilePosition()
 
 		stats := state.Stats()
+		dialog := state.Dialog()
 
 		uiState := ui.InGameUIState{
 			MapName:         state.GetMapName(),
@@ -699,14 +701,33 @@ func (g *Game) renderUI() {
 			ShowDebugInfo:   g.showDebug,
 			ToggleBasicInfo: g.toggleBasicInfo,
 			FPS:             g.fps,
-			PlayerName:      ui.GetCharName(state.CharInfo()),
-			PlayerClass:     stats.Class,
-			PlayerHP:        stats.HP,
-			PlayerMaxHP:     stats.MaxHP,
-			PlayerSP:        stats.SP,
-			PlayerMaxSP:     stats.MaxSP,
-			PlayerLevel:     stats.BaseLevel,
-			PlayerJobLevel:  stats.JobLevel,
+			DialogMessage:   dialog.Message,
+			DialogShowNext:  dialog.Phase == states.DialogWaitingNext,
+			DialogShowClose: dialog.Phase == states.DialogWaitingClose,
+			OnDialogNext: func() {
+				g.pendingAction = state.AdvanceDialog
+			},
+			OnDialogClose: func() {
+				g.pendingAction = state.EndDialog
+			},
+			DialogPhase:   dialog.Phase.String(),
+			DialogNPCID:   dialog.NPCID,
+			DialogNPCName: dialog.Name,
+			DialogMenu:    dialog.Menu,
+			OnDialogChoose: func(choice int) {
+				g.pendingAction = func() { state.ChooseMenuItem(choice) }
+			},
+			OnDialogCancel: func() {
+				g.pendingAction = state.CancelMenuChoice
+			},
+			PlayerName:     ui.GetCharName(state.CharInfo()),
+			PlayerClass:    stats.Class,
+			PlayerHP:       stats.HP,
+			PlayerMaxHP:    stats.MaxHP,
+			PlayerSP:       stats.SP,
+			PlayerMaxSP:    stats.MaxSP,
+			PlayerLevel:    stats.BaseLevel,
+			PlayerJobLevel: stats.JobLevel,
 
 			PlayerBaseExp:     stats.BaseExp,
 			PlayerNextBaseExp: stats.NextBaseExp,
@@ -843,8 +864,12 @@ func (g *Game) handleInGameInput(state *states.InGameState) {
 
 	// Scroll wheel for zoom - use small multiplier for smooth zooming
 	// Each scroll tick changes distance by ~20% (sensitivity 0.1 * delta 2 = 20%)
+	//
+	// The interface gets the wheel first. A dialog long enough to scroll is
+	// exactly when the player reaches for it, and zooming the camera instead
+	// makes the scrollbar look broken.
 	scroll := io.MouseWheel()
-	if scroll != 0 {
+	if scroll != 0 && !io.WantCaptureMouse() && !g.uiBackend.MouseCaptured() {
 		camera.HandleZoom(scroll * 2)
 	}
 
@@ -902,6 +927,11 @@ func (g *Game) handleInGameInput(state *states.InGameState) {
 		}
 	}
 
+	// The pointer changes over an NPC, the way the original tells you a thing
+	// can be talked to before you click it. Runs every frame, so it uses the
+	// pick that does not trace.
+	g.updateCursor(state, io, mouseX, mouseY)
+
 	// Left click for click-to-move. Skip if any imgui window (HUD, minimap,
 	// chat, etc) is consuming the click; otherwise ray-cast to ground plane
 	// and dispatch a server move request.
@@ -919,13 +949,7 @@ func (g *Game) handleInGameInput(state *states.InGameState) {
 			zap.Float32("mouseX", mouseX), zap.Float32("mouseY", mouseY),
 			zap.Float32("viewportW", viewportW), zap.Float32("viewportH", viewportH))
 
-		if tileX, tileY, ok := state.ScreenToTile(mouseX, mouseY, viewportW, viewportH); ok {
-			if err := state.RequestMove(tileX, tileY); err != nil {
-				logger.Warn("click-to-move RequestMove failed", zap.Error(err))
-			}
-		} else {
-			trace.Emit(trace.Pick, "miss")
-		}
+		state.ClickWorld(mouseX, mouseY, viewportW, viewportH)
 	}
 }
 
@@ -1089,4 +1113,29 @@ func parseHostPort(addr string) (string, int) {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// updateCursor picks the cursor for whatever the pointer is over.
+//
+// The original signals a talkable NPC before you click it, which is the only
+// way to tell scenery from something with a script behind it. Warps come out
+// of this as talkable too — they are NPC entities like any other, and nothing
+// in what the server sends distinguishes them — so they get the same cursor
+// until something does.
+func (g *Game) updateCursor(state *states.InGameState, io *imgui.IO, mouseX, mouseY float32) {
+	if g.uiBackend == nil {
+		return
+	}
+
+	want := cursor.StateDefault
+
+	// Over the interface the pointer belongs to the interface.
+	if !io.WantCaptureMouse() && !g.uiBackend.MouseCaptured() {
+		viewportW, viewportH := g.uiBackend.GetScreenSize()
+		if state.HoverEntity(mouseX, mouseY, viewportW, viewportH) != nil {
+			want = cursor.StateTalk
+		}
+	}
+
+	g.uiBackend.SetCursorState(want)
 }

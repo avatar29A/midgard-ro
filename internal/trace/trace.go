@@ -37,6 +37,11 @@ const (
 	// Status covers the parameter updates the server pushes — HP, SP, levels,
 	// experience, weight and Zeny — including the ids we do not map yet.
 	Status = "status"
+	// NPC covers a conversation from the click that starts it to the close
+	// that ends it. The net channel shows the same packets, but as a stream
+	// of ids; this one reads as the conversation, which is what makes a
+	// dialog that stopped halfway legible.
+	NPC = "npc"
 )
 
 // All is the channel spec that turns everything on.

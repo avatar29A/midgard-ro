@@ -2,6 +2,7 @@
 package ui
 
 import (
+	"github.com/Faultbox/midgard-ro/internal/engine/cursor"
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
 )
@@ -25,6 +26,9 @@ type UIBackend interface {
 	// MouseCaptured reports whether the pointer is over the interface, so a
 	// click on a panel is not also a click on the world behind it.
 	MouseCaptured() bool
+
+	// SetCursorState switches which of the original's cursors is drawn.
+	SetCursorState(state cursor.State)
 
 	// Input returns the input state for the current frame.
 	// Note: This returns the ui2d InputState; ImGui backends should provide
@@ -163,6 +167,29 @@ type InGameUIState struct {
 	SceneTexture  uint32
 	StatusMessage string
 	ErrorMessage  string
+
+	// What the NPC said, as the script wrote it — color codes and all.
+	DialogMessage string
+
+	// DialogShowNext and DialogShowClose are which button the server has
+	// asked for. Never both.
+	DialogShowNext  bool
+	DialogShowClose bool
+
+	// OnDialogNext and OnDialogClose are what the buttons do.
+	OnDialogNext  func()
+	OnDialogClose func()
+
+	// The conversation in progress, for the debug overlay.
+	DialogPhase   string
+	DialogNPCID   uint32
+	DialogNPCName string
+
+	// DialogMenu is the choices on offer, and the callbacks answer them.
+	// OnDialogChoose takes a one-based index, which is what the wire wants.
+	DialogMenu     []string
+	OnDialogChoose func(choice int)
+	OnDialogCancel func()
 
 	// ToggleBasicInfo folds the Basic Info panel to its reduced form, or back.
 	// It is an event rather than a setting — set for the one frame the key was
