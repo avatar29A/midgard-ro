@@ -14,8 +14,11 @@ import (
 const (
 	chatWidth   float32 = 595
 	chatHeight  float32 = 120
-	chatMargin  float32 = 10
 	chatPadding float32 = 6
+
+	// chatInputScale shrinks the text in the input bar. Its boxes are 16px
+	// tall in an image we do not control, and the body's size overflows them.
+	chatInputScale float32 = 0.8
 
 	// chatLineH is the height of one wrapped line.
 	chatLineH float32 = 14
@@ -56,11 +59,6 @@ const (
 	// chatStepLines is how much one +/- press changes the box, in lines. The
 	// original steps a ladder of 3-line stops rather than a free height.
 	chatStepLines = 3
-
-	// chatStatusBarH is the strip along the bottom of the screen the chat has
-	// to sit above. Kept here rather than shared, so the two do not have to
-	// know about each other beyond this number.
-	chatStatusBarH float32 = 25
 
 	// chatGrip is the corner you drag to resize, and how big that corner is.
 	chatGrip float32 = 14
@@ -152,21 +150,11 @@ func (b *UI2DBackend) wrapChat(lines []states.ChatLine, maxWidth float32) [][]Te
 		runs := chatRuns(line)
 
 		// Color codes inside the text itself win over the line's own color,
-		// the same way they do in NPC dialog.
+		// the same way they do in NPC dialog. Text with no codes keeps the
+		// color the line would have had.
 		var expanded []TextRun
 		for _, run := range runs {
-			parsed := ParseNPCText(run.Text)
-			if len(parsed) == 1 && parsed[0].Color == (ui2d.Color{}) {
-				expanded = append(expanded, run)
-
-				continue
-			}
-			for _, p := range parsed {
-				if p.Color == (ui2d.Color{}) {
-					p.Color = run.Color
-				}
-				expanded = append(expanded, p)
-			}
+			expanded = append(expanded, ParseNPCTextColored(run.Text, run.Color)...)
 		}
 
 		wrapped = append(wrapped, WrapNPCText(expanded, maxWidth, measure)...)
@@ -182,8 +170,10 @@ func (b *UI2DBackend) wrapChat(lines []states.ChatLine, maxWidth float32) [][]Te
 // chat will appear.
 func (b *UI2DBackend) drawChat(state InGameUIState, screenH float32) {
 	if !b.chatPlaced {
-		b.chatX = chatMargin
-		b.chatY = screenH - chatStatusBarH - chatMargin - chatInputH - chatHeight - chatTabH
+		// Flush into the bottom-left corner. Nothing sits below it now that
+		// the debug bar is gone, so a margin only left a gap.
+		b.chatX = 0
+		b.chatY = screenH - chatInputH - chatHeight - chatTabH
 		b.chatW, b.chatH = chatWidth, chatHeight
 		b.chatPlaced = true
 	}
@@ -259,7 +249,7 @@ func (b *UI2DBackend) clampChatToScreen(screenH float32) {
 	b.chatH = clampF(b.chatH, chatMinH, chatMaxH)
 
 	// Never off the bottom or the sides of the screen.
-	maxTop := screenH - chatStatusBarH - chatInputH - b.chatH - chatTabH
+	maxTop := screenH - chatInputH - b.chatH - chatTabH
 	b.chatY = clampF(b.chatY, 0, maxTop)
 	b.chatX = clampF(b.chatX, 0, 4000)
 }
@@ -479,11 +469,11 @@ func (b *UI2DBackend) drawChatInput(x, y, w float32) {
 	msgBox := chatInputBox(x, y, w, chatMsgBoxL, chatMsgBoxR)
 
 	name, _, nameSubmit := b.ctx.TextInputBareAt("hud_chat_name",
-		nameBox.X, nameBox.Y, nameBox.W, nameBox.H, 1, b.chatName)
+		nameBox.X, nameBox.Y, nameBox.W, nameBox.H, chatInputScale, b.chatName)
 	b.chatName = name
 
 	msg, _, msgSubmit := b.ctx.TextInputBareAt("hud_chat_input",
-		msgBox.X, msgBox.Y, msgBox.W, msgBox.H, 1, b.chatInput)
+		msgBox.X, msgBox.Y, msgBox.W, msgBox.H, chatInputScale, b.chatInput)
 	b.chatInput = msg
 
 	// The fields are drawn bare, into boxes the background already paints, so

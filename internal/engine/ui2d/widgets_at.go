@@ -319,13 +319,19 @@ func (c *Context) textFieldAt(id string, x, y, w, h float32, value string, maske
 	textY := y + (h-ascent)/2
 	textW, _ := c.renderer.MeasureText(displayed, scale)
 
+	// The caret and the selection follow the text, not the field: sized to
+	// the field they stay full height when the text is scaled down, which
+	// leaves a caret taller than the characters it sits among.
+	caretH := ascent + 2
+	caretY := y + (h-caretH)/2
+
 	if selected {
-		c.renderer.DrawRect(x+pad, y+3, textW, h-6, ColorSelection)
+		c.renderer.DrawRect(x+pad, caretY, textW, caretH, ColorSelection)
 	}
 	c.renderer.DrawText(x+pad, textY, displayed, scale, ColorText)
 
 	if focused && !selected {
-		c.renderer.DrawRect(x+pad+textW, y+4, 2, h-8, ColorText)
+		c.renderer.DrawRect(x+pad+textW, caretY, 2, caretH, ColorText)
 	}
 
 	return value, changed, submitted
