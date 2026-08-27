@@ -33,6 +33,8 @@ func populateDebugFields(out *ui.InGameUIState, state *states.InGameState, clien
 		}
 	}
 
+	out.MapLoadMs, out.MapLoadPhases = state.LastMapLoad()
+
 	if cam := state.GetCamera(); cam != nil {
 		out.CamX = cam.PosX
 		out.CamY = cam.PosY
