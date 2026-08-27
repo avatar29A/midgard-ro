@@ -186,7 +186,18 @@ type InGameUIState struct {
 	// points left to spend — indexed the same way the model holds them.
 	PrimaryStats [packets.PrimaryStatCount]int
 	PrimaryBonus [packets.PrimaryStatCount]int
+	PrimaryCost  [packets.PrimaryStatCount]int
 	StatusPoints int
+
+	// The numbers derived from those six, down the right of the window.
+	Atk, AtkBonus    int
+	MatkMin, MatkMax int
+	Def, DefBonus    int
+	Mdef, MdefBonus  int
+	Flee, FleeBonus  int
+	Hit              int
+	Critical         int
+	Aspd             int
 
 	// The last map load: how long, and where the time went (debug).
 	MapLoadMs     float64

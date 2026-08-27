@@ -50,6 +50,23 @@ const (
 	SP_WEIGHT      uint16 = 24
 	SP_MAXWEIGHT   uint16 = 25
 	SP_JOBLEVEL    uint16 = 55
+
+	// The derived numbers down the right of the status window. They arrive
+	// through ZC_PAR_CHANGE like everything else; ZC_STATUS only carries them
+	// once, when the window is first filled in.
+	SP_ATK1     uint16 = 41
+	SP_ATK2     uint16 = 42
+	SP_MATK1    uint16 = 43
+	SP_MATK2    uint16 = 44
+	SP_DEF1     uint16 = 45
+	SP_DEF2     uint16 = 46
+	SP_MDEF1    uint16 = 47
+	SP_MDEF2    uint16 = 48
+	SP_HIT      uint16 = 49
+	SP_FLEE1    uint16 = 50
+	SP_FLEE2    uint16 = 51
+	SP_CRITICAL uint16 = 52
+	SP_ASPD     uint16 = 53
 )
 
 // StatusChange is one parameter update, whichever of the three packets
@@ -117,7 +134,8 @@ const (
 	ZC_COUPLESTATUS uint16 = 0x0141
 )
 
-// PrimaryStats is what ZC_STATUS says about the six.
+// PrimaryStats is what ZC_STATUS says: the six, and the numbers derived from
+// them that fill the right of the window.
 type PrimaryStats struct {
 	// StatusPoints is what there is left to spend.
 	StatusPoints int
@@ -126,6 +144,18 @@ type PrimaryStats struct {
 	// Costs what raising each by one would take.
 	Values [PrimaryStatCount]int
 	Costs  [PrimaryStatCount]int
+
+	// The derived numbers, each as the window shows it: a base and what
+	// equipment adds, except Matk which is a range and Hit, Critical and
+	// Aspd which are single figures.
+	Atk, AtkBonus    int
+	MatkMin, MatkMax int
+	Def, DefBonus    int
+	Mdef, MdefBonus  int
+	Flee, FleeBonus  int
+	Hit              int
+	Critical         int
+	Aspd             int
 }
 
 // PrimaryStatCount is how many primary stats there are: STR through LUK.
@@ -157,7 +187,41 @@ func DecodeStatus(data []byte) *PrimaryStats {
 		stats.Costs[i] = int(data[5+i*2])
 	}
 
+	// The derived half, in the order clif_initialstatus writes it. Absent on
+	// a short packet, which leaves the window's right column empty rather
+	// than filled with nonsense.
+	if len(data) < 44 {
+		return stats
+	}
+
+	stats.Atk = readI16(data, 16)
+	stats.AtkBonus = readI16(data, 18)
+	stats.MatkMax = readI16(data, 20)
+	stats.MatkMin = readI16(data, 22)
+	stats.Def = readI16(data, 24)
+	stats.DefBonus = readI16(data, 26)
+	stats.Mdef = readI16(data, 28)
+	stats.MdefBonus = readI16(data, 30)
+	stats.Hit = readI16(data, 32)
+	stats.Flee = readI16(data, 34)
+	stats.FleeBonus = readI16(data, 36)
+	stats.Critical = readI16(data, 38)
+	stats.Aspd = AspdFromAmotion(readI16(data, 40))
+
 	return stats
+}
+
+// AspdFromAmotion converts the attack motion the server sends into the ASPD
+// the window shows. The packet carries amotion; 200 - amotion/10 is what the
+// original displays, which is why a value of 280 reads as 172.
+func AspdFromAmotion(amotion int) int {
+	return 200 - amotion/10
+}
+
+// readI16 reads a signed 16-bit field. Several of these go negative — a
+// defense penalty, say — and reading them unsigned turns -1 into 65535.
+func readI16(data []byte, offset int) int {
+	return int(int16(readU16(data, offset)))
 }
 
 // CoupleStatus is one stat and what is added to it.

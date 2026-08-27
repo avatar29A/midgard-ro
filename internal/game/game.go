@@ -845,7 +845,15 @@ func (g *Game) renderUI() {
 
 			PrimaryStats: stats.Primary,
 			PrimaryBonus: stats.PrimaryBonus,
+			PrimaryCost:  stats.PrimaryCost,
 			StatusPoints: stats.StatusPoints,
+
+			Atk: stats.Atk, AtkBonus: stats.AtkBonus,
+			MatkMin: stats.MatkMin, MatkMax: stats.MatkMax,
+			Def: stats.Def, DefBonus: stats.DefBonus,
+			Mdef: stats.Mdef, MdefBonus: stats.MdefBonus,
+			Flee: stats.Flee, FleeBonus: stats.FleeBonus,
+			Hit: stats.Hit, Critical: stats.Critical, Aspd: stats.Aspd,
 		}
 		populateDebugFields(&uiState, state, g.client)
 		g.uiBackend.RenderInGameUI(uiState, g.dt, viewportWidth, viewportHeight)
