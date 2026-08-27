@@ -886,13 +886,15 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 		// Tall enough for the stat rows: the height is not derived from the
 		// content, so text past it draws outside the frame rather than
 		// growing it.
-		if b.ctx.BeginWindow("debug", 10, 10, 520, 304, "Debug") {
+		if b.ctx.BeginWindow("debug", 10, 10, 520, 320, "Debug") {
 			b.ctx.Row(16)
 			b.ctx.Label(fmt.Sprintf("Map: %s", state.MapName))
 			b.ctx.Row(16)
 			b.ctx.Label(fmt.Sprintf("Load: %.0f ms", state.MapLoadMs))
 			b.ctx.Row(16)
 			b.ctx.Label(state.MapLoadPhases)
+			b.ctx.Row(16)
+			b.ctx.Label(fmt.Sprintf("Indoor: %s   Water: %d cells", describeCameraRules(state), state.WaterCells))
 			b.ctx.Row(16)
 			b.ctx.Label(fmt.Sprintf("Tile: (%d, %d)", state.PlayerTileX, state.PlayerTileY))
 			b.ctx.Row(16)
@@ -958,6 +960,21 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 // A stuck dialog is the failure this is for: the phase says what the client
 // thinks the server last asked for, so a screenshot is enough to tell a packet
 // we ignored from a window we failed to draw.
+// describeCameraRules is the map's camera rules in a word or two.
+func describeCameraRules(state InGameUIState) string {
+	s := "no"
+	if state.Indoor {
+		s = "yes"
+	}
+	switch {
+	case state.CameraYawLocked:
+		s += " (yaw locked)"
+	case state.CameraArc:
+		s += " (arc)"
+	}
+	return s
+}
+
 func describeDialog(state InGameUIState) string {
 	if state.DialogNPCID == 0 {
 		return state.DialogPhase
