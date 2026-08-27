@@ -21,6 +21,7 @@ var (
 	flagDebugHUD   = flag.Bool("debug-overlay", false, "Start with the F3 debug overlay open (QA aid)")
 	flagNoBGM      = flag.Bool("no-bgm", false, "Run without background music, keeping sound effects")
 	flagWalkTo     = flag.String("walk-to", "", "Once in game, walk to this cell, e.g. 156,22 (QA aid)")
+	flagMouseAt    = flag.String("mouse-at", "", "Once in game, put the pointer at this window position, e.g. 640,360 (QA aid)")
 )
 
 // ParseFlags parses command-line flags. Call this early in main().
@@ -92,6 +93,25 @@ func WalkTo() (x, y int, ok bool) {
 // parse.
 func WalkToSpec() string {
 	return *flagWalkTo
+}
+
+// MouseAt returns the window position --mouse-at asked for, and whether one
+// was given. Which cursor is drawn depends on what the pointer is over, and
+// an unattended capture has no hand to put it there.
+func MouseAt() (x, y int, ok bool) {
+	if *flagMouseAt == "" {
+		return 0, 0, false
+	}
+	if _, err := fmt.Sscanf(*flagMouseAt, "%d,%d", &x, &y); err != nil {
+		return 0, 0, false
+	}
+	return x, y, true
+}
+
+// MouseAtSpec returns the raw --mouse-at value, for reporting one that did
+// not parse.
+func MouseAtSpec() string {
+	return *flagMouseAt
 }
 
 // ConfigPath returns the explicit config path if provided via --config flag.

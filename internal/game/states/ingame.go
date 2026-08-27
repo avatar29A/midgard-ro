@@ -1384,15 +1384,28 @@ func (s *InGameState) ClickWorld(mouseX, mouseY, viewportW, viewportH float32) {
 		return
 	}
 
-	// An NPC under the pointer takes the click. Walking there instead would be
-	// the wrong thing twice over: the conversation would not start, and the
-	// server would refuse a step into the cell the NPC is standing on.
-	if npc := s.PickEntity(mouseX, mouseY, viewportW, viewportH); npc != nil {
+	// A unit under the pointer takes the click. For an NPC, walking there
+	// instead would be the wrong thing twice over: the conversation would not
+	// start, and the server would refuse a step into the cell the NPC is
+	// standing on. For a warp it is the other way round — there is nothing to
+	// say to it; you walk into it, and the server does the rest.
+	if e := s.PickEntity(mouseX, mouseY, viewportW, viewportH); e != nil {
+		if e.Type == entity.TypeWarp {
+			cellX, cellY := e.Body.CurrentCell()
+			trace.Emit(trace.Map, "warp-click",
+				zap.Uint32("aid", e.ID), zap.String("name", e.Name),
+				zap.Int("cellX", cellX), zap.Int("cellY", cellY))
+			if err := s.RequestMove(cellX, cellY); err != nil {
+				logger.Warn("walk to warp failed", zap.Error(err))
+			}
+			return
+		}
+
 		trace.Emit(trace.NPC, "click",
-			zap.Uint32("npcID", npc.ID), zap.String("name", npc.Name),
+			zap.Uint32("npcID", e.ID), zap.String("name", e.Name),
 			zap.Float32("screenX", mouseX), zap.Float32("screenY", mouseY))
 
-		s.ContactNPC(npc)
+		s.ContactNPC(e)
 
 		return
 	}

@@ -383,7 +383,7 @@ server   → inventory, weight, spawn(self), map property,
       `Load: 1243 ms (gat 3 · gnd 210 · rsw 12 · tex 380 · models 620 · water 18)`,
       `Indoor: yes (yaw locked, zoom 230–400)`, `Water: 1240 cells`.
       A frozen load or a wrong camera is diagnosable from one screenshot.
-- [x] **`--walk-to x,y` (QA aid)** in `internal/config/flags.go`, alongside
+- [x] **`--walk-to x,y` (QA aid)** — and **`--mouse-at x,y`**, added in Step 5 for the cursor capture. in `internal/config/flags.go`, alongside
       `--autologin`: once in-game, issue one click-to-move to that tile through
       the same `RequestMove` path. It is what lets an unattended run step on a
       warp. Zero-code alternative for the packet steps: put the character **on**
@@ -469,7 +469,7 @@ goroutine at best-speed compression (`internal/game/screenshot.go`), and the
 same 1 s run measures 1.9 s. Every unattended number in this document from
 here on is taken with that in place.
 
-### Step 3 — Walk through a gate
+### Step 3 — Walk through a gate ✅
 - **Changes:** `ingame.go` (`handleMapChange` → `Manager.Change(LoadingState{map, x, y, keepConnection})`, `OnMapChanged` hook), `entities.go` (`Clear` keeping the player), `npcdialog.go` (close), `internal/engine/character` (cancel walk), BGM switch via `manager.PlayLocationBGM`
 - **Done when:** stepping on `prt001` shows the loading screen and lands the
   player at `prt_fild08 170,375` with the field's units spawning within a
@@ -479,6 +479,18 @@ here on is taken with that in place.
   unattended `0x0091` right after login — trace reads `map.change origin=warp →
   map.load.phase… → map.ready → 0x09FF…`; `--walk-to 156,22` from `156,30`
   does it by walking. `Entities:` on F3 drops to 0 and grows again.
+
+![step3-prt-in-arrival — our client just after walking into door prt04: prt_in at 131,71, Load: 344 ms on the overlay; the water in the void is Step 6's](./step3-prt-in-arrival.jpg)
+
+Done — the mechanics landed with Step 0 (the state survives the change; the
+loader runs for every map alike) and this is the proof, by walking: from
+`prontera 136,219`, `--walk-to 134,221` onto door `prt04`. The trace reads
+`walking to … 134,221` → `net.recv 0x0091` → `map.change from prontera.gat to
+prt_in.gat 131,71 origin=warp` → `map.loaded prt_in 344 ms (528 models)` →
+`map.ready` → the room's NPCs (`Tool Dealer`, `Gemstone Bagger`) in the next
+packets. Six tenths of a second from the step to standing inside, loading
+screen included. The units, the dialog and the walk are dropped on the
+change; the character, stats, camera and handlers are not.
 
 ### Step 4 — Warps look like warps ✅
 - **Changes:** `entities.go` (`unitType`: 45 → `TypeWarp`, 139 → hidden), `internal/engine/scene/portal.go` (new: the 20-segment cylinder, `ring_blue.tga`, spin at `tick/4`°, alpha blend, no depth write), `ingame.go` (`renderUnits` → portal for `TypeWarp`, drawn through `RenderWithThirdPersonExtras`), `charsprite` (never look 45/139 up)
@@ -504,13 +516,23 @@ renderer belongs to the state, like the player's, so a warp costs no
 reload. Proportions are by eye against ref-04 — the thing to adjust in
 review, if anything.
 
-### Step 5 — The door cursor, and clicking a portal walks onto it
+### Step 5 — The door cursor, and clicking a portal walks onto it ✅
 - **Changes:** `game.go` (`updateCursor`: `TypeWarp` → `cursor.StateWarp`), `npcpick.go` (`isClickable` excludes warps; `ClickWorld` walks to a warp's tile)
 - **Done when:** hovering a portal shows the animated door; hovering an NPC still
   shows talk; clicking a portal walks there and warps, sending no `CZ_CONTACTNPC`.
 - **Proved by:** UC-213; F12 with the cursor on the portal; `--trace=npc,move`
   shows `move.request` and no `npc.contact` for the click.
 - **Reference:** grf-cursor-door ⑨
+
+![step5-door-cursor — the door cursor over the portal in prt04's doorway, placed by --mouse-at 690,430](./step5-door-cursor.jpg)
+
+Done. `cursorFor` returns `StateWarp` for a warp; `isClickable` admits visible
+warps and refuses hidden ones; `ClickWorld` walks to a warp's cell instead
+of contacting it (`map.warp-click` in the trace, no `npc.contact`). The
+capture needed a pointer over the portal with nobody at the mouse, so there
+is now **`--mouse-at x,y`** beside `--walk-to`: once the map is up it moves
+the pointer through the OS (`SDL_WarpMouseGlobal`), so the same motion event
+a hand would cause reaches the input layer.
 
 ### Step 6 — Indoors, the camera behaves, and the void is black
 - **Changes:** `internal/assets/maptables.go` (new: `indoorrswtable.txt`,
@@ -611,6 +633,9 @@ None open.
 
 ## Revision log
 
+- 2026-08-27 — **Steps 3 and 5 done.** Walking into a Prontera door reaches
+  `prt_in` in 0.6 s, loading screen included; the door cursor shows over a
+  portal and clicking one walks into it. `--mouse-at` joins `--walk-to`.
 - 2026-08-27 — **Step 4 done.** The portal effect, rebuilt from roBrowser's
   cylinder and the archive's `ring_blue.tga`; warps typed as `TypeWarp`,
   hidden ones (139) not drawn.

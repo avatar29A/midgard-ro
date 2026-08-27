@@ -3,7 +3,9 @@ package states
 import (
 	"testing"
 
+	"github.com/Faultbox/midgard-ro/internal/engine/scene"
 	"github.com/Faultbox/midgard-ro/internal/game/entity"
+	"github.com/Faultbox/midgard-ro/internal/network/packets"
 )
 
 // npcAt builds an NPC standing at a world position, with the Body that makes
@@ -39,6 +41,16 @@ func TestIsClickable(t *testing.T) {
 		{
 			name: "another player is not talked to",
 			e:    &entity.Entity{ID: 102, Type: entity.TypePlayer, Body: &entity.Character{}},
+			want: false,
+		},
+		{
+			name: "a portal is walked into",
+			e:    &entity.Entity{ID: 103, Type: entity.TypeWarp, Job: packets.JobWarpPortal, Body: &entity.Character{}},
+			want: true,
+		},
+		{
+			name: "a hidden warp shows nothing and takes no click",
+			e:    &entity.Entity{ID: 104, Type: entity.TypeWarp, Job: packets.JobHiddenWarp, Body: &entity.Character{}},
 			want: false,
 		},
 	}
@@ -85,5 +97,25 @@ func TestPickEntityWithoutSceneIsSafe(t *testing.T) {
 	var nilState *InGameState
 	if got := nilState.PickEntity(100, 100, 1280, 720); got != nil {
 		t.Errorf("PickEntity on nil = %+v, want nil", got)
+	}
+}
+
+// TestWarpBoxIsThePortalsSize pins the hit box of a warp to the effect that is
+// drawn for it: there is no sprite to measure, and the fallback box would be
+// a third of the portal's width.
+func TestWarpBoxIsThePortalsSize(t *testing.T) {
+	var s InGameState
+	e := &entity.Entity{ID: 1, Type: entity.TypeWarp, Job: packets.JobWarpPortal,
+		Body: &entity.Character{RenderX: 100, RenderY: 20, RenderZ: 300}}
+
+	box := s.unitBox(e)
+	if w := box.Max[0] - box.Min[0]; w != 2*scene.PortalRadius {
+		t.Fatalf("warp box width %v, want %v", w, 2*scene.PortalRadius)
+	}
+	if h := box.Max[1] - box.Min[1]; h != scene.PortalHeight {
+		t.Fatalf("warp box height %v, want %v", h, scene.PortalHeight)
+	}
+	if box.Min[1] != 20 {
+		t.Fatalf("warp box floor %v, want the ground at 20", box.Min[1])
 	}
 }
