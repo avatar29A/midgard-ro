@@ -3,10 +3,7 @@ package game
 
 import (
 	"fmt"
-	"image"
-	"image/png"
 	"os"
-	"path/filepath"
 	"runtime"
 	"sync"
 	"time"
@@ -85,6 +82,9 @@ type Game struct {
 	// Debug overlay toggle (F3). Default off so the HUD isn't cluttered;
 	// turn on to inspect player/camera/scene/network telemetry live.
 	showDebug bool
+
+	// screenshots writes captured frames off the render thread.
+	screenshots screenshotWriter
 
 	// A cell to walk to once the map is up, from --walk-to. Fired once.
 	walkToX, walkToY int
@@ -814,6 +814,9 @@ func (g *Game) renderUI() {
 func (g *Game) Close() {
 	logger.Info("closing game")
 
+	// A capture asked for just before exit is still worth having.
+	g.screenshots.flush(5 * time.Second)
+
 	if g.uiBackend != nil {
 		g.uiBackend.Close()
 	}
@@ -831,26 +834,25 @@ func (g *Game) Close() {
 	}
 }
 
-// captureScreenshot captures the current frame to a PNG file.
+// captureScreenshot reads the current frame back and hands it to the
+// screenshot writer. Only the readback and the flip happen here; the PNG
+// encoding is the expensive part and runs off the render thread.
 func (g *Game) captureScreenshot() {
-	var pixels []byte
-	var width, height int
-
 	// Get actual viewport size from OpenGL (handles HiDPI correctly)
 	var viewport [4]int32
 	gl.GetIntegerv(gl.VIEWPORT, &viewport[0])
-	width = int(viewport[2])
-	height = int(viewport[3])
+	width := int(viewport[2])
+	height := int(viewport[3])
 
 	if width <= 0 || height <= 0 {
 		logger.Warn("screenshot failed: invalid viewport")
 		return
 	}
 
-	pixels = make([]byte, width*height*4)
+	pixels := make([]byte, width*height*4)
 	gl.ReadPixels(0, 0, int32(width), int32(height), gl.RGBA, gl.UNSIGNED_BYTE, gl.Ptr(pixels))
 
-	// Flip vertically for default framebuffer
+	// Flip vertically: OpenGL reads the bottom row first.
 	rowSize := width * 4
 	flipped := make([]byte, len(pixels))
 	for y := 0; y < height; y++ {
@@ -858,46 +860,14 @@ func (g *Game) captureScreenshot() {
 		dstRow := y * rowSize
 		copy(flipped[dstRow:dstRow+rowSize], pixels[srcRow:srcRow+rowSize])
 	}
-	pixels = flipped
 
-	// Create screenshot directory if needed
-	if err := os.MkdirAll(g.screenshotDir, 0755); err != nil {
-		logger.Warn("failed to create screenshot dir", zap.Error(err))
+	name := screenshotName(time.Now())
+	if !g.screenshots.enqueue(screenshotJob{pixels: flipped, width: width, height: height, dir: g.screenshotDir, name: name}) {
 		return
 	}
 
-	// Create image (pixels are already in correct orientation from CaptureScene or flipped above)
-	img := image.NewRGBA(image.Rect(0, 0, width, height))
-	copy(img.Pix, pixels)
-
-	// Generate filename with timestamp
-	timestamp := time.Now().Format("20060102-150405")
-	filename := fmt.Sprintf("screenshot-%s.png", timestamp)
-	savePath := filepath.Join(g.screenshotDir, filename)
-
-	// Save to file
-	file, err := os.Create(savePath)
-	if err != nil {
-		logger.Warn("failed to create screenshot file", zap.Error(err))
-		return
-	}
-	defer file.Close()
-
-	if err := png.Encode(file, img); err != nil {
-		logger.Warn("failed to encode screenshot", zap.Error(err))
-		return
-	}
-
-	// Also save as "latest.png" for easy access
-	latestPath := filepath.Join(g.screenshotDir, "latest.png")
-	if latestFile, err := os.Create(latestPath); err == nil {
-		_ = png.Encode(latestFile, img)
-		latestFile.Close()
-	}
-
-	g.screenshotMsg = fmt.Sprintf("Saved: %s", filename)
+	g.screenshotMsg = fmt.Sprintf("Saved: %s", name)
 	g.screenshotMsgTime = time.Now()
-	logger.Info("screenshot saved", zap.String("path", savePath))
 }
 
 // handleInGameInput handles camera and movement input when in game.
