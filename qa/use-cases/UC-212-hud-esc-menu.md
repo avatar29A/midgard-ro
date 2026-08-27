@@ -1,11 +1,11 @@
-# UC-210: HUD — ESC Menu and Leaving the Game
+# UC-212: HUD — ESC Menu and Leaving the Game
 
 ## Description
 ESC opens the system menu; Return to character select and Quit both leave the
 game cleanly through the correct packet.
 
 ## Preconditions
-- As UC-208
+- As UC-210
 
 ## Test Steps
 

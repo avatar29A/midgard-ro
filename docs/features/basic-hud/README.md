@@ -232,7 +232,7 @@ Two traps, both the same shape as ones already hit:
       against hand-written bytes; chat splitting (`name : message`), and
       `CZ_RESTART`'s type byte. `internal/game/ui/*_test.go` — scrollback
       trimming, minimap cell→pixel mapping, window toggle state.
-- [ ] **Use cases:** UC-208 (always-on HUD), UC-209 (the four windows), UC-210
+- [ ] **Use cases:** UC-210 (always-on HUD), UC-211 (the four windows), UC-212
       (ESC menu and leaving the game).
 
 ## Steps
@@ -242,20 +242,24 @@ Two traps, both the same shape as ones already hit:
 - **Done when:** Prontera's pre-rendered minimap sits top-right with the player
   as a dot that moves as you walk; a map without an image logs at warn and leaves
   the corner empty rather than drawing black.
-- **Proved by:** screenshot scenario; UC-208. `hud` trace shows the image path resolved.
+- **Proved by:** screenshot scenario; UC-210. `hud` trace shows the image path resolved.
 - **Reference:** grf-prontera ④
 
 ### Step 2 — Chat display
 - **Changes:** `internal/network/packets/hud.go`, `internal/game/ui/hud_chat.go`, `internal/game/states/ingame.go`
+- **Reuse from #89:** `ui.scrollbar()` (RO-skinned, `scrollbar.go:73`), and
+  `ParseNPCText`/`WrapNPCText` (`npctext.go:83,164`) — chat carries the same
+  `^RRGGBB` colour codes and needs the same wrapping. Do not write a second
+  wrapper or scrollbar.
 - **Done when:** rAthena's welcome lines appear bottom-left and scroll; the box
   keeps a bounded backlog.
-- **Proved by:** UC-208; `--trace=hud` shows `hud.chat` per line. Packet tests for `0x008D`/`0x008E`.
+- **Proved by:** UC-210; `--trace=hud` shows `hud.chat` per line. Packet tests for `0x008D`/`0x008E`.
 
 ### Step 3 — Click target square
 - **Changes:** `internal/engine/scene`, `internal/game/states/ingame.go`
 - **Done when:** a green square from `grid.tga` sits on the cell under the cursor
   and animates on click; it tracks the cursor and disappears on arrival.
-- **Proved by:** screenshot scenario with the cursor over a cell; UC-208.
+- **Proved by:** screenshot scenario with the cursor over a cell; UC-210.
 - **Reference:** grf-grid ③
 
 ### Step 4 — HP/SP bars under the character and other units
@@ -299,7 +303,7 @@ Two traps, both the same shape as ones already hit:
   alive with no change to the renderer. Until then a monster's bar reads full
   until it despawns — a known limitation, written down rather than surprising.
 - **No new packets.** Everything drawn here is already decoded.
-- **Proved by:** screenshot scenario; UC-208. Bar width against value is a table
+- **Proved by:** screenshot scenario; UC-210. Bar width against value is a table
   test, and `SetVitals` has its own test so the seam is exercised before Track F
   uses it.
 - **Reference:** ref-02 ⑤⑥
@@ -308,14 +312,14 @@ Two traps, both the same shape as ones already hit:
 - **Changes:** `internal/game/ui/hud_hotkeys.go`
 - **Done when:** the bar draws along the bottom with its slots; slots are empty
   but present and the bar sits where the original puts it.
-- **Proved by:** screenshot scenario; UC-208.
+- **Proved by:** screenshot scenario; UC-210.
 - **Reference:** grf-shortcut_bg ②
 
 ### Step 6 — ESC menu
 - **Changes:** `internal/game/ui/hud_escmenu.go`, `internal/network/packets/hud.go`, `internal/game/states/`
 - **Done when:** ESC toggles a menu with Return to character select, Quit and
   Cancel; both leave the game cleanly through the right packet.
-- **Proved by:** UC-210 — each button lands you where it says, with no hang and
+- **Proved by:** UC-212 — each button lands you where it says, with no hang and
   no orphaned connection.
 
 ### Step 7 — Stats window (Info)
@@ -325,7 +329,7 @@ Two traps, both the same shape as ones already hit:
 - **Note:** the model and its live updates already exist from #87 — this extends
   `PlayerStats` with the six primary stats from `ZC_STATUS`/`ZC_COUPLESTATUS`
   and draws it. Do not build a second stats model.
-- **Proved by:** UC-209, UC-305 (extended); `status` trace fires on change.
+- **Proved by:** UC-211, UC-305 (extended); `status` trace fires on change.
   Packet tests for `0x00BD`/`0x0141`.
 - **Reference:** grf-statwin_bg ①
 
@@ -333,18 +337,18 @@ Two traps, both the same shape as ones already hit:
 - **Changes:** `internal/network/packets/hud.go`, `internal/game/ui/win_skills.go`
 - **Done when:** the Skills button lists the character's skills with names and
   levels, from `ZC_SKILLINFO_LIST` (`0x0B32`).
-- **Proved by:** UC-209. A Novice shows Basic Skill at its level.
+- **Proved by:** UC-211. A Novice shows Basic Skill at its level.
 
 ### Step 9 — Items window
 - **Changes:** `internal/network/packets/hud.go`, `internal/game/ui/win_items.go`
 - **Done when:** the Items button lists inventory contents with counts.
-- **Proved by:** UC-209.
+- **Proved by:** UC-211.
 
 ### Step 10 — Map window
 - **Changes:** `internal/game/ui/win_map.go`
 - **Done when:** the Map button opens the full-size map image with the player
   marked — the minimap enlarged, sharing its loader.
-- **Proved by:** UC-209.
+- **Proved by:** UC-211.
 
 ### Step 11 — Delete the deprecated ImGui widgets, and docs
 - **Changes:** remove `internal/game/ui/{imgui_backend,ingame_ui,minimap,chatbox,charselect_ui,login_ui,loading_ui,connecting_ui,debug_overlay,statusbar}.go`
@@ -419,6 +423,9 @@ Two traps, both the same shape as ones already hit:
 - 2026-08-26 — added the HP/SP bars under the character as Step 4, with real
   client captures (ref-01, ref-02) taken from #86's ref-03; Open question 1
   answered by them (per request)
+- 2026-08-27 — merged main after #89 (NPC dialog) landed: HUD use cases renumbered
+  to UC-210..212 to clear the collision with the NPC ones, and Step 2 now reuses
+  #89's scrollbar and text wrapping
 - 2026-08-26 — extended Step 4 to other units too, with an explicit `SetVitals`
   seam for Track F to call, rather than deferring the whole component (per
   direction)

@@ -1,11 +1,11 @@
-# UC-209: HUD — The Four Menu Windows
+# UC-211: HUD — The Four Menu Windows
 
 ## Description
 The first row of menu buttons opens Info (stats), Skills, Items and Map, each
 toggling and reflecting its state in the button art.
 
 ## Preconditions
-- As UC-208
+- As UC-210
 
 ## Test Steps
 
