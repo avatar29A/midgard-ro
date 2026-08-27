@@ -9,7 +9,6 @@ import (
 
 	"github.com/Faultbox/midgard-ro/internal/engine/scene/shaders"
 	"github.com/Faultbox/midgard-ro/internal/engine/shader"
-	"github.com/Faultbox/midgard-ro/internal/engine/texture"
 	"github.com/Faultbox/midgard-ro/pkg/math"
 )
 
@@ -17,35 +16,42 @@ import (
 // "Warp NPC" effect it shows for every NPC of class 45.
 //
 // No file in the archive describes the effect; the client draws it itself,
-// and so do we. The geometry is the one roBrowser carries for it
-// (Cylinder.js): a twenty-sided tube with separate top and bottom radii,
-// wrapped in ring_blue.tga — pale blue spikes of light rising from the base —
-// and spun about its axis at a quarter degree per millisecond. Under it a
-// soft disc of the same blue, which the real-client frames show and the
-// texture alone would not give.
-//
-// Sizes are in world units, ten to a cell. The tube stands a little wider
-// than a character and about a character and a half tall, which is how it
-// looks beside a Prontera door in the reference frames.
+// and so do we. It lies flat on the ground rather than standing up: rings of
+// pale blue light around a dark middle, a handful of bright sparkles set
+// around them, the whole turning slowly and faint enough to read the floor
+// through. The texture is generated rather than loaded, because the archive
+// has no picture of it — what it does ship under that name (ring_blue.tga
+// and its siblings) is the vertical spikes of other effects.
 const (
-	PortalRadius    = float32(5.5)  // at the base
-	PortalTopRadius = float32(4.0)  // at the top; the tube leans in
-	PortalHeight    = float32(16.0) // world units
-	PortalSegments  = 20
+	// PortalRadius is how far the light reaches from the warp's cell, in
+	// world units — ten to a cell, so the effect is a little over four cells
+	// across, which is how it measures against the characters standing beside
+	// one in the reference captures.
+	PortalRadius = float32(22.0)
 
-	portalDiscRadius   = float32(7.5)
-	portalDiscLift     = float32(0.4) // above the ground, out of the terrain's depth
-	portalSpinDegPerMs = 0.25
+	// PortalHeight is nothing that is drawn: the effect is flat. It is how
+	// tall the warp's hit box stands, so a portal can be clicked without
+	// having to aim at the floor.
+	PortalHeight = float32(12.0)
+
+	// portalLift keeps the disc off the terrain it lies on, out of the depth
+	// buffer's way.
+	portalLift = float32(2.5)
+
+	// portalSpinDegPerMs turns the rings, slowly: a little over three seconds
+	// for a full turn.
+	portalSpinDegPerMs = 0.1
+
+	// portalTexSize is the generated texture's side.
+	portalTexSize = 256
 )
 
-// portalTint colors the light: the original's blue, at nine tenths.
-var portalTint = [4]float32{0.55, 0.8, 1.0, 0.9}
+// portalTint scales the generated colors. The texture already carries the
+// blue, so this only holds the whole effect short of full strength.
+var portalTint = [4]float32{1, 1, 1, 0.9}
 
-// ringTexturePath is the tube's texture; the archive has it in one place.
-const ringTexturePath = "data/texture/effect/ring_blue.tga"
-
-// PortalRenderer holds the shader, the meshes and the textures. One serves
-// every portal on the map.
+// PortalRenderer holds the shader, the quad and the texture. One serves every
+// portal on the map.
 type PortalRenderer struct {
 	program uint32
 
@@ -58,17 +64,14 @@ type PortalRenderer struct {
 	locTexture    int32
 	locTint       int32
 
-	tubeVAO, tubeVBO uint32
-	tubeVerts        int32
 	discVAO, discVBO uint32
 	discVerts        int32
 
-	ringTex uint32
 	discTex uint32
 }
 
-// NewPortalRenderer compiles the shader and builds the meshes. The ring
-// texture comes later, from LoadTextures; the disc's is generated here.
+// NewPortalRenderer compiles the shader, builds the quad and generates the
+// texture. Nothing is read from the archive.
 func NewPortalRenderer() (*PortalRenderer, error) {
 	pr := &PortalRenderer{}
 
@@ -86,39 +89,10 @@ func NewPortalRenderer() (*PortalRenderer, error) {
 	pr.locTexture = shader.GetUniform(program, "uTexture")
 	pr.locTint = shader.GetUniform(program, "uTint")
 
-	pr.tubeVAO, pr.tubeVBO, pr.tubeVerts = uploadMesh5(tubeVertices())
 	pr.discVAO, pr.discVBO, pr.discVerts = uploadMesh5(discVertices())
-	pr.discTex = uploadRGBA(discPixels(64), 64, 64, gl.CLAMP_TO_EDGE)
+	pr.discTex = uploadRGBA(portalPixels(portalTexSize), portalTexSize, portalTexSize, gl.CLAMP_TO_EDGE)
 
 	return pr, nil
-}
-
-// tubeVertices is the unit tube as roBrowser builds it: for each segment a
-// bottom vertex at angle i/n and a top vertex half a segment further round,
-// so the spikes lean; u runs once around, v from 1 at the base to 0 at the
-// top, which is the way up the texture is painted.
-func tubeVertices() []float32 {
-	n := PortalSegments
-	bottom := make([][5]float32, n+1)
-	top := make([][5]float32, n+1)
-	for i := 0; i <= n; i++ {
-		a := float64(i) / float64(n)
-		b := (float64(i) + 0.5) / float64(n)
-		bottom[i] = [5]float32{float32(gomath.Sin(a * 2 * gomath.Pi)), 0, float32(gomath.Cos(a * 2 * gomath.Pi)), float32(a), 1}
-		top[i] = [5]float32{float32(gomath.Sin(b * 2 * gomath.Pi)), 1, float32(gomath.Cos(b * 2 * gomath.Pi)), float32(b), 0}
-	}
-
-	mesh := make([]float32, 0, n*6*5)
-	push := func(v [5]float32) { mesh = append(mesh, v[:]...) }
-	for i := 0; i < n; i++ {
-		push(bottom[i])
-		push(top[i])
-		push(bottom[i+1])
-		push(top[i])
-		push(bottom[i+1])
-		push(top[i+1])
-	}
-	return mesh
 }
 
 // discVertices is a unit quad on the ground, textured corner to corner.
@@ -133,25 +107,92 @@ func discVertices() []float32 {
 	}
 }
 
-// discPixels is a soft disc: white-blue at the center, transparent at the
-// rim, falling off with the square of the distance so the edge is a glow
-// rather than a line.
-func discPixels(size int) []byte {
+// portalPixels draws the warp: concentric rings of pale light, a swirl
+// through them, sparkles set around the widest ring, and a point at the
+// middle. Everything else is transparent, so the floor shows through.
+//
+// It is generated rather than painted because the original generates it too,
+// and because there is no picture of it in the archive to copy. The numbers
+// are read off the reference captures: four rings, the third of them the
+// widest and brightest, six sparkles a little inside it.
+func portalPixels(size int) []byte {
 	pix := make([]byte, size*size*4)
 	half := float64(size) / 2
+
+	// radius, half-width, strength — as fractions of the disc's own radius.
+	// Three broad rings rather than four thin ones: on screen a portal is
+	// sixty pixels across, and a ring any finer than this disappears into
+	// the gap between two of them.
+	rings := [...][3]float64{
+		{0.34, 0.090, 0.55},
+		{0.62, 0.075, 1.00},
+		{0.88, 0.055, 0.70},
+	}
+	const (
+		sparkles      = 6
+		sparkleRadius = 0.74
+		sparkleArm    = 0.13 // how far a star's points reach
+		sparkleCore   = 0.025
+	)
+
 	for y := 0; y < size; y++ {
 		for x := 0; x < size; x++ {
 			dx := (float64(x) + 0.5 - half) / half
 			dy := (float64(y) + 0.5 - half) / half
 			d := gomath.Sqrt(dx*dx + dy*dy)
-			a := 1 - d
-			if a < 0 {
-				a = 0
+			if d > 1 {
+				continue
 			}
-			a *= a
+			angle := gomath.Atan2(dy, dx)
+
+			var light float64
+			for _, r := range rings {
+				t := (d - r[0]) / r[1]
+				light += r[2] * gomath.Exp(-t*t)
+			}
+
+			// The swirl. The rings are not even all the way round, which is
+			// what makes the effect look like it is turning rather than
+			// pulsing.
+			light *= 0.50 + 0.50*gomath.Cos(angle*2+d*7)
+
+			// A soft wash inside the widest ring, so the middle reads as
+			// light rather than as a hole in the floor.
+			light += 0.10 * gomath.Exp(-(d/0.55)*(d/0.55))
+
+			// Sparkles: four-pointed stars, brightest at their core.
+			var spark float64
+			for i := 0; i < sparkles; i++ {
+				a := 2 * gomath.Pi * float64(i) / sparkles
+				ax := gomath.Abs(dx - sparkleRadius*gomath.Cos(a))
+				ay := gomath.Abs(dy - sparkleRadius*gomath.Sin(a))
+				arm := gomath.Exp(-(ax/sparkleCore)*(ax/sparkleCore)-(ay/sparkleArm)*(ay/sparkleArm)) +
+					gomath.Exp(-(ax/sparkleArm)*(ax/sparkleArm)-(ay/sparkleCore)*(ay/sparkleCore))
+				if arm > spark {
+					spark = arm
+				}
+			}
+
+			// The point at the middle.
+			spark += gomath.Exp(-(d / 0.03) * (d / 0.03))
+
+			// Fade out at the rim rather than cutting it off.
+			edge := 1 - gomath.Max(0, (d-0.86)/0.14)
+			alpha := (light*0.85 + spark) * edge
+			if alpha <= 0 {
+				continue
+			}
+			if alpha > 1 {
+				alpha = 1
+			}
+
+			// The rings are blue; a sparkle's core burns out to white.
+			white := gomath.Min(1, spark)
 			i := (y*size + x) * 4
-			pix[i], pix[i+1], pix[i+2] = 170, 215, 255
-			pix[i+3] = byte(a * 220)
+			pix[i] = byte(150 + 105*white)
+			pix[i+1] = byte(205 + 50*white)
+			pix[i+2] = 255
+			pix[i+3] = byte(alpha * 255)
 		}
 	}
 	return pix
@@ -172,8 +213,8 @@ func uploadMesh5(vertices []float32) (vao, vbo uint32, count int32) {
 	return vao, vbo, int32(len(vertices) / 5)
 }
 
-// uploadRGBA uploads a texture with linear filtering and the given
-// horizontal wrap. The tube repeats around; the disc does not.
+// uploadRGBA uploads a texture with linear filtering and the given horizontal
+// wrap.
 func uploadRGBA(pix []byte, width, height int, wrapS int32) uint32 {
 	var tex uint32
 	gl.GenTextures(1, &tex)
@@ -186,36 +227,27 @@ func uploadRGBA(pix []byte, width, height int, wrapS int32) uint32 {
 	return tex
 }
 
-// LoadTextures reads the ring texture from the archives. Without it the
-// portal is not drawn at all — a blank tube would be worse than nothing —
-// and the error says which file was wanted.
-func (pr *PortalRenderer) LoadTextures(load func(string) ([]byte, error)) error {
-	data, err := load(ringTexturePath)
-	if err != nil {
-		return fmt.Errorf("loading %s: %w", ringTexturePath, err)
-	}
-	img, err := texture.DecodeTGA(data)
-	if err != nil {
-		return fmt.Errorf("decoding %s: %w", ringTexturePath, err)
-	}
-	rgba := texture.ImageToRGBA(img, false)
-	b := rgba.Bounds()
-	pr.ringTex = uploadRGBA(rgba.Pix, b.Dx(), b.Dy(), gl.REPEAT)
+// LoadTextures is kept for the caller's sake: the effect needs nothing from
+// the archive, so there is nothing to load and nothing to fail.
+func (pr *PortalRenderer) LoadTextures(func(string) ([]byte, error)) error {
 	return nil
 }
 
 // Ready reports whether the portal can be drawn.
 func (pr *PortalRenderer) Ready() bool {
-	return pr != nil && pr.ringTex != 0
+	return pr != nil && pr.discTex != 0
 }
 
-// Render draws one portal standing on the ground at a world position, with
-// its base on the ground. timeMs drives the spin; alpha fades it with the
-// unit it belongs to.
+// Render draws one portal, flat on the ground at a world position. timeMs
+// turns it; alpha fades it with the unit it belongs to.
 //
-// The light is added to what is behind it rather than painted over it, which
-// is what makes it read as a glow, and it writes no depth so the units
-// walking through it are not clipped by an invisible tube.
+// It is blended over the floor rather than added to it. Added light looked
+// right on the dark stone of a dungeon and destroyed the effect on Prontera's
+// pale pavement, where everything above about a third of full brightness
+// clipped to white and the rings disappeared into one smear. Blending keeps
+// the pattern on any floor, which is what the reference captures show on
+// both. Depth is not written, so a character standing on a portal is not
+// clipped by it.
 func (pr *PortalRenderer) Render(viewProj math.Mat4, x, y, z, timeMs, alpha float32) {
 	if !pr.Ready() {
 		return
@@ -223,38 +255,33 @@ func (pr *PortalRenderer) Render(viewProj math.Mat4, x, y, z, timeMs, alpha floa
 
 	gl.UseProgram(pr.program)
 	gl.Enable(gl.BLEND)
-	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE)
+	// Color blends over the floor; the destination alpha is left alone.
+	//
+	// The scene is drawn into an offscreen buffer that the interface later
+	// composites by its alpha, and every other thing in it writes alpha 1.
+	// Blending alpha the ordinary way punched the portal's own shape out of
+	// that buffer, and what showed through the hole was the interface behind
+	// it: hard bands of cyan and black in the middle of the street. Additive
+	// blending had hidden the fault by saturating alpha to 1.
+	gl.BlendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ZERO, gl.ONE)
 	gl.DepthMask(false)
 	gl.Disable(gl.CULL_FACE)
 
+	spin := float32(float64(timeMs) * portalSpinDegPerMs * gomath.Pi / 180)
+
 	gl.UniformMatrix4fv(pr.locViewProj, 1, false, &viewProj[0])
-	// Added light over a sunlit doorway comes out white; the original's
-	// portal is unmistakably blue, so the texture is tinted towards it and
-	// held short of full strength.
 	gl.Uniform4f(pr.locTint, portalTint[0], portalTint[1], portalTint[2], alpha*portalTint[3])
 	gl.ActiveTexture(gl.TEXTURE0)
 	gl.Uniform1i(pr.locTexture, 0)
 
-	// The disc, flat on the ground.
 	gl.BindTexture(gl.TEXTURE_2D, pr.discTex)
-	gl.Uniform3f(pr.locPosition, x, y+portalDiscLift, z)
-	gl.Uniform1f(pr.locBottomSize, portalDiscRadius)
-	gl.Uniform1f(pr.locTopSize, portalDiscRadius)
+	gl.Uniform3f(pr.locPosition, x, y+portalLift, z)
+	gl.Uniform1f(pr.locBottomSize, PortalRadius)
+	gl.Uniform1f(pr.locTopSize, PortalRadius)
 	gl.Uniform1f(pr.locHeight, 0)
-	gl.Uniform1f(pr.locSpin, 0)
+	gl.Uniform1f(pr.locSpin, spin)
 	gl.BindVertexArray(pr.discVAO)
 	gl.DrawArrays(gl.TRIANGLES, 0, pr.discVerts)
-
-	// The tube, spinning.
-	spin := float32(float64(timeMs) * portalSpinDegPerMs * gomath.Pi / 180)
-	gl.BindTexture(gl.TEXTURE_2D, pr.ringTex)
-	gl.Uniform3f(pr.locPosition, x, y, z)
-	gl.Uniform1f(pr.locBottomSize, PortalRadius)
-	gl.Uniform1f(pr.locTopSize, PortalTopRadius)
-	gl.Uniform1f(pr.locHeight, PortalHeight)
-	gl.Uniform1f(pr.locSpin, spin)
-	gl.BindVertexArray(pr.tubeVAO)
-	gl.DrawArrays(gl.TRIANGLES, 0, pr.tubeVerts)
 
 	gl.BindVertexArray(0)
 	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
@@ -266,23 +293,17 @@ func (pr *PortalRenderer) Destroy() {
 	if pr == nil {
 		return
 	}
-	for _, vao := range []*uint32{&pr.tubeVAO, &pr.discVAO} {
-		if *vao != 0 {
-			gl.DeleteVertexArrays(1, vao)
-			*vao = 0
-		}
+	if pr.discVAO != 0 {
+		gl.DeleteVertexArrays(1, &pr.discVAO)
+		pr.discVAO = 0
 	}
-	for _, vbo := range []*uint32{&pr.tubeVBO, &pr.discVBO} {
-		if *vbo != 0 {
-			gl.DeleteBuffers(1, vbo)
-			*vbo = 0
-		}
+	if pr.discVBO != 0 {
+		gl.DeleteBuffers(1, &pr.discVBO)
+		pr.discVBO = 0
 	}
-	for _, tex := range []*uint32{&pr.ringTex, &pr.discTex} {
-		if *tex != 0 {
-			gl.DeleteTextures(1, tex)
-			*tex = 0
-		}
+	if pr.discTex != 0 {
+		gl.DeleteTextures(1, &pr.discTex)
+		pr.discTex = 0
 	}
 	if pr.program != 0 {
 		gl.DeleteProgram(pr.program)

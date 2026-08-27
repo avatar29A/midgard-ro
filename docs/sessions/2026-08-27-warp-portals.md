@@ -55,6 +55,31 @@ black — the "seeing aside" the feature was meant to stop, and it is the
 zoom that causes it, not the turning. Indoors now hold the zoom at the
 default distance (snapping there on entry) and allow rotation.
 
+**The portal was the wrong shape, and testing it found two rendering faults
+underneath.** The plan built a tall spinning tube from roBrowser's
+`Cylinder.js`. That primitive is the original's *casting circle*, not its
+warp: the reference frames showed a flat ringed disc, and Boris's capture of
+the original confirmed it — flat, four cells across, concentric rings with a
+swirl, four-pointed sparkles around them. Rebuilding it turned up:
+
+- **Added light cannot hold a pattern on a pale floor.** On Prontera's
+  pavement every value above about a third clipped to white and the rings
+  became one smear. Blending over the floor reads on both dark stone and
+  pale pavement.
+- **Ordinary alpha blending punched a hole in the scene.** The scene is drawn
+  into an offscreen buffer that the interface composites *by its alpha*, and
+  everything else in it writes alpha 1. `ONE_MINUS_SRC_ALPHA` wrote the
+  portal's shape into that alpha channel and the interface showed through it
+  as hard cyan and black bands. `BlendFuncSeparate(SRC_ALPHA,
+  ONE_MINUS_SRC_ALPHA, ZERO, ONE)` fixes it. The additive version had hidden
+  the fault by saturating alpha to 1 — every future effect that blends into
+  the scene needs the separate alpha.
+
+Tuning an effect through the client is slow — a build, a login and a map load
+per look. `PORTAL_DUMP=<file> go test ./internal/engine/scene/ -run
+TestDumpPortalTexture` writes the generated texture composited over a pale and
+a dark floor, which is where the pattern was actually settled.
+
 ## What no reference client had
 
 Nothing in the archive describes the warp portal: the original draws

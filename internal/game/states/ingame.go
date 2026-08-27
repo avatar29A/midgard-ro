@@ -236,23 +236,13 @@ func (s *InGameState) loadPlayerSprites() {
 		zap.Int("walkFrames", s.playerRender.FrameCount(entity.ActionWalk, entity.DirS)))
 }
 
-// loadPortalRenderer builds the warp portal effect. Without its texture no
-// portal is drawn and the log says which file was wanted; the warps are
-// still there to walk into.
+// loadPortalRenderer builds the warp portal effect. It needs nothing from
+// the archive — the effect is generated — so the only way it fails is the
+// shader, and then the warps are still there to walk into.
 func (s *InGameState) loadPortalRenderer() {
 	pr, err := scene.NewPortalRenderer()
 	if err != nil {
 		logger.Warn("no warp portal effect", zap.Error(err))
-		return
-	}
-	if s.manager.TexLoader == nil {
-		logger.Warn("no asset loader; warp portals will not be drawn")
-		pr.Destroy()
-		return
-	}
-	if err := pr.LoadTextures(s.manager.TexLoader); err != nil {
-		logger.Warn("warp portals will not be drawn", zap.Error(err))
-		pr.Destroy()
 		return
 	}
 	s.portals = pr
