@@ -67,6 +67,11 @@ func (b *ImGuiBackend) MouseCaptured() bool {
 // the game's own.
 func (b *ImGuiBackend) SetCursorState(cursor.State) {}
 
+// WantCursor never asks for one: this backend draws the system cursor.
+func (b *ImGuiBackend) WantCursor() (cursor.State, bool) {
+	return cursor.StateDefault, false
+}
+
 // Input returns the input state.
 func (b *ImGuiBackend) Input() *ui2d.InputState {
 	return b.input

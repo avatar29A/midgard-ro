@@ -38,8 +38,12 @@ type UI2DBackend struct {
 	loginWinPlaced       bool
 
 	// The game's own mouse cursor, drawn over everything else.
-	cursor     *cursor.Cursor
-	cursorTick time.Time
+	cursor *cursor.Cursor
+
+	// What the interface wants the pointer to look like this frame.
+	hudCursor    cursor.State
+	hudCursorSet bool
+	cursorTick   time.Time
 
 	// Raw archive reader, for assets that are not textures — character
 	// sprites are composited from SPR and ACT before they can be uploaded.
@@ -250,6 +254,24 @@ func (b *UI2DBackend) End() {
 	b.drawCursor()
 
 	b.ctx.End()
+}
+
+// WantCursor is the cursor an interface element under the pointer asks for,
+// and whether anything asked. Set while drawing and read afterwards, so a
+// widget can say "this is draggable" without knowing what else is on screen.
+func (b *UI2DBackend) WantCursor() (cursor.State, bool) {
+	return b.hudCursor, b.hudCursorSet
+}
+
+// wantCursor is how a widget asks. First asker wins, so a grip inside a
+// window does not have its request overwritten by the window behind it.
+func (b *UI2DBackend) wantCursor(state cursor.State) {
+	if b.hudCursorSet {
+		return
+	}
+
+	b.hudCursor = state
+	b.hudCursorSet = true
 }
 
 // SetCursorState switches which cursor is shown.
@@ -902,6 +924,10 @@ func (b *UI2DBackend) RenderCharSelectUI(state CharSelectUIState, width, height 
 
 // RenderInGameUI renders the in-game HUD.
 func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, height float32) {
+	// Cleared each frame: a request only holds while the pointer is still on
+	// the thing that made it.
+	b.hudCursor, b.hudCursorSet = cursor.StateDefault, false
+
 	// Draw scene texture as background
 	if state.SceneReady && state.SceneTexture != 0 {
 		b.ctx.Renderer().DrawSceneTexture(0, 0, width, height, state.SceneTexture)
