@@ -77,23 +77,28 @@ func (b *UI2DBackend) drawSoundConfig(screenW, screenH float32) {
 		return
 	}
 
-	x := (screenW - soundW) / 2
-	y := (screenH-soundH)/2 + escMenuH/2 + 12
-
-	// Read back where it actually is, so its contents travel with the frame.
-	if rect, ok := b.ctx.WindowRect(soundWindowID); ok {
-		x, y = rect.X, rect.Y
+	// Opens above the menu it was opened from, so both are readable at once.
+	openX := (screenW - soundW) / 2
+	openY := (screenH-escMenuH)/2 - soundH - 12
+	if openY < 0 {
+		openY = 0
 	}
 
-	b.ctx.CaptureMouse(ui2d.Rect{X: x, Y: y, W: soundW, H: soundH})
-
-	opened := b.ctx.BeginWindow(soundWindowID, x, y, soundW, soundH, "Sound Configuration")
-	if !opened {
+	if !b.ctx.BeginWindow(soundWindowID, openX, openY, soundW, soundH, "Sound Configuration") {
 		// Closed from its own title bar.
 		b.soundOpen = false
 
 		return
 	}
+
+	// Read back after BeginWindow: before, the position is last frame's, and
+	// the contents trail the frame while it is dragged.
+	x, y := openX, openY
+	if rect, ok := b.ctx.WindowRect(soundWindowID); ok {
+		x, y = rect.X, rect.Y
+	}
+
+	b.ctx.CaptureMouse(ui2d.Rect{X: x, Y: y, W: soundW, H: soundH})
 
 	r := b.ctx.Renderer()
 	top := y + ui2d.FrameTitleH + 8
