@@ -40,8 +40,10 @@ type PlayerStats struct {
 	PrimaryBonus [packets.PrimaryStatCount]int
 	PrimaryCost  [packets.PrimaryStatCount]int
 
-	// StatusPoints is what there is left to spend on them.
+	// StatusPoints is what there is left to spend on them, and SkillPoints
+	// what there is to spend on skills.
 	StatusPoints int
+	SkillPoints  int
 
 	// The derived numbers down the right of the status window.
 	Atk, AtkBonus    int
@@ -152,6 +154,8 @@ func (s *PlayerStats) Apply(varID uint16, value int64) bool {
 		s.Class = int(value)
 	case packets.SP_STATUSPOINT:
 		s.StatusPoints = int(value)
+	case packets.SP_SKILLPOINT:
+		s.SkillPoints = int(value)
 
 	// The derived numbers, which arrive one at a time as gear and buffs
 	// change. ZC_STATUS carries them once; without these the right of the

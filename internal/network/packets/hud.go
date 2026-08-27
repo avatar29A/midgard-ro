@@ -77,3 +77,76 @@ func DecodeDisconnectAck(data []byte) (uint16, bool) {
 
 	return binary.LittleEndian.Uint16(data[2:4]), true
 }
+
+// The skill list.
+//
+// The entry layout moved with the packet version and so did the id: before
+// PACKETVER 20190807 each entry carried the skill's name and the packet was
+// 0x010F; from that version the name is gone and it is 0x0B32. Ours is the
+// later one, which is why the client needs a name table of its own — the
+// server no longer sends one.
+const (
+	// ZC_SKILLINFO_LIST is `<len>.W` then a run of 15-byte entries.
+	ZC_SKILLINFO_LIST uint16 = 0x0B32
+
+	// skillEntryLen is one entry: id, inf, level, sp, range, upFlag, level2.
+	skillEntryLen = 15
+)
+
+// Skill is one entry of the list.
+type Skill struct {
+	ID    uint16
+	Level int
+
+	// Inf is what the skill targets. Zero means it targets nothing, which is
+	// how the server says passive — the window shows those as "Passive"
+	// rather than as an SP cost they do not have.
+	Inf int
+
+	// SP is what casting it costs, and Range how far it reaches.
+	SP    int
+	Range int
+
+	// Raisable is the server saying this skill can be leveled with a skill
+	// point right now.
+	Raisable bool
+}
+
+// DecodeSkillList reads the whole list. Returns nil when the packet is too
+// short to hold its own header, and stops at whatever whole entries fit —
+// a truncated tail is dropped rather than read past.
+func DecodeSkillList(data []byte) []Skill {
+	if len(data) < 4 {
+		return nil
+	}
+
+	// The declared length wins over the buffer's: the framing hands us
+	// exactly one packet, but a server that declares less than it sent should
+	// not have the remainder read as skills.
+	length := int(readU16(data, 2))
+	if length > len(data) {
+		length = len(data)
+	}
+
+	count := (length - 4) / skillEntryLen
+	if count <= 0 {
+		return nil
+	}
+
+	list := make([]Skill, 0, count)
+	for i := 0; i < count; i++ {
+		at := 4 + i*skillEntryLen
+
+		list = append(list, Skill{
+			ID:    readU16(data, at),
+			Inf:   int(readU32(data, at+2)),
+			Level: int(readU16(data, at+6)),
+			SP:    int(readU16(data, at+8)),
+			Range: int(readU16(data, at+10)),
+			// The byte after the range; level2 follows it.
+			Raisable: data[at+12] != 0,
+		})
+	}
+
+	return list
+}

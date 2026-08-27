@@ -843,10 +843,13 @@ func (g *Game) renderUI() {
 			PlayerWeight:      stats.Weight,
 			PlayerMaxWeight:   stats.MaxWeight,
 
+			Skills: state.Skills(),
+
 			PrimaryStats: stats.Primary,
 			PrimaryBonus: stats.PrimaryBonus,
 			PrimaryCost:  stats.PrimaryCost,
 			StatusPoints: stats.StatusPoints,
+			SkillPoints:  stats.SkillPoints,
 
 			Atk: stats.Atk, AtkBonus: stats.AtkBonus,
 			MatkMin: stats.MatkMin, MatkMax: stats.MatkMax,
