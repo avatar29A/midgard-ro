@@ -121,6 +121,10 @@ type InGameUIState struct {
 	// ChatLines is the chat scrollback, oldest first.
 	ChatLines []states.ChatLine
 
+	// EntityBars are the HP/SP bars to draw under units, already projected
+	// into viewport pixels.
+	EntityBars []states.EntityBar
+
 	// Player position
 	PlayerX, PlayerY, PlayerZ float32
 	PlayerTileX, PlayerTileY  int

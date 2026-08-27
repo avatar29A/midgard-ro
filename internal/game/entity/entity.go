@@ -312,6 +312,27 @@ func (m *Manager) PlayerID() uint32 {
 	return m.playerID
 }
 
+// SetVitals updates what a unit's bar shows.
+//
+// The spawn packets fill HP and MaxHP once, when a unit first appears. Nothing
+// refreshes them after that until the combat packets land (Track F), which is
+// what this exists for: damage and healing handlers call this and the bars
+// follow, with no change to anything that draws them.
+//
+// Reports whether the unit was found, so a caller can tell an update that
+// landed from one for a unit that has already despawned.
+func (m *Manager) SetVitals(id uint32, hp, maxHP int) bool {
+	e := m.entities[id]
+	if e == nil {
+		return false
+	}
+
+	e.HP = hp
+	e.MaxHP = maxHP
+
+	return true
+}
+
 // Update updates all entities.
 func (m *Manager) Update(dt float64) {
 	for _, e := range m.entities {
