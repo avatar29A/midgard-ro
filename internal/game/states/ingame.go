@@ -99,8 +99,10 @@ type InGameState struct {
 	// quit ends the process, once the server has agreed to let us go.
 	quit QuitFunc
 
-	// skills is what the character can do, as the server listed it.
-	skills []packets.Skill
+	// skills is what the character can do, as the server listed it, and
+	// inventory what it is carrying — the two lists appended together.
+	skills    []packets.Skill
+	inventory []packets.InventoryItem
 
 	// unitTraceAt rate limits the unit render statistics.
 	unitTraceAt time.Time
@@ -938,6 +940,53 @@ func (s *InGameState) handleSkillList(data []byte) error {
 	return nil
 }
 
+// handleInventoryNormal takes the stackable half of the inventory.
+func (s *InGameState) handleInventoryNormal(data []byte) error {
+	return s.takeInventory(data, packets.NormalItemLen, "normal", packets.DecodeInventoryNormal)
+}
+
+// handleInventoryEquip takes the worn half.
+func (s *InGameState) handleInventoryEquip(data []byte) error {
+	return s.takeInventory(data, packets.EquipItemLen, "equip", packets.DecodeInventoryEquip)
+}
+
+// takeInventory folds one of the two lists into the inventory, and complains
+// loudly if the entries did not divide evenly.
+//
+// That check is the important part. The entry layout changed several times
+// across packet versions and the sizes here are read off the server's structs
+// with our version's guards resolved by hand. If the arithmetic is wrong the
+// remainder says so, which is far easier to act on than a window full of
+// nonsense items.
+func (s *InGameState) takeInventory(
+	data []byte, entryLen int, which string, decode func([]byte) []packets.InventoryItem,
+) error {
+	if left := packets.ItemListRemainder(data, entryLen); left != 0 {
+		logger.Warn("inventory list does not divide into whole entries",
+			zap.String("list", which),
+			zap.Int("entryLen", entryLen),
+			zap.Int("remainder", left),
+			zap.Int("bytes", len(data)))
+
+		return nil
+	}
+
+	items := decode(data)
+	s.inventory = append(s.inventory, items...)
+
+	trace.Emit(trace.HUD, "inventory",
+		zap.String("list", which),
+		zap.Int("added", len(items)),
+		zap.Int("total", len(s.inventory)))
+
+	return nil
+}
+
+// Inventory returns what the character is carrying, for the interface.
+func (s *InGameState) Inventory() []packets.InventoryItem {
+	return s.inventory
+}
+
 // Skills returns the character's skills for the interface, oldest order kept:
 // the server sends them in the order the window is meant to list them.
 func (s *InGameState) Skills() []packets.Skill {
@@ -1082,6 +1131,8 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_PAR_CHANGE, s.handleStatusChange)
 	s.client.RegisterHandler(packets.ZC_STATUS, s.handleStatus)
 	s.client.RegisterHandler(packets.ZC_SKILLINFO_LIST, s.handleSkillList)
+	s.client.RegisterHandler(packets.ZC_INVENTORY_ITEMLIST_NORMAL, s.handleInventoryNormal)
+	s.client.RegisterHandler(packets.ZC_INVENTORY_ITEMLIST_EQUIP, s.handleInventoryEquip)
 	s.client.RegisterHandler(packets.ZC_COUPLESTATUS, s.handleCoupleStatus)
 	s.client.RegisterHandler(packets.ZC_LONGPAR_CHANGE, s.handleStatusChange)
 	s.client.RegisterHandler(packets.ZC_LONGLONGPAR_CHANGE, s.handleStatusChange)

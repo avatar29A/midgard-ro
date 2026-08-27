@@ -31,6 +31,7 @@ const (
 var hudWindowFrames = map[HUDWindow]string{
 	WindowInfo:  statsWindowID,
 	WindowSkill: skillsWindowID,
+	WindowItem:  itemsWindowID,
 }
 
 // hudWindowTitles are what each window calls itself, matching the original.

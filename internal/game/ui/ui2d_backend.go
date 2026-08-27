@@ -120,6 +120,7 @@ type UI2DBackend struct {
 	hotkeyDirty  bool
 
 	skillScroll int
+	itemScroll  int
 
 	escOpen   bool
 	escAction EscAction
@@ -965,6 +966,7 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 	b.drawSoundConfig(width, height)
 	b.drawStatsWindow(state, width, height)
 	b.drawSkillsWindow(state, width, height)
+	b.drawItemsWindow(state, width, height)
 	b.renderNPCDialog(state, width, height)
 	b.renderNPCMenu(state, width, height)
 

@@ -121,3 +121,62 @@ func TestDecodeSkillListEmpty(t *testing.T) {
 		t.Errorf("decoded %v, want nil", got)
 	}
 }
+
+// TestDecodeInventoryNormal walks the 34-byte entry our packet version
+// declares: index, ITID, type, count, WearState, four uint32 card slots,
+// HireExpireDate and a flag byte.
+//
+// The card slots are where this is easy to get wrong — they were four uint16
+// until PACKETVER_RE 20180704 and are four uint32 after, eight bytes a row.
+func TestDecodeInventoryNormal(t *testing.T) {
+	entry := func(index int, id uint32, count int) []byte {
+		b := make([]byte, NormalItemLen)
+		binary.LittleEndian.PutUint16(b[0:], uint16(index))
+		binary.LittleEndian.PutUint32(b[2:], id)
+		b[6] = 3 // type
+		binary.LittleEndian.PutUint16(b[7:], uint16(count))
+
+		return b
+	}
+
+	body := append(entry(2, 501, 5), entry(3, 512, 10)...)
+
+	pkt := make([]byte, itemListHeaderLen)
+	binary.LittleEndian.PutUint16(pkt[0:], ZC_INVENTORY_ITEMLIST_NORMAL)
+	binary.LittleEndian.PutUint16(pkt[2:], uint16(itemListHeaderLen+len(body)))
+	pkt = append(pkt, body...)
+
+	got := DecodeInventoryNormal(pkt)
+	if len(got) != 2 {
+		t.Fatalf("decoded %d items, want 2", len(got))
+	}
+	if got[0].ID != 501 || got[0].Count != 5 || got[0].Index != 2 {
+		t.Errorf("first = %+v, want index 2 id 501 count 5", got[0])
+	}
+	if got[1].ID != 512 || got[1].Count != 10 {
+		t.Errorf("second = %+v, want id 512 count 10", got[1])
+	}
+}
+
+// TestItemListRemainderCatchesWrongEntrySize is the guard that matters most
+// here: the entry sizes are read off the server's structs with our version's
+// guards resolved by hand, and a wrong one would otherwise fill the window
+// with nonsense rather than say anything.
+func TestItemListRemainderCatchesWrongEntrySize(t *testing.T) {
+	pkt := make([]byte, itemListHeaderLen+NormalItemLen)
+	binary.LittleEndian.PutUint16(pkt[0:], ZC_INVENTORY_ITEMLIST_NORMAL)
+	binary.LittleEndian.PutUint16(pkt[2:], uint16(len(pkt)))
+
+	if left := ItemListRemainder(pkt, NormalItemLen); left != 0 {
+		t.Errorf("remainder = %d for the size it was built with, want 0", left)
+	}
+
+	// A size that does not divide must report the leftovers, and decoding
+	// with it must return nothing rather than a misread list.
+	if left := ItemListRemainder(pkt, NormalItemLen-1); left == 0 {
+		t.Error("a size that does not divide must report a remainder")
+	}
+	if got := decodeItemList(pkt, NormalItemLen-1, func([]byte) InventoryItem { return InventoryItem{} }); got != nil {
+		t.Errorf("decoded %v with the wrong entry size, want nothing", got)
+	}
+}
