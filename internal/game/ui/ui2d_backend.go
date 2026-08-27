@@ -88,6 +88,10 @@ type UI2DBackend struct {
 	hudPlaced  bool
 	hudReduced bool
 
+	// Which menu windows are open. The buttons under the panel toggle these;
+	// each window draws itself when its entry is set.
+	hudOpen map[HUDWindow]bool
+
 	// Cached widget states
 	loginUsername string
 	loginPassword string
@@ -922,6 +926,8 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 			b.ctx.Separator()
 			b.ctx.Row(16)
 			b.ctx.Label("Dialog: " + describeDialog(state))
+			b.ctx.Row(16)
+			b.ctx.Label("HUD: " + b.describeHUD())
 			b.ctx.EndWindow()
 		}
 	}
