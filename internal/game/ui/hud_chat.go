@@ -30,9 +30,23 @@ const (
 	// chatInputH is the bar along the bottom, which carries dialog_bg.bmp.
 	chatInputH float32 = 25
 
-	// chatNameW is the whisper-target field at the left of that bar. Empty
-	// means the line goes to public chat; a name makes it private.
-	chatNameW float32 = 90
+	// The two boxes are painted into dialog_bg.bmp rather than drawn by us,
+	// and these are where they sit in it: a 600x24 image whose name box spans
+	// x 6-93 and whose message box spans x 110-568, both from y 5 to y 21.
+	//
+	// They are fractions because the bar is one stretched image. At fixed
+	// offsets the fields drift out of their boxes as soon as the chat is
+	// resized, and even at the default width the message text started 14px
+	// left of its box, sitting on the divider between the two.
+	chatBGW = 600
+	chatBGH = 24
+
+	chatNameBoxL = 6.0 / chatBGW
+	chatNameBoxR = 93.0 / chatBGW
+	chatMsgBoxL  = 110.0 / chatBGW
+	chatMsgBoxR  = 568.0 / chatBGW
+	chatBoxT     = 5.0 / chatBGH
+	chatBoxB     = 21.0 / chatBGH
 
 	// chatCtrlBtn is one control-panel button in the tab strip, and
 	// chatCtrlGap the space between them.
@@ -461,26 +475,21 @@ func (b *UI2DBackend) drawChatInput(x, y, w float32) {
 	// Two fields, as the original has: a name and a message. Leaving the name
 	// blank talks to everyone; filling it in makes the line a whisper. They
 	// take focus independently, by click or by Tab.
-	nameW := chatNameW
-	msgX := x + nameW + chatCtrlGap
-	msgW := w - nameW - chatCtrlGap - chatPadding
+	nameBox := chatInputBox(x, y, w, chatNameBoxL, chatNameBoxR)
+	msgBox := chatInputBox(x, y, w, chatMsgBoxL, chatMsgBoxR)
 
 	name, _, nameSubmit := b.ctx.TextInputBareAt("hud_chat_name",
-		x+chatPadding, y+3, nameW-chatPadding, chatInputH-6, 1, b.chatName)
+		nameBox.X, nameBox.Y, nameBox.W, nameBox.H, 1, b.chatName)
 	b.chatName = name
 
 	msg, _, msgSubmit := b.ctx.TextInputBareAt("hud_chat_input",
-		msgX, y+3, msgW, chatInputH-6, 1, b.chatInput)
+		msgBox.X, msgBox.Y, msgBox.W, msgBox.H, 1, b.chatInput)
 	b.chatInput = msg
 
-	// A hairline between them, so it reads as two boxes rather than one long
-	// one with a gap in the text.
-	r.DrawRect(x+nameW, y+4, 1, chatInputH-8, chatBorder)
-
-	// The fields are drawn bare, on a background strip that already looks like
-	// a box, so an outline is the only thing that says where the typing goes.
-	b.outlineIfFocused("hud_chat_name", x+chatPadding-2, y+2, nameW-chatPadding+2, chatInputH-4)
-	b.outlineIfFocused("hud_chat_input", msgX-2, y+2, msgW+4, chatInputH-4)
+	// The fields are drawn bare, into boxes the background already paints, so
+	// an outline is the only thing that says where the typing goes.
+	b.outlineIfFocused("hud_chat_name", nameBox)
+	b.outlineIfFocused("hud_chat_input", msgBox)
 
 	// Enter sends from either field: with the caret in the name box there is
 	// nothing else Enter could sensibly mean.
@@ -494,6 +503,18 @@ func (b *UI2DBackend) drawChatInput(x, y, w float32) {
 		b.chatInput = ""
 		// Back to following the newest line: you just added one.
 		b.chatPinned = true
+	}
+}
+
+// chatInputBox maps one of the boxes painted into dialog_bg.bmp onto the bar
+// as it is actually drawn, so the field lands inside its box whatever width
+// the chat has been dragged to.
+func chatInputBox(x, y, w, left, right float32) ui2d.Rect {
+	return ui2d.Rect{
+		X: x + w*left,
+		Y: y + chatInputH*chatBoxT,
+		W: w * (right - left),
+		H: chatInputH * (chatBoxB - chatBoxT),
 	}
 }
 
@@ -511,16 +532,16 @@ func (b *UI2DBackend) TakeChatMessage() (target, message string) {
 
 // outlineIfFocused frames a field that has the keyboard, so it is obvious
 // which of the two the next keystroke lands in.
-func (b *UI2DBackend) outlineIfFocused(id string, x, y, w, h float32) {
+func (b *UI2DBackend) outlineIfFocused(id string, box ui2d.Rect) {
 	if !b.ctx.Focused(id) {
 		return
 	}
 
 	r := b.ctx.Renderer()
-	r.DrawRect(x, y, w, 1, chatFocusBorder)
-	r.DrawRect(x, y+h-1, w, 1, chatFocusBorder)
-	r.DrawRect(x, y, 1, h, chatFocusBorder)
-	r.DrawRect(x+w-1, y, 1, h, chatFocusBorder)
+	r.DrawRect(box.X, box.Y, box.W, 1, chatFocusBorder)
+	r.DrawRect(box.X, box.Y+box.H-1, box.W, 1, chatFocusBorder)
+	r.DrawRect(box.X, box.Y, 1, box.H, chatFocusBorder)
+	r.DrawRect(box.X+box.W-1, box.Y, 1, box.H, chatFocusBorder)
 }
 
 // max32 is the float32 max the standard library only offers for float64.
