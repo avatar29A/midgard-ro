@@ -222,35 +222,76 @@ func (c *Context) PasswordInputBareAt(id string, x, y, w, h, scale float32, valu
 func (c *Context) textFieldAt(id string, x, y, w, h float32, value string, masked, chrome bool, scale float32) (string, bool, bool) {
 	rect := Rect{x, y, w, h}
 	hovered := rect.Contains(c.input.MouseX, c.input.MouseY)
-	focused := c.activeWidget == id
 	changed := false
 	submitted := false
 
-	if hovered && c.input.MouseLeftPressed {
+	// Claim a pending Tab before this call can hand one on, so a lone field
+	// does not tab to itself and a field never steals the focus it just gave
+	// away. Fields drawn in call order are the tab order; a Tab from the last
+	// one survives into the next frame and wraps onto the first.
+	if c.focusNext {
 		c.activeWidget = id
-		focused = true
-	} else if !hovered && c.input.MouseLeftPressed {
-		// Clicking outside an active text field releases focus.
-		if focused {
+		c.focusNext = false
+		c.selectAll = ""
+	}
+	focused := c.activeWidget == id
+
+	if c.input.MouseLeftPressed {
+		switch {
+		case hovered:
+			c.activeWidget = id
+			focused = true
+			// A double click selects the whole value, which is the only way
+			// to clear a field in one gesture without a caret to drag.
+			if c.DoubleClickedIn(id, rect) {
+				c.selectAll = id
+			} else {
+				c.selectAll = ""
+			}
+		case focused:
 			c.activeWidget = ""
 			focused = false
+			c.selectAll = ""
 		}
 	}
 
+	selected := focused && c.selectAll == id && value != ""
+
 	if focused {
 		if len(c.input.TextInput) > 0 {
+			if selected {
+				value = ""
+				selected = false
+				c.selectAll = ""
+			}
 			value += c.input.TextInput
 			changed = true
 		}
-		if c.input.KeyBackspacePressed && len(value) > 0 {
-			value = value[:len(value)-1]
-			changed = true
+		if c.input.KeyBackspacePressed || c.input.KeyDeletePressed {
+			switch {
+			case selected:
+				value = ""
+				selected = false
+				c.selectAll = ""
+				changed = true
+			case c.input.KeyBackspacePressed && value != "":
+				value = trimLastRune(value)
+				changed = true
+			}
 		}
 		if c.input.KeyEnterPressed {
 			submitted = true
 		}
 		if c.input.KeyEscapePressed {
 			c.activeWidget = ""
+			c.selectAll = ""
+		}
+		if c.input.KeyTabPressed {
+			c.activeWidget = ""
+			c.selectAll = ""
+			c.focusNext = true
+			focused = false
+			selected = false
 		}
 	}
 
@@ -260,11 +301,15 @@ func (c *Context) textFieldAt(id string, x, y, w, h float32, value string, maske
 
 	displayed := value
 	if masked {
-		displayed = ""
-		for range value {
-			displayed += "*"
-		}
+		displayed = maskRunes(value)
 	}
+
+	// There is no scissor in the renderer, so overflow is handled by drawing
+	// only the tail that fits: the caret sits at the end of the value, and
+	// keeping it visible is what matters while typing.
+	const pad = 4
+	inner := w - 2*pad
+	displayed = fitTextTail(c.renderer, displayed, scale, inner)
 
 	// Body text scaled down so glyphs sit comfortably inside the field —
 	// at scale=1.0 cap-height was visually too tall for a 22-28px input.
@@ -272,15 +317,61 @@ func (c *Context) textFieldAt(id string, x, y, w, h float32, value string, maske
 	// line-height that includes leading + descender padding.
 	ascent := c.renderer.FontAscent(scale)
 	textY := y + (h-ascent)/2
-	c.renderer.DrawText(x+4, textY, displayed, scale, ColorText)
+	textW, _ := c.renderer.MeasureText(displayed, scale)
 
-	if focused {
-		textW, _ := c.renderer.MeasureText(displayed, scale)
-		cursorX := x + 4 + textW
-		c.renderer.DrawRect(cursorX, y+4, 2, h-8, ColorText)
+	// The caret and the selection follow the text, not the field: sized to
+	// the field they stay full height when the text is scaled down, which
+	// leaves a caret taller than the characters it sits among.
+	caretH := ascent + 2
+	caretY := y + (h-caretH)/2
+
+	if selected {
+		c.renderer.DrawRect(x+pad, caretY, textW, caretH, ColorSelection)
+	}
+	c.renderer.DrawText(x+pad, textY, displayed, scale, ColorText)
+
+	if focused && !selected {
+		c.renderer.DrawRect(x+pad+textW, caretY, 2, caretH, ColorText)
 	}
 
 	return value, changed, submitted
+}
+
+// fitTextTail returns the longest suffix of s that measures within maxW, so a
+// value longer than its field scrolls instead of spilling past the edge.
+func fitTextTail(r *Renderer, s string, scale, maxW float32) string {
+	if s == "" || maxW <= 0 {
+		return s
+	}
+	if w, _ := r.MeasureText(s, scale); w <= maxW {
+		return s
+	}
+	runes := []rune(s)
+	for i := 1; i < len(runes); i++ {
+		tail := string(runes[i:])
+		if w, _ := r.MeasureText(tail, scale); w <= maxW {
+			return tail
+		}
+	}
+	return ""
+}
+
+// trimLastRune drops the final rune, not the final byte: names arrive as UTF-8
+// and a byte-wise backspace would leave a broken sequence behind.
+func trimLastRune(s string) string {
+	runes := []rune(s)
+	if len(runes) == 0 {
+		return s
+	}
+	return string(runes[:len(runes)-1])
+}
+
+func maskRunes(s string) string {
+	masked := make([]rune, 0, len(s))
+	for range s {
+		masked = append(masked, '*')
+	}
+	return string(masked)
 }
 
 // InvisibleButtonAt is a hit area with no drawing of its own, for regions whose
@@ -394,4 +485,202 @@ func (c *Context) ImageAt(x, y, w, h float32, texID uint32, tint Color) {
 		return
 	}
 	c.renderer.DrawImage(texID, x, y, w, h, tint)
+}
+
+// WindowRect is where a window actually is.
+//
+// BeginWindow takes a position, but only as an opening hint: once the window
+// has been dragged it keeps its own, and the caller's is ignored. Anything
+// drawn inside at the position it passed in therefore stays behind when the
+// frame is moved, which is what this is for.
+func (c *Context) WindowRect(id string) (Rect, bool) {
+	ws, ok := c.windows[id]
+	if !ok {
+		return Rect{}, false
+	}
+
+	return Rect{X: ws.X, Y: ws.Y, W: ws.W, H: ws.H}, true
+}
+
+// OpenWindow reopens a window that was closed from its own X.
+//
+// Closing sets a flag on the window's remembered state, and BeginWindow
+// returns false while it is set — for good, since the state outlives the
+// window. Anything that offers a way to open a window again has to clear it,
+// or the window opens once per session and never more.
+func (c *Context) OpenWindow(id string) {
+	if ws, ok := c.windows[id]; ok {
+		ws.Open = true
+	}
+}
+
+// CheckboxAt is Checkbox at a position of the caller's choosing, for a dialog
+// laid out to match the original rather than by the cursor.
+func (c *Context) CheckboxAt(id string, x, y, size float32, label string, checked bool) bool {
+	rect := Rect{x, y, size, size}
+	hovered := rect.Contains(c.input.MouseX, c.input.MouseY)
+
+	if hovered && c.input.MouseLeftPressed {
+		c.activeWidget = id
+	}
+
+	if c.activeWidget == id && c.input.MouseLeftReleased {
+		if hovered {
+			checked = !checked
+		}
+		c.activeWidget = ""
+	}
+
+	// A white box in a thin dark border, which is what the original's is: the
+	// panel-colored fill and heavy border read as a button, not a checkbox.
+	bg := ColorCheckFace
+	if hovered {
+		bg = ColorCheckFaceHot
+	}
+	c.renderer.DrawRect(x, y, size, size, bg)
+	c.renderer.DrawRectOutline(x, y, size, size, 1, ColorCheckBorder)
+
+	if checked {
+		const inset float32 = 3
+		c.renderer.DrawRect(x+inset, y+inset, size-inset*2, size-inset*2, ColorCheckMark)
+	}
+
+	if label != "" {
+		_, capH := c.renderer.MeasureText(label, 1)
+		c.renderer.DrawText(x+size+6, y+(size-capH)/2, label, 1, ColorText)
+	}
+
+	return checked
+}
+
+// SliderAt is a horizontal slider between 0 and 1, with the arrow caps the
+// original draws at each end.
+//
+// The value follows the pointer while the knob is held rather than moving by
+// how far the pointer traveled: a drag that leaves the track and comes back
+// then picks up where the pointer is, instead of somewhere behind it.
+func (c *Context) SliderAt(id string, x, y, w, h, value float32) (float32, bool) {
+	const (
+		cap   float32 = 9
+		knobW float32 = 9
+	)
+
+	trackX := x + cap
+	trackW := w - 2*cap
+
+	// The knob's center travels the track inset by half its own width, so it
+	// stops flush with each end rather than hanging over it.
+	span := trackW - knobW
+	if span < 1 {
+		span = 1
+	}
+
+	rect := Rect{x, y, w, h}
+	if c.input.MouseLeftPressed && rect.Contains(c.input.MouseX, c.input.MouseY) {
+		c.activeWidget = id
+	}
+
+	changed := false
+	if c.activeWidget == id {
+		if c.input.MouseLeftDown {
+			want := (c.input.MouseX - trackX - knobW/2) / span
+			want = clamp01(want)
+
+			if want != value {
+				value = want
+				changed = true
+			}
+		} else {
+			c.activeWidget = ""
+		}
+	}
+
+	value = clamp01(value)
+
+	// A pale track in a thin border, an outlined arrow at each end, and a
+	// round knob — the original's is a Windows trackbar, not a painted RO
+	// widget, and a solid blue bar is not what it looks like.
+	trackY := y + h/2 - 5
+	c.renderer.DrawRect(trackX, trackY, trackW, 10, ColorTrackFace)
+	c.renderer.DrawRectOutline(trackX, trackY, trackW, 10, 1, ColorTrackBorder)
+
+	c.drawSliderCap(x, y+h/2, cap, true)
+	c.drawSliderCap(x+w-cap, y+h/2, cap, false)
+
+	c.drawSliderKnob(trackX+value*span+knobW/2, y+h/2, knobW/2)
+
+	return value, changed
+}
+
+// drawSliderCap draws one of the triangular ends, filling [x, x+size] and
+// pointing away from the track.
+func (c *Context) drawSliderCap(x, midY, size float32, left bool) {
+	// Stepped columns rather than a real triangle: the renderer draws
+	// rectangles, and at this size the steps read as the arrow the original
+	// has. Each column is tallest at the track side and a pixel at the point.
+	//
+	// Outlined rather than solid: a pale face with an edge, so it matches the
+	// track it sits against instead of being a block of color beside it.
+	steps := int(size)
+	for i := 0; i < steps; i++ {
+		half := float32(i+1) / float32(steps) * size / 2
+		if half < 1 {
+			half = 1
+		}
+
+		// i counts from the point outward, so it maps to the far column on a
+		// left-pointing cap and the near one on a right-pointing cap.
+		col := x + size - float32(i) - 1
+		if left {
+			col = x + float32(i)
+		}
+
+		c.renderer.DrawRect(col, midY-half, 1, half*2, ColorTrackFace)
+		c.renderer.DrawRect(col, midY-half, 1, 1, ColorSliderEdge)
+		c.renderer.DrawRect(col, midY+half-1, 1, 1, ColorSliderEdge)
+
+		// The point itself, so the tip is edged rather than open.
+		if i == 0 {
+			c.renderer.DrawRect(col, midY-half, 1, half*2, ColorSliderEdge)
+		}
+	}
+}
+
+// drawSliderKnob draws the round grip. The renderer has no circle, so it is
+// built from rows whose width follows the chord of one.
+func (c *Context) drawSliderKnob(cx, cy, radius float32) {
+	for dy := -radius; dy <= radius; dy++ {
+		halfW := sqrt32(radius*radius - dy*dy)
+		if halfW < 0.5 {
+			continue
+		}
+
+		c.renderer.DrawRect(cx-halfW, cy+dy, halfW*2, 1, ColorKnobFace)
+	}
+}
+
+// sqrt32 is a Newton step or two, which is plenty for a knob a few pixels
+// across and avoids pulling math in for one call.
+func sqrt32(v float32) float32 {
+	if v <= 0 {
+		return 0
+	}
+
+	guess := v
+	for i := 0; i < 8; i++ {
+		guess = 0.5 * (guess + v/guess)
+	}
+
+	return guess
+}
+
+func clamp01(v float32) float32 {
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+
+	return v
 }

@@ -73,3 +73,34 @@ func TestLoadUIStateCorruptFile(t *testing.T) {
 		t.Errorf("CameraZoom = %v from a corrupt file, want the zero value", got.CameraZoom)
 	}
 }
+
+// TestUpdateUIStateKeepsOtherFields is the guard for the clobber: the camera
+// records its zoom on the way out, and a whole-struct save that only knew
+// about the zoom would write zeroes over the chat's remembered place.
+func TestUpdateUIStateKeepsOtherFields(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	if err := UpdateUIState(func(s *UIState) {
+		s.ChatX, s.ChatY, s.ChatW, s.ChatH = 12, 34, 500, 200
+		s.ChatLocked = true
+	}); err != nil {
+		t.Fatalf("saving chat placement: %v", err)
+	}
+
+	if err := UpdateUIState(func(s *UIState) { s.CameraZoom = 42 }); err != nil {
+		t.Fatalf("saving zoom: %v", err)
+	}
+
+	got := LoadUIState()
+	if got.CameraZoom != 42 {
+		t.Errorf("CameraZoom = %v, want 42", got.CameraZoom)
+	}
+	if got.ChatX != 12 || got.ChatY != 34 || got.ChatW != 500 || got.ChatH != 200 {
+		t.Errorf("chat placement = %v/%v %vx%v, want 12/34 500x200",
+			got.ChatX, got.ChatY, got.ChatW, got.ChatH)
+	}
+	if !got.ChatLocked {
+		t.Error("ChatLocked was lost")
+	}
+}
