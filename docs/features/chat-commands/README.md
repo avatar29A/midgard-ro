@@ -1,6 +1,6 @@
 # Feature: Chat commands — `/` client commands and `@` GM commands
 
-**Branch:** `feature/chat-commands` · **Issue:** _(filled after creation)_ · **Parent:** #49 (MVP scope), #53 (Track D — HUD)
+**Branch:** `feature/chat-commands` · **Issue:** #94 · **Parent:** #49 (MVP scope), #53 (Track D — HUD)
 **Status:** Planned · **Created:** 2026-08-27
 
 ## Goal
