@@ -977,6 +977,30 @@ func (c *Context) DragHandle(id string, handle Rect, x, y *float32) {
 	}
 }
 
+// Held claims the press inside handle and reports true for as long as the
+// button stays down.
+//
+// It is for a drag whose effect is not a position: the hotkey bar's corner
+// sets a row count from where the pointer has got to, which DragHandle's pair
+// of floats cannot express.
+func (c *Context) Held(id string, handle Rect) bool {
+	if c.input.MouseLeftPressed && handle.Contains(c.input.MouseX, c.input.MouseY) {
+		c.activeWidget = id
+	}
+
+	if c.activeWidget != id {
+		return false
+	}
+
+	if !c.input.MouseLeftDown {
+		c.activeWidget = ""
+
+		return false
+	}
+
+	return true
+}
+
 // DragHandleFree is DragHandle for a surface that lies underneath other
 // widgets: it takes the press only when nothing else has claimed it.
 //

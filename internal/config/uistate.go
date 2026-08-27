@@ -32,6 +32,12 @@ type UIState struct {
 	ChatW      float32 `json:"chat_w,omitempty"`
 	ChatH      float32 `json:"chat_h,omitempty"`
 	ChatLocked bool    `json:"chat_locked,omitempty"`
+
+	// Where the hotkey bar was left and how many of its rows were open. Zero
+	// rows means unset, and the bar opens with one beside the info panel.
+	HotkeyX    float32 `json:"hotkey_x,omitempty"`
+	HotkeyY    float32 `json:"hotkey_y,omitempty"`
+	HotkeyRows int     `json:"hotkey_rows,omitempty"`
 }
 
 // LoadUIState reads remembered UI state. A missing or unreadable file is not
