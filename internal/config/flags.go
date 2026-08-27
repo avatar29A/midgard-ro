@@ -2,6 +2,7 @@ package config
 
 import (
 	"flag"
+	"fmt"
 	"time"
 )
 
@@ -13,12 +14,14 @@ var (
 	flagFullscreen = flag.Bool("fullscreen", false, "Run in fullscreen mode")
 	flagWidth      = flag.Int("width", 0, "Window width")
 	flagHeight     = flag.Int("height", 0, "Window height")
-	flagTrace      = flag.String("trace", "", "Comma-separated trace channels (move, pick, net, render, status, or all)")
+	flagTrace      = flag.String("trace", "", "Comma-separated trace channels (move, pick, net, render, status, npc, map, or all)")
 	flagShotAfter  = flag.Duration("screenshot-after", 0, "Capture a screenshot this long after startup, then keep running (QA aid)")
 	flagShotEvery  = flag.Duration("screenshot-every", 0, "Capture a screenshot on this interval (QA aid)")
 	flagAutoLogin  = flag.Bool("autologin", false, "Log in and enter the first character without input (QA aid)")
 	flagDebugHUD   = flag.Bool("debug-overlay", false, "Start with the F3 debug overlay open (QA aid)")
 	flagNoBGM      = flag.Bool("no-bgm", false, "Run without background music, keeping sound effects")
+	flagWalkTo     = flag.String("walk-to", "", "Once in game, walk to this cell, e.g. 156,22 (QA aid)")
+	flagMouseAt    = flag.String("mouse-at", "", "Once in game, put the pointer at this window position, e.g. 640,360 (QA aid)")
 )
 
 // ParseFlags parses command-line flags. Call this early in main().
@@ -68,6 +71,47 @@ func DebugOverlay() bool {
 // effects are unaffected.
 func NoBGM() bool {
 	return *flagNoBGM
+}
+
+// WalkTo returns the cell --walk-to asked for, and whether one was given.
+//
+// Stepping onto a warp is the one thing an unattended run could not do by
+// itself: the trigger is a cell, and reaching it takes a click. This issues
+// that click once the map is up, through the same path a real one takes, so
+// a map change can be captured with nobody at the keyboard.
+func WalkTo() (x, y int, ok bool) {
+	if *flagWalkTo == "" {
+		return 0, 0, false
+	}
+	if _, err := fmt.Sscanf(*flagWalkTo, "%d,%d", &x, &y); err != nil {
+		return 0, 0, false
+	}
+	return x, y, true
+}
+
+// WalkToSpec returns the raw --walk-to value, for reporting one that did not
+// parse.
+func WalkToSpec() string {
+	return *flagWalkTo
+}
+
+// MouseAt returns the window position --mouse-at asked for, and whether one
+// was given. Which cursor is drawn depends on what the pointer is over, and
+// an unattended capture has no hand to put it there.
+func MouseAt() (x, y int, ok bool) {
+	if *flagMouseAt == "" {
+		return 0, 0, false
+	}
+	if _, err := fmt.Sscanf(*flagMouseAt, "%d,%d", &x, &y); err != nil {
+		return 0, 0, false
+	}
+	return x, y, true
+}
+
+// MouseAtSpec returns the raw --mouse-at value, for reporting one that did
+// not parse.
+func MouseAtSpec() string {
+	return *flagMouseAt
 }
 
 // ConfigPath returns the explicit config path if provided via --config flag.

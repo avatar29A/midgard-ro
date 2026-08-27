@@ -52,3 +52,13 @@ var ShadowVertexShader string
 //
 //go:embed shadow.frag
 var ShadowFragmentShader string
+
+// PortalVertexShader is the vertex shader for the warp portal effect.
+//
+//go:embed portal.vert
+var PortalVertexShader string
+
+// PortalFragmentShader is the fragment shader for the warp portal effect.
+//
+//go:embed portal.frag
+var PortalFragmentShader string

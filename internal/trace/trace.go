@@ -47,6 +47,10 @@ const (
 	// click marker sits. Stat values stay on Status — reporting the same
 	// change on two channels would split the trail rather than widen it.
 	HUD = "hud"
+	// Map covers a map change from the packet that orders it to the one that
+	// says we are ready: the load's phases and their timings, what was kept
+	// and dropped on the way, and the camera rules the new map brought.
+	Map = "map"
 )
 
 // All is the channel spec that turns everything on.

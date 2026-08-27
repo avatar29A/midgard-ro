@@ -98,6 +98,9 @@ type Manager struct {
 	// BGM is nil when audio is unavailable, which the PlayBGM helpers below
 	// tolerate so states never have to check.
 	BGM BGMController
+
+	// mapRules holds the camera tables once read; see MapRules.
+	mapRules mapRulesOnce
 }
 
 // NewManager creates a new state manager.
