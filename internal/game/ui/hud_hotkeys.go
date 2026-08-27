@@ -39,6 +39,10 @@ const (
 
 	hotkeySysBtn float32 = 11
 	hotkeyResize float32 = 13
+
+	// hotkeyNumScale shrinks the row numbers. At full size they crowded the
+	// strip they sit in and ran into the resize corner.
+	hotkeyNumScale float32 = 0.7
 )
 
 // drawHotkeys draws the bar and handles moving and resizing it.
@@ -83,13 +87,13 @@ func (b *UI2DBackend) drawHotkeyRowNumbers(x, y float32, rows int) {
 	for i := 0; i < rows; i++ {
 		label := strconv.Itoa(i + 1)
 
-		capW, capH := r.MeasureText(label, 1)
+		capW, capH := r.MeasureText(label, hotkeyNumScale)
 		capX := numX + (numW-capW)/2
 		capY := y + float32(i)*hotkeyRowH + (hotkeyRowH-capH)/2
 
 		// Dark: the row is a light strip, and the pale-on-dark color the rest
 		// of the HUD uses reads as an outline here rather than a number.
-		r.DrawText(capX, capY, label, 1, ui2d.ColorText)
+		r.DrawText(capX, capY, label, hotkeyNumScale, ui2d.ColorText)
 	}
 }
 
