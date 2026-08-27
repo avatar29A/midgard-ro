@@ -20,8 +20,9 @@ const (
 	// tall in an image we do not control, and the body's size overflows them.
 	chatInputScale float32 = 0.8
 
-	// chatLineH is the height of one wrapped line.
-	chatLineH float32 = 14
+	// chatLineGap is the air between one message and the next. The line's own
+	// height comes from the font, so this is only the breathing room.
+	chatLineGap float32 = 4
 
 	// chatScrollW is the gutter the scrollbar occupies.
 	chatScrollW float32 = 14
@@ -389,7 +390,7 @@ func (b *UI2DBackend) drawChatControls(x, y, w float32) {
 // bar where it is: the bar is what the eye tracks, and having it walk up the
 // screen every time the scrollback grew would be the wrong thing to move.
 func (b *UI2DBackend) stepChatHeight(lines float32) {
-	want := clampF(b.chatH+lines*chatLineH, chatMinH, chatMaxH)
+	want := clampF(b.chatH+lines*b.chatLineH(), chatMinH, chatMaxH)
 	b.chatY -= want - b.chatH
 	b.chatH = want
 	b.chatPinned = true
@@ -403,7 +404,7 @@ func (b *UI2DBackend) drawChatLines(state InGameUIState, x, y, w, h float32) {
 	wrapped := b.wrapChat(state.ChatLines, textW)
 
 	usableH := h - 2*chatPadding
-	visible := int(usableH / chatLineH)
+	visible := int(usableH / b.chatLineH())
 	if visible < 1 {
 		visible = 1
 	}
@@ -432,7 +433,7 @@ func (b *UI2DBackend) drawChatLines(state InGameUIState, x, y, w, h float32) {
 	}
 
 	for i := 0; i < visible && offset+i < len(wrapped); i++ {
-		lineY := y + chatPadding + float32(i)*chatLineH
+		lineY := y + chatPadding + float32(i)*b.chatLineH()
 		runX := x + chatPadding
 
 		for _, run := range wrapped[offset+i] {
@@ -541,4 +542,12 @@ func max32(a, b float32) float32 {
 	}
 
 	return b
+}
+
+// chatLineH is how far apart two messages sit: the font's own line advance
+// plus a gap. Measured rather than fixed, because a constant that looks right
+// on one font at one pixel density crowds the lines on another — at 14px the
+// descenders of one message ran into the next.
+func (b *UI2DBackend) chatLineH() float32 {
+	return b.ctx.Renderer().FontLineHeight(1) + chatLineGap
 }

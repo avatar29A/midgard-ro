@@ -465,6 +465,18 @@ func (r *Renderer) MeasureText(text string, scale float32) (float32, float32) {
 	return r.font.MeasureText(text, scale)
 }
 
+// FontLineHeight returns the line advance of the body font at the given scale:
+// ascent, descent and leading together. It is what one line of text occupies,
+// so anything stacking lines should space them by this rather than by a
+// constant that only suits one font at one pixel density.
+func (r *Renderer) FontLineHeight(scale float32) float32 {
+	if r.font == nil {
+		return 0
+	}
+
+	return r.font.LineHeight() * scale
+}
+
 // FontAscent returns the cap-height of the body font at the given scale —
 // useful for vertically centering text in a box where line-height would
 // look top-heavy because of leading + descender padding.
