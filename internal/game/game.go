@@ -695,6 +695,7 @@ func (g *Game) renderUI() {
 			MapName:         state.GetMapName(),
 			MapCellsX:       mapCellsX,
 			MapCellsY:       mapCellsY,
+			ChatLines:       state.ChatLines(),
 			PlayerX:         playerX,
 			PlayerY:         playerY,
 			PlayerZ:         playerZ,

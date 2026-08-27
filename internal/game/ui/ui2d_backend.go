@@ -92,6 +92,11 @@ type UI2DBackend struct {
 	// each window draws itself when its entry is set.
 	hudOpen map[HUDWindow]bool
 
+	// Chat scrollback position. Pinned means following the newest line, which
+	// is where it starts and where it returns once scrolled back to the bottom.
+	chatScroll int
+	chatPinned bool
+
 	// The minimap image for the map we are on. minimapTried is the path last
 	// attempted, so a map that ships no image is not retried every frame.
 	minimapTex   *TextureInfo
@@ -905,6 +910,7 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 
 	b.renderBasicInfo(state)
 	b.drawMinimap(state, width)
+	b.drawChat(state, height)
 	b.renderNPCDialog(state, width, height)
 	b.renderNPCMenu(state, width, height)
 
