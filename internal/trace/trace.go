@@ -42,6 +42,11 @@ const (
 	// of ids; this one reads as the conversation, which is what makes a
 	// dialog that stopped halfway legible.
 	NPC = "npc"
+	// HUD covers what the in-game interface is showing: which windows are
+	// open, what the minimap resolved, how many lines chat holds, where the
+	// click marker sits. Stat values stay on Status — reporting the same
+	// change on two channels would split the trail rather than widen it.
+	HUD = "hud"
 )
 
 // All is the channel spec that turns everything on.

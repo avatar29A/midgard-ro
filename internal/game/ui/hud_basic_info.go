@@ -560,9 +560,31 @@ func (b *UI2DBackend) drawMenuButtons(skin *basicInfoSkin, x, y float32) {
 		col := i % hudBtnCols
 		row := i / hudBtnCols
 
-		b.ctx.ImageButtonAtOpts("hud_menu_"+button.name,
+		window, opens := opensWindow(button.name)
+
+		// A button whose window is open stays drawn in its pressed art, so the
+		// strip shows what is on screen. The other two states still follow the
+		// pointer, which is why this swaps the normal texture rather than
+		// forcing all three.
+		normal := button.normal.ID
+		if opens && b.IsWindowOpen(window) {
+			normal = button.pressed.ID
+		}
+
+		// Buttons that open something are worth a click sound; the rest still
+		// do nothing, and announcing that reads as a fault.
+		opts := hudButtonOptions
+		if opens {
+			opts.Silent = false
+		}
+
+		clicked := b.ctx.ImageButtonAtOpts("hud_menu_"+button.name,
 			x+float32(col)*hudBtnW, y+float32(row)*hudBtnH,
 			hudBtnW, hudBtnH,
-			button.normal.ID, button.hover.ID, button.pressed.ID, hudButtonOptions)
+			normal, button.hover.ID, button.pressed.ID, opts)
+
+		if clicked && opens {
+			b.ToggleWindow(window)
+		}
 	}
 }
