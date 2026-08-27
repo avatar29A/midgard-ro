@@ -440,7 +440,7 @@ rule is therefore "same map and not yet loaded", not "same map and loading".
 A `0x0091` for another map already starts a load (that is most of Step 3);
 `0x0AC7` is decoded and logged at warn.
 
-### Step 2 — A loading screen that loads
+### Step 2 — A loading screen that loads ✅
 - **Changes:** `internal/game/states/maploader.go` (new), `loading.go`, `ingame.go`,
   `internal/engine/scene/scene.go` (phase methods), `internal/game/ui/ui2d_backend.go`
   (`RenderLoadingUI`), `internal/game/debug_fields.go`
@@ -454,6 +454,20 @@ A `0x0091` for another map already starts a load (that is most of Step 3);
   `map.load.phase … → map.loaded → map.ready → net.recv 0x00B0/0x09FF…`;
   `maploader_test.go`.
 - **Reference:** ref-02 ④, grf-loading01 ⑩⑪
+
+Done. The picture is one of `loading01..10.jpg` per load, chosen by the
+handshake and kept by the load that follows so the player sees one screen;
+the bar is roBrowser's transcription to the pixel. A missing picture warns
+once with its path and falls back to the title backdrop. Load time: **1307 ms**
+for Prontera against 1243 synchronous (+5 %).
+
+What the proof run found: capturing the loading screen was distorting it.
+Each `--screenshot-every` frame encoded a 2560×1440 PNG on the render
+thread — most of a second each — so a 1.3 s load measured as **7.3 s** with a
+300 ms cadence and still 7.3 s at 1 s. The encode now runs on a worker
+goroutine at best-speed compression (`internal/game/screenshot.go`), and the
+same 1 s run measures 1.9 s. Every unattended number in this document from
+here on is taken with that in place.
 
 ### Step 3 — Walk through a gate
 - **Changes:** `ingame.go` (`handleMapChange` → `Manager.Change(LoadingState{map, x, y, keepConnection})`, `OnMapChanged` hook), `entities.go` (`Clear` keeping the player), `npcdialog.go` (close), `internal/engine/character` (cancel walk), BGM switch via `manager.PlayLocationBGM`
@@ -557,6 +571,14 @@ None open.
 
 ## Investigation notes
 
+- **`0x01D7` is mis-framed on every map entry — pre-existing.** Right after
+  `0x007D` the server sends `ZC_SPRITE_CHANGE2`, which our length table has
+  at 11 bytes; at this PACKETVER it is 15, so the client logs `unknown packet
+  id, resynchronising {id: 0x0000, skipped: 4}` and recovers. It is in every
+  run back to `main` and costs nothing visible, but it is a wrong entry in
+  `lengths.go` (`tools/packetlen`) worth its own fix.
+
+
 - The initial map name reaches the client only in `HC_NOTIFY_ZONESVR2`
   (`packets.go:405-437`); `ZC_ACCEPT_ENTER2` carries position and tick, no name.
   A warp's map name therefore comes only from `0x0091`.
@@ -575,6 +597,10 @@ None open.
 
 ## Revision log
 
+- 2026-08-27 — **Step 2 done.** The original's loading screen; screenshot
+  encoding moved off the render thread after it turned a 1.3 s load into a
+  7.3 s measurement. The `0x01D7` framing warning traced to a pre-existing
+  length-table entry (Investigation notes).
 - 2026-08-27 — **Step 0 done, Step 1 with it.** Phased map loading measured
   at **1307 ms** for Prontera across 32 frames (synchronous was 1243), with a
   24 ms per-frame budget: a 12 ms budget cost 1444 ms because each frame
