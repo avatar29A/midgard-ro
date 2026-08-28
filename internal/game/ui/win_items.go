@@ -27,8 +27,8 @@ const (
 
 	// The slot mark inside a cell: a flat oval, inset from the cell's sides
 	// and shorter than it is wide.
-	itemsSlotInset float32 = 1
-	itemsSlotH     float32 = 18
+	itemsSlotInset float32 = 4
+	itemsSlotH     float32 = 14
 
 	// itemsTabW is the strip of tabs down the left, and itemsTabH one tab.
 	//
