@@ -99,3 +99,25 @@ func TestLengthsAreSane(t *testing.T) {
 		}
 	}
 }
+
+// TestInventoryListsAreFramed is the guard for a gap that cost the inventory
+// entirely: the generator reads packet_db and DEFINE_PACKET_HEADER structs,
+// and these two ids are declared as enum constants that it sees neither way.
+// Without a length the reader treats them as corruption and resynchronises
+// past them, so the handler never runs.
+func TestInventoryListsAreFramed(t *testing.T) {
+	for _, id := range []uint16{ZC_INVENTORY_ITEMLIST_NORMAL, ZC_INVENTORY_ITEMLIST_EQUIP} {
+		length, known := Length(id)
+		if !known {
+			t.Errorf("0x%04X is not framed — the reader will resynchronise past it", id)
+
+			continue
+		}
+		if length != VariableLength {
+			t.Errorf("0x%04X length = %d, want VariableLength", id, length)
+		}
+		if !IsKnown(id) {
+			t.Errorf("0x%04X is not IsKnown, so resync will not stop on it", id)
+		}
+	}
+}
