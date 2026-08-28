@@ -530,6 +530,31 @@ func (c *Context) WindowClosed(id string) bool {
 	return ok && !ws.Open
 }
 
+// FillEllipseImageLayer fills an ellipse in the image pass, so it sits behind
+// images drawn after it rather than over them.
+//
+// Built from horizontal rows whose width follows the ellipse's chord, the way
+// the slider's knob is: the renderer draws rectangles and nothing rounder.
+func (c *Context) FillEllipseImageLayer(x, y, w, h float32, color Color) {
+	rx, ry := w/2, h/2
+	cx, cy := x+rx, y+ry
+
+	for dy := -ry; dy <= ry; dy++ {
+		// The chord at this height, as a fraction of the full width.
+		frac := 1 - (dy*dy)/(ry*ry)
+		if frac <= 0 {
+			continue
+		}
+
+		half := rx * sqrt32(frac)
+		if half < 0.5 {
+			continue
+		}
+
+		c.renderer.FillImageLayer(cx-half, cy+dy, half*2, 1, color)
+	}
+}
+
 // CheckboxAt is Checkbox at a position of the caller's choosing, for a dialog
 // laid out to match the original rather than by the cursor.
 func (c *Context) CheckboxAt(id string, x, y, size float32, label string, checked bool) bool {
