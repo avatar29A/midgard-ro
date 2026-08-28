@@ -16,7 +16,7 @@ import (
 //
 // Every `/` command must answer with something: nothing goes to the server, so
 // a command that returned silence would be indistinguishable from one that was
-// never recognised.
+// never recognized.
 type localCommand func(s *InGameState, args string) (ChatKind, string)
 
 // CommandHost is what the game layer lends to a `/` command — the things the
@@ -105,7 +105,7 @@ func cmdWho(s *InGameState, _ string) (ChatKind, string) {
 // commandHelp is what /help lists, in the order it lists them.
 //
 // Kept apart from localCommands for two reasons. Reading the table directly
-// would be an initialisation cycle — the table holds cmdHelp — and it would
+// would be an initialization cycle — the table holds cmdHelp — and it would
 // print every alias flat, so "/bgm, /h, /help, /music, /sound, /w, /where,
 // /who" instead of five commands with their alternatives. A test asserts the
 // two never drift.
@@ -250,7 +250,7 @@ func (s *InGameState) sendServerCommand(line command.Line) error {
 // runLocalCommand answers a `/` command, or says it is not one we know.
 //
 // Nothing is ever sent from here. A `/` line the client does not implement
-// must not reach the server: it would not be recognised as a command — nothing
+// must not reach the server: it would not be recognized as a command — nothing
 // server-side parses a leading slash — and would be broadcast to everyone in
 // range instead.
 func (s *InGameState) runLocalCommand(line command.Line) {
