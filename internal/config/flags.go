@@ -10,6 +10,8 @@ var (
 	flagConfig     = flag.String("config", "", "Path to config file")
 	flagDebug      = flag.Bool("debug", false, "Enable debug logging")
 	flagServer     = flag.String("server", "", "Login server address")
+	flagUsername   = flag.String("username", "", "Account name, overriding the config (QA aid)")
+	flagPassword   = flag.String("password", "", "Account password, overriding the config (QA aid)")
 	flagWindowed   = flag.Bool("windowed", false, "Run in windowed mode")
 	flagFullscreen = flag.Bool("fullscreen", false, "Run in fullscreen mode")
 	flagWidth      = flag.Int("width", 0, "Window width")
@@ -127,6 +129,17 @@ func applyFlags(cfg *Config) {
 	}
 	if *flagServer != "" {
 		cfg.Network.LoginServer = *flagServer
+	}
+	// Credentials are per-account but the config file is per-checkout, so
+	// switching test accounts otherwise means editing config.yaml and putting
+	// it back. These override it for one run and are never written to disk.
+	// A password in argv is visible to anyone who can read `ps`; these are
+	// meant for the throwaway accounts in docs/TEST_ACCOUNTS.md, not real ones.
+	if *flagUsername != "" {
+		cfg.Network.Username = *flagUsername
+	}
+	if *flagPassword != "" {
+		cfg.Network.Password = *flagPassword
 	}
 	if *flagWindowed {
 		cfg.Graphics.Fullscreen = false
