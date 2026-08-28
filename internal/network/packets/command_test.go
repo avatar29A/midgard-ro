@@ -55,7 +55,7 @@ func TestDecodeUserCount(t *testing.T) {
 }
 
 // TestUserCountReplyIsFramed: the reply's length has to be in the server table
-// or the connection desynchronises the moment /who is answered.
+// or the connection desynchronizes the moment /who is answered.
 func TestUserCountReplyIsFramed(t *testing.T) {
 	size, ok := Length(ZC_USER_COUNT)
 	if !ok {

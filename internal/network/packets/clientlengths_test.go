@@ -6,9 +6,9 @@ import "testing"
 // server actually parses at our PACKETVER.
 //
 // An id that is not in this table is not "probably fine" — it is a packet the
-// server will not recognise, and because RO has no framing markers it does not
+// server will not recognize, and because RO has no framing markers it does not
 // fail cleanly: the server reads our bytes as whatever packet it thinks came
-// next and the connection desynchronises. #86 nearly shipped `CZ_CHOOSE_MENU`
+// next and the connection desynchronizes. #86 nearly shipped `CZ_CHOOSE_MENU`
 // as 0x0BA8 for exactly this reason; the struct exists at our packetver but
 // the packet table never registers it, which is the distinction this test
 // encodes.
@@ -33,7 +33,7 @@ func TestOutgoingPacketsAreParseable(t *testing.T) {
 		t.Run(p.name, func(t *testing.T) {
 			if _, ok := ClientPacketLength(p.id); !ok {
 				t.Errorf("we send %s (0x%04X) but the server does not parse it "+
-					"at this PACKETVER — the connection will desynchronise",
+					"at this PACKETVER — the connection will desynchronize",
 					p.name, p.id)
 			}
 		})
@@ -43,7 +43,7 @@ func TestOutgoingPacketsAreParseable(t *testing.T) {
 // TestEncodersMatchTheExpectedLength: a fixed-length packet we build must be
 // exactly as long as the server expects, and a variable-length one must say so.
 //
-// Building one byte short or long is the same desynchronisation as a wrong id,
+// Building one byte short or long is the same desynchronization as a wrong id,
 // and it is not visible in the encoder itself — only against the server's own
 // table.
 func TestEncodersMatchTheExpectedLength(t *testing.T) {

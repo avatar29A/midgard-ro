@@ -53,7 +53,7 @@ const (
 	Map = "map"
 	// Cmd covers a chat command from the line that was typed to what became
 	// of it. A command that silently does nothing is otherwise
-	// indistinguishable from one that was never recognised, and the two want
+	// indistinguishable from one that was never recognized, and the two want
 	// opposite fixes.
 	Cmd = "cmd"
 )
