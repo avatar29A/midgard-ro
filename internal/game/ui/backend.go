@@ -31,6 +31,12 @@ type UIBackend interface {
 	// so the game layer can send it — the interface has no client of its own.
 	TakeChatMessage() (target, message string)
 
+	// QueueChatMessage puts a line in as though it had been typed and
+	// submitted, for --say. It goes to the same field TakeChatMessage drains,
+	// so an unattended run exercises the real path rather than a shortcut
+	// past the interface. Reports false when a line is already waiting.
+	QueueChatMessage(text string) bool
+
 	// Begin starts a new UI frame.
 	Begin()
 

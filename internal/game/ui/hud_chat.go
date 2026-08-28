@@ -825,6 +825,26 @@ func (b *UI2DBackend) TakeChatMessage() (target, message string) {
 	return target, message
 }
 
+// QueueChatMessage puts a line in as though it had been typed, for --say.
+//
+// It writes the same field the input bar writes and leaves the whisper target
+// alone, so a queued line is routed by exactly the rules a typed one is —
+// including whatever is sitting in the name field, which is the whole point of
+// being able to test that.
+//
+// Reports false when a line is already pending, so the caller can wait rather
+// than overwrite one that has not been sent yet.
+func (b *UI2DBackend) QueueChatMessage(text string) bool {
+	if b.chatPending != "" {
+		return false
+	}
+
+	b.chatPending = text
+	b.chatPinned = true
+
+	return true
+}
+
 // outlineIfFocused frames a field that has the keyboard, so it is obvious
 // which of the two the next keystroke lands in.
 func (b *UI2DBackend) outlineIfFocused(id string, box ui2d.Rect) {

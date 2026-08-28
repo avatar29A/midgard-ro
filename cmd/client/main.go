@@ -62,6 +62,9 @@ func main() {
 	} else if spec := config.MouseAtSpec(); spec != "" {
 		logger.Warn("--mouse-at not understood, want x,y", zap.String("value", spec))
 	}
+	if lines := config.Say(); len(lines) > 0 {
+		g.SetSay(lines)
+	}
 
 	// Run the game loop
 	if err := g.Run(); err != nil {
