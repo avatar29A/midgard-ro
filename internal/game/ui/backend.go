@@ -193,6 +193,9 @@ type InGameUIState struct {
 	StatusPoints int
 	SkillPoints  int
 
+	// MapMarkers is who is around, for the map window.
+	MapMarkers []states.MapMarker
+
 	// Skills is what the character can do, as the server listed it, and
 	// Inventory what it is carrying.
 	Skills    []packets.Skill

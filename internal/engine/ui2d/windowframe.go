@@ -201,8 +201,16 @@ func (c *Context) windowResizeGrip(ws *WindowState) {
 
 	id := ws.ID + "_grip"
 	grip := Rect{gripX, gripY, frameGrip, frameGrip}
+	hovered := grip.Contains(c.input.MouseX, c.input.MouseY)
 
-	if c.input.MouseLeftPressed && grip.Contains(c.input.MouseX, c.input.MouseY) {
+	// Recorded for whoever draws the pointer. The 2D layer has no business
+	// knowing what a cursor is, so it says only that the pointer is over a
+	// grip and leaves the choice of cursor to the caller.
+	if hovered || c.activeWidget == id {
+		c.overResizeGrip = true
+	}
+
+	if c.input.MouseLeftPressed && hovered {
 		c.activeWidget = id
 	}
 

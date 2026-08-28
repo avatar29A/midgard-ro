@@ -3,6 +3,7 @@ package ui
 import (
 	"github.com/Faultbox/midgard-ro/internal/config"
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
+	"github.com/Faultbox/midgard-ro/internal/game/entity"
 	"github.com/Faultbox/midgard-ro/internal/logger"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
 
@@ -28,8 +29,10 @@ const (
 	mapWinBtnW    float32 = 86
 	mapWinBtnH    float32 = 18
 
-	// mapWinMark is the dot marking the player.
-	mapWinMark float32 = 5
+	// mapWinMark is the dot marking the player, mapWinOther the smaller one
+	// marking everyone else.
+	mapWinMark  float32 = 5
+	mapWinOther float32 = 3
 
 	// mapWorldTexture is the archive's own painted world map, "Orbis of
 	// Midgard" — 1280x1024, towns already marked on it.
@@ -143,7 +146,38 @@ func (b *UI2DBackend) drawMapImage(state InGameUIState, body ui2d.Rect) {
 	markX := drawX + fx*drawW - mapWinMark/2
 	markY := drawY + (1-fy)*drawH - mapWinMark/2
 
+	// Everyone else first, so the player's own mark is never hidden under a
+	// unit standing on the same spot.
+	for _, marker := range state.MapMarkers {
+		// Off the map means the unit has no position yet — the server sends
+		// some units before it says where they are, and those arrive at cell
+		// zero, which is the map's corner and not where they are standing.
+		if marker.CellX <= 0 || marker.CellY <= 0 ||
+			marker.CellX >= state.MapCellsX || marker.CellY >= state.MapCellsY {
+			continue
+		}
+
+		mx := drawX + float32(marker.CellX)/float32(state.MapCellsX)*drawW
+		my := drawY + (1-float32(marker.CellY)/float32(state.MapCellsY))*drawH
+
+		r.DrawRect(mx-mapWinOther/2, my-mapWinOther/2, mapWinOther, mapWinOther,
+			mapMarkerColor(marker.Type))
+	}
+
 	r.DrawRect(markX, markY, mapWinMark, mapWinMark, minimapDot)
+}
+
+// mapMarkerColor is how each kind of unit is marked, so the map can be read
+// at a glance rather than by hovering everything on it.
+func mapMarkerColor(kind entity.Type) ui2d.Color {
+	switch kind {
+	case entity.TypeNPC:
+		return mapMarkerNPC
+	case entity.TypeMonster:
+		return mapMarkerMob
+	default:
+		return mapMarkerPlayer
+	}
 }
 
 // drawWorldMap draws the archive's painted world map.
@@ -234,3 +268,12 @@ func (b *UI2DBackend) rememberMapPlacement(win ui2d.Rect) {
 		logger.Warn("could not save map window placement", zap.Error(err))
 	}
 }
+
+var (
+	// Who is who on the map. Only units the server has told us about appear —
+	// those near enough to be in view — so this is who is around rather than
+	// everyone on the map.
+	mapMarkerNPC    = ui2d.Color{R: 1, G: 0.85, B: 0.2, A: 1}
+	mapMarkerMob    = ui2d.Color{R: 0.9, G: 0.35, B: 0.2, A: 1}
+	mapMarkerPlayer = ui2d.Color{R: 1, G: 1, B: 1, A: 1}
+)
