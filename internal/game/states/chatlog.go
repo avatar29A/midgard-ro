@@ -37,11 +37,14 @@ const (
 	// ChatDamage is a battle line. Nothing produces one yet — the combat
 	// packets are Track F — but the chat box already knows how to color it.
 	ChatDamage
-	// ChatCommand is the command the player typed, echoed back by us. The
-	// server never echoes a command: it answers one, or swallows it.
-	ChatCommand
 	// ChatNotice is the client answering for itself — what /where prints,
 	// what /bgm says it did.
+	//
+	// There is no kind for the command a player typed, because the original
+	// does not echo one: roBrowser's ChatBox submits a / line straight to
+	// ProcessCommand, and each command adds its own result instead. So every
+	// / command has to answer with something, or the player is left with no
+	// sign that anything happened at all.
 	ChatNotice
 	// ChatError is a command that could not run: unknown, malformed, or
 	// refused before anything was sent.
