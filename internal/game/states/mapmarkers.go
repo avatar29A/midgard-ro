@@ -14,6 +14,10 @@ import "github.com/Faultbox/midgard-ro/internal/game/entity"
 type MapMarker struct {
 	CellX, CellY int
 	Type         entity.Type
+
+	// Name as the server gave it in the unit's spawn packet, which is what
+	// makes a dot on the map worth pointing at.
+	Name string
 }
 
 // MapMarkers returns the units to draw on the map, our own character left out
@@ -37,7 +41,9 @@ func (s *InGameState) MapMarkers() []MapMarker {
 		}
 
 		cellX, cellY := entity.WorldToCell(e.Body.RenderX, e.Body.RenderZ)
-		markers = append(markers, MapMarker{CellX: cellX, CellY: cellY, Type: e.Type})
+		markers = append(markers, MapMarker{
+			CellX: cellX, CellY: cellY, Type: e.Type, Name: e.Name,
+		})
 	}
 
 	return markers
