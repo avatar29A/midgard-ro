@@ -613,8 +613,13 @@ listed there — the `@` list does not carry over.
 
 - **`@commands` output will not line up.** The server pads names into
   10-character columns with spaces (`src/map/atcommand.cpp:10058`), assuming a
-  fixed-width font. Ours is Arial Unicode (`internal/engine/ui2d/font.go:90`),
-  so the list renders ragged. Cosmetic, and not a defect to report.
+  fixed-width font. Two things undo that on our side, and the second is the one
+  that matters: our font is proportional (`internal/engine/ui2d/font.go:90`),
+  and — measured, not guessed — the chat wrapper splits on `strings.Fields`
+  (`internal/game/ui/npctext.go:222`), which discards runs of whitespace and
+  rejoins with a single space. So the padding is gone before the font ever sees
+  it, and a monospace face alone would not fix it. Cosmetic; not a defect to
+  report, but worth knowing before anyone tries the obvious fix.
 - **Command replies arrive as `ZC_NOTIFY_PLAYERCHAT` `0x008E`**
   (`clif.cpp:6697`), which the original paints **green**, not yellow — it maps
   to `PUBLIC|SELF` (roBrowser `Main.js:65`). Our client currently paints these

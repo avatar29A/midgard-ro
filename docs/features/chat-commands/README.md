@@ -400,10 +400,14 @@ them into atcommand text, since the packets are silently rejected instead.
 
 ## Investigation notes
 
-- **`@commands` output will not line up.** The server pads command names into
-  10-character columns with spaces (`atcommand.cpp:10058`), which assumes a
-  fixed-width font. Ours is Arial Unicode (`ui2d/font.go:90`), so the list will
-  be ragged. Not worth fixing here — noted so it is not reported as a bug.
+- **`@commands` output will not line up**, and the font is only half the
+  reason. The server pads names into 10-character columns with spaces
+  (`atcommand.cpp:10058`), assuming fixed width; ours is Arial Unicode
+  (`ui2d/font.go:90`). But the chat wrapper splits with `strings.Fields`
+  (`npctext.go:222`), which discards runs of whitespace and rejoins with one
+  space — so the padding is gone before the font matters, and a monospace face
+  alone would not fix it. Confirmed on screen at step 1. Not worth fixing here;
+  noted so it is not reported as a bug, and so the obvious fix is not tried.
 - **The `0x01D7` resync is still there.** Every map entry logs `unknown packet
   id, resynchronising {"id": "0x0000", "skipped": 4}`. Known from #92, not this
   feature's to fix, but it will show up in any `--trace=net` run taken while

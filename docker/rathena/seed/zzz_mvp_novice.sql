@@ -8,14 +8,27 @@ USE ragnarok;
 
 -- Account: midgard-test / midgard-test
 -- account_id starts at 2000000 per rAthena's main.sql AUTO_INCREMENT.
+--
+-- group_id 99 is Admin. It lists no commands of its own; it carries the
+-- `all_commands` permission (conf/groups.yml), which short-circuits the
+-- per-command check in s_player_group::can_use_command, so all 313 at-commands
+-- are reachable. Group 0 grants exactly two — @changedress and @resurrect —
+-- which is not enough to set up a test for anything.
+--
+-- @ commands are how this client is exercised: @go and @mapmove move it
+-- between maps, @item and @monster populate one, @heal and @zeny move the
+-- numbers the HUD draws. See docs/research/chat-commands.md.
+--
+-- This runs only on first DB init. `make server-gm` / `make server-player`
+-- flip it on a database that already exists.
 INSERT INTO `login` (
     `account_id`, `userid`, `user_pass`, `sex`, `email`,
     `group_id`, `state`, `character_slots`
 ) VALUES (
     2000000, 'midgard-test', 'midgard-test', 'M',
-    'midgard-test@example.com', 0, 0, 9
+    'midgard-test@example.com', 99, 0, 9
 )
-ON DUPLICATE KEY UPDATE `userid` = VALUES(`userid`);
+ON DUPLICATE KEY UPDATE `userid` = VALUES(`userid`), `group_id` = VALUES(`group_id`);
 
 -- Pre-created Novice character on slot 0, spawned in Prontera.
 -- Class 0 = Novice. Stats are all 1 (no points spent). HP/SP at level-1 baseline.
