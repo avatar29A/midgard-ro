@@ -36,7 +36,9 @@ text — no dedicated packet — so this also proves the account change on its o
 4. `--say "@go 0"` and verify the return to Prontera
 
 ### A command that answers with text
-1. `--say "@where"` and verify the map name and coordinates appear in the box
+1. `--say "@where MidgardTest"` and verify the map name and coordinates appear
+   in the box. The name is required: a bare `@where` answers with the usage
+   line and `@where failed.`, which is the server refusing it, not a client bug
 2. `--say "@rates"` and verify the experience and drop rates appear
 3. Verify the `@rates` lines arrive on `0x02C1` (`--trace=net`) and are coloured
    from the packet rather than from the line kind

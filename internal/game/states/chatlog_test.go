@@ -123,17 +123,16 @@ func TestAddLocalKeepsEmptyText(t *testing.T) {
 	}
 }
 
-// TestAddLocalKinds: the three client-side kinds exist so the box can color
-// them apart from anything the server said.
+// TestAddLocalKinds: the client-side kinds exist so the box can color them
+// apart from anything the server said.
 func TestAddLocalKinds(t *testing.T) {
 	var log ChatLog
 
-	log.AddLocal(ChatCommand, "@commands")
 	log.AddLocal(ChatNotice, "prontera 156, 191")
 	log.AddLocal(ChatError, "Unknown command")
 
 	lines := log.Lines()
-	want := []ChatKind{ChatCommand, ChatNotice, ChatError}
+	want := []ChatKind{ChatNotice, ChatError}
 	for i, w := range want {
 		if lines[i].Kind != w {
 			t.Errorf("line %d kind = %d, want %d", i, lines[i].Kind, w)

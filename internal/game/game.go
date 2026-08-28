@@ -957,15 +957,10 @@ func (g *Game) renderUI() {
 		}
 
 		// A line the player typed goes out here rather than from the widget:
-		// the interface has no client to send with.
+		// the interface has no client to send with, and whether a line is
+		// even sent depends on what kind of command it turns out to be.
 		if to, msg := g.uiBackend.TakeChatMessage(); msg != "" {
-			var err error
-			if to != "" {
-				err = state.SendWhisper(to, msg)
-			} else {
-				err = state.SendChat(msg)
-			}
-			if err != nil {
+			if err := state.SubmitLine(to, msg); err != nil {
 				logger.Warn("could not send chat", zap.Error(err))
 			}
 		}

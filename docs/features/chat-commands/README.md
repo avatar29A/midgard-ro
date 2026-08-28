@@ -242,11 +242,13 @@ them into atcommand text, since the packets are silently rejected instead.
       below can be tested unattended** — every proof in this feature is "type
       something, look at the box". Mirrors `--walk-to`; `--say "@go 1" --say
       "/where"` runs a sequence.
-- [ ] **Trace channel `cmd`** in `internal/trace`: `cmd.parse` (raw line →
-      sigil, name, args), `cmd.local` (handled here, no packet), `cmd.server`
-      (sent on, with the packet id), `cmd.unknown` (rejected, and why). A
-      command that does nothing is otherwise indistinguishable from one that
-      was never recognised.
+- [ ] **Trace channel `cmd`** in `internal/trace`, emitted as `parse` /
+      `local` / `server` / `unknown` and printed as `cmd.parse` and so on —
+      `trace.Emit` prefixes the channel itself. `cmd.parse` gives the sigil and
+      name, `cmd.local` says it was handled here with no packet, `cmd.server`
+      that it was sent on, `cmd.unknown` that it was rejected. A command that
+      does nothing is otherwise indistinguishable from one that was never
+      recognised.
 - [ ] **`--trace` help text is stale** — it lists `move, pick, net, render,
       status, npc, map` and omits `hud`, which has existed since #93
       (`flags.go:17`). Add `hud` and `cmd`.
