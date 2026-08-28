@@ -25,14 +25,19 @@ const (
 	itemsCellGap float32 = 4
 	itemsCols            = 6
 
+	// The slot mark inside a cell: a flat oval, inset from the cell's sides
+	// and shorter than it is wide.
+	itemsSlotInset float32 = 1
+	itemsSlotH     float32 = 18
+
 	// itemsTabW is the strip of tabs down the left, and itemsTabH one tab.
 	//
 	// A tab has to be tall enough for its label stacked a letter to a line,
 	// and "equip" is five of them: at the body scale they overran the tab and
 	// ran into the one below, so the labels have a smaller scale of their own.
 	itemsTabW     float32 = 18
-	itemsTabH     float32 = 56
-	itemsTabScale float32 = 0.5
+	itemsTabH     float32 = 62
+	itemsTabScale float32 = 0.45
 
 	itemsFooterH float32 = 24
 
@@ -166,9 +171,13 @@ func (b *UI2DBackend) drawItemGrid(state InGameUIState, x, bodyY float32) {
 func (b *UI2DBackend) drawItemCell(cell ui2d.Rect, shown []packets.InventoryItem, index int) {
 	r := b.ctx.Renderer()
 
-	// The empty cell first: it is the grid, and it shows through wherever
-	// there is nothing to put in it.
-	r.FillImageLayer(cell.X, cell.Y, cell.W, cell.H, itemsCellBg)
+	// The slot mark: a flat oval, as the original draws it, not a square.
+	// It shows through wherever there is nothing to put in the cell, and an
+	// icon sits over it where there is.
+	b.ctx.FillEllipseImageLayer(
+		cell.X+itemsSlotInset, cell.Y+(cell.H-itemsSlotH)/2,
+		cell.W-2*itemsSlotInset, itemsSlotH, itemsCellBg,
+	)
 
 	if index >= len(shown) {
 		return
