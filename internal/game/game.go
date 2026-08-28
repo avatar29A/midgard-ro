@@ -90,6 +90,10 @@ type Game struct {
 	walkToX, walkToY int
 	walkToPending    bool
 
+	// Lines to say once in game, from --say, drained in order.
+	sayQueue []string
+	sayNext  time.Time
+
 	// Where to put the pointer once the map is up, from --mouse-at, in window
 	// points. Fired once.
 	mouseAtX, mouseAtY int
@@ -512,6 +516,7 @@ func (g *Game) frame() {
 
 	g.runWalkTo()
 	g.runMouseAt()
+	g.runSay()
 
 	// Render 3D scene (if applicable)
 	sceneStart := time.Now()
@@ -589,6 +594,53 @@ func (g *Game) runWalkTo() {
 	if err := state.RequestMove(g.walkToX, g.walkToY); err != nil {
 		logger.Warn("--walk-to request failed", zap.Error(err))
 	}
+}
+
+// SetSay queues lines to type into the chat box once in game, from --say.
+func (g *Game) SetSay(lines []string) {
+	g.sayQueue = append(g.sayQueue, lines...)
+}
+
+// sayInterval is the gap between one --say line and the next.
+//
+// Not politeness: a command's answer has to arrive before the next line goes
+// out, or the trace reads as one burst with the replies interleaved and it is
+// no longer clear which answer belongs to which command. A second is longer
+// than any local reply takes and short enough that a sequence still fits
+// inside a --screenshot-after window.
+const sayInterval = 1000 * time.Millisecond
+
+// runSay types the next --say line once the map can take it.
+//
+// Gated on MapReady as well as the interval, so a command that changes maps —
+// @go, /mm — lets the new map finish loading before the line after it is sent
+// rather than being swallowed during the load.
+func (g *Game) runSay() {
+	if len(g.sayQueue) == 0 {
+		return
+	}
+	state, ok := g.stateManager.Current().(*states.InGameState)
+	if !ok || !state.MapReady() {
+		return
+	}
+	now := time.Now()
+	if now.Before(g.sayNext) {
+		return
+	}
+
+	line := g.sayQueue[0]
+	if !g.uiBackend.QueueChatMessage(line) {
+		// The line before this one has not been drained yet. Leave it in the
+		// queue and try again next frame rather than overwriting it.
+		return
+	}
+
+	g.sayNext = now.Add(sayInterval)
+	g.sayQueue = g.sayQueue[1:]
+
+	logger.Info("saying the line asked for on the command line",
+		zap.String("line", line),
+		zap.Int("remaining", len(g.sayQueue)))
 }
 
 // SetScreenshotTimers arms the unattended capture. A zero duration disables
