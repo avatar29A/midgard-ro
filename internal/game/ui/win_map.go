@@ -175,6 +175,8 @@ func mapMarkerColor(kind entity.Type) ui2d.Color {
 		return mapMarkerNPC
 	case entity.TypeMonster:
 		return mapMarkerMob
+	case entity.TypeWarp:
+		return mapMarkerWarp
 	default:
 		return mapMarkerPlayer
 	}
@@ -276,4 +278,5 @@ var (
 	mapMarkerNPC    = ui2d.Color{R: 1, G: 0.85, B: 0.2, A: 1}
 	mapMarkerMob    = ui2d.Color{R: 0.9, G: 0.35, B: 0.2, A: 1}
 	mapMarkerPlayer = ui2d.Color{R: 1, G: 1, B: 1, A: 1}
+	mapMarkerWarp   = ui2d.Color{R: 0.45, G: 0.8, B: 1, A: 1}
 )

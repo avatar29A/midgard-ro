@@ -29,11 +29,14 @@ func (s *InGameState) MapMarkers() []MapMarker {
 	markers := make([]MapMarker, 0, len(visible))
 
 	for _, e := range visible {
-		if e == nil || e.ID == self {
+		// Body carries where a unit actually is. Entity.Position is not kept
+		// up to date — it stays at zero, which is the map's corner, and is
+		// why every marker landed there.
+		if e == nil || e.ID == self || e.Body == nil {
 			continue
 		}
 
-		cellX, cellY := entity.WorldToCell(e.Position.X, e.Position.Z)
+		cellX, cellY := entity.WorldToCell(e.Body.RenderX, e.Body.RenderZ)
 		markers = append(markers, MapMarker{CellX: cellX, CellY: cellY, Type: e.Type})
 	}
 
