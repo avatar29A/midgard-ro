@@ -112,7 +112,20 @@ func (b *UI2DBackend) drawItemTabs(x, bodyY float32) {
 		}
 
 		r.FillImageLayer(box.X, box.Y, box.W, box.H, face)
-		r.DrawRectOutline(box.X, box.Y, box.W, box.H, 1, ui2d.ColorPanelBorder)
+
+		// Edged rather than boxed, and in a grey of its own: the panel border
+		// is a dark blue-grey meant for a window's outline, and a full box of
+		// it around every tab read as three black rectangles.
+		//
+		// The open tab keeps no right edge, so it runs into the grid beside
+		// it — which is how a tab says it is the open one.
+		r.DrawRect(box.X, box.Y, box.W, 1, itemsTabBorder)
+		r.DrawRect(box.X, box.Y+box.H-1, box.W, 1, itemsTabBorder)
+		r.DrawRect(box.X, box.Y, 1, box.H, itemsTabBorder)
+
+		if i != b.itemTab {
+			r.DrawRect(box.X+box.W-1, box.Y, 1, box.H, itemsTabBorder)
+		}
 
 		// Stacked down the tab, a letter to a line: the strip is 18px wide,
 		// the labels do not fit across it, and cutting them to one letter
@@ -275,7 +288,11 @@ func (b *UI2DBackend) TakeItemAction() (ItemAction, bool) {
 
 var (
 	// itemsCellBg is an empty slot, and itemsTabIdle a tab that is not open.
-	itemsCellBg    = ui2d.Color{R: 0.90, G: 0.91, B: 0.95, A: 1}
+	// The slot mark: a blue-grey, not the neutral grey the rest of the panel
+	// uses. It has to read as blue against a white body or the grid looks
+	// like smudges rather than slots.
+	itemsCellBg    = ui2d.Color{R: 0.78, G: 0.81, B: 0.91, A: 1}
 	itemsTabIdle   = ui2d.Color{R: 0.82, G: 0.83, B: 0.86, A: 1}
+	itemsTabBorder = ui2d.Color{R: 0.62, G: 0.63, B: 0.68, A: 1}
 	itemsCountText = ui2d.Color{R: 0.1, G: 0.1, B: 0.15, A: 1}
 )
