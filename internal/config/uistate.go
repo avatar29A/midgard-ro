@@ -39,6 +39,13 @@ type UIState struct {
 	HotkeyY    float32 `json:"hotkey_y,omitempty"`
 	HotkeyRows int     `json:"hotkey_rows,omitempty"`
 
+	// Where the Map window was left and how big. Zero width means unset, and
+	// it opens centered at its default size.
+	MapX float32 `json:"map_x,omitempty"`
+	MapY float32 `json:"map_y,omitempty"`
+	MapW float32 `json:"map_w,omitempty"`
+	MapH float32 `json:"map_h,omitempty"`
+
 	// The sound dialog's levels and switches.
 	//
 	// The switches are written even when false — no omitempty — so that "off"

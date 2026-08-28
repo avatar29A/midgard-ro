@@ -125,6 +125,8 @@ type UI2DBackend struct {
 
 	// mapWorldView switches the Map window between this map and the world.
 	mapWorldView bool
+	mapPlaced    bool
+	mapSaved     ui2d.Rect
 	itemAction   ItemAction
 
 	escOpen   bool
