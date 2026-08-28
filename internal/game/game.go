@@ -1326,9 +1326,6 @@ func (g *Game) updateCursor(state *states.InGameState, io *imgui.IO, mouseX, mou
 	g.uiBackend.SetCursorState(want)
 }
 
-// applySoundSettings seeds the sound dialog from the audio manager and puts
-// back whatever the player changed.
-//
 // ToggleBGM turns background music on or off for /bgm, reporting the new
 // state.
 //
@@ -1405,6 +1402,9 @@ func (g *Game) toggleChannel(bgm bool) bool {
 	return on
 }
 
+// applySoundSettings seeds the sound dialog from the audio manager and puts
+// back whatever the player changed.
+//
 // A channel switched off is played at zero rather than having its level
 // zeroed, so the slider keeps its position and switching back on returns to
 // the level that was there.
