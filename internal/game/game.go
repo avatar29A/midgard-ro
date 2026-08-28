@@ -385,6 +385,8 @@ func (g *Game) initAudio(cfg *config.Config) {
 
 	g.bgm = audio.NewLocationPlayer(manager, table, bgmDir)
 	g.stateManager.BGM = g.bgm
+	// The / commands that touch sound reach it through here.
+	g.stateManager.CommandHost = g
 }
 
 // loadKoreanFont loads a font with Korean glyph support.
@@ -1327,6 +1329,82 @@ func (g *Game) updateCursor(state *states.InGameState, io *imgui.IO, mouseX, mou
 // applySoundSettings seeds the sound dialog from the audio manager and puts
 // back whatever the player changed.
 //
+// ToggleBGM turns background music on or off for /bgm, reporting the new
+// state.
+//
+// Goes through the same sound settings the options dialog writes, so the two
+// stay in agreement and the choice is persisted — a command that turned the
+// music off behind the dialog's back would leave the checkbox lying.
+func (g *Game) ToggleBGM() bool {
+	return g.toggleChannel(true)
+}
+
+// ToggleSFX does the same for sound effects.
+func (g *Game) ToggleSFX() bool {
+	return g.toggleChannel(false)
+}
+
+// toggleChannel flips one audio channel and saves it. Reports the new state.
+//
+// A channel that is off has volume zero, which is also how the dialog stores
+// it, so "on" means a level above zero. Turning one back on restores the level
+// the settings file remembers rather than a guess — except when that level is
+// itself zero, which would turn the channel "on" inaudibly.
+func (g *Game) toggleChannel(bgm bool) bool {
+	if g.audioManager == nil {
+		return false
+	}
+
+	const defaultLevel = 0.5
+
+	current := g.audioManager.GetSFXVolume()
+	if bgm {
+		current = g.audioManager.GetBGMVolume()
+	}
+
+	on := current <= 0
+	level := 0.0
+	if on {
+		level = defaultLevel
+
+		saved := config.LoadUIState()
+		remembered := saved.SFXVolume
+		if bgm {
+			remembered = saved.BGMVolume
+		}
+		if remembered > 0 {
+			level = float64(remembered)
+		}
+	}
+
+	if bgm {
+		g.audioManager.SetBGMVolume(level)
+	} else {
+		g.audioManager.SetSFXVolume(level)
+	}
+
+	err := config.UpdateUIState(func(state *config.UIState) {
+		state.SoundSet = true
+		if bgm {
+			state.BGMOn = on
+			if on {
+				state.BGMVolume = float32(level)
+			}
+
+			return
+		}
+		state.SFXOn = on
+		if on {
+			state.SFXVolume = float32(level)
+		}
+	})
+	if err != nil {
+		logger.Warn("could not save the sound setting", zap.Error(err))
+	}
+
+	return on
+}
+
 // A channel switched off is played at zero rather than having its level
 // zeroed, so the slider keeps its position and switching back on returns to
 // the level that was there.

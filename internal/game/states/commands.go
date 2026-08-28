@@ -2,10 +2,13 @@ package states
 
 import (
 	"fmt"
+	"strings"
 
 	"go.uber.org/zap"
 
 	"github.com/Faultbox/midgard-ro/internal/game/command"
+	"github.com/Faultbox/midgard-ro/internal/logger"
+	"github.com/Faultbox/midgard-ro/internal/network/packets"
 	"github.com/Faultbox/midgard-ro/internal/trace"
 )
 
@@ -16,13 +19,153 @@ import (
 // never recognised.
 type localCommand func(s *InGameState, args string) (ChatKind, string)
 
+// CommandHost is what the game layer lends to a `/` command — the things the
+// game state itself cannot reach.
+//
+// Audio lives on Game, along with the settings file it is persisted to, and
+// this package has no business importing either to turn the music off.
+type CommandHost interface {
+	// ToggleBGM turns background music on or off, reporting the new state.
+	ToggleBGM() bool
+	// ToggleSFX does the same for sound effects.
+	ToggleSFX() bool
+}
+
+// host is the game layer's CommandHost, or nil when there is none — which is
+// the case in a test, and before the game layer has wired one up.
+func (s *InGameState) host() CommandHost {
+	if s.manager == nil {
+		return nil
+	}
+
+	return s.manager.CommandHost
+}
+
 // localCommands is the `/` table — the commands this client answers itself.
 //
-// Empty until step 3 of #94 fills it. Until then every `/` line reports itself
-// unknown, which is the right answer for a command we do not implement and is
-// emphatically better than the alternative: a `/` line sent as chat is said out
-// loud to everyone in range, because nothing on the server parses a slash.
-var localCommands = map[string]localCommand{}
+// A `/` line that is not in here is reported unknown and sent nowhere. That is
+// not a fallback but the only safe answer: nothing on the server parses a
+// leading slash, so a `/` line handed to the network would be said out loud to
+// everyone in range.
+//
+// Aliases are separate entries pointing at the same function, as the original
+// treats them — `/h` and `/help` are both real names, not one with a lookup
+// through the other.
+var localCommands = map[string]localCommand{
+	"where": cmdWhere,
+	"who":   cmdWho,
+	"w":     cmdWho,
+	"h":     cmdHelp,
+	"help":  cmdHelp,
+	"bgm":   cmdBGM,
+	"music": cmdBGM,
+	"sound": cmdSound,
+}
+
+// cmdWhere prints the map and cell the character is standing on.
+//
+// Answered here rather than by @where, which needs a character name and is a
+// GM command. This is the client reading its own state, which is what makes it
+// the cheapest check that our idea of the position matches the server's.
+func cmdWhere(s *InGameState, _ string) (ChatKind, string) {
+	player := s.GetPlayer()
+	if player == nil {
+		return ChatError, "You are not on a map yet."
+	}
+
+	cellX, cellY := player.CurrentCell()
+
+	// The server names maps with a .gat suffix in some packets and without it
+	// in others; the player should always see the plain name.
+	return ChatNotice, fmt.Sprintf("%s : %d, %d",
+		packets.MapBaseName(s.MapName), cellX, cellY)
+}
+
+// cmdWho asks the server how many players are online.
+//
+// The only `/` command here that needs a round trip: the count is the server's
+// to know. The answer arrives on ZC_USER_COUNT and is printed by its handler,
+// so nothing is returned now.
+func cmdWho(s *InGameState, _ string) (ChatKind, string) {
+	if s.client == nil {
+		return ChatError, "Not connected."
+	}
+
+	trace.Emit(trace.Cmd, "who-request")
+
+	if err := s.client.Send(packets.EncodeUserCount()); err != nil {
+		logger.Warn("could not ask how many players are online", zap.Error(err))
+
+		return ChatError, "Could not ask the server."
+	}
+
+	return ChatNotice, ""
+}
+
+// commandHelp is what /help lists, in the order it lists them.
+//
+// Kept apart from localCommands for two reasons. Reading the table directly
+// would be an initialisation cycle — the table holds cmdHelp — and it would
+// print every alias flat, so "/bgm, /h, /help, /music, /sound, /w, /where,
+// /who" instead of five commands with their alternatives. A test asserts the
+// two never drift.
+var commandHelp = []struct {
+	name    string
+	aliases []string
+}{
+	{"where", nil},
+	{"who", []string{"w"}},
+	{"help", []string{"h"}},
+	{"bgm", []string{"music"}},
+	{"sound", nil},
+}
+
+// cmdHelp lists the commands this client answers.
+//
+// Deliberately only the `/` ones. The `@` list is the server's, and it already
+// has a command for it — @commands — which prints what this account may
+// actually use, something the client has no way to know.
+func cmdHelp(_ *InGameState, _ string) (ChatKind, string) {
+	parts := make([]string, 0, len(commandHelp))
+	for _, c := range commandHelp {
+		entry := "/" + c.name
+		if len(c.aliases) > 0 {
+			entry += " (/" + strings.Join(c.aliases, ", /") + ")"
+		}
+		parts = append(parts, entry)
+	}
+
+	return ChatNotice, "Commands: " + strings.Join(parts, ", ") +
+		". For server commands use @commands."
+}
+
+// cmdBGM turns the background music on or off.
+func cmdBGM(s *InGameState, _ string) (ChatKind, string) {
+	host := s.host()
+	if host == nil {
+		return ChatError, "Sound is not available."
+	}
+
+	return ChatNotice, "Background music " + onOff(host.ToggleBGM()) + "."
+}
+
+// cmdSound turns sound effects on or off.
+func cmdSound(s *InGameState, _ string) (ChatKind, string) {
+	host := s.host()
+	if host == nil {
+		return ChatError, "Sound is not available."
+	}
+
+	return ChatNotice, "Sound effects " + onOff(host.ToggleSFX()) + "."
+}
+
+func onOff(on bool) string {
+	if on {
+		return "on"
+	}
+
+	return "off"
+}
 
 // chatIntent is what should become of a line the player entered.
 type chatIntent uint8
