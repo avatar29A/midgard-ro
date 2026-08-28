@@ -975,6 +975,13 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 	b.drawSkillsWindow(state, width, height)
 	b.drawItemsWindow(state, width, height)
 	b.drawMapWindow(state, width, height)
+
+	// After the windows, so it sees whichever grip the pointer ended on. RO
+	// has no resize pointer of its own, so this is the hand it shows for
+	// anything you press — the pointer changing at all is the affordance.
+	if b.ctx.OverResizeGrip() {
+		b.wantCursor(cursor.StateClick)
+	}
 	b.renderNPCDialog(state, width, height)
 	b.renderNPCMenu(state, width, height)
 
