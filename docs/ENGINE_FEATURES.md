@@ -241,9 +241,41 @@ High-level game systems.
 |---------|-------------|
 | **entity/** | Entity definitions (`Character`, etc.) |
 | **states/** | Game state machine, and the player's live stats (`player_stats.go`) |
-| **ui/** | The 2D interface, including the Basic Info HUD (`hud_basic_info.go`) |
+| **ui/** | The 2D interface: the HUD (`hud_*.go`) and the menu windows (`win_*.go`) |
 | **world/** | World/map management |
 | **game.go** | Main game loop |
+
+### The interface is drawn natively, not with ImGui
+
+Every widget is drawn by `internal/engine/ui2d` against the archive's own
+bitmaps. ImGui remains only as the platform layer — window, GL context and
+raw input — behind `ui2d_backend.go`, and `git grep -l cimgui-go --
+internal/game/ui` returning anything else means a widget has crept back.
+
+What that layer can and cannot do is worth knowing before adding to it:
+
+- Draw order is **image, then solid, then text**, with solids over images by
+  design. A rectangle can never sit behind an image, so a window whose body
+  is a bitmap has to say so (`WindowOptions.BitmapBody`), and a fill that
+  must go under an icon uses `Renderer.FillImageLayer` instead of `DrawRect`.
+- There is no scissor. Text that must not overflow its box is trimmed to fit
+  rather than clipped.
+- A window's remembered state outlives the window. Closing or minimizing sets
+  a flag that `BeginWindow` refuses on, so anything offering a way to reopen
+  one has to clear it (`OpenWindow`), and a false return has to be read with
+  `WindowClosed` rather than assumed to mean closed.
+
+### The HUD and its windows
+
+Always on: the minimap, the chat box, the hotkey bar, the bars under the
+character and the click marker. Behind the menu buttons: Status, Skill Tree,
+Inventory and Map. Escape opens the game menu, which leaves the game through
+the protocol rather than by exiting the process.
+
+Names the packets no longer carry — skills and items — are generated from the
+server's own database into `internal/game/skills` and `internal/game/items`,
+because this archive's tables are Korean. See `tools/skillnames` and
+`tools/itemnames`.
 
 ### NPC conversations (`internal/game/states/npcdialog.go`, `internal/game/ui/npcdialog.go`, `npcmenu.go`)
 

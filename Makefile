@@ -66,7 +66,8 @@ server-up: ## Bring up the local rAthena stack (clones rAthena at pin on first r
 		[ -d build/rathena/.git ] || ./setup.sh && \
 		docker compose up -d
 	@echo "rAthena listening on localhost:6900 (login), 6121 (char), 5121 (map)"
-	@echo "Test account: midgard-test / midgard-test"
+	@echo "Test accounts: midgard-test / midgard-sword / midgard-mage (password = login)"
+	@echo "See docs/TEST_ACCOUNTS.md"
 
 server-down: ## Stop the rAthena stack (preserves DB volume)
 	cd docker/rathena && docker compose down

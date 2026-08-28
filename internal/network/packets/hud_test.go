@@ -59,3 +59,124 @@ func TestDecodeAcksAgainstLengthTable(t *testing.T) {
 		t.Error("result 1 is a refusal, not a grant")
 	}
 }
+
+// TestDecodeSkillList walks the 15-byte entry rAthena declares for our packet
+// version: id, inf, level, sp, range, upFlag, level2. The name field earlier
+// versions carried is gone, which is why entries are 15 bytes and not 39.
+func TestDecodeSkillList(t *testing.T) {
+	entry := func(id uint16, level, sp, rng int, up byte) []byte {
+		b := make([]byte, skillEntryLen)
+		binary.LittleEndian.PutUint16(b[0:], id)
+		binary.LittleEndian.PutUint32(b[2:], 1) // inf
+		binary.LittleEndian.PutUint16(b[6:], uint16(level))
+		binary.LittleEndian.PutUint16(b[8:], uint16(sp))
+		binary.LittleEndian.PutUint16(b[10:], uint16(rng))
+		b[12] = up
+		binary.LittleEndian.PutUint16(b[13:], uint16(level))
+
+		return b
+	}
+
+	body := append(entry(1, 9, 0, 0, 1), entry(5, 3, 8, 1, 0)...)
+
+	pkt := make([]byte, 4)
+	binary.LittleEndian.PutUint16(pkt[0:], ZC_SKILLINFO_LIST)
+	binary.LittleEndian.PutUint16(pkt[2:], uint16(4+len(body)))
+	pkt = append(pkt, body...)
+
+	got := DecodeSkillList(pkt)
+	if len(got) != 2 {
+		t.Fatalf("decoded %d skills, want 2", len(got))
+	}
+
+	if got[0].ID != 1 || got[0].Level != 9 || !got[0].Raisable {
+		t.Errorf("first = %+v, want id 1 level 9 raisable", got[0])
+	}
+	if got[1].ID != 5 || got[1].Level != 3 || got[1].SP != 8 || got[1].Range != 1 {
+		t.Errorf("second = %+v, want id 5 level 3 sp 8 range 1", got[1])
+	}
+	if got[1].Raisable {
+		t.Error("second should not be raisable")
+	}
+}
+
+// TestDecodeSkillListTruncated: a declared length that does not divide into
+// whole entries drops the partial tail rather than reading past it.
+func TestDecodeSkillListTruncated(t *testing.T) {
+	pkt := make([]byte, 4+skillEntryLen+5)
+	binary.LittleEndian.PutUint16(pkt[0:], ZC_SKILLINFO_LIST)
+	binary.LittleEndian.PutUint16(pkt[2:], uint16(len(pkt)))
+
+	if got := DecodeSkillList(pkt); len(got) != 1 {
+		t.Errorf("decoded %d skills, want 1 — the partial entry must be dropped", len(got))
+	}
+}
+
+// TestDecodeSkillListEmpty: a character with no skills sends a header and
+// nothing else, which is a list of none rather than a malformed packet.
+func TestDecodeSkillListEmpty(t *testing.T) {
+	pkt := []byte{0x32, 0x0B, 4, 0}
+
+	if got := DecodeSkillList(pkt); got != nil {
+		t.Errorf("decoded %v, want nil", got)
+	}
+}
+
+// TestDecodeInventoryNormal walks the 34-byte entry our packet version
+// declares: index, ITID, type, count, WearState, four uint32 card slots,
+// HireExpireDate and a flag byte.
+//
+// The card slots are where this is easy to get wrong — they were four uint16
+// until PACKETVER_RE 20180704 and are four uint32 after, eight bytes a row.
+func TestDecodeInventoryNormal(t *testing.T) {
+	entry := func(index int, id uint32, count int) []byte {
+		b := make([]byte, NormalItemLen)
+		binary.LittleEndian.PutUint16(b[0:], uint16(index))
+		binary.LittleEndian.PutUint32(b[2:], id)
+		b[6] = 3 // type
+		binary.LittleEndian.PutUint16(b[7:], uint16(count))
+
+		return b
+	}
+
+	body := append(entry(2, 501, 5), entry(3, 512, 10)...)
+
+	pkt := make([]byte, itemListHeaderLen)
+	binary.LittleEndian.PutUint16(pkt[0:], ZC_INVENTORY_ITEMLIST_NORMAL)
+	binary.LittleEndian.PutUint16(pkt[2:], uint16(itemListHeaderLen+len(body)))
+	pkt = append(pkt, body...)
+
+	got := DecodeInventoryNormal(pkt)
+	if len(got) != 2 {
+		t.Fatalf("decoded %d items, want 2", len(got))
+	}
+	if got[0].ID != 501 || got[0].Count != 5 || got[0].Index != 2 {
+		t.Errorf("first = %+v, want index 2 id 501 count 5", got[0])
+	}
+	if got[1].ID != 512 || got[1].Count != 10 {
+		t.Errorf("second = %+v, want id 512 count 10", got[1])
+	}
+}
+
+// TestItemListRemainderCatchesWrongEntrySize is the guard that matters most
+// here: the entry sizes are read off the server's structs with our version's
+// guards resolved by hand, and a wrong one would otherwise fill the window
+// with nonsense rather than say anything.
+func TestItemListRemainderCatchesWrongEntrySize(t *testing.T) {
+	pkt := make([]byte, itemListHeaderLen+NormalItemLen)
+	binary.LittleEndian.PutUint16(pkt[0:], ZC_INVENTORY_ITEMLIST_NORMAL)
+	binary.LittleEndian.PutUint16(pkt[2:], uint16(len(pkt)))
+
+	if left := ItemListRemainder(pkt, NormalItemLen); left != 0 {
+		t.Errorf("remainder = %d for the size it was built with, want 0", left)
+	}
+
+	// A size that does not divide must report the leftovers, and decoding
+	// with it must return nothing rather than a misread list.
+	if left := ItemListRemainder(pkt, NormalItemLen-1); left == 0 {
+		t.Error("a size that does not divide must report a remainder")
+	}
+	if got := decodeItemList(pkt, NormalItemLen-1, func([]byte) InventoryItem { return InventoryItem{} }); got != nil {
+		t.Errorf("decoded %v with the wrong entry size, want nothing", got)
+	}
+}

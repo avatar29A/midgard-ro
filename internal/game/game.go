@@ -894,11 +894,43 @@ func (g *Game) renderUI() {
 			PlayerZeny:        stats.Zeny,
 			PlayerWeight:      stats.Weight,
 			PlayerMaxWeight:   stats.MaxWeight,
+
+			MapMarkers: state.MapMarkers(),
+
+			Skills:    state.Skills(),
+			Inventory: state.Inventory(),
+
+			PrimaryStats: stats.Primary,
+			PrimaryBonus: stats.PrimaryBonus,
+			PrimaryCost:  stats.PrimaryCost,
+			StatusPoints: stats.StatusPoints,
+			SkillPoints:  stats.SkillPoints,
+
+			Atk: stats.Atk, AtkBonus: stats.AtkBonus,
+			MatkMin: stats.MatkMin, MatkMax: stats.MatkMax,
+			Def: stats.Def, DefBonus: stats.DefBonus,
+			Mdef: stats.Mdef, MdefBonus: stats.MdefBonus,
+			Flee: stats.Flee, FleeBonus: stats.FleeBonus,
+			Hit: stats.Hit, Critical: stats.Critical, Aspd: stats.Aspd,
 		}
 		populateDebugFields(&uiState, state, g.client)
 		g.uiBackend.RenderInGameUI(uiState, g.dt, viewportWidth, viewportHeight)
 
 		g.applySoundSettings()
+
+		// A double click in the inventory goes out here, for the same reason
+		// the chat line does: the interface has no connection of its own.
+		if action, ok := g.uiBackend.TakeItemAction(); ok {
+			var err error
+			if action.Equip {
+				err = state.EquipItem(action.Index)
+			} else {
+				err = state.UseItem(action.Index)
+			}
+			if err != nil {
+				logger.Warn("could not act on item", zap.Error(err))
+			}
+		}
 
 		// What the ESC menu was asked for goes out here for the same reason
 		// the chat line below does: the interface has no connection.
