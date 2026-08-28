@@ -258,6 +258,43 @@ func TestApplyFlags(t *testing.T) {
 			},
 		},
 		{
+			name: "username and password flags",
+			setup: func() {
+				*flagUsername = "midgard-sword"
+				*flagPassword = "midgard-sword"
+			},
+			verify: func(cfg *Config) error {
+				if cfg.Network.Username != "midgard-sword" {
+					t.Errorf("expected username midgard-sword, got %s", cfg.Network.Username)
+				}
+				if cfg.Network.Password != "midgard-sword" {
+					t.Errorf("expected password midgard-sword, got %s", cfg.Network.Password)
+				}
+				return nil
+			},
+			teardown: func() {
+				*flagUsername = ""
+				*flagPassword = ""
+			},
+		},
+		{
+			name: "empty credential flags leave the config alone",
+			setup: func() {
+				*flagUsername = ""
+				*flagPassword = ""
+			},
+			verify: func(cfg *Config) error {
+				if cfg.Network.Username != "from-config" {
+					t.Errorf("expected username from-config, got %s", cfg.Network.Username)
+				}
+				if cfg.Network.Password != "from-config" {
+					t.Errorf("expected password from-config, got %s", cfg.Network.Password)
+				}
+				return nil
+			},
+			teardown: func() {},
+		},
+		{
 			name: "windowed flag",
 			setup: func() {
 				*flagWindowed = true
@@ -315,8 +352,11 @@ func TestApplyFlags(t *testing.T) {
 			tt.setup()
 			defer tt.teardown()
 
-			// Apply flags to default config
+			// Apply flags to default config. The credentials stand in for
+			// values a config file would have supplied.
 			cfg := Default()
+			cfg.Network.Username = "from-config"
+			cfg.Network.Password = "from-config"
 			applyFlags(cfg)
 
 			// Verify

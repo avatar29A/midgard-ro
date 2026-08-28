@@ -70,7 +70,10 @@ data:
 
 The default credentials (`midgard-test` / `midgard-test`) and server
 address (`127.0.0.1:6900`) match the seeded test account, leave them
-alone for the first run.
+alone for the first run. Two more accounts (a Swordman and a Mage) are
+seeded alongside it — see [TEST_ACCOUNTS.md](TEST_ACCOUNTS.md). To use one
+without editing the config, pass `--username` / `--password` on the command
+line; they override the file for that run only.
 
 ---
 
@@ -203,6 +206,7 @@ ticks yet. Tracked in #51 (Track B). Re-launching reconnects fine.
 
 ## 9. Reference
 
+- [`docs/TEST_ACCOUNTS.md`](TEST_ACCOUNTS.md) — seeded logins, passwords and jobs
 - [`docker/rathena/README.md`](../docker/rathena/README.md) — server stack details
 - [`docs/research/rathena-setup.md`](research/rathena-setup.md) — distribution choice rationale
 - [RFC #49](https://github.com/avatar29A/midgard-ro/issues/49) — MVP scope and open questions
