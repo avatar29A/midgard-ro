@@ -21,6 +21,9 @@ type UIBackend interface {
 	// TakeEscAction returns what the player picked in it and clears it.
 	TakeEscAction() EscAction
 
+	// TakeItemAction returns a double click on an inventory item.
+	TakeItemAction() (ItemAction, bool)
+
 	// SetSoundSettings seeds the sound dialog from what is actually playing.
 	SetSoundSettings(s SoundSettings)
 
@@ -181,6 +184,32 @@ type InGameUIState struct {
 	PlayerJobExp, PlayerNextJobExp   int64
 	PlayerZeny                       int64
 	PlayerWeight, PlayerMaxWeight    int
+
+	// The six primary stats, what equipment and buffs add to them, and the
+	// points left to spend — indexed the same way the model holds them.
+	PrimaryStats [packets.PrimaryStatCount]int
+	PrimaryBonus [packets.PrimaryStatCount]int
+	PrimaryCost  [packets.PrimaryStatCount]int
+	StatusPoints int
+	SkillPoints  int
+
+	// MapMarkers is who is around, for the map window.
+	MapMarkers []states.MapMarker
+
+	// Skills is what the character can do, as the server listed it, and
+	// Inventory what it is carrying.
+	Skills    []packets.Skill
+	Inventory []packets.InventoryItem
+
+	// The numbers derived from those six, down the right of the window.
+	Atk, AtkBonus    int
+	MatkMin, MatkMax int
+	Def, DefBonus    int
+	Mdef, MdefBonus  int
+	Flee, FleeBonus  int
+	Hit              int
+	Critical         int
+	Aspd             int
 
 	// The last map load: how long, and where the time went (debug).
 	MapLoadMs     float64

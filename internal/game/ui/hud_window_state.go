@@ -24,6 +24,17 @@ const (
 	WindowMap   HUDWindow = "map"
 )
 
+// hudWindowFrames are the frame ids the windows draw under, so opening one
+// from its menu button can clear the closed and minimized flags its own title
+// bar set. Without that a window closes once and the button never brings it
+// back.
+var hudWindowFrames = map[HUDWindow]string{
+	WindowInfo:  statsWindowID,
+	WindowSkill: skillsWindowID,
+	WindowItem:  itemsWindowID,
+	WindowMap:   mapWindowID,
+}
+
 // hudWindowTitles are what each window calls itself, matching the original.
 var hudWindowTitles = map[HUDWindow]string{
 	WindowInfo:  "Status",
@@ -58,6 +69,14 @@ func (b *UI2DBackend) ToggleWindow(w HUDWindow) bool {
 
 	open := !b.hudOpen[w]
 	if open {
+		// Clearing the frame's own closed and minimized flags, so a window
+		// put away from its title bar comes back from its button. The nil
+		// check is for a backend built without a context, which the window
+		// state's own tests do.
+		if frame, ok := hudWindowFrames[w]; ok && b.ctx != nil {
+			b.ctx.OpenWindow(frame)
+		}
+
 		b.hudOpen[w] = true
 	} else {
 		// Deleted rather than set false, so the map holds only what is open

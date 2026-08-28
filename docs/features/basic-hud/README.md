@@ -364,7 +364,8 @@ Two traps, both the same shape as ones already hit:
 - **Proved by:** `go build ./... && go test ./...`; `git grep -l cimgui-go -- internal/game/ui` returns only `ui2d_backend.go`.
 - **Note:** done last, once each native replacement is proven — deleting a
   minimap before its replacement works leaves nothing to compare against.
-- [ ] `docs/ENGINE_FEATURES.md`
+- [x] `docs/ENGINE_FEATURES.md` — the native-UI section and what its draw
+      order allows, which is the thing most likely to trip up the next window
 - [ ] Session log
 - [ ] Close #53's D1/D2/D3 items; note what remains
 

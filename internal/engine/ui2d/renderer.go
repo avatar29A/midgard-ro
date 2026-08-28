@@ -52,6 +52,9 @@ type Renderer struct {
 
 	// Current draw lists
 	solidVertices []float32
+
+	// whiteTex is a single white pixel, for filling in the image pass.
+	whiteTex      uint32
 	textVertices  []float32
 	imageVertices []float32
 
@@ -341,19 +344,40 @@ func (r *Renderer) DrawPanel(x, y, width, height float32, bg, border Color) {
 	r.DrawRectOutline(x, y, width, height, 1, border)
 }
 
+// FillImageLayer fills a rectangle in the image pass rather than the solid
+// one, so it stacks with images by call order.
+//
+// Solid quads paint over every image by design, which makes DrawRect useless
+// for anything that has to sit *behind* an image — the cell a pale icon needs
+// so it does not vanish into a white panel. This draws the same rectangle as
+// a one-pixel white texture tinted to the color, which puts it in the image
+// pass where "before" and "after" mean what they say.
+func (r *Renderer) FillImageLayer(x, y, width, height float32, color Color) {
+	if r.whiteTex == 0 {
+		r.whiteTex = r.CreateTexture(1, 1, []byte{255, 255, 255, 255})
+	}
+
+	r.DrawImage(r.whiteTex, x, y, width, height, color)
+}
+
 // addQuad adds a solid color quad to the vertex buffer.
 func (r *Renderer) addQuad(x, y, w, h float32, c Color) {
+	r.addQuadTo(&r.solidVertices, x, y, w, h, c)
+}
+
+// addQuadTo adds a solid color quad to one of the solid layers.
+func (r *Renderer) addQuadTo(into *[]float32, x, y, w, h float32, c Color) {
 	// Two triangles forming a quad
 	// Vertex format: x, y, z, r, g, b, a (7 floats)
 
 	// Triangle 1
-	r.solidVertices = append(r.solidVertices,
+	*into = append(*into,
 		x, y, 0, c.R, c.G, c.B, c.A,
 		x+w, y, 0, c.R, c.G, c.B, c.A,
 		x+w, y+h, 0, c.R, c.G, c.B, c.A,
 	)
 	// Triangle 2
-	r.solidVertices = append(r.solidVertices,
+	*into = append(*into,
 		x, y, 0, c.R, c.G, c.B, c.A,
 		x+w, y+h, 0, c.R, c.G, c.B, c.A,
 		x, y+h, 0, c.R, c.G, c.B, c.A,
