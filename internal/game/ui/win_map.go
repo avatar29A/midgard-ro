@@ -14,14 +14,22 @@ import (
 const (
 	mapWindowID = "hud_win_map"
 
-	mapWinW float32 = 320
-	mapWinH float32 = 340
+	mapWinW float32 = 480
+	mapWinH float32 = 452
 
 	mapWinPad float32 = 8
 
-	// mapWinMark is the dot marking the player, and mapWinMarkMin keeps it
-	// visible on a map scaled well down.
+	// The strip along the bottom carrying the view switch.
+	mapWinFooterH float32 = 26
+	mapWinBtnW    float32 = 86
+	mapWinBtnH    float32 = 18
+
+	// mapWinMark is the dot marking the player.
 	mapWinMark float32 = 5
+
+	// mapWorldTexture is the archive's own painted world map, "Orbis of
+	// Midgard" — 1280x1024, towns already marked on it.
+	mapWorldTexture = skinBasePath + "worldmap.bmp"
 
 	mapWinTextScale float32 = 0.75
 )
@@ -45,6 +53,10 @@ func (b *UI2DBackend) drawMapWindow(state InGameUIState, screenW, screenH float3
 		title = packets.MapBaseName(state.MapName)
 	}
 
+	if b.mapWorldView {
+		title = "World Map"
+	}
+
 	if !b.ctx.BeginWindowEx(mapWindowID, openX, openY, mapWinW, mapWinH, title, opts) {
 		if b.ctx.WindowClosed(mapWindowID) {
 			b.ToggleWindow(WindowMap)
@@ -64,13 +76,19 @@ func (b *UI2DBackend) drawMapWindow(state InGameUIState, screenW, screenH float3
 		X: x + mapWinPad,
 		Y: y + ui2d.FrameTitleH + mapWinPad,
 		W: mapWinW - 2*mapWinPad,
-		H: mapWinH - ui2d.FrameTitleH - 2*mapWinPad,
+		H: mapWinH - ui2d.FrameTitleH - mapWinFooterH - 2*mapWinPad,
 	}
 
 	r := b.ctx.Renderer()
 	r.FillImageLayer(x, y+ui2d.FrameTitleH, mapWinW, mapWinH-ui2d.FrameTitleH, ui2d.ColorWindowBody)
 
-	b.drawMapImage(state, body)
+	if b.mapWorldView {
+		b.drawWorldMap(body)
+	} else {
+		b.drawMapImage(state, body)
+	}
+
+	b.drawMapFooter(x, y)
 	b.ctx.EndWindow()
 }
 
@@ -107,4 +125,58 @@ func (b *UI2DBackend) drawMapImage(state InGameUIState, body ui2d.Rect) {
 	markY := drawY + (1-fy)*drawH - mapWinMark/2
 
 	r.DrawRect(markX, markY, mapWinMark, mapWinMark, minimapDot)
+}
+
+// drawWorldMap draws the archive's painted world map.
+//
+// No "you are here" on it. Which map sits where on this picture is in the
+// client's worldviewdata table, which is Lua bytecode this does not read yet,
+// and a marker placed by guesswork would be worse than none.
+func (b *UI2DBackend) drawWorldMap(body ui2d.Rect) {
+	r := b.ctx.Renderer()
+
+	tex, err := b.texCache.Load(mapWorldTexture)
+	if err != nil {
+		r.DrawText(body.X, body.Y, "No world map in this archive.", mapWinTextScale, skillsEmptyText)
+
+		return
+	}
+
+	scale := min(body.W/float32(tex.Width), body.H/float32(tex.Height))
+	drawW := float32(tex.Width) * scale
+	drawH := float32(tex.Height) * scale
+
+	r.DrawImage(tex.ID,
+		body.X+(body.W-drawW)/2, body.Y+(body.H-drawH)/2,
+		drawW, drawH, ui2d.ColorWhite)
+}
+
+// drawMapFooter draws the strip with the switch between the two views.
+//
+// They answer different questions — where am I on this map, and where is this
+// map in the world — so the window carries both rather than one replacing the
+// other, which is what the original does too.
+func (b *UI2DBackend) drawMapFooter(x, y float32) {
+	r := b.ctx.Renderer()
+
+	footerY := y + mapWinH - mapWinFooterH
+	r.DrawRect(x+1, footerY, mapWinW-2, 1, ui2d.ColorPanelBorder)
+
+	label := "World Map"
+	if b.mapWorldView {
+		label = "This Map"
+	}
+
+	box := ui2d.Rect{
+		X: x + mapWinW - mapWinPad - mapWinBtnW,
+		Y: footerY + (mapWinFooterH-mapWinBtnH)/2,
+		W: mapWinBtnW,
+		H: mapWinBtnH,
+	}
+
+	b.drawEscButton(box, label, false)
+
+	if b.ctx.InvisibleButtonAt("hud_map_view", box.X, box.Y, box.W, box.H) {
+		b.mapWorldView = !b.mapWorldView
+	}
 }
