@@ -1,8 +1,8 @@
 # Self-hosted rAthena (MVP)
 
-Wraps the official rAthena Docker setup with our MVP-specific seed SQL: a
-single Novice test account pre-spawned in Prontera. Implements Track A of
-RFC [#49](https://github.com/avatar29A/midgard-ro/issues/49).
+Wraps the official rAthena Docker setup with our MVP-specific seed SQL:
+three test accounts (Novice, Swordman, Mage) pre-spawned in Prontera.
+Implements Track A of RFC [#49](https://github.com/avatar29A/midgard-ro/issues/49).
 
 See [`docs/research/rathena-setup.md`](../../docs/research/rathena-setup.md)
 for the distribution-choice rationale.
@@ -32,6 +32,7 @@ Subsequent `docker compose up` invocations skip both.
 | [`setup.sh`](setup.sh) | Clones rAthena at the pin and copies our seed into upstream `sql-files/` |
 | [`docker-compose.yml`](docker-compose.yml) | 5-service stack: db + builder + login + char + map |
 | [`seed/zzz_mvp_novice.sql`](seed/zzz_mvp_novice.sql) | MVP test account + pre-created Novice char |
+| [`seed/zzz_test_accounts.sql`](seed/zzz_test_accounts.sql) | Two extra test accounts (Swordman, Mage) |
 | `build/` | gitignored rAthena clone created by `setup.sh` |
 
 ## Connection details
@@ -43,8 +44,17 @@ Subsequent `docker compose up` invocations skip both.
 | Map | `localhost:5121` |
 | MariaDB | `localhost:3306` (`ragnarok` / `ragnarok` / `ragnarok`) |
 
-Test account: `midgard-test` / `midgard-test` — has one Novice character
-named `MidgardTest` spawned at `prontera (156, 191)`.
+Test accounts — full table, including how to apply the seed to an already
+initialised DB, in [`docs/TEST_ACCOUNTS.md`](../../docs/TEST_ACCOUNTS.md):
+
+| Login | Password | Job | Character | Spawn |
+|---|---|---|---|---|
+| `midgard-test` | `midgard-test` | Novice | `MidgardTest` (M) | `prontera (156, 191)` |
+| `midgard-sword` | `midgard-sword` | Swordman | `MidgardSword` (M) | `prontera (152, 191)` |
+| `midgard-mage` | `midgard-mage` | Mage | `MidgardMage` (F) | `prontera (160, 191)` |
+
+The seed runs only on first DB init — `docker compose down --volumes` (or
+`make server-reset`) re-seeds from scratch.
 
 Packet version: `20211103` (modern era — exercises the `0x0AC4` code path
 in [`internal/network/client.go`](../../internal/network/client.go)).
