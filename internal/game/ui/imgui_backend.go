@@ -77,6 +77,9 @@ func (b *ImGuiBackend) EscMenuOpen() bool { return false }
 // TakeEscAction never has one to give here, for the same reason.
 func (b *ImGuiBackend) TakeEscAction() EscAction { return EscNone }
 
+// TakeItemAction never has one to give here: there is no inventory window.
+func (b *ImGuiBackend) TakeItemAction() (ItemAction, bool) { return ItemAction{}, false }
+
 // SetSoundSettings does nothing here: there is no sound dialog to seed.
 func (b *ImGuiBackend) SetSoundSettings(SoundSettings) {}
 

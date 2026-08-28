@@ -21,6 +21,9 @@ type UIBackend interface {
 	// TakeEscAction returns what the player picked in it and clears it.
 	TakeEscAction() EscAction
 
+	// TakeItemAction returns a double click on an inventory item.
+	TakeItemAction() (ItemAction, bool)
+
 	// SetSoundSettings seeds the sound dialog from what is actually playing.
 	SetSoundSettings(s SoundSettings)
 
