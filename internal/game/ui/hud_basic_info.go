@@ -478,14 +478,20 @@ func (b *UI2DBackend) drawFoldButton(skin *basicInfoSkin, x, y float32) {
 // A next-level total of zero means the server has not sent one — at max level
 // it never will — and draws an empty well rather than a full bar.
 func (b *UI2DBackend) drawExpBar(x, y float32, current, next int64) {
-	r := b.ctx.Renderer()
+	// Filled in the image pass, not with DrawRect.
+	//
+	// These are the only painted rectangles on the panel — the gauges above
+	// them are skin textures — and as solids they floated over every window
+	// on screen and over the ESC menu's backdrop, because solid quads paint
+	// over every image in the frame by design. In the image pass they are
+	// ordered by call, and the windows are drawn after the panel.
+	fill := b.ctx.Renderer().FillImageLayer
 
-	r.DrawRect(x, y, hudExpW+2*hudExpBorder, hudExpH+2*hudExpBorder, hudExpBorderColor)
-	r.DrawRect(x+hudExpBorder, y+hudExpBorder, hudExpW, hudExpH, hudExpWellColor)
+	fill(x, y, hudExpW+2*hudExpBorder, hudExpH+2*hudExpBorder, hudExpBorderColor)
+	fill(x+hudExpBorder, y+hudExpBorder, hudExpW, hudExpH, hudExpWellColor)
 
-	fill := expFillWidth(current, next, hudExpW)
-	if fill > 0 {
-		r.DrawRect(x+hudExpBorder, y+hudExpBorder, fill, hudExpH, hudExpFillColor)
+	if filled := expFillWidth(current, next, hudExpW); filled > 0 {
+		fill(x+hudExpBorder, y+hudExpBorder, filled, hudExpH, hudExpFillColor)
 	}
 }
 
