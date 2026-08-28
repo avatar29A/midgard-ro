@@ -30,8 +30,9 @@ text — no dedicated packet — so this also proves the account change on its o
 
 ### A command that changes the world
 1. `--say "@go 1"`
-2. Verify the loading screen appears and Geffen loads
-3. Verify the character is in Geffen and can walk
+2. Verify the loading screen appears and Morocc loads (`@go 1` is Morocc;
+   Geffen is `@go 2` — the numbering is in `atcommand.cpp` ACMD_FUNC(go))
+3. Verify the character is in Morocc and can walk
 4. `--say "@go 0"` and verify the return to Prontera
 
 ### A command that answers with text

@@ -6,7 +6,7 @@
 ## Goal
 
 Make the chat box accept commands as well as sentences. Typing `@go 1` warps the
-character to Geffen; typing `/where` prints the map and cell without troubling
+character to Morocc; typing `/where` prints the map and cell without troubling
 the server; typing `/nonsense` says so instead of shouting it at everyone on the
 map. The test account becomes a GM so all 318 of the server's commands are
 actually reachable, and every line in the box is coloured by where it came
@@ -347,7 +347,7 @@ them into atcommand text, since the packets are silently rejected instead.
 
 ## Done when (feature)
 
-- `@commands` lists the commands; `@go 1` warps to Geffen; `@item 909 10` works.
+- `@commands` lists the commands; `@go 1` warps to Morocc; `@item 909 10` works.
 - `#` charcommands reach the server (`#zeny MidgardTest 100`).
 - `/where`, `/who`, `/h`, `/bgm`, `/sound` answer without a round trip where
   they should, and with one where they must.
