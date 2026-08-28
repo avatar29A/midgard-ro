@@ -7,6 +7,8 @@ another character.
 **Server:** rAthena at `5addd72448e2da3af6c89a97ccb994e5d49d8263`
 (`docker/rathena/pin.txt`), PACKETVER **20211103**.
 **Supporting work:** #94 (`docs/features/chat-commands/README.md`).
+**Searchable version:** <https://claude.ai/code/artifact/23c22c8b-9641-47e3-99aa-acf57b677751>
+— the same data as a filterable page, which is easier than scrolling 313 rows.
 
 The `@` tables are **generated** from the server tree rather than typed, so they
 cannot drift from the server we actually run:
