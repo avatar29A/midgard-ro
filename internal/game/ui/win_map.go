@@ -1,8 +1,12 @@
 package ui
 
 import (
+	"github.com/Faultbox/midgard-ro/internal/config"
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
+	"github.com/Faultbox/midgard-ro/internal/logger"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
+
+	"go.uber.org/zap"
 )
 
 // The Map window the Map button opens: the same image the minimap draws, at
@@ -40,12 +44,21 @@ func (b *UI2DBackend) drawMapWindow(state InGameUIState, screenW, screenH float3
 		return
 	}
 
+	// Where it was left, or centered at its default size the first time.
 	openX := (screenW - mapWinW) / 2
 	openY := (screenH - mapWinH) / 2
+	openW, openH := mapWinW, mapWinH
+
+	if saved := b.mapPlacement(); saved.W > 0 {
+		openX, openY, openW, openH = saved.X, saved.Y, saved.W, saved.H
+	}
 
 	// The body is the map image, so the frame must not paint one over it.
+	// Resizable because a map is worth making bigger, which is the one window
+	// here where that is true.
 	opts := ui2d.DefaultWindowOptions()
 	opts.BitmapBody = true
+	opts.Resizable = true
 
 	// The map's name without its extension: "prontera", not "prontera.gat".
 	title := hudWindowTitles[WindowMap]
@@ -57,7 +70,7 @@ func (b *UI2DBackend) drawMapWindow(state InGameUIState, screenW, screenH float3
 		title = "World Map"
 	}
 
-	if !b.ctx.BeginWindowEx(mapWindowID, openX, openY, mapWinW, mapWinH, title, opts) {
+	if !b.ctx.BeginWindowEx(mapWindowID, openX, openY, openW, openH, title, opts) {
 		if b.ctx.WindowClosed(mapWindowID) {
 			b.ToggleWindow(WindowMap)
 		}
@@ -65,22 +78,28 @@ func (b *UI2DBackend) drawMapWindow(state InGameUIState, screenW, screenH float3
 		return
 	}
 
-	x, y := openX, openY
+	// The window's own size, not the caller's: once resized it keeps its own,
+	// and laying the map out to the opening size would leave it in a corner
+	// of a window the user has stretched.
+	win := ui2d.Rect{X: openX, Y: openY, W: openW, H: openH}
 	if rect, ok := b.ctx.WindowRect(mapWindowID); ok {
-		x, y = rect.X, rect.Y
+		win = rect
 	}
 
-	b.ctx.CaptureMouse(ui2d.Rect{X: x, Y: y, W: mapWinW, H: mapWinH})
+	b.ctx.CaptureMouse(win)
+	b.rememberMapPlacement(win)
+
+	x, y := win.X, win.Y
 
 	body := ui2d.Rect{
 		X: x + mapWinPad,
 		Y: y + ui2d.FrameTitleH + mapWinPad,
-		W: mapWinW - 2*mapWinPad,
-		H: mapWinH - ui2d.FrameTitleH - mapWinFooterH - 2*mapWinPad,
+		W: win.W - 2*mapWinPad,
+		H: win.H - ui2d.FrameTitleH - mapWinFooterH - 2*mapWinPad,
 	}
 
 	r := b.ctx.Renderer()
-	r.FillImageLayer(x, y+ui2d.FrameTitleH, mapWinW, mapWinH-ui2d.FrameTitleH, ui2d.ColorWindowBody)
+	r.FillImageLayer(x, y+ui2d.FrameTitleH, win.W, win.H-ui2d.FrameTitleH, ui2d.ColorWindowBody)
 
 	if b.mapWorldView {
 		b.drawWorldMap(body)
@@ -88,7 +107,7 @@ func (b *UI2DBackend) drawMapWindow(state InGameUIState, screenW, screenH float3
 		b.drawMapImage(state, body)
 	}
 
-	b.drawMapFooter(x, y)
+	b.drawMapFooter(win)
 	b.ctx.EndWindow()
 }
 
@@ -156,11 +175,11 @@ func (b *UI2DBackend) drawWorldMap(body ui2d.Rect) {
 // They answer different questions — where am I on this map, and where is this
 // map in the world — so the window carries both rather than one replacing the
 // other, which is what the original does too.
-func (b *UI2DBackend) drawMapFooter(x, y float32) {
+func (b *UI2DBackend) drawMapFooter(win ui2d.Rect) {
 	r := b.ctx.Renderer()
 
-	footerY := y + mapWinH - mapWinFooterH
-	r.DrawRect(x+1, footerY, mapWinW-2, 1, ui2d.ColorPanelBorder)
+	footerY := win.Y + win.H - mapWinFooterH
+	r.DrawRect(win.X+1, footerY, win.W-2, 1, ui2d.ColorPanelBorder)
 
 	label := "World Map"
 	if b.mapWorldView {
@@ -168,7 +187,7 @@ func (b *UI2DBackend) drawMapFooter(x, y float32) {
 	}
 
 	box := ui2d.Rect{
-		X: x + mapWinW - mapWinPad - mapWinBtnW,
+		X: win.X + win.W - mapWinPad - mapWinBtnW,
 		Y: footerY + (mapWinFooterH-mapWinBtnH)/2,
 		W: mapWinBtnW,
 		H: mapWinBtnH,
@@ -178,5 +197,40 @@ func (b *UI2DBackend) drawMapFooter(x, y float32) {
 
 	if b.ctx.InvisibleButtonAt("hud_map_view", box.X, box.Y, box.W, box.H) {
 		b.mapWorldView = !b.mapWorldView
+	}
+}
+
+// mapPlacement is where the Map window was last left, read once.
+func (b *UI2DBackend) mapPlacement() ui2d.Rect {
+	if !b.mapPlaced {
+		saved := config.LoadUIState()
+		b.mapSaved = ui2d.Rect{X: saved.MapX, Y: saved.MapY, W: saved.MapW, H: saved.MapH}
+		b.mapPlaced = true
+	}
+
+	return b.mapSaved
+}
+
+// rememberMapPlacement records where the window is once it has settled.
+//
+// Written on release rather than every frame it moves: one file per gesture
+// instead of one per frame, the same way the chat's placement is kept.
+func (b *UI2DBackend) rememberMapPlacement(win ui2d.Rect) {
+	if win == b.mapSaved {
+		return
+	}
+
+	b.mapSaved = win
+
+	if !b.ctx.Input().MouseLeftReleased {
+		return
+	}
+
+	err := config.UpdateUIState(func(state *config.UIState) {
+		state.MapX, state.MapY = win.X, win.Y
+		state.MapW, state.MapH = win.W, win.H
+	})
+	if err != nil {
+		logger.Warn("could not save map window placement", zap.Error(err))
 	}
 }
