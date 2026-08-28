@@ -55,6 +55,14 @@ type WindowOptions struct {
 
 	// Resizable gives the window a footer with a grip in its corner.
 	Resizable bool
+
+	// BitmapBody leaves the body unpainted, for a window whose background is
+	// an image the caller draws.
+	//
+	// It has to be an option rather than something the caller paints over,
+	// because rectangles and images are drawn in separate batches: the body
+	// fill lands on top of an image no matter which was asked for first.
+	BitmapBody bool
 }
 
 // DefaultWindowOptions is the ordinary window: it can be closed and minimized,
@@ -118,21 +126,29 @@ func (c *Context) drawWindowFrame(ws *WindowState, title string) bool {
 	r.DrawImage(f.TitleMid, ws.X+frameCapW, ws.Y, midW, FrameTitleH, ColorWhite)
 	r.DrawImage(f.TitleRight, ws.X+ws.W-frameCapW, ws.Y, frameCapW, FrameTitleH, ColorWhite)
 
-	// Body.
-	bodyY := ws.Y + FrameTitleH
-	bodyH := ws.H - FrameTitleH - c.frameFooterHeight(ws)
-	if bodyH < 0 {
-		bodyH = 0
-	}
+	// Body — skipped entirely when minimized, which is what minimized means.
+	// Drawing its edges anyway left the outline of a window with nothing in
+	// it: a bordered empty box below the title bar, and on a window whose
+	// body is a bitmap that is all you saw.
+	if !ws.Minimized {
+		bodyY := ws.Y + FrameTitleH
+		bodyH := ws.H - FrameTitleH - c.frameFooterHeight(ws)
+		if bodyH < 0 {
+			bodyH = 0
+		}
 
-	r.DrawRect(ws.X, bodyY, ws.W, bodyH, ColorWindowBody)
-	r.DrawRect(ws.X, bodyY, 1, bodyH, ColorPanelBorder)
-	r.DrawRect(ws.X+ws.W-1, bodyY, 1, bodyH, ColorPanelBorder)
+		if !ws.BitmapBody {
+			r.DrawRect(ws.X, bodyY, ws.W, bodyH, ColorWindowBody)
+		}
 
-	if footerH := c.frameFooterHeight(ws); footerH > 0 {
-		r.DrawImage(f.FooterMid, ws.X, bodyY+bodyH, ws.W, footerH, ColorWhite)
-	} else {
-		r.DrawRect(ws.X, bodyY+bodyH-1, ws.W, 1, ColorPanelBorder)
+		r.DrawRect(ws.X, bodyY, 1, bodyH, ColorPanelBorder)
+		r.DrawRect(ws.X+ws.W-1, bodyY, 1, bodyH, ColorPanelBorder)
+
+		if footerH := c.frameFooterHeight(ws); footerH > 0 {
+			r.DrawImage(f.FooterMid, ws.X, bodyY+bodyH, ws.W, footerH, ColorWhite)
+		} else {
+			r.DrawRect(ws.X, bodyY+bodyH-1, ws.W, 1, ColorPanelBorder)
+		}
 	}
 
 	// Title text, left of the system buttons where the original puts it.
@@ -185,8 +201,16 @@ func (c *Context) windowResizeGrip(ws *WindowState) {
 
 	id := ws.ID + "_grip"
 	grip := Rect{gripX, gripY, frameGrip, frameGrip}
+	hovered := grip.Contains(c.input.MouseX, c.input.MouseY)
 
-	if c.input.MouseLeftPressed && grip.Contains(c.input.MouseX, c.input.MouseY) {
+	// Recorded for whoever draws the pointer. The 2D layer has no business
+	// knowing what a cursor is, so it says only that the pointer is over a
+	// grip and leaves the choice of cursor to the caller.
+	if hovered || c.activeWidget == id {
+		c.overResizeGrip = true
+	}
+
+	if c.input.MouseLeftPressed && hovered {
 		c.activeWidget = id
 	}
 

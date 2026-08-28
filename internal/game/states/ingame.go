@@ -99,6 +99,11 @@ type InGameState struct {
 	// quit ends the process, once the server has agreed to let us go.
 	quit QuitFunc
 
+	// skills is what the character can do, as the server listed it, and
+	// inventory what it is carrying — the two lists appended together.
+	skills    []packets.Skill
+	inventory []packets.InventoryItem
+
 	// unitTraceAt rate limits the unit render statistics.
 	unitTraceAt time.Time
 
@@ -923,6 +928,153 @@ func (s *InGameState) Stats() PlayerStats {
 // These arrive constantly — every point of HP regenerated is one — so the
 // handler stays cheap and says nothing at info level; --trace=status is how
 // you watch them.
+// handleSkillList takes the character's skills, which the server sends once
+// on entering the map.
+func (s *InGameState) handleSkillList(data []byte) error {
+	list := packets.DecodeSkillList(data)
+
+	s.skills = list
+
+	trace.Emit(trace.HUD, "skill-list", zap.Int("count", len(list)))
+
+	return nil
+}
+
+// handleInventoryNormal takes the stackable half of the inventory.
+func (s *InGameState) handleInventoryNormal(data []byte) error {
+	return s.takeInventory(data, packets.NormalItemLen, "normal", packets.DecodeInventoryNormal)
+}
+
+// handleInventoryEquip takes the worn half.
+func (s *InGameState) handleInventoryEquip(data []byte) error {
+	return s.takeInventory(data, packets.EquipItemLen, "equip", packets.DecodeInventoryEquip)
+}
+
+// takeInventory folds one of the two lists into the inventory, and complains
+// loudly if the entries did not divide evenly.
+//
+// That check is the important part. The entry layout changed several times
+// across packet versions and the sizes here are read off the server's structs
+// with our version's guards resolved by hand. If the arithmetic is wrong the
+// remainder says so, which is far easier to act on than a window full of
+// nonsense items.
+func (s *InGameState) takeInventory(
+	data []byte, entryLen int, which string, decode func([]byte) []packets.InventoryItem,
+) error {
+	if left := packets.ItemListRemainder(data, entryLen); left != 0 {
+		logger.Warn("inventory list does not divide into whole entries",
+			zap.String("list", which),
+			zap.Int("entryLen", entryLen),
+			zap.Int("remainder", left),
+			zap.Int("bytes", len(data)))
+
+		return nil
+	}
+
+	items := decode(data)
+	s.inventory = append(s.inventory, items...)
+
+	trace.Emit(trace.HUD, "inventory",
+		zap.String("list", which),
+		zap.Int("added", len(items)),
+		zap.Int("total", len(s.inventory)))
+
+	return nil
+}
+
+// UseItem asks to use the item in an inventory slot.
+//
+// Nothing is changed locally. The server answers with the item's effect and a
+// new count, and acting before it does would show a potion drunk that the
+// server refused.
+func (s *InGameState) UseItem(index int) error {
+	trace.Emit(trace.HUD, "use-item", zap.Int("index", index))
+
+	return s.client.Send(packets.EncodeUseItem(index, s.selfAID()))
+}
+
+// EquipItem asks to wear the item in an inventory slot.
+//
+// The position is the item's own, as the equip list reported it: rAthena
+// passes it straight through rather than working one out, so it has to be the
+// value the server gave us. An item the server said nothing about — anything
+// not in the equip list — cannot be worn, and saying so here is better than
+// sending a zero the server will silently refuse.
+func (s *InGameState) EquipItem(index int) error {
+	for _, item := range s.inventory {
+		if item.Index != index {
+			continue
+		}
+
+		if item.EquipPositions == 0 {
+			logger.Info("that item cannot be worn", zap.Int("index", index))
+
+			return nil
+		}
+
+		trace.Emit(trace.HUD, "equip-item",
+			zap.Int("index", index), zap.Uint32("position", item.EquipPositions))
+
+		return s.client.Send(packets.EncodeEquipItem(index, item.EquipPositions))
+	}
+
+	return nil
+}
+
+// Inventory returns what the character is carrying, for the interface.
+func (s *InGameState) Inventory() []packets.InventoryItem {
+	return s.inventory
+}
+
+// Skills returns the character's skills for the interface, oldest order kept:
+// the server sends them in the order the window is meant to list them.
+func (s *InGameState) Skills() []packets.Skill {
+	return s.skills
+}
+
+// handleStatus takes the whole status window: the six primary stats, what
+// raising each costs, and the points left to spend.
+func (s *InGameState) handleStatus(data []byte) error {
+	status := packets.DecodeStatus(data)
+	if status == nil {
+		logger.Warn("malformed status window packet", zap.Int("bytes", len(data)))
+
+		return nil
+	}
+
+	s.stats.ApplyStatus(status)
+
+	trace.Emit(trace.Status, "window",
+		zap.Int("points", status.StatusPoints),
+		zap.Ints("values", status.Values[:]))
+
+	return nil
+}
+
+// handleCoupleStatus takes one primary stat and the bonus on it, which is the
+// only packet that carries the bonus at all.
+func (s *InGameState) handleCoupleStatus(data []byte) error {
+	couple := packets.DecodeCoupleStatus(data)
+	if couple == nil {
+		logger.Warn("malformed couple status packet", zap.Int("bytes", len(data)))
+
+		return nil
+	}
+
+	if !s.stats.ApplyCoupleStatus(couple) {
+		// The server sends these for derived numbers too — attack, defense
+		// and the rest — which the window does not show yet.
+		return nil
+	}
+
+	trace.Emit(trace.Status, "couple",
+		zap.Uint16("varID", couple.VarID),
+		zap.Int("base", couple.Base),
+		zap.Int("bonus", couple.Bonus))
+
+	return nil
+}
+
 func (s *InGameState) handleStatusChange(data []byte) error {
 	change := packets.DecodeStatusChange(data)
 	if change == nil {
@@ -1016,6 +1168,11 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_RESTART_ACK, s.handleRestartAck)
 	s.client.RegisterHandler(packets.ZC_ACK_REQ_DISCONNECT, s.handleDisconnectAck)
 	s.client.RegisterHandler(packets.ZC_PAR_CHANGE, s.handleStatusChange)
+	s.client.RegisterHandler(packets.ZC_STATUS, s.handleStatus)
+	s.client.RegisterHandler(packets.ZC_SKILLINFO_LIST, s.handleSkillList)
+	s.client.RegisterHandler(packets.ZC_INVENTORY_ITEMLIST_NORMAL, s.handleInventoryNormal)
+	s.client.RegisterHandler(packets.ZC_INVENTORY_ITEMLIST_EQUIP, s.handleInventoryEquip)
+	s.client.RegisterHandler(packets.ZC_COUPLESTATUS, s.handleCoupleStatus)
 	s.client.RegisterHandler(packets.ZC_LONGPAR_CHANGE, s.handleStatusChange)
 	s.client.RegisterHandler(packets.ZC_LONGLONGPAR_CHANGE, s.handleStatusChange)
 	s.client.RegisterHandler(packets.ZC_SAY_DIALOG, s.handleSayDialog)

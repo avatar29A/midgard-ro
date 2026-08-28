@@ -96,15 +96,24 @@ func (b *UI2DBackend) drawEntityBars(bar states.EntityBar) {
 
 	r := b.ctx.Renderer()
 
+	// Filled in the image pass, not with DrawRect.
+	//
+	// These belong to the world, and every window belongs over them. Solid
+	// quads paint over every image in the frame by design, so bars drawn as
+	// solids sat on top of the map window's picture — a character's health
+	// showing through a map is not a depth anyone asked for. In the image
+	// pass they are ordered by call, and the windows are drawn after.
+	fill := r.FillImageLayer
+
 	// Border first, then the empty channel inset into it, then the fills —
 	// the same order the original builds them in, so a bar at zero still
 	// reads as a bar rather than disappearing.
-	r.DrawRect(x, y, entityBarW, height, entityBarBorder.WithAlpha(bar.Alpha))
-	r.DrawRect(x+1, y+1, entityBarW-2, height-2, entityBarEmpty.WithAlpha(bar.Alpha))
+	fill(x, y, entityBarW, height, entityBarBorder.WithAlpha(bar.Alpha))
+	fill(x+1, y+1, entityBarW-2, height-2, entityBarEmpty.WithAlpha(bar.Alpha))
 
 	hp := barFraction(bar.HP, bar.MaxHP)
 	if hp > 0 {
-		r.DrawRect(x+1, y+1, (entityBarW-2)*hp, entityBarFillH,
+		fill(x+1, y+1, (entityBarW-2)*hp, entityBarFillH,
 			hpColor(bar.Type, hp).WithAlpha(bar.Alpha))
 	}
 
@@ -113,10 +122,10 @@ func (b *UI2DBackend) drawEntityBars(bar states.EntityBar) {
 	}
 
 	// The separator between the two, then the SP fill under it.
-	r.DrawRect(x, y+4, entityBarW, 1, entityBarBorder.WithAlpha(bar.Alpha))
+	fill(x, y+4, entityBarW, 1, entityBarBorder.WithAlpha(bar.Alpha))
 
 	if sp := barFraction(bar.SP, bar.MaxSP); sp > 0 {
-		r.DrawRect(x+1, y+5, (entityBarW-2)*sp, entityBarFillH,
+		fill(x+1, y+5, (entityBarW-2)*sp, entityBarFillH,
 			entityBarSP.WithAlpha(bar.Alpha))
 	}
 }
