@@ -37,6 +37,12 @@ const (
 	SP_STATUSPOINT uint16 = 9
 	SP_BASELEVEL   uint16 = 11
 	SP_SKILLPOINT  uint16 = 12
+	SP_STR         uint16 = 13
+	SP_AGI         uint16 = 14
+	SP_VIT         uint16 = 15
+	SP_INT         uint16 = 16
+	SP_DEX         uint16 = 17
+	SP_LUK         uint16 = 18
 	SP_CLASS       uint16 = 19
 	SP_ZENY        uint16 = 20
 	SP_NEXTBASEEXP uint16 = 22
@@ -44,6 +50,23 @@ const (
 	SP_WEIGHT      uint16 = 24
 	SP_MAXWEIGHT   uint16 = 25
 	SP_JOBLEVEL    uint16 = 55
+
+	// The derived numbers down the right of the status window. They arrive
+	// through ZC_PAR_CHANGE like everything else; ZC_STATUS only carries them
+	// once, when the window is first filled in.
+	SP_ATK1     uint16 = 41
+	SP_ATK2     uint16 = 42
+	SP_MATK1    uint16 = 43
+	SP_MATK2    uint16 = 44
+	SP_DEF1     uint16 = 45
+	SP_DEF2     uint16 = 46
+	SP_MDEF1    uint16 = 47
+	SP_MDEF2    uint16 = 48
+	SP_HIT      uint16 = 49
+	SP_FLEE1    uint16 = 50
+	SP_FLEE2    uint16 = 51
+	SP_CRITICAL uint16 = 52
+	SP_ASPD     uint16 = 53
 )
 
 // StatusChange is one parameter update, whichever of the three packets
@@ -86,4 +109,140 @@ func DecodeStatusChange(data []byte) *StatusChange {
 // readI64 reads a little-endian signed 64-bit value.
 func readI64(data []byte, offset int) int64 {
 	return int64(uint64(readU32(data, offset)) | uint64(readU32(data, offset+4))<<32)
+}
+
+// The two packets behind the status window.
+//
+// ZC_STATUS is the whole thing at once, sent when the window is first filled
+// in; ZC_COUPLESTATUS is one stat afterwards. They do not carry the same
+// pair of numbers, which is the thing to be careful about:
+//
+//	ZC_STATUS's "standard" fields are pc_need_status_point — what it costs to
+//	raise that stat by one, not a bonus.
+//
+//	ZC_COUPLESTATUS carries the bonus: the base and the equipment and buffs
+//	added on top of it.
+//
+// A window built from ZC_STATUS alone can show the six values and their cost
+// but cannot show a bonus, because the packet does not contain one.
+const (
+	// ZC_STATUS is `<point>.W` then six `<value>.B <cost>.B` pairs, then the
+	// derived numbers. 44 bytes.
+	ZC_STATUS uint16 = 0x00BD
+
+	// ZC_COUPLESTATUS is `<status id>.L <base>.L <bonus>.L`. 14 bytes.
+	ZC_COUPLESTATUS uint16 = 0x0141
+)
+
+// PrimaryStats is what ZC_STATUS says: the six, and the numbers derived from
+// them that fill the right of the window.
+type PrimaryStats struct {
+	// StatusPoints is what there is left to spend.
+	StatusPoints int
+
+	// Values are the six stats, indexed by their offset from SP_STR, and
+	// Costs what raising each by one would take.
+	Values [PrimaryStatCount]int
+	Costs  [PrimaryStatCount]int
+
+	// The derived numbers, each as the window shows it: a base and what
+	// equipment adds, except Matk which is a range and Hit, Critical and
+	// Aspd which are single figures.
+	Atk, AtkBonus    int
+	MatkMin, MatkMax int
+	Def, DefBonus    int
+	Mdef, MdefBonus  int
+	Flee, FleeBonus  int
+	Hit              int
+	Critical         int
+	Aspd             int
+}
+
+// PrimaryStatCount is how many primary stats there are: STR through LUK.
+const PrimaryStatCount = 6
+
+// PrimaryStatIndex maps a status id to its place in PrimaryStats, reporting
+// false for anything that is not one of the six.
+func PrimaryStatIndex(varID uint16) (int, bool) {
+	if varID < SP_STR || varID > SP_LUK {
+		return 0, false
+	}
+
+	return int(varID - SP_STR), true
+}
+
+// DecodeStatus reads the whole status window. Returns nil when the packet is
+// too short to hold it.
+func DecodeStatus(data []byte) *PrimaryStats {
+	// Header, the point total, and the six pairs.
+	const need = 2 + 2 + 2*PrimaryStatCount
+
+	if len(data) < need {
+		return nil
+	}
+
+	stats := &PrimaryStats{StatusPoints: int(readU16(data, 2))}
+	for i := 0; i < PrimaryStatCount; i++ {
+		stats.Values[i] = int(data[4+i*2])
+		stats.Costs[i] = int(data[5+i*2])
+	}
+
+	// The derived half, in the order clif_initialstatus writes it. Absent on
+	// a short packet, which leaves the window's right column empty rather
+	// than filled with nonsense.
+	if len(data) < 44 {
+		return stats
+	}
+
+	stats.Atk = readI16(data, 16)
+	stats.AtkBonus = readI16(data, 18)
+	stats.MatkMax = readI16(data, 20)
+	stats.MatkMin = readI16(data, 22)
+	stats.Def = readI16(data, 24)
+	stats.DefBonus = readI16(data, 26)
+	stats.Mdef = readI16(data, 28)
+	stats.MdefBonus = readI16(data, 30)
+	stats.Hit = readI16(data, 32)
+	stats.Flee = readI16(data, 34)
+	stats.FleeBonus = readI16(data, 36)
+	stats.Critical = readI16(data, 38)
+	stats.Aspd = AspdFromAmotion(readI16(data, 40))
+
+	return stats
+}
+
+// AspdFromAmotion converts the attack motion the server sends into the ASPD
+// the window shows. The packet carries amotion; 200 - amotion/10 is what the
+// original displays, which is why a value of 280 reads as 172.
+func AspdFromAmotion(amotion int) int {
+	return 200 - amotion/10
+}
+
+// readI16 reads a signed 16-bit field. Several of these go negative — a
+// defense penalty, say — and reading them unsigned turns -1 into 65535.
+func readI16(data []byte, offset int) int {
+	return int(int16(readU16(data, offset)))
+}
+
+// CoupleStatus is one stat and what is added to it.
+type CoupleStatus struct {
+	VarID uint16
+	Base  int
+	Bonus int
+}
+
+// DecodeCoupleStatus reads a single stat's base and bonus. Returns nil when
+// the packet is too short.
+func DecodeCoupleStatus(data []byte) *CoupleStatus {
+	if len(data) < 14 {
+		return nil
+	}
+
+	// The status id is four bytes wide here, unlike the two it takes in
+	// ZC_PAR_CHANGE.
+	return &CoupleStatus{
+		VarID: uint16(readU32(data, 2)),
+		Base:  int(int32(readU32(data, 6))),
+		Bonus: int(int32(readU32(data, 10))),
+	}
 }

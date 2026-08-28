@@ -19,6 +19,10 @@ type Context struct {
 	selectAll string
 	focusNext bool
 
+	// overResizeGrip is set while the pointer is on a window's resize corner,
+	// so the caller can show a cursor that says the corner does something.
+	overResizeGrip bool
+
 	// Window state
 	windows map[string]*WindowState
 
@@ -87,6 +91,10 @@ type WindowState struct {
 	// Resized, like Dragged, freezes the caller's size once the user has set
 	// their own.
 	Resized bool
+
+	// BitmapBody leaves the body unpainted for this window, set from the
+	// options each frame.
+	BitmapBody bool
 
 	// Minimized collapses the window to its title bar.
 	Minimized bool
@@ -162,6 +170,7 @@ func (c *Context) SetDefaultInputSkin(skin *NineSlice) {
 func (c *Context) Begin() {
 	c.input.Update()
 	c.mouseCaptured = false
+	c.overResizeGrip = false
 	c.renderer.Begin()
 }
 
@@ -183,6 +192,12 @@ func (c *Context) CaptureMouse(rect Rect) {
 // the interface has to be drawn before anyone can click on it.
 func (c *Context) MouseCaptured() bool {
 	return c.mouseCaptured
+}
+
+// OverResizeGrip reports whether the pointer is on a window's resize corner,
+// or holding one. Cleared at the start of each frame.
+func (c *Context) OverResizeGrip() bool {
+	return c.overResizeGrip
 }
 
 // Focused reports whether the widget owns keyboard focus, so a caller drawing
@@ -277,6 +292,7 @@ func (c *Context) BeginWindowEx(id string, x, y, w, h float32, title string, opt
 		return false
 	}
 
+	ws.BitmapBody = opts.BitmapBody
 	c.currentWindow = ws
 
 	titleBarH := c.frameTitleBarH()

@@ -95,12 +95,14 @@ func TestPlayerStatsApply(t *testing.T) {
 // such and changes nothing — the server sends every combat stat down the same
 // packet, and silently absorbing them would hide a parameter we do want.
 func TestPlayerStatsApplyUntracked(t *testing.T) {
-	const spATK1 = 41
+	// SP_FAME. The combat stats used to stand for this and no longer can:
+	// the status window shows them, so Apply tracks them now.
+	const spFame = 59
 
 	stats := PlayerStats{HP: 40, MaxHP: 40}
 	before := stats
 
-	if stats.Apply(spATK1, 11) {
+	if stats.Apply(spFame, 11) {
 		t.Error("Apply() reported an untracked id as tracked")
 	}
 	if stats != before {
