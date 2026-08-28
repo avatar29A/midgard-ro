@@ -7,8 +7,10 @@ another character.
 **Server:** rAthena at `5addd72448e2da3af6c89a97ccb994e5d49d8263`
 (`docker/rathena/pin.txt`), PACKETVER **20211103**.
 **Supporting work:** #94 (`docs/features/chat-commands/README.md`).
-**Searchable version:** <https://claude.ai/code/artifact/23c22c8b-9641-47e3-99aa-acf57b677751>
-— the same data as a filterable page, which is easier than scrolling 313 rows.
+**Searchable version:** [`chat-commands.html`](./chat-commands.html) — the same
+data as a filterable page, which beats scrolling 386 rows. Open it straight from
+the repository, or read it at
+<https://claude.ai/code/artifact/23c22c8b-9641-47e3-99aa-acf57b677751>.
 
 The `@` tables are **generated** from the server tree rather than typed, so they
 cannot drift from the server we actually run:
@@ -637,10 +639,18 @@ pinned SHA. After a `make server-rebuild` onto a newer rAthena, re-run the
 extractor to pick up new commands and changed permissions:
 
 ```bash
-python3 tools/chatcmds/gen.py > /tmp/at-table.md
-# then replace the table under "3c. Every command"
+python3 tools/chatcmds/gen.py > /tmp/at-table.md   # then replace §3c below
+python3 tools/chatcmds/build_page.py               # rewrites chat-commands.html
 ```
 
-If the counts in the header change, update them too — a mismatch between
-`atcommands.yml` and `atcommand.cpp` is worth investigating rather than
-papering over, since it means the documentation and the server disagree.
+Both read the same rAthena tree, so they cannot disagree with each other. If the
+counts in the header change, update them here too — and a warning that
+`atcommands.yml` and `atcommand.cpp` disagree is worth investigating rather than
+papering over, since it means the documentation and the server have diverged.
+
+| File | What it is |
+|------|------------|
+| `tools/chatcmds/gen.py` | Reads the server tree; emits the markdown table below. |
+| `tools/chatcmds/build_page.py` | Same data → `chat-commands.html`. |
+| `tools/chatcmds/page.template.html` | Layout and filter UI for that page. Deliberately carries no `<!doctype>`/`<html>`/`<head>`/`<body>` so it also serves as the published artifact's source; `build_page.py` adds them for the standalone file. |
+| `tools/chatcmds/slash.json` | The `/` commands. **Hand-maintained** — no single file on either side holds them, so this is the one part that can drift. |
