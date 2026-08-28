@@ -287,11 +287,16 @@ func (b *UI2DBackend) TakeItemAction() (ItemAction, bool) {
 }
 
 var (
-	// itemsCellBg is an empty slot, and itemsTabIdle a tab that is not open.
+	// itemsCellBg is the mark under a slot, and itemsTabIdle a tab that is
+	// not open.
+	//
+	// The slot is a shadow for an item to sit on, not a plate behind it.
+	// Given any weight the grid reads before its contents do — the eye lands
+	// on rows of ovals and finds the items afterwards, which is backwards.
 	// The slot mark: a blue-grey, not the neutral grey the rest of the panel
 	// uses. It has to read as blue against a white body or the grid looks
 	// like smudges rather than slots.
-	itemsCellBg    = ui2d.Color{R: 0.78, G: 0.81, B: 0.91, A: 1}
+	itemsCellBg    = ui2d.Color{R: 0.88, G: 0.91, B: 0.97, A: 1}
 	itemsTabIdle   = ui2d.Color{R: 0.82, G: 0.83, B: 0.86, A: 1}
 	itemsTabBorder = ui2d.Color{R: 0.62, G: 0.63, B: 0.68, A: 1}
 	itemsCountText = ui2d.Color{R: 0.1, G: 0.1, B: 0.15, A: 1}
