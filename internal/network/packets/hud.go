@@ -187,6 +187,12 @@ type InventoryItem struct {
 	// Equipped is set for a worn item, which the list marks with a place on
 	// the body rather than a count.
 	Equipped bool
+
+	// EquipPositions is where on the body this can go, as the server told us.
+	// Equipping sends it straight back: the server uses the value rather than
+	// working it out, so a client that invents one equips the wrong slot or
+	// nothing at all.
+	EquipPositions uint32
 }
 
 // ItemListRemainder reports how many bytes are left over when a list's body
@@ -236,9 +242,10 @@ func DecodeInventoryEquip(data []byte) []InventoryItem {
 			Index: int(readU16(entry, 0)),
 			ID:    readU32(entry, 2),
 			Count: 1,
-			// WearState is zero for something carried and non-zero for
-			// something worn.
-			Equipped: readU32(entry, 11) != 0,
+			// location is where it may go; WearState where it is now, zero
+			// for something carried rather than worn.
+			EquipPositions: readU32(entry, 7),
+			Equipped:       readU32(entry, 11) != 0,
 		}
 	})
 }
@@ -281,4 +288,54 @@ func decodeItemList(data []byte, entryLen int, read func([]byte) InventoryItem) 
 	}
 
 	return items
+}
+
+// Acting on an item: using one, wearing one, and putting one on the ground.
+//
+// All three name the item by its inventory index rather than by its id, which
+// is why the index the lists carry has to be kept.
+const (
+	// CZ_USE_ITEM is 13 bytes at our packet version, with the index at 5 and
+	// the account id at 9 — not the 8-byte shape the older guard declares.
+	CZ_USE_ITEM uint16 = 0x00A7
+
+	// CZ_REQ_WEAR_EQUIP is `<index>.W <position>.L`, 8 bytes, from
+	// PACKETVER 20120925.
+	CZ_REQ_WEAR_EQUIP uint16 = 0x0998
+
+	// CZ_ITEM_THROW drops one on the ground: `<index>.W <amount>.W`.
+	CZ_ITEM_THROW uint16 = 0x00A2
+)
+
+// EncodeUseItem asks to use the item in an inventory slot.
+func EncodeUseItem(index int, accountID uint32) []byte {
+	pkt := make([]byte, 13)
+	binary.LittleEndian.PutUint16(pkt, CZ_USE_ITEM)
+	binary.LittleEndian.PutUint16(pkt[5:], uint16(index))
+	binary.LittleEndian.PutUint32(pkt[9:], accountID)
+
+	return pkt
+}
+
+// EncodeEquipItem asks to wear the item in an inventory slot.
+//
+// The position is the item's own, as the server reported it in the equip
+// list: rAthena passes it straight to pc_equipitem rather than deriving one.
+func EncodeEquipItem(index int, position uint32) []byte {
+	pkt := make([]byte, 8)
+	binary.LittleEndian.PutUint16(pkt, CZ_REQ_WEAR_EQUIP)
+	binary.LittleEndian.PutUint16(pkt[2:], uint16(index))
+	binary.LittleEndian.PutUint32(pkt[4:], position)
+
+	return pkt
+}
+
+// EncodeDropItem asks to put some of a stack on the ground.
+func EncodeDropItem(index, amount int) []byte {
+	pkt := make([]byte, 6)
+	binary.LittleEndian.PutUint16(pkt, CZ_ITEM_THROW)
+	binary.LittleEndian.PutUint16(pkt[2:], uint16(index))
+	binary.LittleEndian.PutUint16(pkt[4:], uint16(amount))
+
+	return pkt
 }

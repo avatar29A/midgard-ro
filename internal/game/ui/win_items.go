@@ -8,32 +8,55 @@ import (
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
 )
 
-// The Item window the Item button opens.
+// The Inventory window the Item button opens.
 //
-// Built the same way as the Skill Tree — there is no single bitmap for it —
-// and for the same reason it paints its own body in the image layer, so the
-// item icons are not buried under it.
+// A grid of cells rather than a list, with tabs down the left edge, which is
+// how the original shows it: usable things, worn things, and everything else.
 const (
 	itemsWindowID = "hud_win_items"
 
-	itemsW float32 = 280
-	itemsH float32 = 250
+	itemsW float32 = 260
+	itemsH float32 = 232
 
-	itemsPad     float32 = 6
-	itemsRowH    float32 = 32
-	itemsIcon    float32 = 24
-	itemsIconGap float32 = 10
-	itemsScrollW float32 = 14
+	itemsPad float32 = 6
 
-	// itemsCountW is the column the counts are right-aligned in.
-	itemsCountW float32 = 52
+	// The grid. Cells are 32 square with a little air between them.
+	itemsCell    float32 = 32
+	itemsCellGap float32 = 4
+	itemsCols            = 6
 
-	itemsFooterH float32 = 26
+	// itemsTabW is the strip of tabs down the left, and itemsTabH one tab.
+	//
+	// A tab has to be tall enough for its label stacked a letter to a line,
+	// and "equip" is five of them: at the body scale they overran the tab and
+	// ran into the one below, so the labels have a smaller scale of their own.
+	itemsTabW     float32 = 18
+	itemsTabH     float32 = 56
+	itemsTabScale float32 = 0.5
 
-	itemsTextScale float32 = 0.75
+	itemsFooterH float32 = 24
+
+	itemsTextScale float32 = 0.65
 )
 
-// drawItemsWindow draws the Item window when its button has opened it.
+// itemIconPath is where the archive keeps item icons, named in its own
+// Korean: the resource table maps an id to one of these.
+//
+// Under the interface folder, beside the skill icons — not data\texture\item,
+// which holds fifteen files and none of them these.
+const itemIconPath = skinBasePath + `item\`
+
+// itemTabs are the three the original has, in its order.
+var itemTabs = []struct {
+	label    string
+	category items.Category
+}{
+	{"item", items.CategoryUsable},
+	{"equip", items.CategoryEquip},
+	{"etc", items.CategoryEtc},
+}
+
+// drawItemsWindow draws the Inventory window when its button has opened it.
 func (b *UI2DBackend) drawItemsWindow(state InGameUIState, screenW, screenH float32) {
 	if !b.IsWindowOpen(WindowItem) {
 		return
@@ -42,10 +65,12 @@ func (b *UI2DBackend) drawItemsWindow(state InGameUIState, screenW, screenH floa
 	openX := (screenW - itemsW) / 2
 	openY := (screenH - itemsH) / 2
 
+	// The body is filled in the image layer below, so the icons are not
+	// buried under a solid one.
 	opts := ui2d.DefaultWindowOptions()
 	opts.BitmapBody = true
 
-	if !b.ctx.BeginWindowEx(itemsWindowID, openX, openY, itemsW, itemsH, "Item", opts) {
+	if !b.ctx.BeginWindowEx(itemsWindowID, openX, openY, itemsW, itemsH, "Inventory", opts) {
 		if b.ctx.WindowClosed(itemsWindowID) {
 			b.ToggleWindow(WindowItem)
 		}
@@ -63,86 +88,138 @@ func (b *UI2DBackend) drawItemsWindow(state InGameUIState, screenW, screenH floa
 	bodyY := y + ui2d.FrameTitleH
 	b.ctx.Renderer().FillImageLayer(x, bodyY, itemsW, itemsH-ui2d.FrameTitleH, ui2d.ColorWindowBody)
 
-	b.drawItemRows(state, x, y)
+	b.drawItemTabs(x, bodyY)
+	b.drawItemGrid(state, x, bodyY)
 	b.drawItemsFooter(state, x, y)
 	b.ctx.EndWindow()
 }
 
-// drawItemRows lists what is being carried, scrolled to wherever the bar is.
-func (b *UI2DBackend) drawItemRows(state InGameUIState, x, y float32) {
+// drawItemTabs draws the three tabs down the left edge.
+func (b *UI2DBackend) drawItemTabs(x, bodyY float32) {
 	r := b.ctx.Renderer()
 
-	listX := x + itemsPad
-	listY := y + ui2d.FrameTitleH + itemsPad
-	listH := itemsH - ui2d.FrameTitleH - itemsFooterH - 2*itemsPad
+	for i, tab := range itemTabs {
+		box := ui2d.Rect{X: x + 1, Y: bodyY + itemsPad + float32(i)*itemsTabH, W: itemsTabW, H: itemsTabH}
 
-	if len(state.Inventory) == 0 {
-		r.DrawText(listX, listY, "Carrying nothing.", itemsTextScale, skillsEmptyText)
+		face := itemsTabIdle
+		if i == b.itemTab {
+			face = ui2d.ColorWindowBody
+		}
 
-		return
-	}
+		r.FillImageLayer(box.X, box.Y, box.W, box.H, face)
+		r.DrawRectOutline(box.X, box.Y, box.W, box.H, 1, ui2d.ColorPanelBorder)
 
-	visible := max(1, int(listH/itemsRowH))
-	maxOffset := max(0, len(state.Inventory)-visible)
+		// Stacked down the tab, a letter to a line: the strip is 18px wide,
+		// the labels do not fit across it, and cutting them to one letter
+		// gave two tabs both reading "e".
+		b.drawStackedLabel(box, tab.label)
 
-	offset := min(b.itemScroll, maxOffset)
-	listW := itemsW - 2*itemsPad
-
-	if maxOffset > 0 {
-		b.itemScroll = b.scrollbar("hud_items", x+itemsW-itemsPad-itemsScrollW, listY,
-			listH, offset, maxOffset, visible)
-		offset = b.itemScroll
-		listW -= itemsScrollW
-	}
-
-	for i := 0; i < visible && offset+i < len(state.Inventory); i++ {
-		b.drawItemRow(state.Inventory[offset+i], listX, listY+float32(i)*itemsRowH, listW)
+		if b.ctx.InvisibleButtonAt("hud_item_tab_"+tab.label, box.X, box.Y, box.W, box.H) {
+			b.itemTab = i
+			b.itemScroll = 0
+		}
 	}
 }
 
-// drawItemRow draws one item: its cell, its name, and how many are held.
-func (b *UI2DBackend) drawItemRow(item packets.InventoryItem, x, y, w float32) {
+// drawStackedLabel writes a label down a narrow tab, one letter to a line.
+func (b *UI2DBackend) drawStackedLabel(box ui2d.Rect, label string) {
 	r := b.ctx.Renderer()
 
-	// The cell is drawn empty. Item icons are named for the item's own
-	// sprite, and the inventory packet carries ids only — the archive's
-	// lookup from one to the other is Korean and not read yet, so there is
-	// nothing to put in the cell but the cell.
-	iconY := y + (itemsRowH-itemsIcon)/2
-	r.FillImageLayer(x, iconY, itemsIcon, itemsIcon, skillsIconBg)
-	r.DrawRectOutline(x, iconY, itemsIcon, itemsIcon, 1, ui2d.ColorPanelBorder)
+	letters := []rune(label)
 
-	// An id the table does not know is a newer item than the table, so it
-	// shows as its id rather than as a blank row.
-	name := items.Name(item.ID)
-	if name == "" {
-		name = "Item #" + strconv.FormatUint(uint64(item.ID), 10)
+	_, lineH := r.MeasureText(label, itemsTabScale)
+	top := box.Y + (box.H-lineH*float32(len(letters)))/2
+
+	for i, letter := range letters {
+		text := string(letter)
+
+		capW, _ := r.MeasureText(text, itemsTabScale)
+		r.DrawText(box.X+(box.W-capW)/2, top+float32(i)*lineH, text, itemsTabScale, ui2d.ColorText)
 	}
+}
 
-	if item.Equipped {
-		// Marked rather than listed separately: it is still being carried,
-		// and the original marks worn things in the same list.
-		name += " (equipped)"
+// drawItemGrid draws the cells and whatever is in them.
+func (b *UI2DBackend) drawItemGrid(state InGameUIState, x, bodyY float32) {
+	gridX := x + itemsTabW + itemsPad
+	gridY := bodyY + itemsPad
+	gridH := itemsH - ui2d.FrameTitleH - itemsFooterH - 2*itemsPad
+	rows := int(gridH / (itemsCell + itemsCellGap))
+
+	shown := b.itemsOnTab(state)
+
+	for i := 0; i < rows*itemsCols; i++ {
+		col := float32(i % itemsCols)
+		row := float32(i / itemsCols)
+
+		cell := ui2d.Rect{
+			X: gridX + col*(itemsCell+itemsCellGap),
+			Y: gridY + row*(itemsCell+itemsCellGap),
+			W: itemsCell,
+			H: itemsCell,
+		}
+
+		b.drawItemCell(cell, shown, i)
 	}
+}
 
-	textX := x + itemsIcon + itemsIconGap
-	textW := w - itemsIcon - itemsIconGap - itemsCountW
+// drawItemCell draws one cell of the grid, empty or occupied.
+func (b *UI2DBackend) drawItemCell(cell ui2d.Rect, shown []packets.InventoryItem, index int) {
+	r := b.ctx.Renderer()
 
-	_, capH := r.MeasureText(name, itemsTextScale)
-	textY := y + (itemsRowH-capH)/2
+	// The empty cell first: it is the grid, and it shows through wherever
+	// there is nothing to put in it.
+	r.FillImageLayer(cell.X, cell.Y, cell.W, cell.H, itemsCellBg)
 
-	r.DrawText(textX, textY, fitTextEnd(r, name, itemsTextScale, textW), itemsTextScale, ui2d.ColorText)
-
-	// The count against the right, and only when there is more than one:
-	// every line reading "1" is noise.
-	if item.Count <= 1 {
+	if index >= len(shown) {
 		return
 	}
 
-	count := strconv.Itoa(item.Count)
-	countW, _ := r.MeasureText(count, itemsTextScale)
+	item := shown[index]
 
-	r.DrawText(x+w-countW, textY, count, itemsTextScale, ui2d.ColorText)
+	if info, ok := items.Lookup(item.ID); ok && info.Resource != "" {
+		if tex, err := b.texCache.Load(itemIconPath + info.Resource + ".bmp"); err == nil {
+			r.DrawImage(tex.ID, cell.X+2, cell.Y+2, cell.W-4, cell.H-4, ui2d.ColorWhite)
+		}
+	}
+
+	// The count in the corner, and only past one: a grid of "1" is noise.
+	if item.Count > 1 {
+		count := strconv.Itoa(item.Count)
+		capW, capH := r.MeasureText(count, itemsTextScale)
+
+		r.DrawText(cell.X+cell.W-capW-1, cell.Y+cell.H-capH, count, itemsTextScale, itemsCountText)
+	}
+
+	if item.Equipped {
+		// A worn item stays in the list; the original marks it rather than
+		// moving it, so the corner carries the mark.
+		r.DrawRect(cell.X+1, cell.Y+1, 4, 4, statsBonusUp)
+	}
+
+	// Double click uses it, or wears it, depending on which tab it is on.
+	// Single clicks do nothing yet: selecting is what a single click means in
+	// the original, and there is nothing to select for.
+	if b.ctx.DoubleClickedIn("hud_item_cell_"+strconv.Itoa(index), cell) {
+		b.itemAction = ItemAction{Index: item.Index, Equip: itemTabs[b.itemTab].category == items.CategoryEquip}
+	}
+}
+
+// itemsOnTab is the inventory filtered to the open tab.
+func (b *UI2DBackend) itemsOnTab(state InGameUIState) []packets.InventoryItem {
+	if b.itemTab < 0 || b.itemTab >= len(itemTabs) {
+		return state.Inventory
+	}
+
+	want := itemTabs[b.itemTab].category
+
+	shown := make([]packets.InventoryItem, 0, len(state.Inventory))
+	for _, item := range state.Inventory {
+		if items.CategoryOf(item.ID) == want {
+			shown = append(shown, item)
+		}
+	}
+
+	return shown
 }
 
 // drawItemsFooter draws the strip along the bottom: the weight and the zeny.
@@ -163,3 +240,33 @@ func (b *UI2DBackend) drawItemsFooter(state InGameUIState, x, y float32) {
 
 	r.DrawText(x+itemsW-itemsPad-zenyW, textY, zeny, itemsTextScale, ui2d.ColorText)
 }
+
+// ItemAction is a double click on an item, waiting to be sent.
+type ItemAction struct {
+	// Index is the inventory slot, which is how the server names an item.
+	Index int
+
+	// Equip is set when the double click was on the equipment tab, where
+	// using an item means wearing it.
+	Equip bool
+}
+
+// TakeItemAction returns a double click on an item and clears it. The
+// interface has no connection, so acting on it is the caller's job.
+func (b *UI2DBackend) TakeItemAction() (ItemAction, bool) {
+	action := b.itemAction
+	if action.Index == 0 {
+		return ItemAction{}, false
+	}
+
+	b.itemAction = ItemAction{}
+
+	return action, true
+}
+
+var (
+	// itemsCellBg is an empty slot, and itemsTabIdle a tab that is not open.
+	itemsCellBg    = ui2d.Color{R: 0.90, G: 0.91, B: 0.95, A: 1}
+	itemsTabIdle   = ui2d.Color{R: 0.82, G: 0.83, B: 0.86, A: 1}
+	itemsCountText = ui2d.Color{R: 0.1, G: 0.1, B: 0.15, A: 1}
+)

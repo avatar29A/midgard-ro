@@ -864,6 +864,20 @@ func (g *Game) renderUI() {
 
 		g.applySoundSettings()
 
+		// A double click in the inventory goes out here, for the same reason
+		// the chat line does: the interface has no connection of its own.
+		if action, ok := g.uiBackend.TakeItemAction(); ok {
+			var err error
+			if action.Equip {
+				err = state.EquipItem(action.Index)
+			} else {
+				err = state.UseItem(action.Index)
+			}
+			if err != nil {
+				logger.Warn("could not act on item", zap.Error(err))
+			}
+		}
+
 		// What the ESC menu was asked for goes out here for the same reason
 		// the chat line below does: the interface has no connection.
 		//

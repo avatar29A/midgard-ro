@@ -20,29 +20,64 @@ import (
 //go:embed names.txt
 var namesData string
 
+// Category is which of the inventory's three tabs an item belongs on.
+type Category string
+
+// The three tabs, matching the strings the generator writes.
+const (
+	CategoryUsable Category = "item"
+	CategoryEquip  Category = "equip"
+	CategoryEtc    Category = "etc"
+)
+
+// Info is what the table knows about one item.
+type Info struct {
+	Name     string
+	Category Category
+
+	// Resource is the icon's file name in the archive, which is Korean for
+	// everything old enough to have one. Empty when the archive's table has
+	// no entry, which is most of what has been added since.
+	Resource string
+}
+
 var (
 	once  sync.Once
-	names map[uint32]string
+	table map[uint32]Info
 )
 
 // load parses the table on first use, so a client that never opens the
 // inventory never pays for it.
 func load() {
-	names = make(map[uint32]string, 30000)
+	table = make(map[uint32]Info, 30000)
 
 	for line := range strings.Lines(namesData) {
-		id, name, ok := strings.Cut(strings.TrimSuffix(line, "\n"), "\t")
-		if !ok {
+		fields := strings.Split(strings.TrimSuffix(line, "\n"), "\t")
+		if len(fields) < 4 {
 			continue
 		}
 
-		parsed, err := strconv.ParseUint(id, 10, 32)
+		id, err := strconv.ParseUint(fields[0], 10, 32)
 		if err != nil {
 			continue
 		}
 
-		names[uint32(parsed)] = name
+		table[uint32(id)] = Info{
+			Name:     fields[1],
+			Category: Category(fields[2]),
+			Resource: fields[3],
+		}
 	}
+}
+
+// Lookup returns everything the table knows about an item, and whether it
+// knows it at all.
+func Lookup(id uint32) (Info, bool) {
+	once.Do(load)
+
+	info, ok := table[id]
+
+	return info, ok
 }
 
 // Name returns an item's name, or an empty string for an id this table does
@@ -51,7 +86,19 @@ func load() {
 func Name(id uint32) string {
 	once.Do(load)
 
-	return names[id]
+	return table[id].Name
+}
+
+// CategoryOf returns which tab an item belongs on. An item the table does not
+// know goes to etc, which is where anything uncategorised belongs anyway.
+func CategoryOf(id uint32) Category {
+	once.Do(load)
+
+	if info, ok := table[id]; ok && info.Category != "" {
+		return info.Category
+	}
+
+	return CategoryEtc
 }
 
 // Count is how many items the table holds, for tests that check the generator
@@ -59,5 +106,5 @@ func Name(id uint32) string {
 func Count() int {
 	once.Do(load)
 
-	return len(names)
+	return len(table)
 }

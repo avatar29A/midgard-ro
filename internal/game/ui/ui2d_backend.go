@@ -121,6 +121,8 @@ type UI2DBackend struct {
 
 	skillScroll int
 	itemScroll  int
+	itemTab     int
+	itemAction  ItemAction
 
 	escOpen   bool
 	escAction EscAction
