@@ -49,6 +49,10 @@ const (
 )
 
 var (
+	// escBackdrop dims the game behind the menu, enough to say the menu has
+	// the screen without hiding where you were standing.
+	escBackdrop = ui2d.Color{R: 0, G: 0, B: 0, A: 0.45}
+
 	escBorder   = ui2d.Color{R: 0.694, G: 0.694, B: 0.694, A: 1}
 	escFace     = ui2d.Color{R: 0.953, G: 0.953, B: 0.953, A: 1}
 	escFaceHot  = ui2d.Color{R: 0.855, G: 0.894, B: 0.969, A: 1}
@@ -104,6 +108,13 @@ func (b *UI2DBackend) drawEscMenu(screenW, screenH float32) {
 	if !b.escOpen {
 		return
 	}
+
+	// The backdrop, dimming the game behind the menu.
+	//
+	// Filled in the image pass rather than with DrawRect: solid quads paint
+	// over every image in the frame, so a backdrop drawn as one would land on
+	// top of the very window it is meant to sit behind — title bar and all.
+	b.ctx.Renderer().FillImageLayer(0, 0, screenW, screenH, escBackdrop)
 
 	// Only where it opens: once dragged, the window keeps its own position.
 	openX := (screenW - escMenuW) / 2
