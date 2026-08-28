@@ -122,7 +122,10 @@ type UI2DBackend struct {
 	skillScroll int
 	itemScroll  int
 	itemTab     int
-	itemAction  ItemAction
+
+	// mapWorldView switches the Map window between this map and the world.
+	mapWorldView bool
+	itemAction   ItemAction
 
 	escOpen   bool
 	escAction EscAction
