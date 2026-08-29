@@ -108,3 +108,22 @@ each of the four windows need looking at before it is trusted.
 
 PR #97, which adds `Flush`. This branch removes it again, so it should land
 after that one rather than racing it.
+
+---
+
+## Outcome
+
+Done. The command list is in, the three mechanisms are gone, and the rule
+holds.
+
+Verified the way the plan asked: seven screens captured from the pre-refactor
+build, the same seven captured again after, and compared as a mean absolute
+difference rather than by eye. Every screen came back between 0.01 and 0.15 on
+a 0–255 scale — the noise of units having moved between runs, not a rendering
+change. The two windows that existed only because of the old order, the Status
+window's bitmap body and the Skill Tree's icons, were also checked by eye with
+their workarounds deleted.
+
+`FillImageLayer`, `WindowOptions.BitmapBody`, `WindowState.BitmapBody`,
+`Renderer.Flush` and the one-pixel white texture behind the first are all
+removed, along with the layer split in `RenderInGameUI`.
