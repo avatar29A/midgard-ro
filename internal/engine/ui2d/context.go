@@ -92,10 +92,6 @@ type WindowState struct {
 	// their own.
 	Resized bool
 
-	// BitmapBody leaves the body unpainted for this window, set from the
-	// options each frame.
-	BitmapBody bool
-
 	// Minimized collapses the window to its title bar.
 	Minimized bool
 }
@@ -292,7 +288,6 @@ func (c *Context) BeginWindowEx(id string, x, y, w, h float32, title string, opt
 		return false
 	}
 
-	ws.BitmapBody = opts.BitmapBody
 	c.currentWindow = ws
 
 	titleBarH := c.frameTitleBarH()
