@@ -1,4 +1,4 @@
-# UC-211: Walk through a city gate into a field map
+# UC-214: Walk through a city gate into a field map
 
 ## Description
 The player walks onto Prontera's south gate warp and arrives in `prt_fild08` after a loading screen, with the field's NPCs and monsters present. Covers the server-driven map change (`ZC_NPCACK_MAPMOVE`), the loading screen with real progress, the `CZ_NOTIFY_ACTORINIT` handshake and the entity refresh.

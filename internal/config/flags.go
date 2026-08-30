@@ -3,6 +3,7 @@ package config
 import (
 	"flag"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -16,7 +17,7 @@ var (
 	flagFullscreen = flag.Bool("fullscreen", false, "Run in fullscreen mode")
 	flagWidth      = flag.Int("width", 0, "Window width")
 	flagHeight     = flag.Int("height", 0, "Window height")
-	flagTrace      = flag.String("trace", "", "Comma-separated trace channels (move, pick, net, render, status, npc, map, or all)")
+	flagTrace      = flag.String("trace", "", "Comma-separated trace channels (move, pick, net, render, status, npc, hud, map, cmd, or all)")
 	flagShotAfter  = flag.Duration("screenshot-after", 0, "Capture a screenshot this long after startup, then keep running (QA aid)")
 	flagShotEvery  = flag.Duration("screenshot-every", 0, "Capture a screenshot on this interval (QA aid)")
 	flagAutoLogin  = flag.Bool("autologin", false, "Log in and enter the first character without input (QA aid)")
@@ -24,11 +25,40 @@ var (
 	flagNoBGM      = flag.Bool("no-bgm", false, "Run without background music, keeping sound effects")
 	flagWalkTo     = flag.String("walk-to", "", "Once in game, walk to this cell, e.g. 156,22 (QA aid)")
 	flagMouseAt    = flag.String("mouse-at", "", "Once in game, put the pointer at this window position, e.g. 640,360 (QA aid)")
+
+	flagSay sayLines
 )
+
+// sayLines collects every --say, in the order they were given.
+type sayLines []string
+
+func (s *sayLines) String() string { return strings.Join(*s, " | ") }
+
+func (s *sayLines) Set(v string) error {
+	*s = append(*s, v)
+
+	return nil
+}
+
+func init() {
+	flag.Var(&flagSay, "say",
+		"Once in game, type this line into the chat box and send it. Repeatable; "+
+			"lines go in order, e.g. --say \"@commands\" --say \"/where\" (QA aid)")
+}
 
 // ParseFlags parses command-line flags. Call this early in main().
 func ParseFlags() {
 	flag.Parse()
+}
+
+// Say returns the lines --say asked for, in order.
+//
+// Every check in this feature is "type something, look at the box", and a
+// keyboard is exactly what an unattended run does not have. The lines go
+// through the same path typing does, so what is tested is the real one rather
+// than a shortcut past the interface.
+func Say() []string {
+	return flagSay
 }
 
 // TraceSpec returns the --trace channel list, empty when tracing is off.

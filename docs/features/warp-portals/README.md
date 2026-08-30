@@ -415,7 +415,7 @@ server   → inventory, weight, spawn(self), map property,
       not clickable-as-NPC; `game`'s cursor choice from entity type; `Clear`
       keeps the player.
       Done for this step: `mapchange_test.go`, `maploader_test.go` (phase order, chunking, progress monotonic, GAT/RSW optional, GND fatal, terrain failure stops), `manager_test.go`. The rest land with their steps.
-- [x] **Use cases:** UC-211 (gate → field with loading screen), UC-212 (enter
+- [x] **Use cases:** UC-214 (gate → field with loading screen), UC-215 (enter
       and leave a building, indoor camera), UC-213 (portal visual, door cursor,
       click-to-walk).
 
@@ -475,7 +475,7 @@ here on is taken with that in place.
   player at `prt_fild08 170,375` with the field's units spawning within a
   second; the return warp brings you back; the NPC dialog, if open, is closed;
   a `0x0091` that arrives during loading (landmine 3) restarts the load cleanly.
-- **Proved by:** UC-211; the DB trick (character on `prontera 156,22`) gives an
+- **Proved by:** UC-214; the DB trick (character on `prontera 156,22`) gives an
   unattended `0x0091` right after login — trace reads `map.change origin=warp →
   map.load.phase… → map.ready → 0x09FF…`; `--walk-to 156,22` from `156,30`
   does it by walking. `Entities:` on F3 drops to 0 and grows again.
@@ -587,7 +587,7 @@ a hand would cause reaches the input layer.
   water**; outdoor maps are unchanged — Prontera's fountain and the field's
   lake still render and animate; F3 shows `Indoor: yes` and the water cell
   count.
-- **Proved by:** UC-212; screenshots in `prt_in` after a right-drag and a full
+- **Proved by:** UC-215; screenshots in `prt_in` after a right-drag and a full
   zoom-out, and at Prontera's fountain (attach both); `camera_test.go`,
   `indoor_test.go`, `water_test.go`; `map.water` reports 0 cells for `prt_in`.
 - **Reference:** current-prt-in ⑭ (the before)

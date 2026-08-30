@@ -90,6 +90,10 @@ type Game struct {
 	walkToX, walkToY int
 	walkToPending    bool
 
+	// Lines to say once in game, from --say, drained in order.
+	sayQueue []string
+	sayNext  time.Time
+
 	// Where to put the pointer once the map is up, from --mouse-at, in window
 	// points. Fired once.
 	mouseAtX, mouseAtY int
@@ -381,6 +385,8 @@ func (g *Game) initAudio(cfg *config.Config) {
 
 	g.bgm = audio.NewLocationPlayer(manager, table, bgmDir)
 	g.stateManager.BGM = g.bgm
+	// The / commands that touch sound reach it through here.
+	g.stateManager.CommandHost = g
 }
 
 // loadKoreanFont loads a font with Korean glyph support.
@@ -512,6 +518,7 @@ func (g *Game) frame() {
 
 	g.runWalkTo()
 	g.runMouseAt()
+	g.runSay()
 
 	// Render 3D scene (if applicable)
 	sceneStart := time.Now()
@@ -589,6 +596,53 @@ func (g *Game) runWalkTo() {
 	if err := state.RequestMove(g.walkToX, g.walkToY); err != nil {
 		logger.Warn("--walk-to request failed", zap.Error(err))
 	}
+}
+
+// SetSay queues lines to type into the chat box once in game, from --say.
+func (g *Game) SetSay(lines []string) {
+	g.sayQueue = append(g.sayQueue, lines...)
+}
+
+// sayInterval is the gap between one --say line and the next.
+//
+// Not politeness: a command's answer has to arrive before the next line goes
+// out, or the trace reads as one burst with the replies interleaved and it is
+// no longer clear which answer belongs to which command. A second is longer
+// than any local reply takes and short enough that a sequence still fits
+// inside a --screenshot-after window.
+const sayInterval = 1000 * time.Millisecond
+
+// runSay types the next --say line once the map can take it.
+//
+// Gated on MapReady as well as the interval, so a command that changes maps —
+// @go, /mm — lets the new map finish loading before the line after it is sent
+// rather than being swallowed during the load.
+func (g *Game) runSay() {
+	if len(g.sayQueue) == 0 {
+		return
+	}
+	state, ok := g.stateManager.Current().(*states.InGameState)
+	if !ok || !state.MapReady() {
+		return
+	}
+	now := time.Now()
+	if now.Before(g.sayNext) {
+		return
+	}
+
+	line := g.sayQueue[0]
+	if !g.uiBackend.QueueChatMessage(line) {
+		// The line before this one has not been drained yet. Leave it in the
+		// queue and try again next frame rather than overwriting it.
+		return
+	}
+
+	g.sayNext = now.Add(sayInterval)
+	g.sayQueue = g.sayQueue[1:]
+
+	logger.Info("saying the line asked for on the command line",
+		zap.String("line", line),
+		zap.Int("remaining", len(g.sayQueue)))
 }
 
 // SetScreenshotTimers arms the unattended capture. A zero duration disables
@@ -905,15 +959,10 @@ func (g *Game) renderUI() {
 		}
 
 		// A line the player typed goes out here rather than from the widget:
-		// the interface has no client to send with.
+		// the interface has no client to send with, and whether a line is
+		// even sent depends on what kind of command it turns out to be.
 		if to, msg := g.uiBackend.TakeChatMessage(); msg != "" {
-			var err error
-			if to != "" {
-				err = state.SendWhisper(to, msg)
-			} else {
-				err = state.SendChat(msg)
-			}
-			if err != nil {
+			if err := state.SubmitLine(to, msg); err != nil {
 				logger.Warn("could not send chat", zap.Error(err))
 			}
 		}
@@ -1275,6 +1324,82 @@ func (g *Game) updateCursor(state *states.InGameState, io *imgui.IO, mouseX, mou
 	}
 
 	g.uiBackend.SetCursorState(want)
+}
+
+// ToggleBGM turns background music on or off for /bgm, reporting the new
+// state.
+//
+// Goes through the same sound settings the options dialog writes, so the two
+// stay in agreement and the choice is persisted — a command that turned the
+// music off behind the dialog's back would leave the checkbox lying.
+func (g *Game) ToggleBGM() bool {
+	return g.toggleChannel(true)
+}
+
+// ToggleSFX does the same for sound effects.
+func (g *Game) ToggleSFX() bool {
+	return g.toggleChannel(false)
+}
+
+// toggleChannel flips one audio channel and saves it. Reports the new state.
+//
+// A channel that is off has volume zero, which is also how the dialog stores
+// it, so "on" means a level above zero. Turning one back on restores the level
+// the settings file remembers rather than a guess — except when that level is
+// itself zero, which would turn the channel "on" inaudibly.
+func (g *Game) toggleChannel(bgm bool) bool {
+	if g.audioManager == nil {
+		return false
+	}
+
+	const defaultLevel = 0.5
+
+	current := g.audioManager.GetSFXVolume()
+	if bgm {
+		current = g.audioManager.GetBGMVolume()
+	}
+
+	on := current <= 0
+	level := 0.0
+	if on {
+		level = defaultLevel
+
+		saved := config.LoadUIState()
+		remembered := saved.SFXVolume
+		if bgm {
+			remembered = saved.BGMVolume
+		}
+		if remembered > 0 {
+			level = float64(remembered)
+		}
+	}
+
+	if bgm {
+		g.audioManager.SetBGMVolume(level)
+	} else {
+		g.audioManager.SetSFXVolume(level)
+	}
+
+	err := config.UpdateUIState(func(state *config.UIState) {
+		state.SoundSet = true
+		if bgm {
+			state.BGMOn = on
+			if on {
+				state.BGMVolume = float32(level)
+			}
+
+			return
+		}
+		state.SFXOn = on
+		if on {
+			state.SFXVolume = float32(level)
+		}
+	})
+	if err != nil {
+		logger.Warn("could not save the sound setting", zap.Error(err))
+	}
+
+	return on
 }
 
 // applySoundSettings seeds the sound dialog from the audio manager and puts

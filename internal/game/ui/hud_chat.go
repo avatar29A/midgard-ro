@@ -7,7 +7,6 @@ import (
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
 	"github.com/Faultbox/midgard-ro/internal/game/states"
 	"github.com/Faultbox/midgard-ro/internal/logger"
-	"github.com/Faultbox/midgard-ro/internal/network/packets"
 	"github.com/Faultbox/midgard-ro/internal/trace"
 
 	"go.uber.org/zap"
@@ -177,16 +176,22 @@ var (
 )
 
 // chatKindColor is the color a line is drawn in.
-func chatKindColor(kind packets.ChatKind) ui2d.Color {
+//
+// The palette is the one #93 shipped, and it is knowingly not the original's:
+// server replies should be green rather than yellow and whispers yellow rather
+// than purple. Correcting it is step 5 of #94, which carries the reference to
+// prove it against. This function only had to learn the new kind type.
+func chatKindColor(kind states.ChatKind) ui2d.Color {
 	switch kind {
-	case packets.ChatSystem, packets.ChatBroadcast:
+	case states.ChatSystem, states.ChatBroadcast, states.ChatNotice:
 		return chatColorSystem
-	case packets.ChatWhisper:
+	case states.ChatWhisper:
 		return chatColorWhisper
-	case packets.ChatDamage:
+	case states.ChatDamage, states.ChatError:
 		return chatColorDamage
 	default:
-		// Anything a person said, ours or theirs.
+		// Anything a person said, ours or theirs — including the echo of a
+		// command, which is the player's own words too.
 		return chatColorMessage
 	}
 }
@@ -820,6 +825,26 @@ func (b *UI2DBackend) TakeChatMessage() (target, message string) {
 	return target, message
 }
 
+// QueueChatMessage puts a line in as though it had been typed, for --say.
+//
+// It writes the same field the input bar writes and leaves the whisper target
+// alone, so a queued line is routed by exactly the rules a typed one is —
+// including whatever is sitting in the name field, which is the whole point of
+// being able to test that.
+//
+// Reports false when a line is already pending, so the caller can wait rather
+// than overwrite one that has not been sent yet.
+func (b *UI2DBackend) QueueChatMessage(text string) bool {
+	if b.chatPending != "" {
+		return false
+	}
+
+	b.chatPending = text
+	b.chatPinned = true
+
+	return true
+}
+
 // outlineIfFocused frames a field that has the keyboard, so it is obvious
 // which of the two the next keystroke lands in.
 func (b *UI2DBackend) outlineIfFocused(id string, box ui2d.Rect) {
@@ -857,7 +882,7 @@ func (b *UI2DBackend) chatTabLines(lines []states.ChatLine) []states.ChatLine {
 
 	filtered := make([]states.ChatLine, 0, len(lines))
 	for _, line := range lines {
-		if (line.Kind == packets.ChatDamage) == battle {
+		if (line.Kind == states.ChatDamage) == battle {
 			filtered = append(filtered, line)
 		}
 	}
