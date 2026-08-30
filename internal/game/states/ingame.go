@@ -91,6 +91,10 @@ type InGameState struct {
 	// chat is the scrollback the chat box shows.
 	chat ChatLog
 
+	// lastCommand is what became of the most recent command, for the F3
+	// overlay. See LastCommand in commands.go for why it is worth keeping.
+	lastCommand lastCommand
+
 	// pendingWhisper is the private message waiting on its acknowledgement,
 	// which is what says whether it reached anyone. One at a time is enough:
 	// the server answers each before the box can send another.

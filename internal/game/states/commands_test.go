@@ -317,3 +317,49 @@ func TestGMCommandSuccessSaysNothing(t *testing.T) {
 		t.Errorf("a successful GM command answered %q, want silence", text)
 	}
 }
+
+// TestLastCommandOutcome: the overlay has to tell apart a command that was
+// never recognized from one that ran and from one that refused itself. On
+// screen all three can look the same — the box is unchanged — and they want
+// opposite fixes.
+func TestLastCommandOutcome(t *testing.T) {
+	tests := []struct {
+		name        string
+		line        string
+		wantOutcome string
+	}{
+		{"a name that does not resolve", "/nonsense", "unknown"},
+		{"a bare sigil", "/", "unknown"},
+		{"a command that answered", "/help", "answered"},
+		{"a command that refused itself", "/mm", "refused"},
+		// /who needs a connection it does not have here, so it refuses rather
+		// than answering — which is the distinction being drawn.
+		{"a command that could not reach the server", "/who", "refused"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var s InGameState
+
+			s.runLocalCommand(command.Parse(tt.line))
+
+			text, outcome := s.LastCommand()
+			if text != tt.line {
+				t.Errorf("text = %q, want %q", text, tt.line)
+			}
+			if outcome != tt.wantOutcome {
+				t.Errorf("outcome = %q, want %q", outcome, tt.wantOutcome)
+			}
+		})
+	}
+}
+
+// TestLastCommandStartsEmpty: the overlay says "none yet" off the back of
+// this, so it must not report a phantom command before anything is typed.
+func TestLastCommandStartsEmpty(t *testing.T) {
+	var s InGameState
+
+	if text, outcome := s.LastCommand(); text != "" || outcome != "" {
+		t.Errorf("a fresh state reports %q / %q, want both empty", text, outcome)
+	}
+}
