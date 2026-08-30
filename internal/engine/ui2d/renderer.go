@@ -53,8 +53,16 @@ type Renderer struct {
 	// Current draw lists
 	solidVertices []float32
 
-	// whiteTex is a single white pixel, for filling in the image pass.
-	whiteTex      uint32
+	// commands is every draw in the order it was asked for.
+	//
+	// The vertices still live in one buffer per shader — that is what the GPU
+	// wants — but which buffer a draw came from no longer decides when it is
+	// drawn. Each command names its kind, its texture and its span in that
+	// kind's buffer, and the flush walks them in order. Consecutive commands
+	// that share a kind and texture are merged as they are added, so a window
+	// drawing twenty quads of skin costs one call, as it did before.
+	commands []drawCmd
+
 	textVertices  []float32
 	imageVertices []float32
 
@@ -158,28 +166,7 @@ func (r *Renderer) Begin() {
 	r.imageDrawCalls = r.imageDrawCalls[:0]
 	r.overlayVertices = r.overlayVertices[:0]
 	r.overlayDrawCalls = r.overlayDrawCalls[:0]
-}
-
-// Flush draws everything queued so far and clears it, so that what is drawn
-// next lands on top of all of it.
-//
-// The passes are global — image, then solid, then text — which means text
-// queued early is drawn above an image queued late, however the calls were
-// ordered. That is right within one layer and wrong between two: the HUD's
-// labels floated over every window opened on top of them. Flushing between
-// the two makes "after" mean after.
-//
-// The overlay is left alone: it is the cursor, and it belongs above whatever
-// comes next as much as above what came before.
-func (r *Renderer) Flush() {
-	r.withDrawState(func(proj [16]float32) {
-		r.drawQueuedBatches(proj)
-	})
-
-	r.solidVertices = r.solidVertices[:0]
-	r.textVertices = r.textVertices[:0]
-	r.imageVertices = r.imageVertices[:0]
-	r.imageDrawCalls = r.imageDrawCalls[:0]
+	r.commands = r.commands[:0]
 }
 
 // withDrawState sets up the 2D drawing state, runs the body, and puts the
@@ -219,6 +206,40 @@ func (r *Renderer) withDrawState(body func(proj [16]float32)) {
 	}
 }
 
+// drawKind is which shader and vertex buffer a command draws from.
+type drawKind uint8
+
+const (
+	drawImage drawKind = iota
+	drawSolid
+	drawText
+)
+
+// drawCmd is one run of vertices from one buffer.
+type drawCmd struct {
+	kind    drawKind
+	texture uint32
+	start   int
+	count   int
+}
+
+// pushCmd records count vertices of a kind, extending the previous command
+// when it can rather than adding another.
+func (r *Renderer) pushCmd(kind drawKind, texture uint32, start, count int) {
+	if n := len(r.commands); n > 0 {
+		last := &r.commands[n-1]
+		if last.kind == kind && last.texture == texture && last.start+last.count == start {
+			last.count += count
+
+			return
+		}
+	}
+
+	r.commands = append(r.commands, drawCmd{
+		kind: kind, texture: texture, start: start, count: count,
+	})
+}
+
 // End finishes the UI frame, drawing whatever is still queued and the overlay
 // above it.
 func (r *Renderer) End() {
@@ -228,61 +249,94 @@ func (r *Renderer) End() {
 	})
 }
 
-// drawQueuedBatches draws the three ordinary layers in their fixed order.
+// drawQueuedBatches draws every command in the order it was asked for.
+//
+// The vertices go up once per shader, then the commands are walked and each
+// run drawn from its own buffer. Which buffer a run came from no longer
+// decides when it is drawn, so "drawn later is on top" holds for images,
+// solids and text alike.
 func (r *Renderer) drawQueuedBatches(proj [16]float32) {
-	// Render image quads first (window skins, scene textures, etc).
-	// Solid quads paint on top so structural rectangles — buttons, input
-	// fields, separators — aren't buried under skin backgrounds. Order is:
-	//   image -> solid -> text.
-	if len(r.imageDrawCalls) > 0 {
-		gl.UseProgram(r.imageShader)
-		projLoc := gl.GetUniformLocation(r.imageShader, gl.Str("uProjection\x00"))
-		gl.UniformMatrix4fv(projLoc, 1, false, &proj[0])
+	if len(r.commands) == 0 {
+		return
+	}
 
-		texLoc := gl.GetUniformLocation(r.imageShader, gl.Str("uTexture\x00"))
-		gl.Uniform1i(texLoc, 0)
+	r.uploadBuffers()
 
-		gl.ActiveTexture(gl.TEXTURE0)
+	var (
+		bound    drawKind = 255
+		boundTex uint32
+	)
+
+	for _, cmd := range r.commands {
+		if cmd.kind != bound {
+			r.bindKind(cmd.kind, proj)
+			bound = cmd.kind
+			boundTex = 0
+		}
+
+		// Text draws from one atlas, bound with its shader; images name
+		// their own texture and change it only when it actually changes.
+		if cmd.kind == drawImage && cmd.texture != boundTex {
+			gl.BindTexture(gl.TEXTURE_2D, cmd.texture)
+			boundTex = cmd.texture
+		}
+
+		gl.DrawArrays(gl.TRIANGLES, int32(cmd.start), int32(cmd.count))
+	}
+}
+
+// uploadBuffers sends each shader's vertices to the GPU once.
+func (r *Renderer) uploadBuffers() {
+	if len(r.imageVertices) > 0 {
 		gl.BindVertexArray(r.imageVAO)
 		gl.BindBuffer(gl.ARRAY_BUFFER, r.imageVBO)
 		gl.BufferData(gl.ARRAY_BUFFER, len(r.imageVertices)*4, unsafe.Pointer(&r.imageVertices[0]), gl.STREAM_DRAW)
-
-		for _, dc := range r.imageDrawCalls {
-			gl.BindTexture(gl.TEXTURE_2D, dc.textureID)
-			gl.DrawArrays(gl.TRIANGLES, int32(dc.vertStart), int32(dc.vertCount))
-		}
 	}
 
-	// Solid quads on top of images.
 	if len(r.solidVertices) > 0 {
-		gl.UseProgram(r.solidShader)
-		projLoc := gl.GetUniformLocation(r.solidShader, gl.Str("uProjection\x00"))
-		gl.UniformMatrix4fv(projLoc, 1, false, &proj[0])
-
 		gl.BindVertexArray(r.solidVAO)
 		gl.BindBuffer(gl.ARRAY_BUFFER, r.solidVBO)
 		gl.BufferData(gl.ARRAY_BUFFER, len(r.solidVertices)*4, unsafe.Pointer(&r.solidVertices[0]), gl.STREAM_DRAW)
-		gl.DrawArrays(gl.TRIANGLES, 0, int32(len(r.solidVertices)/7)) // 7 floats per vertex
 	}
 
-	// Render textured quads (text) on top
-	if len(r.textVertices) > 0 && r.font != nil {
-		gl.UseProgram(r.textShader)
-		projLoc := gl.GetUniformLocation(r.textShader, gl.Str("uProjection\x00"))
-		gl.UniformMatrix4fv(projLoc, 1, false, &proj[0])
-
-		texLoc := gl.GetUniformLocation(r.textShader, gl.Str("uTexture\x00"))
-		gl.Uniform1i(texLoc, 0)
-
-		gl.ActiveTexture(gl.TEXTURE0)
-		gl.BindTexture(gl.TEXTURE_2D, r.font.TextureID())
-
+	if len(r.textVertices) > 0 {
 		gl.BindVertexArray(r.textVAO)
 		gl.BindBuffer(gl.ARRAY_BUFFER, r.textVBO)
 		gl.BufferData(gl.ARRAY_BUFFER, len(r.textVertices)*4, unsafe.Pointer(&r.textVertices[0]), gl.STREAM_DRAW)
-		gl.DrawArrays(gl.TRIANGLES, 0, int32(len(r.textVertices)/9)) // 9 floats per vertex (pos3 + uv2 + color4)
 	}
+}
 
+// bindKind switches to the shader and vertex array one kind of command draws
+// from.
+func (r *Renderer) bindKind(kind drawKind, proj [16]float32) {
+	switch kind {
+	case drawImage:
+		gl.UseProgram(r.imageShader)
+		gl.UniformMatrix4fv(gl.GetUniformLocation(r.imageShader, gl.Str("uProjection\x00")), 1, false, &proj[0])
+		gl.Uniform1i(gl.GetUniformLocation(r.imageShader, gl.Str("uTexture\x00")), 0)
+		gl.ActiveTexture(gl.TEXTURE0)
+		gl.BindVertexArray(r.imageVAO)
+		gl.BindBuffer(gl.ARRAY_BUFFER, r.imageVBO)
+
+	case drawSolid:
+		gl.UseProgram(r.solidShader)
+		gl.UniformMatrix4fv(gl.GetUniformLocation(r.solidShader, gl.Str("uProjection\x00")), 1, false, &proj[0])
+		gl.BindVertexArray(r.solidVAO)
+		gl.BindBuffer(gl.ARRAY_BUFFER, r.solidVBO)
+
+	case drawText:
+		if r.font == nil {
+			return
+		}
+
+		gl.UseProgram(r.textShader)
+		gl.UniformMatrix4fv(gl.GetUniformLocation(r.textShader, gl.Str("uProjection\x00")), 1, false, &proj[0])
+		gl.Uniform1i(gl.GetUniformLocation(r.textShader, gl.Str("uTexture\x00")), 0)
+		gl.ActiveTexture(gl.TEXTURE0)
+		gl.BindTexture(gl.TEXTURE_2D, r.font.TextureID())
+		gl.BindVertexArray(r.textVAO)
+		gl.BindBuffer(gl.ARRAY_BUFFER, r.textVBO)
+	}
 }
 
 // drawOverlay draws the topmost layer — the cursor.
@@ -385,22 +439,6 @@ func (r *Renderer) DrawPanel(x, y, width, height float32, bg, border Color) {
 	r.DrawRectOutline(x, y, width, height, 1, border)
 }
 
-// FillImageLayer fills a rectangle in the image pass rather than the solid
-// one, so it stacks with images by call order.
-//
-// Solid quads paint over every image by design, which makes DrawRect useless
-// for anything that has to sit *behind* an image — the cell a pale icon needs
-// so it does not vanish into a white panel. This draws the same rectangle as
-// a one-pixel white texture tinted to the color, which puts it in the image
-// pass where "before" and "after" mean what they say.
-func (r *Renderer) FillImageLayer(x, y, width, height float32, color Color) {
-	if r.whiteTex == 0 {
-		r.whiteTex = r.CreateTexture(1, 1, []byte{255, 255, 255, 255})
-	}
-
-	r.DrawImage(r.whiteTex, x, y, width, height, color)
-}
-
 // addQuad adds a solid color quad to the vertex buffer.
 func (r *Renderer) addQuad(x, y, w, h float32, c Color) {
 	r.addQuadTo(&r.solidVertices, x, y, w, h, c)
@@ -410,6 +448,7 @@ func (r *Renderer) addQuad(x, y, w, h float32, c Color) {
 func (r *Renderer) addQuadTo(into *[]float32, x, y, w, h float32, c Color) {
 	// Two triangles forming a quad
 	// Vertex format: x, y, z, r, g, b, a (7 floats)
+	r.pushCmd(drawSolid, 0, len(*into)/7, 6)
 
 	// Triangle 1
 	*into = append(*into,
@@ -446,6 +485,7 @@ func (r *Renderer) addQuadGradient(x, y, w, h float32, t, b Color) {
 func (r *Renderer) addTexturedQuad(x, y, w, h float32, u0, v0, u1, v1 float32, c Color) {
 	// Two triangles forming a quad
 	// Vertex format: x, y, z, u, v, r, g, b, a (9 floats)
+	r.pushCmd(drawText, 0, len(r.textVertices)/9, 6)
 
 	// Triangle 1
 	r.textVertices = append(r.textVertices,
@@ -891,6 +931,13 @@ func (r *Renderer) DrawImage(texID uint32, x, y, w, h float32, tint Color) {
 
 // DrawImageUV draws a textured quad with custom UV coordinates.
 func (r *Renderer) DrawImageUV(texID uint32, x, y, w, h, u0, v0, u1, v1 float32, tint Color) {
+	if texID == 0 {
+		return
+	}
+
+	// Recorded here rather than in appendImageQuad: the overlay shares that
+	// helper and is drawn on its own terms, above the command list entirely.
+	r.pushCmd(drawImage, texID, len(r.imageVertices)/9, 6)
 	appendImageQuad(&r.imageVertices, &r.imageDrawCalls, texID, x, y, w, h, u0, v0, u1, v1, tint)
 }
 

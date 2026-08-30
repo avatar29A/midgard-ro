@@ -103,7 +103,7 @@ func (b *UI2DBackend) drawEntityBars(bar states.EntityBar) {
 	// solids sat on top of the map window's picture — a character's health
 	// showing through a map is not a depth anyone asked for. In the image
 	// pass they are ordered by call, and the windows are drawn after.
-	fill := r.FillImageLayer
+	fill := r.DrawRect
 
 	// Border first, then the empty channel inset into it, then the fills —
 	// the same order the original builds them in, so a bar at zero still

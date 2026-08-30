@@ -485,7 +485,7 @@ func (b *UI2DBackend) drawExpBar(x, y float32, current, next int64) {
 	// on screen and over the ESC menu's backdrop, because solid quads paint
 	// over every image in the frame by design. In the image pass they are
 	// ordered by call, and the windows are drawn after the panel.
-	fill := b.ctx.Renderer().FillImageLayer
+	fill := b.ctx.Renderer().DrawRect
 
 	fill(x, y, hudExpW+2*hudExpBorder, hudExpH+2*hudExpBorder, hudExpBorderColor)
 	fill(x+hudExpBorder, y+hudExpBorder, hudExpW, hudExpH, hudExpWellColor)

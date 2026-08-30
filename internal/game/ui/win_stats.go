@@ -65,7 +65,6 @@ func (b *UI2DBackend) drawStatsWindow(state InGameUIState, screenW, screenH floa
 	// and images go in separate batches, and the fill would cover the bitmap
 	// however the calls are ordered.
 	opts := ui2d.DefaultWindowOptions()
-	opts.BitmapBody = true
 
 	if !b.ctx.BeginWindowEx(statsWindowID, openX, openY, statsW, frameH, title, opts) {
 		// Minimized is not closed: the frame has already drawn its title bar

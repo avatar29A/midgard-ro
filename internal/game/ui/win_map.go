@@ -65,7 +65,6 @@ func (b *UI2DBackend) drawMapWindow(state InGameUIState, screenW, screenH float3
 	// Resizable because a map is worth making bigger, which is the one window
 	// here where that is true.
 	opts := ui2d.DefaultWindowOptions()
-	opts.BitmapBody = true
 	opts.Resizable = true
 
 	// The map's name without its extension: "prontera", not "prontera.gat".
@@ -107,7 +106,7 @@ func (b *UI2DBackend) drawMapWindow(state InGameUIState, screenW, screenH float3
 	}
 
 	r := b.ctx.Renderer()
-	r.FillImageLayer(x, y+ui2d.FrameTitleH, win.W, win.H-ui2d.FrameTitleH, ui2d.ColorWindowBody)
+	r.DrawRect(x, y+ui2d.FrameTitleH, win.W, win.H-ui2d.FrameTitleH, ui2d.ColorWindowBody)
 
 	if b.mapWorldView {
 		b.drawWorldMap(body)

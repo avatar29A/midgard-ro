@@ -254,16 +254,29 @@ internal/game/ui` returning anything else means a widget has crept back.
 
 What that layer can and cannot do is worth knowing before adding to it:
 
-- Draw order is **image, then solid, then text**, with solids over images by
-  design. A rectangle can never sit behind an image, so a window whose body
-  is a bitmap has to say so (`WindowOptions.BitmapBody`), and a fill that
-  must go under an icon uses `Renderer.FillImageLayer` instead of `DrawRect`.
+- **Drawn later is on top.** Images, solids and text all go into one command
+  list in the order they are asked for, and the flush walks it in that order.
+  There is no rule about primitive types to remember and no layer to opt into.
 - There is no scissor. Text that must not overflow its box is trimmed to fit
   rather than clipped.
 - A window's remembered state outlives the window. Closing or minimizing sets
   a flag that `BeginWindow` refuses on, so anything offering a way to reopen
   one has to clear it (`OpenWindow`), and a false return has to be read with
   `WindowClosed` rather than assumed to mean closed.
+
+The first of those was not always true, and the cost of it not being true is
+worth remembering. The renderer used to batch by primitive type and flush
+images, then solids, then text, so a solid always covered an image and text
+covered both, whatever order the calls were made in. That produced five bugs
+that looked unrelated — an invisible window background, invisible skill and
+item icons, health bars drawn over a map, and every label on the HUD floating
+above every window — and four of them were worked around one at a time before
+the fifth turned out to be unworkaroundable. The command list replaced three
+mechanisms (`FillImageLayer`, `WindowOptions.BitmapBody` and a manual layer
+flush) with one rule.
+
+The cursor is still drawn in its own pass above everything, which is a
+statement about the cursor rather than an exception to the rule.
 
 ### The HUD and its windows
 
