@@ -235,6 +235,12 @@ type InGameUIState struct {
 	NPCCount     int
 	ItemCount    int
 
+	// The last command typed and what became of it (debug). A command that
+	// did nothing and one that was never recognized look identical on
+	// screen, and want opposite fixes.
+	LastCommand        string
+	LastCommandOutcome string
+
 	// Network telemetry (debug)
 	PacketsSent     uint64
 	PacketsReceived uint64

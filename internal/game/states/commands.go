@@ -2,6 +2,7 @@ package states
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"go.uber.org/zap"
@@ -60,6 +61,14 @@ var localCommands = map[string]localCommand{
 	"bgm":   cmdBGM,
 	"music": cmdBGM,
 	"sound": cmdSound,
+
+	// The GM three. Aliases as tools/chatcmds/slash.json records them.
+	"mm":      cmdMapMove,
+	"mapmove": cmdMapMove,
+	"b":       cmdBroadcast,
+	"nb":      cmdBroadcast,
+	"lb":      cmdLocalBroadcast,
+	"nlb":     cmdLocalBroadcast,
 }
 
 // cmdWhere prints the map and cell the character is standing on.
@@ -118,6 +127,9 @@ var commandHelp = []struct {
 	{"help", []string{"h"}},
 	{"bgm", []string{"music"}},
 	{"sound", nil},
+	{"mm", []string{"mapmove"}},
+	{"b", []string{"nb"}},
+	{"lb", []string{"nlb"}},
 }
 
 // cmdHelp lists the commands this client answers.
@@ -165,6 +177,115 @@ func onOff(on bool) string {
 	}
 
 	return "off"
+}
+
+// The three `/` commands that carry their own packet.
+//
+// Each is a GM command the server converts straight back into an atcommand.
+// They are sent as packets rather than as `@` text for one reason: a refused
+// atcommand falls through to ordinary chat, so a non-GM typing `@kami hi`
+// shouts "@kami hi" at the map. As packets they are refused in silence.
+//
+// Nothing is printed locally on success. Whatever the command did is the
+// server's to report — @mapmove answers on 0x008E, @kami announces — and
+// printing our own line first would claim something happened before the
+// server had agreed. For a non-GM that silence *is* the answer, and it is
+// the same silence the original client gives.
+
+// cmdMapMove warps to a map and cell.
+//
+// Coordinates are optional: @mapmove picks a walkable cell itself when given
+// zero, which is what the original does for a bare `/mm <map>`.
+func cmdMapMove(s *InGameState, args string) (ChatKind, string) {
+	fields := strings.Fields(args)
+	if len(fields) == 0 {
+		return ChatError, "Usage: /mm <map> [<x> <y>]"
+	}
+
+	mapName := fields[0]
+
+	var x, y uint16
+	if len(fields) >= 3 {
+		px, errX := strconv.ParseUint(fields[1], 10, 16)
+		py, errY := strconv.ParseUint(fields[2], 10, 16)
+		if errX != nil || errY != nil {
+			return ChatError, "Usage: /mm <map> [<x> <y>]"
+		}
+		x, y = uint16(px), uint16(py)
+	}
+
+	pkt := packets.EncodeMapMove(mapName, x, y)
+	if pkt == nil {
+		// The only way to get here is a name too long for the 16-byte field.
+		return ChatError, fmt.Sprintf("Map name is too long: %s", mapName)
+	}
+
+	return sendCommandPacket(s, pkt, "mapmove")
+}
+
+// cmdBroadcast announces to the whole server (@kami).
+func cmdBroadcast(s *InGameState, args string) (ChatKind, string) {
+	if args == "" {
+		return ChatError, "Usage: /b <message>"
+	}
+
+	return sendCommandPacket(s, packets.EncodeBroadcast(args), "broadcast")
+}
+
+// cmdLocalBroadcast announces on this map only (@lkami).
+func cmdLocalBroadcast(s *InGameState, args string) (ChatKind, string) {
+	if args == "" {
+		return ChatError, "Usage: /lb <message>"
+	}
+
+	return sendCommandPacket(s, packets.EncodeLocalBroadcast(args), "localbroadcast")
+}
+
+// sendCommandPacket sends one of the GM packets and answers with nothing on
+// success, so the server is the only thing that reports what happened.
+func sendCommandPacket(s *InGameState, pkt []byte, what string) (ChatKind, string) {
+	if s.client == nil {
+		return ChatError, "Not connected."
+	}
+	if pkt == nil {
+		return ChatError, "Nothing to send."
+	}
+
+	trace.Emit(trace.Cmd, "server-packet", zap.String("command", what))
+
+	if err := s.client.Send(pkt); err != nil {
+		logger.Warn("could not send a command packet",
+			zap.String("command", what), zap.Error(err))
+
+		return ChatError, "Could not reach the server."
+	}
+
+	return ChatNotice, ""
+}
+
+// lastCommand is what the F3 overlay reports about the most recent command.
+//
+// A command that did nothing and one that was never recognized look identical
+// on screen — both leave the box unchanged — and they want opposite fixes.
+// The trace channel says the same thing, but a trace has to be turned on
+// before the run that needs it, and by then the interesting attempt is over.
+type lastCommand struct {
+	// Text is the line as typed, empty when nothing has been entered yet.
+	Text string
+	// Outcome is what became of it, in the fewest words that distinguish the
+	// cases: answered, sent, unknown, refused.
+	Outcome string
+}
+
+// LastCommand reports the most recent command and what became of it, for the
+// debug overlay. Both are empty before anything has been typed.
+func (s *InGameState) LastCommand() (text, outcome string) {
+	return s.lastCommand.Text, s.lastCommand.Outcome
+}
+
+// noteCommand records what became of a line, for the overlay.
+func (s *InGameState) noteCommand(text, outcome string) {
+	s.lastCommand = lastCommand{Text: text, Outcome: outcome}
 }
 
 // chatIntent is what should become of a line the player entered.
@@ -244,7 +365,16 @@ func (s *InGameState) sendServerCommand(line command.Line) error {
 		zap.String("sigil", line.Sigil.String()),
 		zap.String("name", line.Name))
 
-	return s.SendChat(line.Raw)
+	err := s.SendChat(line.Raw)
+	if err != nil {
+		s.noteCommand(line.Raw, "refused")
+	} else {
+		// "sent", not "ran": whether the server accepted it is the server's
+		// to say, and for a non-GM the answer is silence.
+		s.noteCommand(line.Raw, "sent")
+	}
+
+	return err
 }
 
 // runLocalCommand answers a `/` command, or says it is not one we know.
@@ -257,6 +387,7 @@ func (s *InGameState) runLocalCommand(line command.Line) {
 	if line.Name == "" {
 		s.chat.AddLocal(ChatError, "Type a command after the /.")
 		trace.Emit(trace.Cmd, "unknown", zap.String("name", ""))
+		s.noteCommand(line.Raw, "unknown")
 
 		return
 	}
@@ -265,6 +396,7 @@ func (s *InGameState) runLocalCommand(line command.Line) {
 	if !ok {
 		s.chat.AddLocal(ChatError, fmt.Sprintf("Unknown command: /%s", line.Name))
 		trace.Emit(trace.Cmd, "unknown", zap.String("name", line.Name))
+		s.noteCommand(line.Raw, "unknown")
 
 		return
 	}
@@ -277,4 +409,13 @@ func (s *InGameState) runLocalCommand(line command.Line) {
 	trace.Emit(trace.Cmd, "local",
 		zap.String("name", line.Name),
 		zap.Bool("answered", answer != ""))
+
+	// A recognized command that answered with an error refused itself — bad
+	// arguments, no connection — which is a different thing from one that
+	// ran, and from one that was never a command at all.
+	outcome := "answered"
+	if kind == ChatError {
+		outcome = "refused"
+	}
+	s.noteCommand(line.Raw, outcome)
 }

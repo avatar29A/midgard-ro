@@ -326,6 +326,78 @@ update as it arrives.
 
 ---
 
+### Chat commands (`internal/game/command/`, `internal/game/states/commands.go`)
+
+Typing into the chat box can now do three different things, and which one it
+does is decided by the first character.
+
+`internal/game/command` parses a line and nothing more — no sending, no
+drawing — so the rules can be tested without a server or a window. It reports
+a sigil (`/`, `@`, `#`, or none) plus the command word and its arguments.
+`states.SubmitLine` routes on that through `routeLine`, which is a pure
+function for the same reason.
+
+The two families are not symmetric, and that asymmetry is the whole design:
+
+- **`@` and `#` are the server's, and need no packet.** They travel as
+  ordinary public chat; the server pulls the command out before broadcasting
+  (`clif_process_message` → `is_atcommand`). Routing one means sending the
+  raw line and nothing else.
+- **`/` is the client's, and the server never sees it.** Nothing server-side
+  parses a leading slash, so a `/` line we do not implement must never reach
+  the network — it would be said out loud to everyone in range. An unknown
+  `/` command is reported in the box instead.
+
+A command ignores the whisper name field entirely. Only the public path runs
+commands, so an `@` sent as a whisper is not refused — it is quietly said to
+one person, which looks exactly like the command having done nothing.
+
+`localCommands` is the `/` table. `/where`, `/help`, `/bgm` and `/sound` are
+answered here; `/who` is the one round trip, answered when `ZC_USER_COUNT`
+arrives. `/mm`, `/b` and `/lb` are GM commands that carry **their own packets**
+(`CZ_MOVETO_MAP` `0x0140`, `CZ_BROADCAST` `0x0099`, `CZ_LOCALBROADCAST`
+`0x019C`) rather than being sent as `@` text — a refused atcommand falls
+through to ordinary chat, so `@kami hi` from a non-GM shouts "@kami hi" at the
+map, while the packet is refused in silence.
+
+Every `/` command must answer with something. Nothing goes to the server, so a
+command that returned silence would be indistinguishable from one that was
+never recognized. The exception is the GM three, whose success is deliberately
+silent: what they did is the server's to report.
+
+`--trace=cmd` shows each parse, route and send. F3 carries the last command and
+what became of it — `answered`, `sent`, `unknown`, `refused` — because on
+screen those can look identical and want opposite fixes.
+
+---
+
+### Chat line colors (`internal/game/ui/hud_chat.go`, `internal/network/packets/chat.go`)
+
+RO tints a line by where it came from, which is how you tell your own words
+from someone else's at a glance. The palette is the original's: our words and
+the server's replies green, other people white, whispers yellow, errors red,
+notices light yellow. Every reply to an `@` command arrives as
+`ZC_NOTIFY_PLAYERCHAT` `0x008E` with no speaker, which the original paints
+green — that is the most visible of these.
+
+Two packets carry a color of their own, and it wins over the kind:
+
+- **`ZC_NPC_CHAT` `0x02C1`** — 7 call sites in `atcommand.cpp` against 1035
+  for the plain path: `@cash`, `@points`, `@request`, `@auction`. Its color
+  arrives **BGR**: `clif_messagecolor_target` swaps rAthena's RGB before
+  sending, so reading it back as RGB turns the server's light green into
+  pink. The swap is its own inverse. All four call sites are gated behind
+  server config we do not set, so this decoder is proved by unit test rather
+  than by a live packet — see `docs/research/chat-commands.md` §5.
+- **`ZC_BROADCAST` `0x009A`** — which has no color field at all. The server
+  puts a literal word at the front of the message (`blue`, or `ssss` for a
+  WoE line) and expects the client to cut it off. Left in, a blue "hi" renders
+  as "bluehi". A message that genuinely begins with one of those words loses
+  it; the protocol has no way to tell a marker from the first four letters of
+  a sentence, and the original reads it the same way.
+
+---
+
 ### Map loading (`internal/game/states/maploader.go`, `internal/engine/scene/scene.go`)
 
 A map is loaded in phases — GAT, GND, RSW, prepare, terrain, models in

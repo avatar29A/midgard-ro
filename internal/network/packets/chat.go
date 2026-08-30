@@ -25,6 +25,13 @@ const (
 	// ZC_WHISPER is a private message. The id moves with the packet version;
 	// 0x09DE is ours, not the 0x0097 older clients use.
 	ZC_WHISPER uint16 = 0x09DE
+	// ZC_NPC_CHAT carries a line with the color the server picked for it.
+	// A handful of commands answer this way instead of on 0x008E — @cash,
+	// @points, @request and @auction, 7 call sites against 1035 for the
+	// plain path. All four are gated behind server config we do not set, so
+	// this is proved by test rather than by a live packet; see
+	// docs/research/chat-commands.md §5.
+	ZC_NPC_CHAT uint16 = 0x02C1
 )
 
 // ChatKind says where a line came from, which is what decides its color.
@@ -61,6 +68,16 @@ type ChatMessage struct {
 
 	// Text is the line without the speaker prefix.
 	Text string
+
+	// Color is an RGB the server chose for this line, valid only when
+	// HasColor is set. Carried as a plain number rather than a color type
+	// because this layer has no business knowing how anything is drawn.
+	Color uint32
+
+	// HasColor says the server picked a color rather than leaving it to the
+	// kind. Distinguishing this from Color == 0 matters: black is a color
+	// the server can legitimately send.
+	HasColor bool
 }
 
 // DecodeChat parses a line someone else spoke (ZC_NOTIFY_CHAT).
@@ -156,14 +173,89 @@ func trimName(raw []byte) string {
 	return string(raw)
 }
 
+// Broadcast colors.
+//
+// ZC_BROADCAST has no color field. The server encodes one as a literal word
+// at the front of the message and the client is expected to recognize it and
+// cut it off (clif_broadcast). Only these two exact words, only at the very
+// start; anything else is an ordinary yellow announcement.
+const (
+	// broadcastBlue is what BC_BLUE prepends.
+	broadcastBlue = "blue"
+	// broadcastWoE is what BC_WOE prepends, marking a War of Emperium line.
+	broadcastWoE = "ssss"
+
+	// BroadcastColorBlue and BroadcastColorYellow are what those two stand
+	// for. WoE lines are yellow like an ordinary announcement — the marker
+	// distinguishes the event, not the color.
+	BroadcastColorBlue   uint32 = 0x00FFFF
+	BroadcastColorYellow uint32 = 0xFFFF00
+)
+
 // DecodeBroadcast parses a server-wide announcement (ZC_BROADCAST).
 // Returns nil on short data.
+//
+// The color marker is stripped here rather than left for the UI. It is not
+// text anyone should see: leaving it in renders "@kami hi" from a blue
+// broadcast as "bluehi".
+//
+// A message that genuinely begins with one of those words loses it. That is
+// the protocol's own ambiguity — there is no length or flag to tell a marker
+// from the first four letters of a sentence — and the original client reads
+// it exactly this way.
 func DecodeBroadcast(data []byte) *ChatMessage {
 	if len(data) < 4 {
 		return nil
 	}
 
-	return &ChatMessage{Kind: ChatBroadcast, Text: chatText(data, 4)}
+	text := chatText(data, 4)
+
+	color := BroadcastColorYellow
+	switch {
+	case strings.HasPrefix(text, broadcastBlue):
+		text = text[len(broadcastBlue):]
+		color = BroadcastColorBlue
+	case strings.HasPrefix(text, broadcastWoE):
+		text = text[len(broadcastWoE):]
+	}
+
+	return &ChatMessage{
+		Kind:     ChatBroadcast,
+		Text:     text,
+		Color:    color,
+		HasColor: true,
+	}
+}
+
+// DecodeNPCChat parses a line carrying its own color (ZC_NPC_CHAT).
+// Returns nil on short data.
+//
+//	02c1 <len>.W <GID>.L <color>.L <message>.?B
+//
+// The color arrives as BGR. clif_messagecolor_target swaps rAthena's RGB
+// before sending it, so reading it back as RGB turns the server's light green
+// into pink. The swap is its own inverse, which is why the same expression
+// undoes it.
+func DecodeNPCChat(data []byte) *ChatMessage {
+	const messageAt = 12
+
+	if len(data) < messageAt {
+		return nil
+	}
+
+	return &ChatMessage{
+		Kind:     ChatSystem,
+		GID:      readU32(data, 4),
+		Text:     chatText(data, messageAt),
+		Color:    bgrToRGB(readU32(data, 8)),
+		HasColor: true,
+	}
+}
+
+// bgrToRGB swaps the red and blue bytes of a 24-bit color, discarding
+// anything above them.
+func bgrToRGB(v uint32) uint32 {
+	return (v&0x0000FF)<<16 | (v & 0x00FF00) | (v&0xFF0000)>>16
 }
 
 // chatText reads the message body, which runs from offset to the length the
