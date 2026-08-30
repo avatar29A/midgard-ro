@@ -1015,6 +1015,8 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 			b.ctx.Label(fmt.Sprintf("Base Lv: %d   Job Lv: %d", state.PlayerLevel, state.PlayerJobLevel))
 			b.ctx.Separator()
 			b.ctx.Row(16)
+			b.ctx.Label("Cmd: " + describeCommand(state))
+			b.ctx.Row(16)
 			b.ctx.Label("Dialog: " + describeDialog(state))
 			b.ctx.Row(16)
 			b.ctx.Label("HUD: " + b.describeHUD())
@@ -1063,6 +1065,19 @@ func describeCameraRules(state InGameUIState) string {
 		s += " (" + strings.Join(rules, ", ") + ")"
 	}
 	return s
+}
+
+// describeCommand reports the last command and what became of it.
+//
+// The outcome is the point: "unknown" means the name never resolved, while
+// "sent" means it went to the server and the silence that followed is the
+// server's answer rather than a client bug.
+func describeCommand(state InGameUIState) string {
+	if state.LastCommand == "" {
+		return "none yet"
+	}
+
+	return state.LastCommand + " -> " + state.LastCommandOutcome
 }
 
 func describeDialog(state InGameUIState) string {

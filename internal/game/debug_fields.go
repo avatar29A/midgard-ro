@@ -33,6 +33,8 @@ func populateDebugFields(out *ui.InGameUIState, state *states.InGameState, clien
 		}
 	}
 
+	out.LastCommand, out.LastCommandOutcome = state.LastCommand()
+
 	out.MapLoadMs, out.MapLoadPhases = state.LastMapLoad()
 	rules := state.CameraRules()
 	out.Indoor = rules.Indoor
