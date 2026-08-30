@@ -1163,6 +1163,7 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_NOTIFY_CHAT, s.handleChat)
 	s.client.RegisterHandler(packets.ZC_NOTIFY_PLAYERCHAT, s.handlePlayerChat)
 	s.client.RegisterHandler(packets.ZC_BROADCAST, s.handleBroadcast)
+	s.client.RegisterHandler(packets.ZC_NPC_CHAT, s.handleNPCChat)
 	s.client.RegisterHandler(packets.ZC_USER_COUNT, s.handleUserCount)
 	s.client.RegisterHandler(packets.ZC_WHISPER, s.handleWhisper)
 	s.client.RegisterHandler(packets.ZC_ACK_WHISPER, s.handleWhisperAck)
@@ -1436,6 +1437,15 @@ func (s *InGameState) handlePlayerChat(data []byte) error {
 // handleBroadcast handles a server-wide announcement.
 func (s *InGameState) handleBroadcast(data []byte) error {
 	return s.addChat(packets.DecodeBroadcast(data))
+}
+
+// handleNPCChat handles a line that carries its own colour.
+//
+// A handful of @ commands answer this way rather than on 0x008E — @cash,
+// @points, @request and @auction — and the colour is the server's choice, so
+// it overrides the one the kind would give.
+func (s *InGameState) handleNPCChat(data []byte) error {
+	return s.addChat(packets.DecodeNPCChat(data))
 }
 
 // handleWhisper handles a private message.
