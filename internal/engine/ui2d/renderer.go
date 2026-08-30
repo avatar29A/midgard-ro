@@ -160,8 +160,31 @@ func (r *Renderer) Begin() {
 	r.overlayDrawCalls = r.overlayDrawCalls[:0]
 }
 
-// End finishes the UI frame and renders all queued elements.
-func (r *Renderer) End() {
+// Flush draws everything queued so far and clears it, so that what is drawn
+// next lands on top of all of it.
+//
+// The passes are global — image, then solid, then text — which means text
+// queued early is drawn above an image queued late, however the calls were
+// ordered. That is right within one layer and wrong between two: the HUD's
+// labels floated over every window opened on top of them. Flushing between
+// the two makes "after" mean after.
+//
+// The overlay is left alone: it is the cursor, and it belongs above whatever
+// comes next as much as above what came before.
+func (r *Renderer) Flush() {
+	r.withDrawState(func(proj [16]float32) {
+		r.drawQueuedBatches(proj)
+	})
+
+	r.solidVertices = r.solidVertices[:0]
+	r.textVertices = r.textVertices[:0]
+	r.imageVertices = r.imageVertices[:0]
+	r.imageDrawCalls = r.imageDrawCalls[:0]
+}
+
+// withDrawState sets up the 2D drawing state, runs the body, and puts the
+// state back as it found it.
+func (r *Renderer) withDrawState(body func(proj [16]float32)) {
 	// Save OpenGL state
 	var prevBlend int32
 	var prevDepth int32
@@ -178,6 +201,35 @@ func (r *Renderer) End() {
 
 	proj := r.orthoMatrix(0, float32(r.screenWidth), float32(r.screenHeight), 0, -1, 1)
 
+	body(proj)
+
+	// Restore state
+	gl.BindVertexArray(0)
+	gl.BindTexture(gl.TEXTURE_2D, 0)
+	gl.UseProgram(0)
+
+	if prevBlend == gl.FALSE {
+		gl.Disable(gl.BLEND)
+	}
+	if prevDepth == gl.TRUE {
+		gl.Enable(gl.DEPTH_TEST)
+	}
+	if prevCull == gl.TRUE {
+		gl.Enable(gl.CULL_FACE)
+	}
+}
+
+// End finishes the UI frame, drawing whatever is still queued and the overlay
+// above it.
+func (r *Renderer) End() {
+	r.withDrawState(func(proj [16]float32) {
+		r.drawQueuedBatches(proj)
+		r.drawOverlay(proj)
+	})
+}
+
+// drawQueuedBatches draws the three ordinary layers in their fixed order.
+func (r *Renderer) drawQueuedBatches(proj [16]float32) {
 	// Render image quads first (window skins, scene textures, etc).
 	// Solid quads paint on top so structural rectangles — buttons, input
 	// fields, separators — aren't buried under skin backgrounds. Order is:
@@ -231,9 +283,13 @@ func (r *Renderer) End() {
 		gl.DrawArrays(gl.TRIANGLES, 0, int32(len(r.textVertices)/9)) // 9 floats per vertex (pos3 + uv2 + color4)
 	}
 
-	// The overlay goes over the lot. It shares the image shader and buffers;
-	// re-uploading replaces what the image pass put there, which has already
-	// been drawn.
+}
+
+// drawOverlay draws the topmost layer — the cursor.
+//
+// It shares the image shader and buffers; re-uploading replaces what the
+// image pass put there, which has already been drawn.
+func (r *Renderer) drawOverlay(proj [16]float32) {
 	if len(r.overlayDrawCalls) > 0 {
 		gl.UseProgram(r.imageShader)
 		projLoc := gl.GetUniformLocation(r.imageShader, gl.Str("uProjection\x00"))
@@ -251,21 +307,6 @@ func (r *Renderer) End() {
 			gl.BindTexture(gl.TEXTURE_2D, dc.textureID)
 			gl.DrawArrays(gl.TRIANGLES, int32(dc.vertStart), int32(dc.vertCount))
 		}
-	}
-
-	// Restore state
-	gl.BindVertexArray(0)
-	gl.BindTexture(gl.TEXTURE_2D, 0)
-	gl.UseProgram(0)
-
-	if prevBlend == gl.FALSE {
-		gl.Disable(gl.BLEND)
-	}
-	if prevDepth == gl.TRUE {
-		gl.Enable(gl.DEPTH_TEST)
-	}
-	if prevCull == gl.TRUE {
-		gl.Enable(gl.CULL_FACE)
 	}
 }
 

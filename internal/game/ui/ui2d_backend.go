@@ -969,6 +969,15 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 	b.drawMinimap(state, width)
 	b.drawChat(state, height)
 	b.drawHotkeys(width, height)
+
+	// Everything above is the HUD, everything below is a window over it.
+	//
+	// Drawn and cleared here so the two are separate layers. The passes are
+	// global — image, then solid, then text — so without this the HUD's
+	// labels are drawn after every window's background whatever the call
+	// order, and the panel's text floated over the map.
+	b.ctx.Renderer().Flush()
+
 	b.drawEscMenu(width, height)
 	b.drawSoundConfig(width, height)
 	b.drawStatsWindow(state, width, height)

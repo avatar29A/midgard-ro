@@ -49,6 +49,10 @@ const (
 )
 
 var (
+	// escBackdrop dims the game behind the menu, enough to say the menu has
+	// the screen without hiding where you were standing.
+	escBackdrop = ui2d.Color{R: 0, G: 0, B: 0, A: 0.45}
+
 	escBorder   = ui2d.Color{R: 0.694, G: 0.694, B: 0.694, A: 1}
 	escFace     = ui2d.Color{R: 0.953, G: 0.953, B: 0.953, A: 1}
 	escFaceHot  = ui2d.Color{R: 0.855, G: 0.894, B: 0.969, A: 1}
@@ -105,6 +109,13 @@ func (b *UI2DBackend) drawEscMenu(screenW, screenH float32) {
 		return
 	}
 
+	// The backdrop, dimming the game behind the menu.
+	//
+	// Filled in the image pass rather than with DrawRect: solid quads paint
+	// over every image in the frame, so a backdrop drawn as one would land on
+	// top of the very window it is meant to sit behind — title bar and all.
+	b.ctx.Renderer().FillImageLayer(0, 0, screenW, screenH, escBackdrop)
+
 	// Only where it opens: once dragged, the window keeps its own position.
 	openX := (screenW - escMenuW) / 2
 	openY := (screenH - escMenuH) / 2
@@ -121,9 +132,12 @@ func (b *UI2DBackend) drawEscMenu(screenW, screenH float32) {
 		x, y = rect.X, rect.Y
 	}
 
-	// The whole menu claims the pointer: a click meant for a button must not
-	// also walk the character to whatever is behind it.
-	b.ctx.CaptureMouse(ui2d.Rect{X: x, Y: y, W: escMenuW, H: escMenuH})
+	// The whole screen claims the pointer while the menu is up: a click meant
+	// for a button must not also walk the character, and neither should the
+	// click that dismisses the menu.
+	b.ctx.CaptureMouse(ui2d.Rect{X: 0, Y: 0, W: screenW, H: screenH})
+
+	b.closeOnClickOutside(ui2d.Rect{X: x, Y: y, W: escMenuW, H: escMenuH})
 
 	btnX := x + escPad
 	btnY := y + ui2d.FrameTitleH + escPad
@@ -184,4 +198,29 @@ func (b *UI2DBackend) drawEscButton(box ui2d.Rect, label string, disabled bool) 
 
 	capW, capH := r.MeasureText(label, escLabelScale)
 	r.DrawText(box.X+(box.W-capW)/2, box.Y+(box.H-capH)/2, label, escLabelScale, text)
+}
+
+// closeOnClickOutside shuts the menu when the pointer is pressed away from it.
+//
+// The sound dialog is opened from this menu and is its own window elsewhere on
+// screen, so a press inside that one is not outside this one — closing the
+// menu out from under the dialog it opened would be its own small bug.
+func (b *UI2DBackend) closeOnClickOutside(menu ui2d.Rect) {
+	if !b.ctx.Input().MouseLeftPressed {
+		return
+	}
+
+	mouseX, mouseY := b.ctx.Input().MouseX, b.ctx.Input().MouseY
+	if menu.Contains(mouseX, mouseY) {
+		return
+	}
+
+	if b.soundOpen {
+		if rect, ok := b.ctx.WindowRect(soundWindowID); ok && rect.Contains(mouseX, mouseY) {
+			return
+		}
+	}
+
+	b.escOpen = false
+	b.soundOpen = false
 }
