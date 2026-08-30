@@ -624,11 +624,26 @@ listed there — the `@` list does not carry over.
   (`clif.cpp:6697`), which the original paints **green**, not yellow — it maps
   to `PUBLIC|SELF` (roBrowser `Main.js:65`). Our client currently paints these
   yellow.
-- **A handful of commands answer on `ZC_NPC_CHAT` `0x02C1` instead**
-  (`@rates`, `@mobinfo`, `@iteminfo` — 7 call sites in `atcommand.cpp` against
-  1035 for the plain path). That packet carries its colour as **BGR**, already
-  swapped at startup (`clif.cpp:25863`). Reading it as RGB turns rAthena's
-  light green `0xB5FFB5` into a light pink.
+- **A handful of commands answer on `ZC_NPC_CHAT` `0x02C1` instead** — 7 call
+  sites in `atcommand.cpp` against 1035 for the plain path. That packet
+  carries its colour as **BGR**, already swapped at startup
+  (`clif.cpp:25863`). Reading it as RGB turns rAthena's light green
+  `0xB5FFB5` into a light pink.
+
+  **Corrected 2026-08-31.** This previously named `@rates`, `@mobinfo` and
+  `@iteminfo`. At our pinned SHA none of those use it — `@rates` calls
+  `clif_displaymessage` four times (`atcommand.cpp:8843`). The 7 call sites
+  belong to `@cash`, `@points`, `@request` and `@auction`. The count was
+  right; the commands were not.
+
+  Worth knowing before trying to see one: **every one of them is gated.**
+  `@cash` and `@points` reach `clif_messagecolor` only when
+  `battle_config.cashshop_show_points` is *off*, and it is on by default — so
+  a successful `@cash 100` reports through `pc_getcash` on `0x008E` and the
+  coloured branch never runs. `@request` needs a GM online to receive it;
+  `@auction` needs auctions enabled. On a default server there is no easy way
+  to make `0x02C1` appear, which is why our decoder for it is proved by unit
+  test rather than by a live packet.
 - **`ZC_BROADCAST` `0x009A` encodes colour as literal text at the front of the
   message** — `"blue"` for blue, `"ssss"` for the WoE style, anything else
   yellow (`clif.cpp:6722-6735`). Strip it, or `@kamib hi` renders as "bluehi".
