@@ -43,3 +43,91 @@ func DecodeUserCount(data []byte) (int, bool) {
 
 	return int(count), true
 }
+
+// The three `/` commands the original client sends as packets of their own.
+//
+// All three are GM commands, and the server turns each one straight back into
+// the atcommand it stands for: 0x0140 becomes @mapmove (clif_parse_MapMove),
+// 0x0099 becomes @kami (clif_parse_Broadcast), 0x019C becomes @lkami
+// (clif_parse_LocalBroadcast). Sending the atcommand text instead would work
+// for a GM and be *broadcast to the map* for anyone else, because a refused
+// command falls through to ordinary chat. As packets they are refused in
+// silence, which is what the original does and the reason these exist.
+const (
+	// CZ_MOVETO_MAP is /mm — warp to a map and cell.
+	//
+	//	0140 <map>.16B <x>.W <y>.W
+	//
+	// 22 bytes fixed. The name field is MAP_NAME_LENGTH_EXT (16) and the
+	// server reads it with safestrncpy, so it must hold a terminator.
+	CZ_MOVETO_MAP uint16 = 0x0140
+
+	// CZ_BROADCAST is /b — announce to the whole server.
+	//
+	//	0099 <len>.W <message>.?B
+	CZ_BROADCAST uint16 = 0x0099
+
+	// CZ_LOCALBROADCAST is /lb — announce on this map only.
+	//
+	//	019c <len>.W <message>.?B
+	CZ_LOCALBROADCAST uint16 = 0x019C
+)
+
+// mapNameLen is MAP_NAME_LENGTH_EXT from the server (mmo.hpp), the width of
+// the map field in CZ_MOVETO_MAP.
+const mapNameLen = 16
+
+// EncodeMapMove builds the /mm request.
+//
+// Returns nil when the name is missing or too long to be terminated inside
+// the field, since the server would read a truncated name and warp somewhere
+// else — a silent wrong answer being worse than no packet at all.
+func EncodeMapMove(mapName string, x, y uint16) []byte {
+	if mapName == "" || len(mapName) >= mapNameLen {
+		return nil
+	}
+
+	const length = 4 + mapNameLen + 2
+
+	pkt := make([]byte, length)
+	writeU16(pkt, 0, CZ_MOVETO_MAP)
+	copy(pkt[2:2+mapNameLen], mapName)
+	writeU16(pkt, 2+mapNameLen, x)
+	writeU16(pkt, 4+mapNameLen, y)
+
+	return pkt
+}
+
+// EncodeBroadcast builds /b, and EncodeLocalBroadcast builds /lb. They differ
+// only in the id.
+func EncodeBroadcast(message string) []byte {
+	return encodeBroadcast(CZ_BROADCAST, message)
+}
+
+// EncodeLocalBroadcast builds the /lb request.
+func EncodeLocalBroadcast(message string) []byte {
+	return encodeBroadcast(CZ_LOCALBROADCAST, message)
+}
+
+// encodeBroadcast builds either broadcast packet.
+//
+// The declared size is the header plus the message and no terminator: the
+// server copies `packetSize - sizeof(header) + 1` bytes with safestrncpy,
+// which writes its own NUL, so an exact fit is what its arithmetic expects.
+//
+// Returns nil for an empty message. The server would accept it and announce
+// nothing, which is a packet spent to no effect.
+func encodeBroadcast(id uint16, message string) []byte {
+	if message == "" {
+		return nil
+	}
+
+	length := 4 + len(message)
+
+	pkt := make([]byte, length)
+	writeU16(pkt, 0, id)
+	writeU16(pkt, 2, uint16(length))
+	copy(pkt[4:], message)
+
+	return pkt
+}

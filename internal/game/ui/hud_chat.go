@@ -137,12 +137,21 @@ var chatTabs = []string{"Public", "Battle"}
 // Chat colors. RO tints a line by where it came from, which is how you tell
 // your own words from someone else's at a glance.
 var (
-	// What someone said, whether that is us or anyone else.
+	// What someone else said. Everything with no color of its own falls
+	// back to this.
 	chatColorMessage = ui2d.Color{R: 1, G: 1, B: 1, A: 1}
-	// The server talking: welcome lines, announcements, notices.
-	chatColorSystem = ui2d.Color{R: 1, G: 0.92, B: 0.25, A: 1}
+	// Our own words, and the server's answer to an @ command. Both are
+	// PUBLIC|SELF to the original, which paints that green — the single most
+	// visible correction in #94's step 5, since we painted it yellow.
+	chatColorSelf = ui2d.Color{R: 0, G: 1, B: 0, A: 1}
 	// A private message.
-	chatColorWhisper = ui2d.Color{R: 0.78, G: 0.55, B: 1, A: 1}
+	chatColorWhisper = ui2d.Color{R: 1, G: 1, B: 0, A: 1}
+	// A notice the client wrote itself — what /where prints, what /bgm says
+	// it did. The original's INFO color, a yellow lightened away from the
+	// whisper's so the two do not read as the same line.
+	chatColorNotice = ui2d.Color{R: 1, G: 1, B: 0.388, A: 1}
+	// A command that could not run.
+	chatColorError = ui2d.Color{R: 1, G: 0, B: 0, A: 1}
 	// Battle lines. Nothing routes here yet — the combat packets are Track F
 	// — but the color belongs with the others rather than in that work.
 	chatColorDamage  = ui2d.Color{R: 1, G: 0.3, B: 0.3, A: 1}
@@ -175,23 +184,55 @@ var (
 	chatLockOn = ui2d.Color{R: 0.35, G: 0.35, B: 0.38, A: 1}
 )
 
-// chatKindColor is the color a line is drawn in.
+// chatLineColor is the color a line is drawn in.
 //
-// The palette is the one #93 shipped, and it is knowingly not the original's:
-// server replies should be green rather than yellow and whispers yellow rather
-// than purple. Correcting it is step 5 of #94, which carries the reference to
-// prove it against. This function only had to learn the new kind type.
+// A color the server chose wins over the kind. Only ZC_NPC_CHAT and
+// ZC_BROADCAST carry one, and for those the server has already decided —
+// @cash picks its own green, a blue broadcast is blue — so overriding it
+// with the kind's color would discard the thing the packet exists to say.
+func chatLineColor(line states.ChatLine) ui2d.Color {
+	if line.HasColor {
+		return rgbColor(line.Color)
+	}
+
+	return chatKindColor(line.Kind)
+}
+
+// rgbColor turns a packed 0xRRGGBB into a drawable color.
+func rgbColor(rgb uint32) ui2d.Color {
+	return ui2d.Color{
+		R: float32((rgb>>16)&0xFF) / 255,
+		G: float32((rgb>>8)&0xFF) / 255,
+		B: float32(rgb&0xFF) / 255,
+		A: 1,
+	}
+}
+
+// chatKindColor is the color a line with no color of its own is drawn in.
+//
+// The palette is the original's, as roBrowser transcribes it and rAthena's own
+// color table confirms: our words and the server's replies green, other
+// people white, whispers yellow, errors red, notices light yellow.
 func chatKindColor(kind states.ChatKind) ui2d.Color {
 	switch kind {
-	case states.ChatSystem, states.ChatBroadcast, states.ChatNotice:
-		return chatColorSystem
+	case states.ChatSelf, states.ChatSystem:
+		// Both are PUBLIC|SELF to the original. ChatSystem is every reply to
+		// an @ command, which is what makes this the visible half of the fix.
+		return chatColorSelf
 	case states.ChatWhisper:
 		return chatColorWhisper
-	case states.ChatDamage, states.ChatError:
+	case states.ChatNotice:
+		return chatColorNotice
+	case states.ChatError:
+		return chatColorError
+	case states.ChatDamage:
 		return chatColorDamage
+	case states.ChatBroadcast:
+		// Only reached when the decoder found no marker to read a color
+		// from, which it always does — kept so the switch is total.
+		return chatColorNotice
 	default:
-		// Anything a person said, ours or theirs — including the echo of a
-		// command, which is the player's own words too.
+		// Someone else speaking.
 		return chatColorMessage
 	}
 }
@@ -202,7 +243,7 @@ func chatKindColor(kind states.ChatKind) ui2d.Color {
 // splits it out of the message rather than leaving the line whole. A line with
 // no speaker — a server message — is one run.
 func chatRuns(line states.ChatLine) []TextRun {
-	body := TextRun{Text: line.Text, Color: chatKindColor(line.Kind)}
+	body := TextRun{Text: line.Text, Color: chatLineColor(line)}
 
 	if line.Speaker == "" {
 		return []TextRun{body}

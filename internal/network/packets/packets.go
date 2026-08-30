@@ -650,6 +650,11 @@ func readU32(data []byte, offset int) uint32 {
 		uint32(data[offset+2])<<16 | uint32(data[offset+3])<<24
 }
 
+func writeU16(buf []byte, offset int, v uint16) {
+	buf[offset] = byte(v)
+	buf[offset+1] = byte(v >> 8)
+}
+
 func writeU32(buf []byte, offset int, v uint32) {
 	buf[offset] = byte(v)
 	buf[offset+1] = byte(v >> 8)
