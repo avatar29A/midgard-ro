@@ -296,3 +296,131 @@ func TestWhisperFailureOnlyForFailures(t *testing.T) {
 		t.Errorf("WhisperFailure(unknown) = %q, want empty", got)
 	}
 }
+
+// broadcastPacket builds a ZC_BROADCAST carrying exactly text.
+func broadcastPacket(text string) []byte {
+	pkt := make([]byte, 4+len(text))
+	binary.LittleEndian.PutUint16(pkt[0:2], ZC_BROADCAST)
+	binary.LittleEndian.PutUint16(pkt[2:4], uint16(len(pkt)))
+	copy(pkt[4:], text)
+
+	return pkt
+}
+
+// TestDecodeBroadcastStripsTheColorMarker: ZC_BROADCAST has no colour field.
+// The server puts a literal word at the front of the message and expects the
+// client to cut it off. Leaving it in renders a blue "hi" as "bluehi".
+func TestDecodeBroadcastStripsTheColorMarker(t *testing.T) {
+	tests := []struct {
+		name      string
+		wire      string
+		wantText  string
+		wantColor uint32
+	}{
+		{"blue marker", "bluehello", "hello", BroadcastColorBlue},
+		{"WoE marker", "sssshello", "hello", BroadcastColorYellow},
+		{"no marker", "hello", "hello", BroadcastColorYellow},
+
+		// The marker is only a marker at the very start.
+		{"marker word later in the line", "the sky is blue", "the sky is blue", BroadcastColorYellow},
+
+		// The protocol cannot tell a marker from the first four letters of a
+		// sentence, and neither can the original client. Pinned so the
+		// behaviour is a decision rather than a surprise.
+		{"message that begins with the marker word", "blueberries", "berries", BroadcastColorBlue},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := DecodeBroadcast(broadcastPacket(tt.wire))
+			if msg == nil {
+				t.Fatal("DecodeBroadcast returned nil")
+			}
+			if msg.Text != tt.wantText {
+				t.Errorf("text = %q, want %q", msg.Text, tt.wantText)
+			}
+			if !msg.HasColor {
+				t.Fatal("HasColor is false; a broadcast always resolves to a colour")
+			}
+			if msg.Color != tt.wantColor {
+				t.Errorf("color = 0x%06X, want 0x%06X", msg.Color, tt.wantColor)
+			}
+			if msg.Kind != ChatBroadcast {
+				t.Errorf("kind = %d, want ChatBroadcast", msg.Kind)
+			}
+		})
+	}
+}
+
+// TestDecodeNPCChatSwapsBGR: clif_messagecolor_target swaps rAthena's RGB to
+// BGR before sending. Reading it back as RGB turns the server's light green
+// into pink, which is the whole reason this decoder exists.
+func TestDecodeNPCChatSwapsBGR(t *testing.T) {
+	const text = "Gained 100 cash points. Total 100 points."
+
+	// An asymmetric colour on purpose. rAthena's light green 0xB5FFB5 is the
+	// realistic value but its red and blue bytes are equal, so a decoder that
+	// forgot to swap would pass with it and fail in the field.
+	const wantRGB uint32 = 0xFF8800
+	const onWire uint32 = 0x0088FF
+
+	pkt := make([]byte, 12+len(text))
+	binary.LittleEndian.PutUint16(pkt[0:2], ZC_NPC_CHAT)
+	binary.LittleEndian.PutUint16(pkt[2:4], uint16(len(pkt)))
+	binary.LittleEndian.PutUint32(pkt[4:8], 2000000)
+	binary.LittleEndian.PutUint32(pkt[8:12], onWire)
+	copy(pkt[12:], text)
+
+	msg := DecodeNPCChat(pkt)
+	if msg == nil {
+		t.Fatal("DecodeNPCChat returned nil")
+	}
+	if msg.Text != text {
+		t.Errorf("text = %q, want %q", msg.Text, text)
+	}
+	if msg.Color != wantRGB {
+		t.Errorf("color = 0x%06X, want 0x%06X", msg.Color, wantRGB)
+	}
+	if !msg.HasColor {
+		t.Error("HasColor is false; the packet exists to carry one")
+	}
+	if msg.GID != 2000000 {
+		t.Errorf("GID = %d, want 2000000", msg.GID)
+	}
+}
+
+// TestBGRSwapIsItsOwnInverse: the server applies the same expression we do, so
+// applying it twice must give back what went in. An asymmetric colour is the
+// only kind that proves it.
+func TestBGRSwapIsItsOwnInverse(t *testing.T) {
+	const rgb uint32 = 0x123456
+
+	if got := bgrToRGB(rgb); got != 0x563412 {
+		t.Errorf("bgrToRGB(0x%06X) = 0x%06X, want 0x563412", rgb, got)
+	}
+	if got := bgrToRGB(bgrToRGB(rgb)); got != rgb {
+		t.Errorf("swapping twice gave 0x%06X, want 0x%06X", got, rgb)
+	}
+}
+
+// TestDecodeNPCChatRefusesShortData: the header alone is 12 bytes.
+func TestDecodeNPCChatRefusesShortData(t *testing.T) {
+	if DecodeNPCChat(make([]byte, 11)) != nil {
+		t.Error("decoded a packet too short to hold the header")
+	}
+	if DecodeNPCChat(nil) != nil {
+		t.Error("decoded nil")
+	}
+}
+
+// TestNPCChatIsFramed: 0x02C1 is variable-length, and the framing layer needs
+// to know that or the stream desynchronizes the first time one arrives.
+func TestNPCChatIsFramed(t *testing.T) {
+	size, ok := Length(ZC_NPC_CHAT)
+	if !ok {
+		t.Fatal("0x02C1 has no length: the framing layer will lose the stream")
+	}
+	if size != -1 {
+		t.Errorf("0x02C1 length = %d, want -1 (variable)", size)
+	}
+}

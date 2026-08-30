@@ -77,6 +77,12 @@ type ChatLine struct {
 	Kind    ChatKind
 	Speaker string
 	Text    string
+
+	// Color is an RGB the server chose for this line, overriding the one the
+	// kind would give it. Valid only when HasColor is set — black is a colour
+	// a server can send, so zero cannot mean "unset".
+	Color    uint32
+	HasColor bool
 }
 
 // ChatLog is the bounded scrollback behind the chat box.
@@ -95,9 +101,11 @@ func (l *ChatLog) Add(msg *packets.ChatMessage) {
 	}
 
 	l.append(ChatLine{
-		Kind:    chatKindFromPacket(msg.Kind),
-		Speaker: msg.Speaker,
-		Text:    msg.Text,
+		Kind:     chatKindFromPacket(msg.Kind),
+		Speaker:  msg.Speaker,
+		Text:     msg.Text,
+		Color:    msg.Color,
+		HasColor: msg.HasColor,
 	})
 }
 
