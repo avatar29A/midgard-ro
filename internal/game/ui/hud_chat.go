@@ -137,7 +137,7 @@ var chatTabs = []string{"Public", "Battle"}
 // Chat colors. RO tints a line by where it came from, which is how you tell
 // your own words from someone else's at a glance.
 var (
-	// What someone else said. Everything with no colour of its own falls
+	// What someone else said. Everything with no color of its own falls
 	// back to this.
 	chatColorMessage = ui2d.Color{R: 1, G: 1, B: 1, A: 1}
 	// Our own words, and the server's answer to an @ command. Both are
@@ -147,7 +147,7 @@ var (
 	// A private message.
 	chatColorWhisper = ui2d.Color{R: 1, G: 1, B: 0, A: 1}
 	// A notice the client wrote itself — what /where prints, what /bgm says
-	// it did. The original's INFO colour, a yellow lightened away from the
+	// it did. The original's INFO color, a yellow lightened away from the
 	// whisper's so the two do not read as the same line.
 	chatColorNotice = ui2d.Color{R: 1, G: 1, B: 0.388, A: 1}
 	// A command that could not run.
@@ -186,10 +186,10 @@ var (
 
 // chatLineColor is the color a line is drawn in.
 //
-// A colour the server chose wins over the kind. Only ZC_NPC_CHAT and
+// A color the server chose wins over the kind. Only ZC_NPC_CHAT and
 // ZC_BROADCAST carry one, and for those the server has already decided —
 // @cash picks its own green, a blue broadcast is blue — so overriding it
-// with the kind's colour would discard the thing the packet exists to say.
+// with the kind's color would discard the thing the packet exists to say.
 func chatLineColor(line states.ChatLine) ui2d.Color {
 	if line.HasColor {
 		return rgbColor(line.Color)
@@ -208,10 +208,10 @@ func rgbColor(rgb uint32) ui2d.Color {
 	}
 }
 
-// chatKindColor is the color a line with no colour of its own is drawn in.
+// chatKindColor is the color a line with no color of its own is drawn in.
 //
 // The palette is the original's, as roBrowser transcribes it and rAthena's own
-// colour table confirms: our words and the server's replies green, other
+// color table confirms: our words and the server's replies green, other
 // people white, whispers yellow, errors red, notices light yellow.
 func chatKindColor(kind states.ChatKind) ui2d.Color {
 	switch kind {
@@ -228,7 +228,7 @@ func chatKindColor(kind states.ChatKind) ui2d.Color {
 	case states.ChatDamage:
 		return chatColorDamage
 	case states.ChatBroadcast:
-		// Only reached when the decoder found no marker to read a colour
+		// Only reached when the decoder found no marker to read a color
 		// from, which it always does — kept so the switch is total.
 		return chatColorNotice
 	default:

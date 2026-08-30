@@ -307,7 +307,7 @@ func broadcastPacket(text string) []byte {
 	return pkt
 }
 
-// TestDecodeBroadcastStripsTheColorMarker: ZC_BROADCAST has no colour field.
+// TestDecodeBroadcastStripsTheColorMarker: ZC_BROADCAST has no color field.
 // The server puts a literal word at the front of the message and expects the
 // client to cut it off. Leaving it in renders a blue "hi" as "bluehi".
 func TestDecodeBroadcastStripsTheColorMarker(t *testing.T) {
@@ -326,7 +326,7 @@ func TestDecodeBroadcastStripsTheColorMarker(t *testing.T) {
 
 		// The protocol cannot tell a marker from the first four letters of a
 		// sentence, and neither can the original client. Pinned so the
-		// behaviour is a decision rather than a surprise.
+		// behavior is a decision rather than a surprise.
 		{"message that begins with the marker word", "blueberries", "berries", BroadcastColorBlue},
 	}
 
@@ -340,7 +340,7 @@ func TestDecodeBroadcastStripsTheColorMarker(t *testing.T) {
 				t.Errorf("text = %q, want %q", msg.Text, tt.wantText)
 			}
 			if !msg.HasColor {
-				t.Fatal("HasColor is false; a broadcast always resolves to a colour")
+				t.Fatal("HasColor is false; a broadcast always resolves to a color")
 			}
 			if msg.Color != tt.wantColor {
 				t.Errorf("color = 0x%06X, want 0x%06X", msg.Color, tt.wantColor)
@@ -358,7 +358,7 @@ func TestDecodeBroadcastStripsTheColorMarker(t *testing.T) {
 func TestDecodeNPCChatSwapsBGR(t *testing.T) {
 	const text = "Gained 100 cash points. Total 100 points."
 
-	// An asymmetric colour on purpose. rAthena's light green 0xB5FFB5 is the
+	// An asymmetric color on purpose. rAthena's light green 0xB5FFB5 is the
 	// realistic value but its red and blue bytes are equal, so a decoder that
 	// forgot to swap would pass with it and fail in the field.
 	const wantRGB uint32 = 0xFF8800
@@ -390,7 +390,7 @@ func TestDecodeNPCChatSwapsBGR(t *testing.T) {
 }
 
 // TestBGRSwapIsItsOwnInverse: the server applies the same expression we do, so
-// applying it twice must give back what went in. An asymmetric colour is the
+// applying it twice must give back what went in. An asymmetric color is the
 // only kind that proves it.
 func TestBGRSwapIsItsOwnInverse(t *testing.T) {
 	const rgb uint32 = 0x123456

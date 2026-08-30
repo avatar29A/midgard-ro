@@ -25,7 +25,7 @@ const (
 	// ZC_WHISPER is a private message. The id moves with the packet version;
 	// 0x09DE is ours, not the 0x0097 older clients use.
 	ZC_WHISPER uint16 = 0x09DE
-	// ZC_NPC_CHAT carries a line with the colour the server picked for it.
+	// ZC_NPC_CHAT carries a line with the color the server picked for it.
 	// A handful of commands answer this way instead of on 0x008E — @cash,
 	// @points, @request and @auction, 7 call sites against 1035 for the
 	// plain path. All four are gated behind server config we do not set, so
@@ -70,12 +70,12 @@ type ChatMessage struct {
 	Text string
 
 	// Color is an RGB the server chose for this line, valid only when
-	// HasColor is set. Carried as a plain number rather than a colour type
+	// HasColor is set. Carried as a plain number rather than a color type
 	// because this layer has no business knowing how anything is drawn.
 	Color uint32
 
-	// HasColor says the server picked a colour rather than leaving it to the
-	// kind. Distinguishing this from Color == 0 matters: black is a colour
+	// HasColor says the server picked a color rather than leaving it to the
+	// kind. Distinguishing this from Color == 0 matters: black is a color
 	// the server can legitimately send.
 	HasColor bool
 }
@@ -173,9 +173,9 @@ func trimName(raw []byte) string {
 	return string(raw)
 }
 
-// Broadcast colours.
+// Broadcast colors.
 //
-// ZC_BROADCAST has no colour field. The server encodes one as a literal word
+// ZC_BROADCAST has no color field. The server encodes one as a literal word
 // at the front of the message and the client is expected to recognize it and
 // cut it off (clif_broadcast). Only these two exact words, only at the very
 // start; anything else is an ordinary yellow announcement.
@@ -187,7 +187,7 @@ const (
 
 	// BroadcastColorBlue and BroadcastColorYellow are what those two stand
 	// for. WoE lines are yellow like an ordinary announcement — the marker
-	// distinguishes the event, not the colour.
+	// distinguishes the event, not the color.
 	BroadcastColorBlue   uint32 = 0x00FFFF
 	BroadcastColorYellow uint32 = 0xFFFF00
 )
@@ -195,7 +195,7 @@ const (
 // DecodeBroadcast parses a server-wide announcement (ZC_BROADCAST).
 // Returns nil on short data.
 //
-// The colour marker is stripped here rather than left for the UI. It is not
+// The color marker is stripped here rather than left for the UI. It is not
 // text anyone should see: leaving it in renders "@kami hi" from a blue
 // broadcast as "bluehi".
 //
@@ -227,12 +227,12 @@ func DecodeBroadcast(data []byte) *ChatMessage {
 	}
 }
 
-// DecodeNPCChat parses a line carrying its own colour (ZC_NPC_CHAT).
+// DecodeNPCChat parses a line carrying its own color (ZC_NPC_CHAT).
 // Returns nil on short data.
 //
 //	02c1 <len>.W <GID>.L <color>.L <message>.?B
 //
-// The colour arrives as BGR. clif_messagecolor_target swaps rAthena's RGB
+// The color arrives as BGR. clif_messagecolor_target swaps rAthena's RGB
 // before sending it, so reading it back as RGB turns the server's light green
 // into pink. The swap is its own inverse, which is why the same expression
 // undoes it.
@@ -252,7 +252,7 @@ func DecodeNPCChat(data []byte) *ChatMessage {
 	}
 }
 
-// bgrToRGB swaps the red and blue bytes of a 24-bit colour, discarding
+// bgrToRGB swaps the red and blue bytes of a 24-bit color, discarding
 // anything above them.
 func bgrToRGB(v uint32) uint32 {
 	return (v&0x0000FF)<<16 | (v & 0x00FF00) | (v&0xFF0000)>>16

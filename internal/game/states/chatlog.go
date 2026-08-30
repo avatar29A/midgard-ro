@@ -79,7 +79,7 @@ type ChatLine struct {
 	Text    string
 
 	// Color is an RGB the server chose for this line, overriding the one the
-	// kind would give it. Valid only when HasColor is set — black is a colour
+	// kind would give it. Valid only when HasColor is set — black is a color
 	// a server can send, so zero cannot mean "unset".
 	Color    uint32
 	HasColor bool
