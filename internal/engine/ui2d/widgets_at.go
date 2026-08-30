@@ -551,7 +551,7 @@ func (c *Context) FillEllipseImageLayer(x, y, w, h float32, color Color) {
 			continue
 		}
 
-		c.renderer.FillImageLayer(cx-half, cy+dy, half*2, 1, color)
+		c.renderer.DrawRect(cx-half, cy+dy, half*2, 1, color)
 	}
 }
 

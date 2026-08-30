@@ -61,7 +61,6 @@ func (b *UI2DBackend) drawSkillsWindow(state InGameUIState, screenW, screenH flo
 	// body is filled below in the image layer instead, before the icons, so
 	// the two stack in the order they are drawn.
 	opts := ui2d.DefaultWindowOptions()
-	opts.BitmapBody = true
 
 	if !b.ctx.BeginWindowEx(skillsWindowID, openX, openY, skillsW, skillsH, "Skill Tree", opts) {
 		if b.ctx.WindowClosed(skillsWindowID) {
@@ -79,7 +78,7 @@ func (b *UI2DBackend) drawSkillsWindow(state InGameUIState, screenW, screenH flo
 	b.ctx.CaptureMouse(ui2d.Rect{X: x, Y: y, W: skillsW, H: skillsH})
 
 	bodyY := y + ui2d.FrameTitleH
-	b.ctx.Renderer().FillImageLayer(x, bodyY, skillsW, skillsH-ui2d.FrameTitleH, ui2d.ColorWindowBody)
+	b.ctx.Renderer().DrawRect(x, bodyY, skillsW, skillsH-ui2d.FrameTitleH, ui2d.ColorWindowBody)
 
 	b.drawSkillRows(state, x, y)
 	b.drawSkillFooter(state, x, y)
@@ -177,7 +176,7 @@ func (b *UI2DBackend) drawSkillIcon(id uint16, x, y float32) {
 	// The cell is filled in the image layer, before the icon: the icons are
 	// pale line art meant for a grey panel, and on a white body they all but
 	// vanish. A DrawRect would not do — solid quads paint over every image.
-	r.FillImageLayer(x, y, skillsIcon, skillsIcon, skillsIconBg)
+	r.DrawRect(x, y, skillsIcon, skillsIcon, skillsIconBg)
 
 	if icon != 0 {
 		r.DrawImage(icon, x+1, y+1, skillsIcon-2, skillsIcon-2, ui2d.ColorWhite)

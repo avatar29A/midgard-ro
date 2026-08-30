@@ -114,7 +114,7 @@ func (b *UI2DBackend) drawEscMenu(screenW, screenH float32) {
 	// Filled in the image pass rather than with DrawRect: solid quads paint
 	// over every image in the frame, so a backdrop drawn as one would land on
 	// top of the very window it is meant to sit behind — title bar and all.
-	b.ctx.Renderer().FillImageLayer(0, 0, screenW, screenH, escBackdrop)
+	b.ctx.Renderer().DrawRect(0, 0, screenW, screenH, escBackdrop)
 
 	// Only where it opens: once dragged, the window keeps its own position.
 	openX := (screenW - escMenuW) / 2

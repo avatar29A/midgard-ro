@@ -73,7 +73,6 @@ func (b *UI2DBackend) drawItemsWindow(state InGameUIState, screenW, screenH floa
 	// The body is filled in the image layer below, so the icons are not
 	// buried under a solid one.
 	opts := ui2d.DefaultWindowOptions()
-	opts.BitmapBody = true
 
 	if !b.ctx.BeginWindowEx(itemsWindowID, openX, openY, itemsW, itemsH, "Inventory", opts) {
 		if b.ctx.WindowClosed(itemsWindowID) {
@@ -91,7 +90,7 @@ func (b *UI2DBackend) drawItemsWindow(state InGameUIState, screenW, screenH floa
 	b.ctx.CaptureMouse(ui2d.Rect{X: x, Y: y, W: itemsW, H: itemsH})
 
 	bodyY := y + ui2d.FrameTitleH
-	b.ctx.Renderer().FillImageLayer(x, bodyY, itemsW, itemsH-ui2d.FrameTitleH, ui2d.ColorWindowBody)
+	b.ctx.Renderer().DrawRect(x, bodyY, itemsW, itemsH-ui2d.FrameTitleH, ui2d.ColorWindowBody)
 
 	b.drawItemTabs(x, bodyY)
 	b.drawItemGrid(state, x, bodyY)
@@ -111,7 +110,7 @@ func (b *UI2DBackend) drawItemTabs(x, bodyY float32) {
 			face = ui2d.ColorWindowBody
 		}
 
-		r.FillImageLayer(box.X, box.Y, box.W, box.H, face)
+		r.DrawRect(box.X, box.Y, box.W, box.H, face)
 
 		// Edged rather than boxed, and in a grey of its own: the panel border
 		// is a dark blue-grey meant for a window's outline, and a full box of
