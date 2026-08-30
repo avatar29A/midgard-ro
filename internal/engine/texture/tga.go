@@ -182,9 +182,43 @@ func ApplyMagentaKey(img *image.RGBA) {
 	}
 }
 
+// wholePalette returns img with a palette long enough for every index its
+// pixels can hold, or img unchanged when it is not paletted.
+//
+// image.Paletted.At indexes the palette with the raw pixel byte and does not
+// range-check it, so a file whose header declares fewer colors than its pixels
+// reference panics the whole client. Morocc's models do exactly that: a
+// 255-entry palette with pixels holding index 255. Which color those pixels
+// were meant to be is not recoverable — the file does not say — so they are
+// made transparent, which is already what this package does with the magenta
+// key and is the least visible way to be wrong.
+//
+// The palette is copied rather than extended in place: the image belongs to
+// the caller, and a decoder may share one palette across several.
+func wholePalette(img image.Image) image.Image {
+	p, ok := img.(*image.Paletted)
+	if !ok || len(p.Palette) >= 256 {
+		return img
+	}
+
+	widened := make(color.Palette, 256)
+	copy(widened, p.Palette)
+	for i := len(p.Palette); i < len(widened); i++ {
+		widened[i] = color.RGBA{}
+	}
+
+	// Same pixels, same rectangle, only the lookup table grows.
+	clone := *p
+	clone.Palette = widened
+
+	return &clone
+}
+
 // ImageToRGBA converts any image.Image to *image.RGBA.
 // If applyMagentaKey is true, magenta pixels are made transparent.
 func ImageToRGBA(img image.Image, applyMagentaKey bool) *image.RGBA {
+	img = wholePalette(img)
+
 	bounds := img.Bounds()
 	rgba := image.NewRGBA(bounds)
 

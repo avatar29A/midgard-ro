@@ -51,6 +51,11 @@ const (
 	// says we are ready: the load's phases and their timings, what was kept
 	// and dropped on the way, and the camera rules the new map brought.
 	Map = "map"
+	// Cmd covers a chat command from the line that was typed to what became
+	// of it. A command that silently does nothing is otherwise
+	// indistinguishable from one that was never recognized, and the two want
+	// opposite fixes.
+	Cmd = "cmd"
 )
 
 // All is the channel spec that turns everything on.

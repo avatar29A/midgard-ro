@@ -1163,6 +1163,7 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_NOTIFY_CHAT, s.handleChat)
 	s.client.RegisterHandler(packets.ZC_NOTIFY_PLAYERCHAT, s.handlePlayerChat)
 	s.client.RegisterHandler(packets.ZC_BROADCAST, s.handleBroadcast)
+	s.client.RegisterHandler(packets.ZC_USER_COUNT, s.handleUserCount)
 	s.client.RegisterHandler(packets.ZC_WHISPER, s.handleWhisper)
 	s.client.RegisterHandler(packets.ZC_ACK_WHISPER, s.handleWhisperAck)
 	s.client.RegisterHandler(packets.ZC_RESTART_ACK, s.handleRestartAck)
@@ -1440,6 +1441,29 @@ func (s *InGameState) handleBroadcast(data []byte) error {
 // handleWhisper handles a private message.
 func (s *InGameState) handleWhisper(data []byte) error {
 	return s.addChat(packets.DecodeWhisper(data))
+}
+
+// handleUserCount prints the answer to /who.
+//
+// The count is the server's to know, so unlike the other / commands this one
+// answers a frame or two later, through here.
+func (s *InGameState) handleUserCount(data []byte) error {
+	count, ok := packets.DecodeUserCount(data)
+	if !ok {
+		logger.Warn("could not read the player count", zap.Int("bytes", len(data)))
+
+		return nil
+	}
+
+	trace.Emit(trace.Cmd, "who-reply", zap.Int("count", count))
+
+	people := "players are"
+	if count == 1 {
+		people = "player is"
+	}
+	s.chat.AddLocal(ChatNotice, fmt.Sprintf("%d %s online.", count, people))
+
+	return nil
 }
 
 // pendingWhisper is a sent private message held until the server says what

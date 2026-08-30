@@ -87,6 +87,35 @@ server-status: ## Show status of rAthena containers
 server-shell-db: ## Open a mariadb shell against the running DB
 	docker exec -it midgard-rathena-db mariadb -uragnarok -pragnarok ragnarok
 
+# GM level lives on the login account, not the character, and the seed only
+# runs on first DB init — so flipping it in the seed alone would need a
+# server-reset and lose the character. These work on a running database. The
+# change takes effect at the next login.
+MIDGARD_ACCOUNT ?= midgard-test
+DB_EXEC = docker exec midgard-rathena-db mariadb -uragnarok -pragnarok ragnarok -e
+
+server-gm: ## Make the test account a GM (group 99 — all 313 commands)
+	@$(DB_EXEC) "UPDATE login SET group_id=99 WHERE userid='$(MIDGARD_ACCOUNT)';"
+	@echo "$(MIDGARD_ACCOUNT) is group 99 (Admin). Log in again for it to apply."
+
+server-player: ## Put the test account back to an ordinary player (group 0)
+	@$(DB_EXEC) "UPDATE login SET group_id=0 WHERE userid='$(MIDGARD_ACCOUNT)';"
+	@echo "$(MIDGARD_ACCOUNT) is group 0 (Player). Log in again for it to apply."
+
+server-group: ## Show the test account's current group
+	@$(DB_EXEC) "SELECT userid, group_id FROM login WHERE userid='$(MIDGARD_ACCOUNT)';"
+
+# Killing a client leaves char.online set and the account authenticated on the
+# login server, so the next run is refused with "Too many connections. Please
+# wait." on the login screen — which looks like a client bug and is not one.
+# Clearing the flag needs the server restart too: the login server holds its
+# own in-memory session list that the database does not reach.
+server-kick: ## Clear a stranded login session after a client was killed
+	@$(DB_EXEC) "UPDATE \`char\` SET online=0 WHERE account_id IN \
+		(SELECT account_id FROM login WHERE userid='$(MIDGARD_ACCOUNT)');"
+	@docker restart midgard-rathena-map midgard-rathena-char midgard-rathena-login >/dev/null
+	@echo "session cleared; give the map server ~20s to come back up"
+
 ## Development
 
 deps: ## Install/update dependencies

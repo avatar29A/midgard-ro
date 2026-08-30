@@ -57,6 +57,17 @@ Each use case follows this standard format:
 - UC-300 to UC-399: Network layer (client, packets)
 - UC-400 to UC-499: Asset layer (asset loading, caching)
 
+**Claim a number against `origin/main`, not your branch:**
+
+```bash
+git fetch origin && git ls-tree --name-only origin/main qa/use-cases/ | sort | tail -3
+```
+
+Two features planned in parallel worktrees both took "the next free number" at
+the same time and both merged, so UC-211 and UC-212 each named two different
+use cases until #94 renumbered the warp pair to UC-214 and UC-215. A local
+listing cannot see a number a sibling branch has already taken.
+
 ### Priority Levels
 
 - **Critical**: Core functionality that blocks all other features

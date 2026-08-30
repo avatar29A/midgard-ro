@@ -105,6 +105,11 @@ type Manager struct {
 	// tolerate so states never have to check.
 	BGM BGMController
 
+	// CommandHost lends the / commands what the states cannot reach — the
+	// audio settings, which live on Game along with the file they persist to.
+	// Nil when unset; commands that need it say so.
+	CommandHost CommandHost
+
 	// mapRules holds the camera tables once read; see MapRules.
 	mapRules mapRulesOnce
 }

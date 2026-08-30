@@ -71,10 +71,87 @@ func TestChatLogKeepsSpeakerAndKind(t *testing.T) {
 	log.Add(&packets.ChatMessage{Kind: packets.ChatOther, Speaker: "Someone", Text: "hello"})
 
 	lines := log.Lines()
-	if lines[0].Kind != packets.ChatBroadcast {
+	if lines[0].Kind != ChatBroadcast {
 		t.Errorf("kind = %d, want ChatBroadcast", lines[0].Kind)
 	}
 	if lines[1].Speaker != "Someone" {
 		t.Errorf("speaker = %q, want Someone", lines[1].Speaker)
+	}
+}
+
+// TestChatKindFromPacket: the wire kinds and ours are separate enums that
+// happen to overlap today, and nothing may assume they stay numerically equal.
+// Every wire kind must land on the kind the box colors by.
+func TestChatKindFromPacket(t *testing.T) {
+	tests := []struct {
+		name string
+		wire packets.ChatKind
+		want ChatKind
+	}{
+		{"other", packets.ChatOther, ChatOther},
+		{"self", packets.ChatSelf, ChatSelf},
+		{"broadcast", packets.ChatBroadcast, ChatBroadcast},
+		{"system", packets.ChatSystem, ChatSystem},
+		{"whisper", packets.ChatWhisper, ChatWhisper},
+		{"damage", packets.ChatDamage, ChatDamage},
+		// A kind we do not know is somebody talking, not a silent drop.
+		{"unknown falls back to other", packets.ChatKind(200), ChatOther},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := chatKindFromPacket(tt.wire); got != tt.want {
+				t.Errorf("chatKindFromPacket(%d) = %d, want %d", tt.wire, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestAddLocalKeepsEmptyText: Add drops a blank line because the server sends
+// those as spacing, but a caller asking for one here meant it.
+func TestAddLocalKeepsEmptyText(t *testing.T) {
+	var log ChatLog
+
+	log.Add(&packets.ChatMessage{Kind: packets.ChatOther})
+	if got := log.Len(); got != 0 {
+		t.Fatalf("Add kept %d blank lines from the wire, want 0", got)
+	}
+
+	log.AddLocal(ChatNotice, "")
+	if got := log.Len(); got != 1 {
+		t.Fatalf("AddLocal held %d lines, want 1", got)
+	}
+}
+
+// TestAddLocalKinds: the client-side kinds exist so the box can color them
+// apart from anything the server said.
+func TestAddLocalKinds(t *testing.T) {
+	var log ChatLog
+
+	log.AddLocal(ChatNotice, "prontera 156, 191")
+	log.AddLocal(ChatError, "Unknown command")
+
+	lines := log.Lines()
+	want := []ChatKind{ChatNotice, ChatError}
+	for i, w := range want {
+		if lines[i].Kind != w {
+			t.Errorf("line %d kind = %d, want %d", i, lines[i].Kind, w)
+		}
+		if lines[i].Speaker != "" {
+			t.Errorf("line %d speaker = %q, want empty", i, lines[i].Speaker)
+		}
+	}
+}
+
+// TestAddLocalIsBounded: the backlog cap applies however a line got in.
+func TestAddLocalIsBounded(t *testing.T) {
+	var log ChatLog
+
+	for i := 0; i < ChatBacklog+50; i++ {
+		log.AddLocal(ChatNotice, fmt.Sprintf("line %d", i))
+	}
+
+	if got := log.Len(); got != ChatBacklog {
+		t.Errorf("held %d lines, want the cap of %d", got, ChatBacklog)
 	}
 }
