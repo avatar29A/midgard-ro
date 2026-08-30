@@ -10,7 +10,7 @@ import (
 // TestChatKindColor pins the palette to the original's, which is the point of
 // step 5 of #94: server replies were yellow and whispers purple, and both are
 // wrong. The values are roBrowser's transcription of the original client,
-// confirmed against rAthena's own colour table.
+// confirmed against rAthena's own color table.
 func TestChatKindColor(t *testing.T) {
 	tests := []struct {
 		name string
@@ -42,12 +42,12 @@ func TestChatKindColor(t *testing.T) {
 // client talking to itself.
 func TestWhisperAndNoticeAreDistinguishable(t *testing.T) {
 	if packRGB(chatColorWhisper) == packRGB(chatColorNotice) {
-		t.Error("whispers and notices are the same colour")
+		t.Error("whispers and notices are the same color")
 	}
 }
 
-// TestServerColorWins: ZC_NPC_CHAT and ZC_BROADCAST carry a colour the server
-// chose. Overriding it with the kind's colour would discard the only thing
+// TestServerColorWins: ZC_NPC_CHAT and ZC_BROADCAST carry a color the server
+// chose. Overriding it with the kind's color would discard the only thing
 // those packets say that the others do not.
 func TestServerColorWins(t *testing.T) {
 	line := states.ChatLine{
@@ -69,8 +69,8 @@ func TestServerColorWins(t *testing.T) {
 	}
 }
 
-// TestRGBColorRoundTrip: the conversion the chat box uses to honour a
-// server-chosen colour must not lose the value on the way in.
+// TestRGBColorRoundTrip: the conversion the chat box uses to honor a
+// server-chosen color must not lose the value on the way in.
 func TestRGBColorRoundTrip(t *testing.T) {
 	for _, rgb := range []uint32{0x000000, 0xFFFFFF, 0xFF8800, 0x123456, 0xB5FFB5} {
 		if got := packRGB(rgbColor(rgb)); got != rgb {

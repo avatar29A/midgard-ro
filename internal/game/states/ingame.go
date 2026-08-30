@@ -1443,10 +1443,10 @@ func (s *InGameState) handleBroadcast(data []byte) error {
 	return s.addChat(packets.DecodeBroadcast(data))
 }
 
-// handleNPCChat handles a line that carries its own colour.
+// handleNPCChat handles a line that carries its own color.
 //
 // A handful of @ commands answer this way rather than on 0x008E — @cash,
-// @points, @request and @auction — and the colour is the server's choice, so
+// @points, @request and @auction — and the color is the server's choice, so
 // it overrides the one the kind would give.
 func (s *InGameState) handleNPCChat(data []byte) error {
 	return s.addChat(packets.DecodeNPCChat(data))
