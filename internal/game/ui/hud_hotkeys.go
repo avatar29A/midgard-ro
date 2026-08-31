@@ -2,6 +2,7 @@ package ui
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/Faultbox/midgard-ro/internal/config"
 	"github.com/Faultbox/midgard-ro/internal/engine/cursor"
@@ -45,6 +46,14 @@ const (
 	// hotkeyNumScale shrinks the row numbers. At full size they crowded the
 	// strip they sit in and ran into the resize corner.
 	hotkeyNumScale float32 = 0.7
+
+	// hotkeyCountScale shrinks the count in a cell's corner.
+	//
+	// Smaller than the inventory's, which is the same number at the same
+	// scale in a cell half again as wide. At the inventory's size a
+	// three-digit count filled a 24px cell corner to corner and sat over the
+	// icon rather than beside it.
+	hotkeyCountScale float32 = 0.42
 )
 
 // hotkeyCountEmpty is the count on a cell whose item has run out.
@@ -198,6 +207,62 @@ func (b *UI2DBackend) placeHotkeys() {
 
 	b.hotkeyX, b.hotkeyY = saved.HotkeyX, saved.HotkeyY
 	b.hotkeyRows = min(saved.HotkeyRows, hotkeyMaxRows)
+	b.loadHotkeyItems(saved.HotkeyItems)
+}
+
+// hotkeyCellKey names a cell in the saved state.
+func hotkeyCellKey(row, col int) string {
+	return strconv.Itoa(row) + "," + strconv.Itoa(col)
+}
+
+// loadHotkeyItems puts saved shortcuts back in their cells.
+//
+// A key that is not a cell on this bar is skipped rather than refused: a
+// config written when the bar had more rows should lose the rows that are
+// gone and keep the rest, not fail to load at all.
+func (b *UI2DBackend) loadHotkeyItems(saved map[string]uint32) {
+	for key, itemID := range saved {
+		row, col, ok := parseHotkeyCellKey(key)
+		if !ok || itemID == 0 {
+			continue
+		}
+
+		b.setHotkeyItem(row, col, itemID)
+	}
+}
+
+// parseHotkeyCellKey reads a "row,col" key back.
+func parseHotkeyCellKey(key string) (row, col int, ok bool) {
+	comma := strings.IndexByte(key, ',')
+	if comma < 0 {
+		return 0, 0, false
+	}
+
+	row, err := strconv.Atoi(key[:comma])
+	if err != nil {
+		return 0, 0, false
+	}
+
+	col, err = strconv.Atoi(key[comma+1:])
+	if err != nil {
+		return 0, 0, false
+	}
+
+	return row, col, true
+}
+
+// savedHotkeyItems is the filled cells, ready to write out.
+func (b *UI2DBackend) savedHotkeyItems() map[string]uint32 {
+	items := make(map[string]uint32)
+	for row := 0; row < hotkeyMaxRows; row++ {
+		for col := 0; col < hotkeySlots; col++ {
+			if id := b.hotkeyItems[row][col]; id != 0 {
+				items[hotkeyCellKey(row, col)] = id
+			}
+		}
+	}
+
+	return items
 }
 
 // saveHotkeyPlacement records where the bar was left and how far it was open.
@@ -207,6 +272,7 @@ func (b *UI2DBackend) saveHotkeyPlacement() {
 	err := config.UpdateUIState(func(state *config.UIState) {
 		state.HotkeyX, state.HotkeyY = b.hotkeyX, b.hotkeyY
 		state.HotkeyRows = b.hotkeyRows
+		state.HotkeyItems = b.savedHotkeyItems()
 	})
 	if err != nil {
 		logger.Warn("could not save hotkey placement", zap.Error(err))
@@ -279,17 +345,33 @@ func (b *UI2DBackend) hotkeyCellAt(px, py float32) (row, col int, ok bool) {
 	return 0, 0, false
 }
 
-// AssignHotkey puts an item in a cell, replacing whatever was there.
+// setHotkeyItem writes a cell, reporting whether it is a cell at all.
 //
 // Rows that are not open still take assignments: the bar can be pulled shut
 // over a row without emptying it, and pulling it back open should find the
 // row as it was left.
-func (b *UI2DBackend) AssignHotkey(row, col int, itemID uint32) bool {
+func (b *UI2DBackend) setHotkeyItem(row, col int, itemID uint32) bool {
 	if row < 0 || row >= hotkeyMaxRows || col < 0 || col >= hotkeySlots {
 		return false
 	}
 
 	b.hotkeyItems[row][col] = itemID
+
+	return true
+}
+
+// AssignHotkey puts an item in a cell, replacing whatever was there, and
+// saves.
+//
+// Saved on the change rather than on the next mouse release: an assignment
+// arrives from the inventory window, which is drawn after the bar, so by the
+// time the bar next looks the release that made it is a frame gone.
+func (b *UI2DBackend) AssignHotkey(row, col int, itemID uint32) bool {
+	if !b.setHotkeyItem(row, col, itemID) {
+		return false
+	}
+
+	b.saveHotkeyPlacement()
 
 	return true
 }
@@ -386,8 +468,8 @@ func (b *UI2DBackend) drawHotkeyCells(state InGameUIState) {
 				color = hotkeyCountEmpty
 			}
 
-			capW, capH := r.MeasureText(label, itemsTextScale)
-			r.DrawText(cell.X+cell.W-capW-1, cell.Y+cell.H-capH, label, itemsTextScale, color)
+			capW, capH := r.MeasureText(label, hotkeyCountScale)
+			r.DrawText(cell.X+cell.W-capW, cell.Y+cell.H-capH, label, hotkeyCountScale, color)
 		}
 	}
 }
@@ -447,14 +529,21 @@ func (b *UI2DBackend) finishHotkeyDrag() {
 	in := b.ctx.Input()
 	from := b.hotkeyDrag
 
+	moved := false
 	if row, col, ok := b.hotkeyCellAt(in.MouseX, in.MouseY); ok {
 		if row != from.row || col != from.col {
 			b.hotkeyItems[row][col] = from.itemID
 			b.hotkeyItems[from.row][from.col] = 0
+			moved = true
 		}
 	} else {
 		b.hotkeyItems[from.row][from.col] = 0
+		moved = true
 	}
 
 	b.hotkeyDrag = hotkeyDrag{}
+
+	if moved {
+		b.saveHotkeyPlacement()
+	}
 }
