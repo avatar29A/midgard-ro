@@ -244,6 +244,7 @@ func (b *UI2DBackend) drawItemCell(cell ui2d.Rect, shown []packets.InventoryItem
 			active: true,
 			index:  item.Index,
 			itemID: item.ID,
+			count:  item.Count,
 		}
 	}
 }
@@ -287,10 +288,13 @@ func (b *UI2DBackend) finishItemDrag(window ui2d.Rect) {
 	}
 
 	if !window.Contains(in.MouseX, in.MouseY) {
-		// One at a time. The packet carries an amount and the original asks
-		// how many with a dialog; until there is one, dropping the whole
-		// stack on a slip of the hand is the worse mistake to make.
-		b.dropAction = DropAction{Index: b.itemDrag.index, Amount: 1}
+		// A stack asks how many; a single item just goes. Asking about a
+		// stack of one would be a dialog with one answer.
+		if b.itemDrag.count > 1 {
+			b.beginDropPrompt(b.itemDrag.index, b.itemDrag.itemID, b.itemDrag.count)
+		} else {
+			b.dropAction = DropAction{Index: b.itemDrag.index, Amount: 1}
+		}
 	}
 
 	b.itemDrag = itemDrag{}
@@ -301,6 +305,7 @@ type itemDrag struct {
 	active bool
 	index  int
 	itemID uint32
+	count  int
 }
 
 // DropAction is an item dragged out of the window, waiting to be sent.

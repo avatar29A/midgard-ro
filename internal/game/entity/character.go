@@ -19,8 +19,14 @@ const (
 
 // Action constants for character animations.
 const (
-	ActionIdle = 0
-	ActionWalk = 1
+	ActionIdle   = 0
+	ActionWalk   = 1
+	ActionSit    = 2
+	ActionPickup = 3
+
+	// LoadedActions bounds the per-action tables here, matching the sprite
+	// sheet's own bound so an action index is valid in both.
+	LoadedActions = 4
 )
 
 // Character represents a game character with position, movement, and animation state.
@@ -57,6 +63,11 @@ type Character struct {
 	// hold the walk animation across the gap between consecutive steps.
 	sinceWalkMs float32
 
+	// playingOnce is set while a one-shot action — the pick-up motion — is
+	// running. It outranks the movement state until it finishes or the
+	// character starts moving.
+	playingOnce bool
+
 	// Server-authoritative cell path and progress along the current step.
 	path        [][2]int
 	pathIdx     int
@@ -74,7 +85,7 @@ type Character struct {
 
 	// AnimIntervalMs overrides the default frame duration per action, taken
 	// from the sprite's own ACT. Zero for an action means use the default.
-	AnimIntervalMs [2]float32
+	AnimIntervalMs [LoadedActions]float32
 
 	// Animation state
 	CurrentAction    int     // 0=Idle, 1=Walk

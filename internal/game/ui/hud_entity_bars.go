@@ -139,18 +139,25 @@ const (
 	// itemLabelRise is how far above the item's base the line sits. An item
 	// sprite is about twenty pixels tall, so this clears it without floating.
 	itemLabelRise = float32(26)
+
+	// itemLabelPadX and itemLabelPadY inset the text from the plate behind it.
+	itemLabelPadX = float32(4)
+	itemLabelPadY = float32(2)
 )
 
 var (
-	itemLabelColor  = ui2d.Color{R: 1, G: 1, B: 1, A: 1}
-	itemLabelShadow = ui2d.Color{R: 0, G: 0, B: 0, A: 0.75}
+	itemLabelColor = ui2d.Color{R: 1, G: 1, B: 1, A: 1}
+
+	// itemLabelPlate is the plate the text sits on. A shadow alone was not
+	// enough: the label lands on whatever the ground happens to be — pale
+	// flagstones in Prontera, snow, sand — and white text on a one-pixel
+	// shadow disappears against the light ones. Dark and mostly opaque, so
+	// the text carries wherever it falls, but still see-through enough to
+	// read as part of the world rather than a panel.
+	itemLabelPlate = ui2d.Color{R: 0, G: 0, B: 0, A: 0.6}
 )
 
 // drawItemLabel names the ground item under the pointer.
-//
-// Drawn with a one-pixel shadow behind it. The label lands on whatever the
-// ground happens to be — pale flagstones in Prontera, snow, sand — and white
-// text alone disappears against half of them.
 func (b *UI2DBackend) drawItemLabel(label *states.HoverLabel) {
 	if label == nil || label.Text == "" {
 		return
@@ -158,10 +165,11 @@ func (b *UI2DBackend) drawItemLabel(label *states.HoverLabel) {
 
 	r := b.ctx.Renderer()
 
-	width, _ := r.MeasureText(label.Text, itemLabelScale)
+	width, height := r.MeasureText(label.Text, itemLabelScale)
 	x := label.ScreenX - width/2
 	y := label.ScreenY - itemLabelRise
 
-	r.DrawText(x+1, y+1, label.Text, itemLabelScale, itemLabelShadow)
+	r.DrawRect(x-itemLabelPadX, y-itemLabelPadY,
+		width+2*itemLabelPadX, height+2*itemLabelPadY, itemLabelPlate)
 	r.DrawText(x, y, label.Text, itemLabelScale, itemLabelColor)
 }

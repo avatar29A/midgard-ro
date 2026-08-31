@@ -22,13 +22,16 @@ type Loader func(path string) ([]byte, error)
 // Action indices within an ACT file. Each action occupies 8 consecutive
 // entries, one per direction: actionIndex = action*8 + direction.
 const (
-	ActionIdle = 0
-	ActionWalk = 1
+	ActionIdle   = 0
+	ActionWalk   = 1
+	ActionSit    = 2
+	ActionPickup = 3
 
-	// LoadedActions is how many actions we bake composites for. Idle and walk
-	// are all the game can currently drive; sit/attack/etc. follow the same
-	// layout when they're needed.
-	LoadedActions = 2
+	// LoadedActions bounds the actions we bake composites for. Sitting falls
+	// inside that bound and is skipped by bakedAction: the index has to be
+	// reachable for pick-up at 3, but nothing drives a sit yet, and baking one
+	// would be eight directions of frames nobody looks at.
+	LoadedActions = 4
 
 	// Directions is the number of facings every action provides.
 	Directions = 8
@@ -76,6 +79,12 @@ type Spec struct {
 	// HeadDirection is which of the three head poses to bake (see
 	// HeadStraight). Zero value looks straight ahead.
 	HeadDirection int
+}
+
+// bakedAction reports whether an action is worth compositing. Actions inside
+// LoadedActions that nothing drives are skipped rather than baked.
+func bakedAction(action int) bool {
+	return action != ActionSit
 }
 
 // Sheet is a complete set of pre-composited frames for one character, keyed
@@ -223,6 +232,9 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 	// left alone, not animation that went missing.
 	dropped := 0
 	for action := 0; action < LoadedActions; action++ {
+		if !bakedAction(action) {
+			continue
+		}
 		if action == ActionIdle && kind == KindPlayer {
 			continue
 		}
@@ -240,6 +252,9 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 	// First pass: the largest frame decides the sheet size.
 	maxW, maxH := 0, 0
 	for action := 0; action < LoadedActions; action++ {
+		if !bakedAction(action) {
+			continue
+		}
 		for dir := 0; dir < Directions; dir++ {
 			idx := action*Directions + dir
 			if idx >= len(bodyACT.Actions) {
@@ -278,6 +293,9 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 	}
 
 	for action := 0; action < LoadedActions; action++ {
+		if !bakedAction(action) {
+			continue
+		}
 		for dir := 0; dir < Directions; dir++ {
 			idx := action*Directions + dir
 			if idx >= len(bodyACT.Actions) {

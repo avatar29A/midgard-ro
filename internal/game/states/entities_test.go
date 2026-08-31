@@ -407,12 +407,12 @@ func TestUpdateUnitsUsesFrameCounts(t *testing.T) {
 	m := entity.NewManager()
 	e := upsertUnit(m, standingAt(2000042, 5, 5), nil)
 
-	asked := 0
+	asked := map[int]bool{}
 	frames := func(unit *entity.Entity, action, _ int) (int, float32) {
 		if unit != e {
 			t.Errorf("asked for frame counts of an entity that is not the unit")
 		}
-		asked++
+		asked[action] = true
 		if action == entity.ActionWalk {
 			return 8, 70
 		}
@@ -420,8 +420,16 @@ func TestUpdateUnitsUsesFrameCounts(t *testing.T) {
 	}
 
 	updateUnits(m, 16, frames)
-	if asked != 2 {
-		t.Errorf("asked for %d frame counts, want 2 (idle and walk)", asked)
+
+	// Idle and walk drive the loop; pick-up is asked for so a one-shot has a
+	// length to play to.
+	for _, action := range []int{entity.ActionIdle, entity.ActionWalk, entity.ActionPickup} {
+		if !asked[action] {
+			t.Errorf("no frame count asked for action %d", action)
+		}
+	}
+	if len(asked) != 3 {
+		t.Errorf("asked for %d actions, want 3", len(asked))
 	}
 }
 
