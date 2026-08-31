@@ -482,6 +482,8 @@ func (g *Game) frame() {
 
 	g.checkTimedScreenshot()
 
+	g.checkHotkeys()
+
 	// F3 toggles the in-game debug overlay (player/camera/scene/network).
 	if imgui.IsKeyPressedBoolV(imgui.KeyF3, false) {
 		g.showDebug = !g.showDebug
@@ -1484,5 +1486,61 @@ func cursorFor(e *entity.Entity) cursor.State {
 		return cursor.StatePick
 	default:
 		return cursor.StateDefault
+	}
+}
+
+// hotkeyRowKeys is which key opens each row of the quick panel.
+//
+// The order the original uses: the top row on the number keys, the second on
+// the function keys, and the rows below them on the same numbers held with a
+// modifier.
+type hotkeyRowKeys struct {
+	row int
+
+	// fn selects F1..F9 rather than 1..9.
+	fn bool
+
+	// ctrl and alt are the modifiers that must be held, and the ones that
+	// must not: a bare 1 and Alt+1 are different rows, so the plain row has
+	// to check that neither is down.
+	ctrl bool
+	alt  bool
+}
+
+var hotkeyRows = []hotkeyRowKeys{
+	{row: 0},
+	{row: 1, fn: true},
+	{row: 2, alt: true},
+	{row: 3, ctrl: true},
+}
+
+// checkHotkeys uses the quick panel from the keyboard.
+//
+// Nothing fires while a field has focus. The chat box takes the number keys
+// as text, and a potion drunk in the middle of typing a message would be the
+// interface acting on something that was never meant for it.
+func (g *Game) checkHotkeys() {
+	if g.uiBackend == nil || g.uiBackend.TextEntryFocused() {
+		return
+	}
+
+	io := imgui.CurrentIO()
+	ctrl, alt := io.KeyCtrl(), io.KeyAlt()
+
+	for _, binding := range hotkeyRows {
+		if binding.ctrl != ctrl || binding.alt != alt {
+			continue
+		}
+
+		for col := 0; col < 9; col++ {
+			key := imgui.Key1 + imgui.Key(col)
+			if binding.fn {
+				key = imgui.KeyF1 + imgui.Key(col)
+			}
+
+			if imgui.IsKeyPressedBoolV(key, false) {
+				g.uiBackend.PressHotkey(binding.row, col)
+			}
+		}
 	}
 }

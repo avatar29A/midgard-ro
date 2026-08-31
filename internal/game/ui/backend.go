@@ -27,6 +27,13 @@ type UIBackend interface {
 	// TakeDropAction returns an item dragged out of the inventory window.
 	TakeDropAction() (DropAction, bool)
 
+	// PressHotkey asks for the item in a quick-panel cell to be used.
+	PressHotkey(row, col int)
+
+	// TextEntryFocused reports whether typing is going into a field, so a
+	// shortcut key does not fire while a message is being written.
+	TextEntryFocused() bool
+
 	// SetSoundSettings seeds the sound dialog from what is actually playing.
 	SetSoundSettings(s SoundSettings)
 
