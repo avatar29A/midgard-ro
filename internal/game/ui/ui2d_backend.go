@@ -980,11 +980,14 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 
 	b.drawEscMenu(width, height)
 	b.drawSoundConfig(width, height)
-	b.drawDropQuantity(width, height)
 	b.drawStatsWindow(state, width, height)
 	b.drawSkillsWindow(state, width, height)
 	b.drawItemsWindow(state, width, height)
 	b.drawMapWindow(state, width, height)
+
+	// After the inventory, which is what it belongs to: drawn before it, the
+	// window it was dragged out of covered it.
+	b.drawDropQuantity(width, height)
 
 	// After the windows, so it sees whichever grip the pointer ended on. RO
 	// has no resize pointer of its own, so this is the hand it shows for
