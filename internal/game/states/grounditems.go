@@ -196,12 +196,39 @@ func (s *InGameState) PickUpItem(e *entity.Entity) {
 		return
 	}
 
+	s.reachFor(e)
+
 	trace.Emit(trace.HUD, "pickup-request",
 		zap.Uint32("id", e.ID), zap.String("name", e.Name))
 
 	if err := s.client.Send(packets.EncodePickUpItem(e.ID)); err != nil {
 		logger.Warn("pick up failed", zap.Error(err))
 	}
+}
+
+// reachFor turns the character towards an item and plays the pick-up motion.
+//
+// Both happen on the click rather than on the server's answer, because both
+// are feedback rather than state: nothing the server owns is changed, and a
+// refused pick-up costs one motion and a turn nobody will mistake for an item
+// arriving. Waiting instead would put the motion a round trip after the
+// click, which reads as the click having missed.
+//
+// An item on the character's own cell leaves the facing alone — there is no
+// direction to face, and DirectionFromCellDelta says so with -1.
+func (s *InGameState) reachFor(e *entity.Entity) {
+	if s.player == nil || e.Body == nil {
+		return
+	}
+
+	itemX, itemY := e.Body.CurrentCell()
+	playerX, playerY := s.player.CurrentCell()
+
+	if dir := entity.DirectionFromCellDelta(itemX-playerX, itemY-playerY); dir >= 0 {
+		s.player.Direction = dir
+	}
+
+	s.player.PlayPickup()
 }
 
 // DropItem asks to put some of an inventory stack on the ground.

@@ -252,13 +252,18 @@ func updateUnits(m *entity.Manager, deltaMs float32, anim UnitAnimFunc) {
 		e.Body.Update(deltaMs)
 		e.Body.UpdateRenderPosition(deltaMs)
 
-		idle, walk := 0, 0
+		idle, walk, pickup := 0, 0, 0
 		if anim != nil {
-			var idleMs, walkMs float32
+			var idleMs, walkMs, pickupMs float32
 			idle, idleMs = anim(e, entity.ActionIdle, e.Body.Direction)
 			walk, walkMs = anim(e, entity.ActionWalk, e.Body.Direction)
-			e.Body.AnimIntervalMs = [2]float32{idleMs, walkMs}
+			pickup, pickupMs = anim(e, entity.ActionPickup, e.Body.Direction)
+			e.Body.AnimIntervalMs = [entity.LoadedActions]float32{
+				entity.ActionIdle:   idleMs,
+				entity.ActionWalk:   walkMs,
+				entity.ActionPickup: pickupMs,
+			}
 		}
-		e.Body.AdvanceAnimation(deltaMs, idle, walk)
+		e.Body.AdvanceAnimation(deltaMs, idle, walk, pickup)
 	}
 }

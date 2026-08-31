@@ -130,6 +130,7 @@ type UI2DBackend struct {
 	itemAction   ItemAction
 	itemDrag     itemDrag
 	dropAction   DropAction
+	dropPrompt   dropPrompt
 
 	escOpen   bool
 	escAction EscAction
@@ -979,6 +980,7 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 
 	b.drawEscMenu(width, height)
 	b.drawSoundConfig(width, height)
+	b.drawDropQuantity(width, height)
 	b.drawStatsWindow(state, width, height)
 	b.drawSkillsWindow(state, width, height)
 	b.drawItemsWindow(state, width, height)

@@ -680,12 +680,13 @@ func (s *InGameState) Update(dt float64) error {
 
 		// Advance the sprite animation. Frame counts come from the loaded
 		// sheet; with no sprites this parks on frame 0 harmlessly.
-		idleFrames, walkFrames := 0, 0
+		idleFrames, walkFrames, pickupFrames := 0, 0, 0
 		if s.playerRender != nil {
 			idleFrames = s.playerRender.FrameCount(entity.ActionIdle, s.player.Direction)
 			walkFrames = s.playerRender.FrameCount(entity.ActionWalk, s.player.Direction)
+			pickupFrames = s.playerRender.FrameCount(entity.ActionPickup, s.player.Direction)
 		}
-		s.player.AdvanceAnimation(deltaMs, idleFrames, walkFrames)
+		s.player.AdvanceAnimation(deltaMs, idleFrames, walkFrames, pickupFrames)
 
 		// Update cell position
 		s.TileX, s.TileY = s.player.CurrentCell()

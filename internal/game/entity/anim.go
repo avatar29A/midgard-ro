@@ -57,11 +57,19 @@ func (c *Character) frameIntervalMs(action int) float32 {
 // exactly during the gap this is here to smooth over. Counts come from
 // whatever holds the loaded sprite sheet; zero (no sprites yet) parks the
 // animation on frame 0.
-func (c *Character) AdvanceAnimation(deltaMs float32, idleFrames, walkFrames int) {
+func (c *Character) AdvanceAnimation(deltaMs float32, idleFrames, walkFrames, pickupFrames int) {
 	if c.IsMoving {
 		c.sinceWalkMs = 0
+
+		// Moving cancels the pick-up: walking away should look like walking,
+		// not like still bending over.
+		c.playingOnce = false
 	} else {
 		c.sinceWalkMs += deltaMs
+	}
+
+	if c.playingOnce && c.advancePickup(deltaMs, pickupFrames) {
+		return
 	}
 
 	action := ActionIdle
@@ -91,4 +99,51 @@ func (c *Character) AdvanceAnimation(deltaMs float32, idleFrames, walkFrames int
 		c.CurrentFrame++
 	}
 	c.CurrentFrame %= frameCount
+}
+
+// PlayPickup starts the pick-up motion, which plays through once and then
+// gives way to whatever the movement state says.
+//
+// Started on the click rather than on the server's answer. It is feedback,
+// not a change to anything the server owns: the item is not removed, the
+// inventory is not touched, and a refused pick-up costs one motion nobody
+// will mistake for an item arriving.
+func (c *Character) PlayPickup() {
+	c.playingOnce = true
+	c.CurrentAction = ActionPickup
+	c.CurrentFrame = 0
+	c.FrameTime = 0
+}
+
+// advancePickup plays the pick-up through once, reporting whether it is still
+// running.
+//
+// A sprite with no pick-up frames ends it immediately rather than freezing
+// mid-motion — not every sheet has the action, and one that lacks it should
+// simply not play it.
+func (c *Character) advancePickup(deltaMs float32, frames int) bool {
+	if frames <= 0 {
+		c.playingOnce = false
+
+		return false
+	}
+
+	c.CurrentAction = ActionPickup
+
+	interval := c.frameIntervalMs(ActionPickup)
+	c.FrameTime += deltaMs
+	for c.FrameTime >= interval {
+		c.FrameTime -= interval
+		c.CurrentFrame++
+	}
+
+	if c.CurrentFrame >= frames {
+		c.playingOnce = false
+		c.CurrentFrame = 0
+		c.FrameTime = 0
+
+		return false
+	}
+
+	return true
 }
