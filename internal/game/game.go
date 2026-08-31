@@ -1491,9 +1491,8 @@ func cursorFor(e *entity.Entity) cursor.State {
 
 // hotkeyRowKeys is which key opens each row of the quick panel.
 //
-// The order the original uses: the top row on the number keys, the second on
-// the function keys, and the rows below them on the same numbers held with a
-// modifier.
+// The function keys take the top row, the plain numbers the second, and the
+// two below them the same numbers held with Ctrl and with Alt.
 type hotkeyRowKeys struct {
 	row int
 
@@ -1508,10 +1507,10 @@ type hotkeyRowKeys struct {
 }
 
 var hotkeyRows = []hotkeyRowKeys{
-	{row: 0},
-	{row: 1, fn: true},
-	{row: 2, alt: true},
-	{row: 3, ctrl: true},
+	{row: 0, fn: true},
+	{row: 1},
+	{row: 2, ctrl: true},
+	{row: 3, alt: true},
 }
 
 // checkHotkeys uses the quick panel from the keyboard.
