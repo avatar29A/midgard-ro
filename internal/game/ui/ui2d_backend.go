@@ -128,6 +128,8 @@ type UI2DBackend struct {
 	mapPlaced    bool
 	mapSaved     ui2d.Rect
 	itemAction   ItemAction
+	itemDrag     itemDrag
+	dropAction   DropAction
 
 	escOpen   bool
 	escAction EscAction

@@ -24,6 +24,9 @@ type UIBackend interface {
 	// TakeItemAction returns a double click on an inventory item.
 	TakeItemAction() (ItemAction, bool)
 
+	// TakeDropAction returns an item dragged out of the inventory window.
+	TakeDropAction() (DropAction, bool)
+
 	// SetSoundSettings seeds the sound dialog from what is actually playing.
 	SetSoundSettings(s SoundSettings)
 
