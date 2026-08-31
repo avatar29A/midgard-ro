@@ -1881,6 +1881,10 @@ func (s *InGameState) ClickWorld(mouseX, mouseY, viewportW, viewportH float32) {
 		return
 	}
 
+	// Whatever this click turns out to mean, it replaces any errand still in
+	// progress. PickUpItem sets a new one if that is what this click was.
+	s.forgetPendingPickup()
+
 	// A unit under the pointer takes the click. For an NPC, walking there
 	// instead would be the wrong thing twice over: the conversation would not
 	// start, and the server would refuse a step into the cell the NPC is
