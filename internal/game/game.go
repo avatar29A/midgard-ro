@@ -940,6 +940,14 @@ func (g *Game) renderUI() {
 			}
 		}
 
+		// An item dragged out of the inventory window and let go over the
+		// world, which is how the original drops one.
+		if drop, ok := g.uiBackend.TakeDropAction(); ok {
+			if err := state.DropItem(drop.Index, drop.Amount); err != nil {
+				logger.Warn("could not drop item", zap.Error(err))
+			}
+		}
+
 		// What the ESC menu was asked for goes out here for the same reason
 		// the chat line below does: the interface has no connection.
 		//
