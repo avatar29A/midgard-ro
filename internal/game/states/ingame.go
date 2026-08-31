@@ -994,7 +994,7 @@ func (s *InGameState) takeInventory(
 func (s *InGameState) UseItem(index int) error {
 	trace.Emit(trace.HUD, "use-item", zap.Int("index", index))
 
-	return s.client.Send(packets.EncodeUseItem(index, s.selfAID()))
+	return s.client.Send(packets.EncodeUseItem(index))
 }
 
 // EquipItem asks to wear the item in an inventory slot.

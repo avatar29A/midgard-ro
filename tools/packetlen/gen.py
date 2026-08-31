@@ -93,15 +93,32 @@ SCALAR_SIZES = {
     "int16": 2, "uint16": 2,
     "int32": 4, "uint32": 4, "int": 4,
     "int64": 8, "uint64": 8,
+    "float": 4, "double": 8,
 }
 
-# The only named array bounds the packet structs use.
+# Fallback array bounds, for callers that resolve a single struct without
+# scanning CONST_HEADERS first — layout.py does exactly that. The generator
+# itself no longer needs these: every one is read from mmo.hpp with the same
+# value, and the table is complete without them. They are kept because a bound
+# that goes missing should degrade to a stale number in one tool rather than an
+# unresolvable struct in both.
 ARRAY_CONSTS = {
     "NAME_LENGTH": 24,            # (23 + 1)
     "MAP_NAME_LENGTH": 12,        # (11 + 1)
     "MAP_NAME_LENGTH_EXT": 16,    # MAP_NAME_LENGTH + 4
     "WEB_AUTH_TOKEN_LENGTH": 17,  # 16 + 1
 }
+
+# Headers scanned for their #defines alone, before the packet headers, because
+# packet structs use bounds declared there: MAX_ITEM_OPTIONS is defined in
+# packets.hpp as MAX_ITEM_RDM_OPT, which is in mmo.hpp, and TALKBOX_MESSAGE_SIZE
+# is in map.hpp behind a PACKETVER guard — 21 from 20190904, 80 before it.
+# Reading them beats writing the numbers down: a guarded constant transcribed
+# at one packetver is wrong at another, and wrong silently.
+CONST_HEADERS = (
+    "src/common/mmo.hpp",
+    "src/map/map.hpp",
+)
 
 # Any packed struct, not just PACKET_* — some packets embed helper structs
 # (hotkey_data, for one) whose size is needed to size the packet.
@@ -156,30 +173,78 @@ def struct_size(fields, structs, consts):
 VARIABLE = -1
 
 
-def parse_structs(path, env):
-    """Packet id -> wire length for every struct in the file."""
-    structs, ids, consts = collect_structs(path, env)
+# The headers that between them declare the packet structs. Which header a
+# struct lands in says nothing about where its id is declared: ZC_ITEM_ENTRY is
+# a struct in packets_struct.hpp whose DEFINE_PACKET_HEADER is in packets.hpp,
+# under a comment reading "Other packets without struct defined in this file".
+# So these are collected together and paired once at the end. Pairing file by
+# file loses every packet split across two of them, and it loses them silently:
+# the id simply never reaches the table, the reader resynchronises past the
+# packet on the wire, and no handler ever runs.
+HEADERS = (
+    "src/map/packets.hpp",
+    "src/map/packets_struct.hpp",
+    "src/common/packets.hpp",
+)
 
+
+def collect_all(src: str, env: dict):
+    """Merge the struct definitions, ids and constants from every header."""
+    consts = dict(ARRAY_CONSTS)
+    for header in CONST_HEADERS:
+        _, _, found_consts = collect_structs(f"{src}/{header}", env, consts)
+        consts.update(found_consts)
+
+    structs, ids = {}, {}
+    for header in HEADERS:
+        found, found_ids, found_consts = collect_structs(f"{src}/{header}", env, consts)
+        structs.update(found)
+        ids.update(found_ids)
+        consts.update(found_consts)
+
+    return structs, ids, consts
+
+
+def sizes_by_id(structs: dict, ids: dict, consts: dict) -> dict:
+    """Packet id -> wire length, for every id whose struct resolves.
+
+    A struct that will not resolve — an unknown field type, an array bound we
+    cannot find — is reported rather than quietly skipped. Skipping is how
+    0x0B09 stayed missing: the packet arrived, the reader had no length for it,
+    resynchronised past the whole inventory, and the only sign was one warning
+    line that read like a server hiccup.
+    """
     lengths = {}
+    skipped = []
     for name, pid in ids.items():
         if name not in structs:
             continue
         size = struct_size(structs[name], structs, consts)
-        if size is not None:
-            lengths[pid] = size
+        if size is None:
+            skipped.append((pid, name))
+            continue
+        lengths[pid] = size
+
+    for pid, name in sorted(skipped):
+        print(f"// WARNING: 0x{pid:04X} {name} has a struct but no resolvable"
+              " size — it will be missing from the table", file=sys.stderr)
+
     return lengths
 
 
-def collect_structs(path, env):
+def collect_structs(path, env, seed=None):
     """Collect struct definitions, their packet ids and any array-bound
     constants, honouring #if guards.
 
-    Kept separate from parse_structs so tools that need the field layout — not
+    seed carries constants already collected from earlier headers, so a bound
+    defined in terms of another header's constant still resolves.
+
+    Kept separate from sizes_by_id so tools that need the field layout — not
     just the total size — can walk the same resolved definitions.
     """
     structs = {}
     ids = {}
-    consts = dict(ARRAY_CONSTS)
+    consts = dict(ARRAY_CONSTS if seed is None else seed)
     stack = []
     current = None
     fields = []
@@ -364,16 +429,7 @@ def emit_client(src: str, packetver: int, env: dict) -> int:
     checked against the server that will parse it, rather than against a number
     somebody read off a wiki for a different packetver.
     """
-    structs, ids, consts = {}, {}, {}
-    for header in (
-        "src/map/packets.hpp",
-        "src/map/packets_struct.hpp",
-        "src/common/packets.hpp",
-    ):
-        s, i, c = collect_structs(f"{src}/{header}", env)
-        structs.update(s)
-        ids.update(i)
-        consts.update(c)
+    structs, ids, consts = collect_all(src, env)
 
     lengths, unresolved = parse_parseable(
         f"{src}/src/map/clif_packetdb.hpp", env, ids, structs, consts
@@ -450,13 +506,7 @@ def main() -> int:
     lengths = parse(f"{src}/src/map/clif_packetdb.hpp", env)
     db_count = len(lengths)
 
-    from_structs = {}
-    for header in (
-        "src/map/packets.hpp",
-        "src/map/packets_struct.hpp",
-        "src/common/packets.hpp",
-    ):
-        from_structs.update(parse_structs(f"{src}/{header}", env))
+    from_structs = sizes_by_id(*collect_all(src, env))
 
     conflicts = 0
     added = 0

@@ -121,3 +121,44 @@ func TestInventoryListsAreFramed(t *testing.T) {
 		}
 	}
 }
+
+// TestGroundItemsAreFramed guards the four packets a ground item needs.
+//
+// They were missing for a subtler reason than the inventory lists: the
+// generator paired an id to its struct one header at a time, and
+// ZC_ITEM_ENTRY is a struct in packets_struct.hpp whose DEFINE_PACKET_HEADER
+// is in packets.hpp, under a comment reading "Other packets without struct
+// defined in this file". ZC_ITEM_PICKUP_ACK resolved in neither, because its
+// option array is bounded by MAX_ITEM_OPTIONS, which is defined in mmo.hpp.
+//
+// The sizes are pinned because both are packetver-dependent and would be
+// wrong if the generator silently fell back to an older branch: ZC_ITEM_ENTRY
+// is 19 rather than 17 because its item id widened to uint32 at RE 20180704,
+// and ZC_ITEM_PICKUP_ACK carries five item options at this packetver.
+func TestGroundItemsAreFramed(t *testing.T) {
+	tests := []struct {
+		name string
+		id   uint16
+		want int
+	}{
+		{"ZC_ITEM_ENTRY", 0x009D, 19},
+		{"ZC_ITEM_FALL_ENTRY", 0x009E, 17},
+		{"ZC_ITEM_DISAPPEAR", 0x00A1, 6},
+		{"ZC_ITEM_PICKUP_ACK", 0x0B41, 70},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			length, known := Length(tt.id)
+			if !known {
+				t.Fatalf("0x%04X is not framed — the reader will resynchronise past it", tt.id)
+			}
+			if length != tt.want {
+				t.Errorf("0x%04X length = %d, want %d", tt.id, length, tt.want)
+			}
+			if !IsKnown(tt.id) {
+				t.Errorf("0x%04X is not IsKnown, so resync will not stop on it", tt.id)
+			}
+		})
+	}
+}
