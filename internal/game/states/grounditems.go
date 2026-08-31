@@ -185,17 +185,61 @@ func (s *InGameState) addToInventory(ack packets.PickupAck) {
 	})
 }
 
-// PickUpItem asks to pick up a ground item.
+// pickupRange is how close the server needs us to be, in cells.
 //
-// Nothing is changed here. The item stays on screen until the server says it
-// is gone, because this is a request the server refuses often — out of range,
-// too heavy, someone else's loot — and clearing it early would show the player
-// a pick-up that did not happen.
+// rAthena's pc_takeitem checks check_distance_bl(fitem, sd, 2), so two cells
+// in either direction. Asking from further away is refused, and the refusal
+// is all the server does — it will not walk us there.
+const pickupRange = 2
+
+// pickupIdleGiveUpMs is how long the character may stand still on the way to
+// an item before the pick-up is abandoned.
+//
+// Not cancelled the moment the character is not walking: a walk is
+// acknowledged one path at a time, so there is a gap between steps where
+// nothing is moving and the next acknowledgement is still in flight. This is
+// comfortably longer than that gap and shorter than anyone's patience.
+const pickupIdleGiveUpMs = 600
+
+// PickUpItem picks up a ground item, walking to it first if it is out of
+// reach.
+//
+// Nothing is changed locally either way. The item stays on screen until the
+// server says it is gone, because this is a request the server refuses often
+// — out of range, too heavy, someone else's loot — and clearing it early
+// would show the player a pick-up that did not happen.
 func (s *InGameState) PickUpItem(e *entity.Entity) {
-	if e == nil || e.Type != entity.TypeItem || s.client == nil {
+	if e == nil || e.Type != entity.TypeItem || s.client == nil || e.Body == nil {
 		return
 	}
 
+	if s.withinPickupRange(e) {
+		s.sendPickUp(e)
+
+		return
+	}
+
+	// Out of reach: walk to it and pick it up on arrival. The server answers
+	// a distant pick-up with a refusal rather than a walk, so the walking is
+	// ours to do.
+	itemX, itemY := e.Body.CurrentCell()
+
+	trace.Emit(trace.HUD, "pickup-approach",
+		zap.Uint32("id", e.ID), zap.String("name", e.Name),
+		zap.Int("x", itemX), zap.Int("y", itemY))
+
+	if err := s.RequestMove(itemX, itemY); err != nil {
+		logger.Warn("could not walk to that item", zap.Error(err))
+
+		return
+	}
+
+	s.pendingPickup = e.ID
+	s.pendingPickupIdleMs = 0
+}
+
+// sendPickUp reaches for an item and asks for it.
+func (s *InGameState) sendPickUp(e *entity.Entity) {
 	s.reachFor(e)
 
 	trace.Emit(trace.HUD, "pickup-request",
@@ -203,6 +247,58 @@ func (s *InGameState) PickUpItem(e *entity.Entity) {
 
 	if err := s.client.Send(packets.EncodePickUpItem(e.ID)); err != nil {
 		logger.Warn("pick up failed", zap.Error(err))
+	}
+}
+
+// withinPickupRange reports whether the server would accept a pick-up from
+// where the character is standing.
+func (s *InGameState) withinPickupRange(e *entity.Entity) bool {
+	if s.player == nil || e == nil || e.Body == nil {
+		return false
+	}
+
+	itemX, itemY := e.Body.CurrentCell()
+	playerX, playerY := s.player.CurrentCell()
+
+	return abs(itemX-playerX) <= pickupRange && abs(itemY-playerY) <= pickupRange
+}
+
+// updatePendingPickup finishes a pick-up the character had to walk to.
+//
+// Given up on if the item goes — someone else was closer — or if the
+// character stops short of it, which is what an unreachable cell looks like
+// from here. Neither is worth a message: the item is still on the ground and
+// still clickable.
+func (s *InGameState) updatePendingPickup(deltaMs float32, walking bool) {
+	if s.pendingPickup == 0 || s.entityManager == nil {
+		return
+	}
+
+	e := s.entityManager.Get(s.pendingPickup)
+	if e == nil || e.Type != entity.TypeItem {
+		trace.Emit(trace.HUD, "pickup-gone", zap.Uint32("id", s.pendingPickup))
+		s.pendingPickup = 0
+
+		return
+	}
+
+	if s.withinPickupRange(e) {
+		s.pendingPickup = 0
+		s.sendPickUp(e)
+
+		return
+	}
+
+	if walking {
+		s.pendingPickupIdleMs = 0
+
+		return
+	}
+
+	s.pendingPickupIdleMs += deltaMs
+	if s.pendingPickupIdleMs >= pickupIdleGiveUpMs {
+		trace.Emit(trace.HUD, "pickup-unreachable", zap.Uint32("id", s.pendingPickup))
+		s.pendingPickup = 0
 	}
 }
 
