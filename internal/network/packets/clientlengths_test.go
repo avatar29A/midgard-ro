@@ -1,6 +1,75 @@
 package packets
 
-import "testing"
+import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"strconv"
+	"strings"
+	"testing"
+)
+
+// discoverOutgoingIDs finds every CZ_* packet id this package declares by
+// reading the package's own source.
+//
+// This list used to be written out by hand, under a note asking whoever added
+// an encoder to extend it. Three encoders were added without it being
+// extended, and two of them carried ids that mean something else entirely at
+// this packetver — CZ_USE_ITEM was clif_parse_WalkToXY and CZ_ITEM_THROW was
+// clif_parse_SolveCharName. The check existed; it just did not cover them.
+// Reading the constants means a new encoder is covered the moment it is
+// declared, which is the only version of this test that stays true.
+func discoverOutgoingIDs(t *testing.T) map[string]uint16 {
+	t.Helper()
+
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, ".", nil, 0)
+	if err != nil {
+		t.Fatalf("parsing this package: %v", err)
+	}
+
+	ids := make(map[string]uint16)
+	for _, pkg := range pkgs {
+		for _, file := range pkg.Files {
+			for _, decl := range file.Decls {
+				gen, ok := decl.(*ast.GenDecl)
+				if !ok || gen.Tok != token.CONST {
+					continue
+				}
+
+				for _, spec := range gen.Specs {
+					value, ok := spec.(*ast.ValueSpec)
+					if !ok || len(value.Names) != 1 || len(value.Values) != 1 {
+						continue
+					}
+
+					name := value.Names[0].Name
+					if !strings.HasPrefix(name, "CZ_") {
+						continue
+					}
+
+					lit, ok := value.Values[0].(*ast.BasicLit)
+					if !ok || lit.Kind != token.INT {
+						continue
+					}
+
+					id, err := strconv.ParseUint(lit.Value, 0, 16)
+					if err != nil {
+						continue
+					}
+
+					ids[name] = uint16(id)
+				}
+			}
+		}
+	}
+
+	if len(ids) == 0 {
+		t.Fatal("no CZ_ constants found — the discovery is broken, not the packets")
+	}
+
+	return ids
+}
 
 // TestOutgoingPacketsAreParseable: every packet id we send must be one the
 // server actually parses at our PACKETVER.
@@ -13,28 +82,12 @@ import "testing"
 // the packet table never registers it, which is the distinction this test
 // encodes.
 func TestOutgoingPacketsAreParseable(t *testing.T) {
-	// Every id this package sends. Add to this list when adding an encoder.
-	outgoing := []struct {
-		name string
-		id   uint16
-	}{
-		{"CZ_NOTIFY_ACTORINIT", CZ_NOTIFY_ACTORINIT},
-		{"CZ_REQUEST_CHAT", CZ_REQUEST_CHAT},
-		{"CZ_WHISPER", CZ_WHISPER},
-		{"CZ_CONTACTNPC", CZ_CONTACTNPC},
-		{"CZ_CHOOSE_MENU", CZ_CHOOSE_MENU},
-		{"CZ_REQ_NEXT_SCRIPT", CZ_REQ_NEXT_SCRIPT},
-		{"CZ_CLOSE_DIALOG", CZ_CLOSE_DIALOG},
-		{"CZ_REQ_RESTART", CZ_REQ_RESTART},
-		{"CZ_REQ_DISCONNECT", CZ_REQ_DISCONNECT},
-	}
-
-	for _, p := range outgoing {
-		t.Run(p.name, func(t *testing.T) {
-			if _, ok := ClientPacketLength(p.id); !ok {
+	for name, id := range discoverOutgoingIDs(t) {
+		t.Run(name, func(t *testing.T) {
+			if _, ok := ClientPacketLength(id); !ok {
 				t.Errorf("we send %s (0x%04X) but the server does not parse it "+
 					"at this PACKETVER — the connection will desynchronize",
-					p.name, p.id)
+					name, id)
 			}
 		})
 	}
@@ -54,6 +107,9 @@ func TestEncodersMatchTheExpectedLength(t *testing.T) {
 	}{
 		{"chat", CZ_REQUEST_CHAT, EncodeChat("MidgardTest", "hello")},
 		{"whisper", CZ_WHISPER, EncodeWhisper("Someone", "hello")},
+		{"use item", CZ_USE_ITEM, EncodeUseItem(5)},
+		{"equip item", CZ_REQ_WEAR_EQUIP, EncodeEquipItem(5, 0x0100)},
+		{"drop item", CZ_ITEM_THROW, EncodeDropItem(5, 1)},
 	}
 
 	for _, tt := range tests {
