@@ -73,7 +73,13 @@ type InGameState struct {
 	// hoverEntity is whatever the pointer is over this frame, set by the
 	// cursor pass so the label and the cursor cannot disagree.
 	hoverEntity *entity.Entity
-	markerPulse float32
+
+	// pendingPickup is a ground item being walked to, picked up once the
+	// character is close enough. pendingPickupIdleMs counts how long it has
+	// stood still on the way, which is how an unreachable item is given up on.
+	pendingPickup       uint32
+	pendingPickupIdleMs float32
+	markerPulse         float32
 
 	// markerTraceAt rate limits the marker diagnostics.
 	markerTraceAt time.Time
@@ -677,6 +683,8 @@ func (s *InGameState) Update(dt float64) error {
 			s.continueToDestination()
 		}
 		s.wasWalking = walking
+
+		s.updatePendingPickup(deltaMs, walking)
 
 		// Advance the sprite animation. Frame counts come from the loaded
 		// sheet; with no sprites this parks on frame 0 harmlessly.
