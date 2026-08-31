@@ -111,3 +111,45 @@ func TestPendingPickupGivesUpAfterStandingStill(t *testing.T) {
 		t.Error("still waiting after standing still well past the limit")
 	}
 }
+
+// TestPendingPickupWaitsForTheWalkToEnd is the guard for the bug this was
+// written to fix: the client reaches a cell before word of it reaches the
+// server, so a pick-up sent while still walking is measured against a
+// character the server has further back, and comes back refused.
+func TestPendingPickupWaitsForTheWalkToEnd(t *testing.T) {
+	m := entity.NewManager()
+	m.Add(itemAt(42, 100, 100))
+
+	s := &InGameState{
+		player:        entity.NewCharacter(0, 0, 0),
+		entityManager: m,
+		pendingPickup: 42,
+	}
+	s.player.SetCell(100, 100)
+
+	// Standing right on the item, but still walking: nothing is asked for.
+	// The pick-up is still pending, which is how we know it was not sent —
+	// sending clears it.
+	for i := 0; i < 30; i++ {
+		s.updatePendingPickup(16, true)
+	}
+
+	if s.pendingPickup != 42 {
+		t.Error("asked for the item mid-walk; the server measures the " +
+			"distance from where it thinks the character is, and refuses")
+	}
+}
+
+// TestForgetPendingPickup: another click countermands the errand.
+func TestForgetPendingPickup(t *testing.T) {
+	s := &InGameState{pendingPickup: 42, pendingPickupIdleMs: 120}
+
+	s.forgetPendingPickup()
+
+	if s.pendingPickup != 0 {
+		t.Error("still on the way to an item after another click")
+	}
+	if s.pendingPickupIdleMs != 0 {
+		t.Error("the idle clock carried over into the next errand")
+	}
+}

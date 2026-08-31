@@ -265,6 +265,18 @@ func (s *InGameState) withinPickupRange(e *entity.Entity) bool {
 
 // updatePendingPickup finishes a pick-up the character had to walk to.
 //
+// Nothing is asked for until the walk has ended, even once the item is within
+// range. Walking is server-authoritative but the client runs ahead of it: the
+// client reaches a cell before word of it does, so a pick-up sent the moment
+// the client thinks it is close is measured by a server that still has the
+// character further back. It comes back as a refusal — result 6, rAthena's
+// catch-all — and the item stays on the ground, which is exactly what it
+// looked like: walk over, nothing happens, click again.
+//
+// Between two acknowledged paths the walk pauses and the two agree on the
+// cell, so waiting for "not walking" is what makes the distance the client
+// measures the same one the server will.
+//
 // Given up on if the item goes — someone else was closer — or if the
 // character stops short of it, which is what an unreachable cell looks like
 // from here. Neither is worth a message: the item is still on the ground and
@@ -282,15 +294,15 @@ func (s *InGameState) updatePendingPickup(deltaMs float32, walking bool) {
 		return
 	}
 
-	if s.withinPickupRange(e) {
-		s.pendingPickup = 0
-		s.sendPickUp(e)
+	if walking {
+		s.pendingPickupIdleMs = 0
 
 		return
 	}
 
-	if walking {
-		s.pendingPickupIdleMs = 0
+	if s.withinPickupRange(e) {
+		s.pendingPickup = 0
+		s.sendPickUp(e)
 
 		return
 	}
@@ -300,6 +312,22 @@ func (s *InGameState) updatePendingPickup(deltaMs float32, walking bool) {
 		trace.Emit(trace.HUD, "pickup-unreachable", zap.Uint32("id", s.pendingPickup))
 		s.pendingPickup = 0
 	}
+}
+
+// forgetPendingPickup drops the intent to pick something up.
+//
+// Any other click cancels it: walking somewhere else, talking to an NPC or
+// going for a different item are all the player changing their mind, and a
+// character that finished the old errand on arrival would be obeying an order
+// countermanded several seconds ago.
+func (s *InGameState) forgetPendingPickup() {
+	if s.pendingPickup == 0 {
+		return
+	}
+
+	trace.Emit(trace.HUD, "pickup-cancelled", zap.Uint32("id", s.pendingPickup))
+	s.pendingPickup = 0
+	s.pendingPickupIdleMs = 0
 }
 
 // reachFor turns the character towards an item and plays the pick-up motion.
