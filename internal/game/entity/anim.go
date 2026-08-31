@@ -13,6 +13,13 @@ const (
 	// WalkAnimIntervalMs is how long each walk frame is held.
 	WalkAnimIntervalMs = 70.0
 
+	// PickupAnimIntervalMs is how long each frame of the pick-up is held.
+	//
+	// Nearer the walk's rate than the idle's: bending down and straightening
+	// up is a quick motion, and at the idle rate the whole thing took over a
+	// second, which reads as the character being reluctant rather than busy.
+	PickupAnimIntervalMs = 60.0
+
 	// WalkHoldMs is how long the walk cycle keeps playing after a path ends.
 	//
 	// Walking is server-acknowledged one path at a time, so a character
@@ -27,10 +34,14 @@ const (
 
 // AnimIntervalMs returns the default frame duration for an action.
 func AnimIntervalMs(action int) float32 {
-	if action == ActionWalk {
+	switch action {
+	case ActionWalk:
 		return WalkAnimIntervalMs
+	case ActionPickup:
+		return PickupAnimIntervalMs
+	default:
+		return IdleAnimIntervalMs
 	}
-	return IdleAnimIntervalMs
 }
 
 // frameIntervalMs is how long this character holds one frame of an action.
