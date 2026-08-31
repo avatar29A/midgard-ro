@@ -101,10 +101,14 @@ func TestLengthsAreSane(t *testing.T) {
 }
 
 // TestInventoryListsAreFramed is the guard for a gap that cost the inventory
-// entirely: the generator reads packet_db and DEFINE_PACKET_HEADER structs,
-// and these two ids are declared as enum constants that it sees neither way.
-// Without a length the reader treats them as corruption and resynchronises
-// past them, so the handler never runs.
+// entirely: these two ids are declared as enum constants, and rAthena then
+// registers them with packet(inventorylistnormalType, ...) rather than a
+// literal. A table built from literals alone loses them, and without a length
+// the reader treats them as corruption and resynchronises past them, so the
+// handler never runs.
+//
+// They were carried by hand in lengths_extra.go until the generator learned to
+// resolve those names. This test is what makes deleting that file safe.
 func TestInventoryListsAreFramed(t *testing.T) {
 	for _, id := range []uint16{ZC_INVENTORY_ITEMLIST_NORMAL, ZC_INVENTORY_ITEMLIST_EQUIP} {
 		length, known := Length(id)
@@ -160,5 +164,24 @@ func TestGroundItemsAreFramed(t *testing.T) {
 				t.Errorf("0x%04X is not IsKnown, so resync will not stop on it", tt.id)
 			}
 		})
+	}
+}
+
+// TestUseItemAckIsFramed guards the server's answer to using an item.
+//
+// It is declared as packet(useItemAckType, sizeof(struct PACKET_ZC_USE_ITEM_ACK))
+// — an enum constant for the id and a sizeof for the length, neither of them a
+// number — so it was missing for the same reason the inventory lists were. The
+// symptom was precise: use a potion, the server replies, and the client
+// resynchronises past the reply, so nothing on screen changes and the only
+// trace is one warning line.
+func TestUseItemAckIsFramed(t *testing.T) {
+	length, known := Length(0x01C8)
+	if !known {
+		t.Fatal("ZC_USE_ITEM_ACK is not framed — the reply to using an item " +
+			"will be resynchronised past")
+	}
+	if length != 15 {
+		t.Errorf("ZC_USE_ITEM_ACK length = %d, want 15", length)
 	}
 }

@@ -15,7 +15,10 @@ Usage:
 import re
 import sys
 
-PACKET_RE = re.compile(r"^\s*packet\(\s*(0[xX][0-9A-Fa-f]{4})\s*,\s*(-?\d+)")
+# packet(id, len) — the server -> client side. Like parseable_packet, either
+# argument may be a literal, an enum constant or sizeof(PACKET_*), so both are
+# captured as tokens and resolved rather than matched as numbers.
+PACKET_RE = re.compile(r"^\s*packet\(\s*([^,]+?)\s*,\s*(.+?)\s*\)\s*;")
 
 # parseable_packet(id, len, handler, ...) — the client -> server side. Both the
 # id and the length may be a literal, a HEADER_* macro or sizeof(PACKET_*).
@@ -134,6 +137,37 @@ HEADER_RE = re.compile(
 # Array bounds are sometimes #defined in the same header, inside the version
 # guards, so they have to be picked up as we walk rather than known up front.
 DEFINE_RE = re.compile(r"^\s*#\s*define\s+([A-Z_][A-Z_0-9]*)\s+(.+?)\s*$")
+
+# Enumerators such as `useItemAckType = 0x1c8`. rAthena names several packet
+# ids this way and then writes packet(useItemAckType, ...) rather than the
+# number, so an id-to-length table built from literals alone loses them. This
+# is how 0x0B09 went missing and needed lengths_extra.go to carry it by hand.
+ENUM_RE = re.compile(r"^\s*(\w+)\s*=\s*(0[xX][0-9A-Fa-f]+|\d+)\s*,?\s*(?://.*)?$")
+
+
+def value_of(token: str, ids: dict, structs: dict, consts: dict):
+    """Resolve one packet() / parseable_packet() argument to a number.
+
+    Either argument can be a bare number, an enum constant, a HEADER_* macro or
+    sizeof(PACKET_*). Returns None when it cannot be resolved, which the
+    callers report rather than skip.
+    """
+    token = token.strip()
+    if re.fullmatch(r"-?\d+", token):
+        return int(token)
+    if re.fullmatch(r"0[xX][0-9A-Fa-f]+", token):
+        return int(token, 16)
+    if token.startswith("HEADER_"):
+        return ids.get("PACKET_" + token[len("HEADER_"):])
+
+    # rAthena writes both sizeof(PACKET_X) and sizeof( struct PACKET_X ).
+    sizeof = re.fullmatch(r"sizeof\(\s*(?:struct\s+)?(\w+)\s*\)", token)
+    if sizeof and sizeof.group(1) in structs:
+        return struct_size(structs[sizeof.group(1)], structs, consts)
+    if token in consts:
+        return consts[token]
+
+    return None
 
 
 def struct_size(fields, structs, consts):
@@ -302,6 +336,11 @@ def collect_structs(path, env, seed=None):
                 header = HEADER_RE.match(line)
                 if header:
                     ids["PACKET_" + header.group(1)] = int(header.group(2), 16)
+                    continue
+
+                enum = ENUM_RE.match(line)
+                if enum and enum.group(1) not in consts:
+                    consts[enum.group(1)] = int(enum.group(2), 0)
                 continue
 
             if STRUCT_END_RE.match(line):
@@ -362,13 +401,22 @@ def active_lines(path: str, env: dict):
             yield line
 
 
-def parse(path: str, env: dict) -> dict:
+def parse(path: str, env: dict, ids: dict, structs: dict, consts: dict) -> dict:
     """Server -> client lengths, from the packet(...) entries."""
     lengths = {}
     for line in active_lines(path, env):
         match = PACKET_RE.match(line)
-        if match:
-            lengths[int(match.group(1), 16)] = int(match.group(2))
+        if not match:
+            continue
+
+        pid = value_of(match.group(1), ids, structs, consts)
+        size = value_of(match.group(2), ids, structs, consts)
+        if pid is None or size is None:
+            print(f"// WARNING: could not resolve packet({match.group(1)},"
+                  f" {match.group(2)})", file=sys.stderr)
+            continue
+
+        lengths[pid] = size
 
     return lengths
 
@@ -390,27 +438,13 @@ def parse_parseable(path: str, env: dict, ids: dict, structs: dict, consts: dict
     lengths = {}
     unresolved = []
 
-    def value_of(token: str):
-        token = token.strip()
-        if re.fullmatch(r"-?\d+", token):
-            return int(token)
-        if re.fullmatch(r"0[xX][0-9A-Fa-f]+", token):
-            return int(token, 16)
-        if token.startswith("HEADER_"):
-            return ids.get("PACKET_" + token[len("HEADER_"):])
-        # rAthena writes both sizeof(PACKET_X) and sizeof( struct PACKET_X ).
-        sizeof = re.fullmatch(r"sizeof\(\s*(?:struct\s+)?(\w+)\s*\)", token)
-        if sizeof and sizeof.group(1) in structs:
-            return struct_size(structs[sizeof.group(1)], structs, consts)
-
-        return None
-
     for line in active_lines(path, env):
         match = PARSEABLE_RE.match(line)
         if not match:
             continue
 
-        pid, size = value_of(match.group(1)), value_of(match.group(2))
+        pid = value_of(match.group(1), ids, structs, consts)
+        size = value_of(match.group(2), ids, structs, consts)
         handler = match.group(3)
         if pid is None or size is None:
             unresolved.append((match.group(1).strip(), match.group(2).strip(), handler))
@@ -503,10 +537,11 @@ def main() -> int:
 
     # The packet db is authoritative where it has an entry. Modern rAthena
     # declares many packets only as packed structs, so those fill the gaps.
-    lengths = parse(f"{src}/src/map/clif_packetdb.hpp", env)
+    structs, ids, consts = collect_all(src, env)
+    lengths = parse(f"{src}/src/map/clif_packetdb.hpp", env, ids, structs, consts)
     db_count = len(lengths)
 
-    from_structs = sizes_by_id(*collect_all(src, env))
+    from_structs = sizes_by_id(structs, ids, consts)
 
     conflicts = 0
     added = 0
