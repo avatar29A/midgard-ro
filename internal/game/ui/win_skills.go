@@ -203,10 +203,10 @@ func (b *UI2DBackend) drawSkillFooter(state InGameUIState, x, y float32) {
 
 	// "use" spends a skill point, which needs CZ_UPGRADE_SKILLLEVEL — not
 	// sent yet, so it is drawn disabled rather than drawn working.
-	b.drawEscButton(ui2d.Rect{X: useX, Y: btnY, W: skillsBtnW, H: skillsBtnH}, "use", true)
+	b.drawFlatButton(ui2d.Rect{X: useX, Y: btnY, W: skillsBtnW, H: skillsBtnH}, "use", true)
 
 	closeBox := ui2d.Rect{X: closeX, Y: btnY, W: skillsBtnW, H: skillsBtnH}
-	b.drawEscButton(closeBox, "close", false)
+	b.drawFlatButton(closeBox, "close", false)
 
 	if b.ctx.InvisibleButtonAt("hud_skills_close", closeBox.X, closeBox.Y, closeBox.W, closeBox.H) {
 		b.ToggleWindow(WindowSkill)

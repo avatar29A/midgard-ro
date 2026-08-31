@@ -34,36 +34,7 @@ const (
 
 	// dropQtyNear is the gap between the inventory window and this one.
 	dropQtyNear = float32(6)
-
-	// The original's own OK button: normal, hovered and pressed. Drawing our
-	// own would be the one control in the dialog that did not come from the
-	// archive, which is exactly the sort of thing that reads as not-quite-RO.
-	dropQtyOKNormal  = skinBasePath + `basic_interface\btn_ok.bmp`
-	dropQtyOKHover   = skinBasePath + `basic_interface\btn_ok_a.bmp`
-	dropQtyOKPressed = skinBasePath + `basic_interface\btn_ok_b.bmp`
 )
-
-// okButtonArt loads the three states of the original's OK button, reporting
-// false when the archive does not have them.
-func (b *UI2DBackend) okButtonArt() (normal, hover, pressed *TextureInfo, ok bool) {
-	normal, err := b.texCache.Load(dropQtyOKNormal)
-	if err != nil {
-		return nil, nil, nil, false
-	}
-
-	// A missing hover or pressed state falls back to the normal one rather
-	// than failing: the button still works, it just does not light up.
-	hover = normal
-	if tex, err := b.texCache.Load(dropQtyOKHover); err == nil {
-		hover = tex
-	}
-	pressed = normal
-	if tex, err := b.texCache.Load(dropQtyOKPressed); err == nil {
-		pressed = tex
-	}
-
-	return normal, hover, pressed, true
-}
 
 // dropPrompt is a drag-out that is waiting to be told an amount.
 type dropPrompt struct {
@@ -151,20 +122,8 @@ func (b *UI2DBackend) dropQtyLayout(screenW, screenH float32) (x, y, w, h, field
 	digitsW, _ := b.ctx.Renderer().MeasureText(strings.Repeat("0", dropQtyMaxDigits), 1)
 	fieldW = digitsW + dropQtyTextPad
 
-	// The OK button is drawn at the bitmap's own size, so the row is as tall
-	// as whichever of the two is taller.
-	okW, okH := dropQtyOKW, dropQtyRowH
-	if normal, _, _, ok := b.okButtonArt(); ok {
-		okW, okH = float32(normal.Width), float32(normal.Height)
-	}
-
-	rowH := dropQtyRowH
-	if okH > rowH {
-		rowH = okH
-	}
-
-	w = dropQtyPad + fieldW + dropQtySpinW + dropQtyGap + okW + dropQtyPad
-	h = ui2d.FrameTitleH + dropQtyPad + rowH + dropQtyPad
+	w = dropQtyPad + fieldW + dropQtySpinW + dropQtyGap + dropQtyOKW + dropQtyPad
+	h = ui2d.FrameTitleH + dropQtyPad + dropQtyRowH + dropQtyPad
 
 	// Beside the inventory it came from, so the two are readable together and
 	// the dialog never lands on the item you were looking at. Falls back to
@@ -196,7 +155,6 @@ func (b *UI2DBackend) drawDropQuantity(screenW, screenH float32) {
 	}
 
 	openX, openY, w, h, fieldW := b.dropQtyLayout(screenW, screenH)
-	okNormal, okHover, okPressed, haveOK := b.okButtonArt()
 
 	// The title carries what is being dropped and how many there are, which
 	// is the whole caption this dialog would otherwise need a row for.
@@ -236,23 +194,17 @@ func (b *UI2DBackend) drawDropQuantity(screenW, screenH float32) {
 
 	b.drawDropSpinner(fieldX+fieldW, rowY)
 
-	okW, okH := dropQtyOKW, dropQtyRowH
-	if haveOK {
-		okW, okH = float32(okNormal.Width), float32(okNormal.Height)
+	// The same button the ESC menu is built from, which is where this
+	// interface's plain button lives.
+	okBox := ui2d.Rect{
+		X: x + w - dropQtyPad - dropQtyOKW,
+		Y: rowY,
+		W: dropQtyOKW,
+		H: dropQtyRowH,
 	}
-
-	// Centred against the field, which is the shorter of the two.
-	okY := rowY + (dropQtyRowH-okH)/2
-
-	var accepted bool
-	if haveOK {
-		accepted = b.ctx.ImageButtonAt(dropQtyWindowID+"_ok",
-			x+w-dropQtyPad-okW, okY, okW, okH,
-			okNormal.ID, okHover.ID, okPressed.ID)
-	} else {
-		accepted = b.ctx.ButtonAt(dropQtyWindowID+"_ok",
-			x+w-dropQtyPad-okW, rowY, okW, dropQtyRowH, "OK")
-	}
+	b.drawFlatButton(okBox, "OK", false)
+	accepted := b.ctx.InvisibleButtonAt(dropQtyWindowID+"_ok",
+		okBox.X, okBox.Y, okBox.W, okBox.H)
 
 	b.ctx.EndWindow()
 
