@@ -65,10 +65,14 @@ type InGameState struct {
 	// marker is the cell highlight under the cursor. hoverCellX/Y is the cell
 	// it sits on and hoverValid whether the cursor is over the ground at all;
 	// markerPulse counts down the flourish a click sets off.
-	marker      *scene.GroundMarker
-	hoverCellX  int
-	hoverCellY  int
-	hoverValid  bool
+	marker     *scene.GroundMarker
+	hoverCellX int
+	hoverCellY int
+	hoverValid bool
+
+	// hoverEntity is whatever the pointer is over this frame, set by the
+	// cursor pass so the label and the cursor cannot disagree.
+	hoverEntity *entity.Entity
 	markerPulse float32
 
 	// markerTraceAt rate limits the marker diagnostics.
@@ -1229,6 +1233,11 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_INVENTORY_ITEMLIST_NORMAL, s.handleInventoryNormal)
 	s.client.RegisterHandler(packets.ZC_INVENTORY_ITEMLIST_EQUIP, s.handleInventoryEquip)
 	s.client.RegisterHandler(packets.ZC_USE_ITEM_ACK, s.handleUseItemAck)
+	s.client.RegisterHandler(packets.ZC_ITEM_ENTRY, s.handleGroundItemEntry)
+	s.client.RegisterHandler(packets.ZC_ITEM_FALL_ENTRY, s.handleGroundItemFall)
+	s.client.RegisterHandler(packets.ZC_ITEM_DISAPPEAR, s.handleGroundItemGone)
+	s.client.RegisterHandler(packets.ZC_ITEM_PICKUP_ACK, s.handlePickupAck)
+	s.client.RegisterHandler(packets.ZC_ITEM_THROW_ACK, s.handleDropAck)
 	s.client.RegisterHandler(packets.ZC_COUPLESTATUS, s.handleCoupleStatus)
 	s.client.RegisterHandler(packets.ZC_LONGPAR_CHANGE, s.handleStatusChange)
 	s.client.RegisterHandler(packets.ZC_LONGLONGPAR_CHANGE, s.handleStatusChange)
@@ -1886,6 +1895,15 @@ func (s *InGameState) ClickWorld(mouseX, mouseY, viewportW, viewportH float32) {
 			if err := s.RequestMove(stepX, stepY); err != nil {
 				logger.Warn("walk to warp failed", zap.Error(err))
 			}
+			return
+		}
+
+		if e.Type == entity.TypeItem {
+			// The server decides whether we are close enough, and refuses
+			// with a message rather than by walking us there. Walking to it
+			// ourselves would be a guess at a range only the server knows.
+			s.PickUpItem(e)
+
 			return
 		}
 

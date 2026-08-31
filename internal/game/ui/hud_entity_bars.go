@@ -129,3 +129,39 @@ func (b *UI2DBackend) drawEntityBars(bar states.EntityBar) {
 			entityBarSP.WithAlpha(bar.Alpha))
 	}
 }
+
+// The name over a ground item the pointer is on.
+const (
+	// itemLabelScale matches the bars' world-scale text rather than the
+	// panels', so a label on the map does not read as part of the interface.
+	itemLabelScale = float32(1)
+
+	// itemLabelRise is how far above the item's base the line sits. An item
+	// sprite is about twenty pixels tall, so this clears it without floating.
+	itemLabelRise = float32(26)
+)
+
+var (
+	itemLabelColor  = ui2d.Color{R: 1, G: 1, B: 1, A: 1}
+	itemLabelShadow = ui2d.Color{R: 0, G: 0, B: 0, A: 0.75}
+)
+
+// drawItemLabel names the ground item under the pointer.
+//
+// Drawn with a one-pixel shadow behind it. The label lands on whatever the
+// ground happens to be — pale flagstones in Prontera, snow, sand — and white
+// text alone disappears against half of them.
+func (b *UI2DBackend) drawItemLabel(label *states.HoverLabel) {
+	if label == nil || label.Text == "" {
+		return
+	}
+
+	r := b.ctx.Renderer()
+
+	width, _ := r.MeasureText(label.Text, itemLabelScale)
+	x := label.ScreenX - width/2
+	y := label.ScreenY - itemLabelRise
+
+	r.DrawText(x+1, y+1, label.Text, itemLabelScale, itemLabelShadow)
+	r.DrawText(x, y, label.Text, itemLabelScale, itemLabelColor)
+}

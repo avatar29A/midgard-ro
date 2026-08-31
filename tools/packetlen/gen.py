@@ -469,6 +469,28 @@ def emit_client(src: str, packetver: int, env: dict) -> int:
         f"{src}/src/map/clif_packetdb.hpp", env, ids, structs, consts
     )
 
+    # clif.cpp includes clif_shuffle.hpp immediately after clif_packetdb.hpp,
+    # and packetdb_addpacket overwrites, so these are the last word on every id
+    # they mention. The blocks are keyed by exact packetver — `#if PACKETVER ==
+    # 20211103` — and reassign a couple of dozen ids wholesale.
+    #
+    # Skipping this file is not a small omission: at our packetver it moves
+    # TakeItem to 0x0362 and DropItem to 0x0363, and hands 0x07E4 to
+    # ItemListWindowSelected as a variable-length packet. Sending the
+    # packetdb's answer instead makes the server read our payload as a length
+    # and drop the connection.
+    try:
+        shuffled, shuffle_unresolved = parse_parseable(
+            f"{src}/src/map/clif_shuffle.hpp", env, ids, structs, consts
+        )
+    except FileNotFoundError:
+        shuffled, shuffle_unresolved = {}, []
+
+    if shuffled:
+        print(f"// shuffle overrides applied: {len(shuffled)}", file=sys.stderr)
+    lengths.update(shuffled)
+    unresolved.extend(shuffle_unresolved)
+
     for pid, size, handler in unresolved:
         print(f"// NOTE: could not resolve parseable_packet({pid}, {size}, "
               f"clif_parse_{handler})", file=sys.stderr)
@@ -500,6 +522,26 @@ def emit_client(src: str, packetver: int, env: dict) -> int:
     for pid in sorted(lengths):
         size, handler = lengths[pid]
         out.append(f"\t0x{pid:04X}: {size}, // clif_parse_{handler}")
+    out.append("}")
+    out.append("")
+    out.append("// clientPacketHandlers is which server function will parse each id.")
+    out.append("//")
+    out.append("// The length alone does not identify a packet: several ids that mean")
+    out.append("// quite different things are six bytes long, so an encoder can carry the")
+    out.append("// wrong id and still match. 0x0362 is clif_parse_TakeItem here and was")
+    out.append("// briefly used for dropping, which is six bytes either way.")
+    out.append("var clientPacketHandlers = map[uint16]string{")
+    for pid in sorted(lengths):
+        _, handler = lengths[pid]
+        out.append(f"\t0x{pid:04X}: \"clif_parse_{handler}\",")
+    out.append("}")
+    out.append("")
+    out.append("// ClientPacketHandler is the server function that will parse a packet we")
+    out.append("// send, and whether the id is parsed at all at this packetver.")
+    out.append("func ClientPacketHandler(id uint16) (string, bool) {")
+    out.append("\thandler, ok := clientPacketHandlers[id]")
+    out.append("")
+    out.append("\treturn handler, ok")
     out.append("}")
     out.append("")
     out.append("// ClientPacketLength is the length the server expects for a packet we")
