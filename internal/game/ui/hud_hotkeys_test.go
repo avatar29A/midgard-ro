@@ -60,15 +60,15 @@ func TestHotkeyCellAtFindsOnlyOpenRows(t *testing.T) {
 	}
 }
 
-// TestAssignHotkeyReplaces: dropping onto an occupied cell takes it over,
+// TestSetHotkeyItemReplaces: dropping onto an occupied cell takes it over,
 // which is what the bar is for — the old shortcut is not worth a prompt.
-func TestAssignHotkeyReplaces(t *testing.T) {
+func TestSetHotkeyItemReplaces(t *testing.T) {
 	b := &UI2DBackend{hotkeyRows: hotkeyMaxRows}
 
-	if !b.AssignHotkey(0, 0, 501) {
+	if !b.setHotkeyItem(0, 0, 501) {
 		t.Fatal("could not assign to the first cell")
 	}
-	if !b.AssignHotkey(0, 0, 512) {
+	if !b.setHotkeyItem(0, 0, 512) {
 		t.Fatal("could not assign over an occupied cell")
 	}
 	if got := b.hotkeyItems[0][0]; got != 512 {
@@ -76,29 +76,90 @@ func TestAssignHotkeyReplaces(t *testing.T) {
 	}
 }
 
-// TestAssignHotkeyRejectsCellsOffTheBar: nothing outside the four rows of nine
+// TestSetHotkeyItemRejectsCellsOffTheBar: nothing outside the four rows of nine
 // is a cell, and writing past them would be a silent memory scribble.
-func TestAssignHotkeyRejectsCellsOffTheBar(t *testing.T) {
+func TestSetHotkeyItemRejectsCellsOffTheBar(t *testing.T) {
 	b := &UI2DBackend{hotkeyRows: hotkeyMaxRows}
 
 	for _, tt := range []struct{ row, col int }{
 		{-1, 0}, {0, -1}, {hotkeyMaxRows, 0}, {0, hotkeySlots},
 	} {
-		if b.AssignHotkey(tt.row, tt.col, 501) {
+		if b.setHotkeyItem(tt.row, tt.col, 501) {
 			t.Errorf("assigned to (%d,%d), which is not a cell", tt.row, tt.col)
 		}
 	}
 }
 
-// TestAssignHotkeyToAClosedRow: the bar can be pulled shut over a row without
+// TestSetHotkeyItemToAClosedRow: the bar can be pulled shut over a row without
 // emptying it, so a row that is not open still holds what it was given.
-func TestAssignHotkeyToAClosedRow(t *testing.T) {
+func TestSetHotkeyItemToAClosedRow(t *testing.T) {
 	b := &UI2DBackend{hotkeyRows: 1}
 
-	if !b.AssignHotkey(3, 8, 501) {
+	if !b.setHotkeyItem(3, 8, 501) {
 		t.Fatal("could not assign to a row that is currently shut")
 	}
 	if b.hotkeyItems[3][8] != 501 {
 		t.Error("a shut row did not keep what it was given")
+	}
+}
+
+// TestHotkeyCellKeyRoundTrip: what is written out reads back as the same cell.
+func TestHotkeyCellKeyRoundTrip(t *testing.T) {
+	for row := 0; row < hotkeyMaxRows; row++ {
+		for col := 0; col < hotkeySlots; col++ {
+			gotRow, gotCol, ok := parseHotkeyCellKey(hotkeyCellKey(row, col))
+			if !ok || gotRow != row || gotCol != col {
+				t.Errorf("round trip of (%d,%d) = (%d,%d,%v)", row, col, gotRow, gotCol, ok)
+			}
+		}
+	}
+}
+
+// TestParseHotkeyCellKeyRejectsRubbish: the config is a file people can edit,
+// so a key that is not a cell has to be refused rather than parsed into one.
+func TestParseHotkeyCellKeyRejectsRubbish(t *testing.T) {
+	for _, key := range []string{"", "0", "a,0", "0,b", ",", "0,", ",0"} {
+		if _, _, ok := parseHotkeyCellKey(key); ok {
+			t.Errorf("parsed %q as a cell", key)
+		}
+	}
+}
+
+// TestLoadHotkeyItemsSkipsWhatIsNotACell: a config written when the bar had
+// more rows should lose the rows that are gone and keep the rest, not refuse
+// to load.
+func TestLoadHotkeyItemsSkipsWhatIsNotACell(t *testing.T) {
+	b := &UI2DBackend{}
+
+	b.loadHotkeyItems(map[string]uint32{
+		"0,0":  501,
+		"9,0":  512, // a row this bar does not have
+		"0,99": 512, // a column it does not have
+		"junk": 512,
+		"1,1":  0, // an empty cell, saved by mistake
+	})
+
+	if b.hotkeyItems[0][0] != 501 {
+		t.Error("the one good entry did not load")
+	}
+	if b.hotkeyItems[1][1] != 0 {
+		t.Error("a zero id was loaded as a shortcut")
+	}
+}
+
+// TestSavedHotkeyItemsWritesOnlyFilledCells: the bar is mostly empty, and
+// writing every cell would put four rows of nine zeroes in every config file.
+func TestSavedHotkeyItemsWritesOnlyFilledCells(t *testing.T) {
+	b := &UI2DBackend{}
+	b.setHotkeyItem(0, 0, 501)
+	b.setHotkeyItem(3, 8, 512)
+
+	saved := b.savedHotkeyItems()
+
+	if len(saved) != 2 {
+		t.Errorf("saved %d cells, want the 2 that are filled", len(saved))
+	}
+	if saved["0,0"] != 501 || saved["3,8"] != 512 {
+		t.Errorf("saved the wrong contents: %v", saved)
 	}
 }

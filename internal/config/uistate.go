@@ -39,6 +39,13 @@ type UIState struct {
 	HotkeyY    float32 `json:"hotkey_y,omitempty"`
 	HotkeyRows int     `json:"hotkey_rows,omitempty"`
 
+	// HotkeyItems is what the quick panel's cells hold, as item ids keyed by
+	// "row,col". A map rather than nested arrays because the bar is mostly
+	// empty: written out as arrays it would be four rows of nine zeroes in
+	// every config file, and adding a row later would change the shape of
+	// what is already saved.
+	HotkeyItems map[string]uint32 `json:"hotkey_items,omitempty"`
+
 	// Where the Map window was left and how big. Zero width means unset, and
 	// it opens centered at its default size.
 	MapX float32 `json:"map_x,omitempty"`
