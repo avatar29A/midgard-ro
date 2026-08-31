@@ -164,6 +164,10 @@ func DecodeSkillList(data []byte) []Skill {
 // uint16, which alone is eight bytes a row.
 const (
 	// ZC_INVENTORY_ITEMLIST_NORMAL is the stackables. 34-byte entries.
+	// ZC_USE_ITEM_ACK answers using an item:
+	// `<index>.W <itemId>.L <AID>.L <amount>.W <result>.B`, 15 bytes.
+	ZC_USE_ITEM_ACK uint16 = 0x01C8
+
 	ZC_INVENTORY_ITEMLIST_NORMAL uint16 = 0x0B09
 
 	// ZC_INVENTORY_ITEMLIST_EQUIP is the equipment. 68-byte entries.
@@ -297,22 +301,38 @@ func decodeItemList(data []byte, entryLen int, read func([]byte) InventoryItem) 
 const (
 	// CZ_USE_ITEM is 13 bytes at our packet version, with the index at 5 and
 	// the account id at 9 — not the 8-byte shape the older guard declares.
-	CZ_USE_ITEM uint16 = 0x00A7
+	// CZ_USE_ITEM is `<index>.W` at offset 7 in a 20-byte packet.
+	//
+	// Not 0x00A7: that id is registered last as clif_parse_WalkToXY at this
+	// packetver, so the old 13-byte form was asking the character to walk to
+	// wherever the index happened to look like, and leaving 4 trailing bytes
+	// for the server to read as the start of the next packet.
+	CZ_USE_ITEM uint16 = 0x009F
 
 	// CZ_REQ_WEAR_EQUIP is `<index>.W <position>.L`, 8 bytes, from
 	// PACKETVER 20120925.
 	CZ_REQ_WEAR_EQUIP uint16 = 0x0998
 
-	// CZ_ITEM_THROW drops one on the ground: `<index>.W <amount>.W`.
-	CZ_ITEM_THROW uint16 = 0x00A2
+	// CZ_ITEM_THROW drops some of a stack on the ground:
+	// `<index>.W <amount>.W`.
+	//
+	// Not 0x00A2, which this packetver registers last as
+	// clif_parse_SolveCharName at 14 bytes. rAthena registers several ids for
+	// clif_parse_DropItem at once and any of them is parsed; this is the one
+	// whose length and field offsets match what we build.
+	CZ_ITEM_THROW uint16 = 0x0362
 )
 
 // EncodeUseItem asks to use the item in an inventory slot.
-func EncodeUseItem(index int, accountID uint32) []byte {
-	pkt := make([]byte, 13)
+//
+// The index is the one the inventory list gave us, sent unchanged: the server
+// subtracts 2 itself, the same way it does for equipping. Everything past the
+// index is padding — clif_parse_UseItem reads that one field and nothing else,
+// but the packet still has to be the full 20 bytes the server will consume.
+func EncodeUseItem(index int) []byte {
+	pkt := make([]byte, 20)
 	binary.LittleEndian.PutUint16(pkt, CZ_USE_ITEM)
-	binary.LittleEndian.PutUint16(pkt[5:], uint16(index))
-	binary.LittleEndian.PutUint32(pkt[9:], accountID)
+	binary.LittleEndian.PutUint16(pkt[7:], uint16(index))
 
 	return pkt
 }
@@ -338,4 +358,41 @@ func EncodeDropItem(index, amount int) []byte {
 	binary.LittleEndian.PutUint16(pkt[4:], uint16(amount))
 
 	return pkt
+}
+
+// UseItemAck is the server's answer to using an item.
+type UseItemAck struct {
+	// Index is the inventory slot, in the same form the inventory list gave it
+	// and the same form we sent: the server adds the 2 back on its way out.
+	Index int
+
+	// ItemID is what was used.
+	ItemID uint32
+
+	// AccountID is who used it. rAthena sends the success case to everyone
+	// nearby rather than only to us, so this has to be checked before the ack
+	// is allowed to change our own inventory.
+	AccountID uint32
+
+	// Amount is how many are left, not how many were spent.
+	Amount int
+
+	// OK is false when the server refused — too heavy, cannot be used here,
+	// or a slot that no longer holds what we thought.
+	OK bool
+}
+
+// DecodeUseItemAck reads ZC_USE_ITEM_ACK, reporting false if it is short.
+func DecodeUseItemAck(data []byte) (UseItemAck, bool) {
+	if len(data) < 15 {
+		return UseItemAck{}, false
+	}
+
+	return UseItemAck{
+		Index:     int(binary.LittleEndian.Uint16(data[2:])),
+		ItemID:    binary.LittleEndian.Uint32(data[4:]),
+		AccountID: binary.LittleEndian.Uint32(data[8:]),
+		Amount:    int(binary.LittleEndian.Uint16(data[12:])),
+		OK:        data[14] != 0,
+	}, true
 }
