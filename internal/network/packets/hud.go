@@ -164,6 +164,10 @@ func DecodeSkillList(data []byte) []Skill {
 // uint16, which alone is eight bytes a row.
 const (
 	// ZC_INVENTORY_ITEMLIST_NORMAL is the stackables. 34-byte entries.
+	// ZC_USE_ITEM_ACK answers using an item:
+	// `<index>.W <itemId>.L <AID>.L <amount>.W <result>.B`, 15 bytes.
+	ZC_USE_ITEM_ACK uint16 = 0x01C8
+
 	ZC_INVENTORY_ITEMLIST_NORMAL uint16 = 0x0B09
 
 	// ZC_INVENTORY_ITEMLIST_EQUIP is the equipment. 68-byte entries.
@@ -354,4 +358,41 @@ func EncodeDropItem(index, amount int) []byte {
 	binary.LittleEndian.PutUint16(pkt[4:], uint16(amount))
 
 	return pkt
+}
+
+// UseItemAck is the server's answer to using an item.
+type UseItemAck struct {
+	// Index is the inventory slot, in the same form the inventory list gave it
+	// and the same form we sent: the server adds the 2 back on its way out.
+	Index int
+
+	// ItemID is what was used.
+	ItemID uint32
+
+	// AccountID is who used it. rAthena sends the success case to everyone
+	// nearby rather than only to us, so this has to be checked before the ack
+	// is allowed to change our own inventory.
+	AccountID uint32
+
+	// Amount is how many are left, not how many were spent.
+	Amount int
+
+	// OK is false when the server refused — too heavy, cannot be used here,
+	// or a slot that no longer holds what we thought.
+	OK bool
+}
+
+// DecodeUseItemAck reads ZC_USE_ITEM_ACK, reporting false if it is short.
+func DecodeUseItemAck(data []byte) (UseItemAck, bool) {
+	if len(data) < 15 {
+		return UseItemAck{}, false
+	}
+
+	return UseItemAck{
+		Index:     int(binary.LittleEndian.Uint16(data[2:])),
+		ItemID:    binary.LittleEndian.Uint32(data[4:]),
+		AccountID: binary.LittleEndian.Uint32(data[8:]),
+		Amount:    int(binary.LittleEndian.Uint16(data[12:])),
+		OK:        data[14] != 0,
+	}, true
 }
