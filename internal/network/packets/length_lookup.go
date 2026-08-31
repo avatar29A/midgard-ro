@@ -9,11 +9,7 @@ package packets
 // unknown packet's size silently corrupts every packet after it on the
 // connection rather than just the one.
 func Length(packetID uint16) (length int, known bool) {
-	if length, known = mapPacketLengths[packetID]; known {
-		return length, known
-	}
-
-	length, known = extraPacketLengths[packetID]
+	length, known = mapPacketLengths[packetID]
 
 	return length, known
 }
@@ -22,11 +18,7 @@ func Length(packetID uint16) (length int, known bool) {
 // when resynchronising a corrupted stream to tell a real packet boundary from
 // two payload bytes that happen to look like one.
 func IsKnown(packetID uint16) bool {
-	if _, ok := mapPacketLengths[packetID]; ok {
-		return true
-	}
-
-	_, ok := extraPacketLengths[packetID]
+	_, ok := mapPacketLengths[packetID]
 
 	return ok
 }

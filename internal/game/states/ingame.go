@@ -949,6 +949,56 @@ func (s *InGameState) handleInventoryNormal(data []byte) error {
 	return s.takeInventory(data, packets.NormalItemLen, "normal", packets.DecodeInventoryNormal)
 }
 
+// handleUseItemAck applies the server's answer to using an item.
+//
+// Two things about this packet decide the shape of the code. The count it
+// carries is what is *left*, not what was spent, so it is assigned rather than
+// subtracted — which also makes a missed ack self-correcting. And rAthena
+// sends the success case to everyone nearby, not just to the player who used
+// the item, so an ack for someone else's potion arrives here too and must not
+// be allowed to touch our inventory.
+//
+// Nothing is changed on a refusal. The server keeps the item in that case, and
+// showing it spent would be a lie the next inventory list would quietly undo.
+func (s *InGameState) handleUseItemAck(data []byte) error {
+	ack, ok := packets.DecodeUseItemAck(data)
+	if !ok {
+		logger.Warn("short use-item ack", zap.Int("len", len(data)))
+
+		return nil
+	}
+
+	if ack.AccountID != s.selfAID() {
+		return nil
+	}
+
+	if !ack.OK {
+		trace.Emit(trace.HUD, "use-item-refused",
+			zap.Int("index", ack.Index), zap.Uint32("item", ack.ItemID))
+
+		return nil
+	}
+
+	for i := range s.inventory {
+		if s.inventory[i].Index != ack.Index {
+			continue
+		}
+
+		if ack.Amount <= 0 {
+			s.inventory = append(s.inventory[:i], s.inventory[i+1:]...)
+		} else {
+			s.inventory[i].Count = ack.Amount
+		}
+
+		break
+	}
+
+	trace.Emit(trace.HUD, "use-item-ack",
+		zap.Int("index", ack.Index), zap.Int("left", ack.Amount))
+
+	return nil
+}
+
 // handleInventoryEquip takes the worn half.
 func (s *InGameState) handleInventoryEquip(data []byte) error {
 	return s.takeInventory(data, packets.EquipItemLen, "equip", packets.DecodeInventoryEquip)
@@ -994,7 +1044,7 @@ func (s *InGameState) takeInventory(
 func (s *InGameState) UseItem(index int) error {
 	trace.Emit(trace.HUD, "use-item", zap.Int("index", index))
 
-	return s.client.Send(packets.EncodeUseItem(index, s.selfAID()))
+	return s.client.Send(packets.EncodeUseItem(index))
 }
 
 // EquipItem asks to wear the item in an inventory slot.
@@ -1178,6 +1228,7 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_SKILLINFO_LIST, s.handleSkillList)
 	s.client.RegisterHandler(packets.ZC_INVENTORY_ITEMLIST_NORMAL, s.handleInventoryNormal)
 	s.client.RegisterHandler(packets.ZC_INVENTORY_ITEMLIST_EQUIP, s.handleInventoryEquip)
+	s.client.RegisterHandler(packets.ZC_USE_ITEM_ACK, s.handleUseItemAck)
 	s.client.RegisterHandler(packets.ZC_COUPLESTATUS, s.handleCoupleStatus)
 	s.client.RegisterHandler(packets.ZC_LONGPAR_CHANGE, s.handleStatusChange)
 	s.client.RegisterHandler(packets.ZC_LONGLONGPAR_CHANGE, s.handleStatusChange)

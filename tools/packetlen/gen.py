@@ -15,7 +15,10 @@ Usage:
 import re
 import sys
 
-PACKET_RE = re.compile(r"^\s*packet\(\s*(0[xX][0-9A-Fa-f]{4})\s*,\s*(-?\d+)")
+# packet(id, len) — the server -> client side. Like parseable_packet, either
+# argument may be a literal, an enum constant or sizeof(PACKET_*), so both are
+# captured as tokens and resolved rather than matched as numbers.
+PACKET_RE = re.compile(r"^\s*packet\(\s*([^,]+?)\s*,\s*(.+?)\s*\)\s*;")
 
 # parseable_packet(id, len, handler, ...) — the client -> server side. Both the
 # id and the length may be a literal, a HEADER_* macro or sizeof(PACKET_*).
@@ -93,15 +96,32 @@ SCALAR_SIZES = {
     "int16": 2, "uint16": 2,
     "int32": 4, "uint32": 4, "int": 4,
     "int64": 8, "uint64": 8,
+    "float": 4, "double": 8,
 }
 
-# The only named array bounds the packet structs use.
+# Fallback array bounds, for callers that resolve a single struct without
+# scanning CONST_HEADERS first — layout.py does exactly that. The generator
+# itself no longer needs these: every one is read from mmo.hpp with the same
+# value, and the table is complete without them. They are kept because a bound
+# that goes missing should degrade to a stale number in one tool rather than an
+# unresolvable struct in both.
 ARRAY_CONSTS = {
     "NAME_LENGTH": 24,            # (23 + 1)
     "MAP_NAME_LENGTH": 12,        # (11 + 1)
     "MAP_NAME_LENGTH_EXT": 16,    # MAP_NAME_LENGTH + 4
     "WEB_AUTH_TOKEN_LENGTH": 17,  # 16 + 1
 }
+
+# Headers scanned for their #defines alone, before the packet headers, because
+# packet structs use bounds declared there: MAX_ITEM_OPTIONS is defined in
+# packets.hpp as MAX_ITEM_RDM_OPT, which is in mmo.hpp, and TALKBOX_MESSAGE_SIZE
+# is in map.hpp behind a PACKETVER guard — 21 from 20190904, 80 before it.
+# Reading them beats writing the numbers down: a guarded constant transcribed
+# at one packetver is wrong at another, and wrong silently.
+CONST_HEADERS = (
+    "src/common/mmo.hpp",
+    "src/map/map.hpp",
+)
 
 # Any packed struct, not just PACKET_* — some packets embed helper structs
 # (hotkey_data, for one) whose size is needed to size the packet.
@@ -117,6 +137,37 @@ HEADER_RE = re.compile(
 # Array bounds are sometimes #defined in the same header, inside the version
 # guards, so they have to be picked up as we walk rather than known up front.
 DEFINE_RE = re.compile(r"^\s*#\s*define\s+([A-Z_][A-Z_0-9]*)\s+(.+?)\s*$")
+
+# Enumerators such as `useItemAckType = 0x1c8`. rAthena names several packet
+# ids this way and then writes packet(useItemAckType, ...) rather than the
+# number, so an id-to-length table built from literals alone loses them. This
+# is how 0x0B09 went missing and needed lengths_extra.go to carry it by hand.
+ENUM_RE = re.compile(r"^\s*(\w+)\s*=\s*(0[xX][0-9A-Fa-f]+|\d+)\s*,?\s*(?://.*)?$")
+
+
+def value_of(token: str, ids: dict, structs: dict, consts: dict):
+    """Resolve one packet() / parseable_packet() argument to a number.
+
+    Either argument can be a bare number, an enum constant, a HEADER_* macro or
+    sizeof(PACKET_*). Returns None when it cannot be resolved, which the
+    callers report rather than skip.
+    """
+    token = token.strip()
+    if re.fullmatch(r"-?\d+", token):
+        return int(token)
+    if re.fullmatch(r"0[xX][0-9A-Fa-f]+", token):
+        return int(token, 16)
+    if token.startswith("HEADER_"):
+        return ids.get("PACKET_" + token[len("HEADER_"):])
+
+    # rAthena writes both sizeof(PACKET_X) and sizeof( struct PACKET_X ).
+    sizeof = re.fullmatch(r"sizeof\(\s*(?:struct\s+)?(\w+)\s*\)", token)
+    if sizeof and sizeof.group(1) in structs:
+        return struct_size(structs[sizeof.group(1)], structs, consts)
+    if token in consts:
+        return consts[token]
+
+    return None
 
 
 def struct_size(fields, structs, consts):
@@ -156,30 +207,78 @@ def struct_size(fields, structs, consts):
 VARIABLE = -1
 
 
-def parse_structs(path, env):
-    """Packet id -> wire length for every struct in the file."""
-    structs, ids, consts = collect_structs(path, env)
+# The headers that between them declare the packet structs. Which header a
+# struct lands in says nothing about where its id is declared: ZC_ITEM_ENTRY is
+# a struct in packets_struct.hpp whose DEFINE_PACKET_HEADER is in packets.hpp,
+# under a comment reading "Other packets without struct defined in this file".
+# So these are collected together and paired once at the end. Pairing file by
+# file loses every packet split across two of them, and it loses them silently:
+# the id simply never reaches the table, the reader resynchronises past the
+# packet on the wire, and no handler ever runs.
+HEADERS = (
+    "src/map/packets.hpp",
+    "src/map/packets_struct.hpp",
+    "src/common/packets.hpp",
+)
 
+
+def collect_all(src: str, env: dict):
+    """Merge the struct definitions, ids and constants from every header."""
+    consts = dict(ARRAY_CONSTS)
+    for header in CONST_HEADERS:
+        _, _, found_consts = collect_structs(f"{src}/{header}", env, consts)
+        consts.update(found_consts)
+
+    structs, ids = {}, {}
+    for header in HEADERS:
+        found, found_ids, found_consts = collect_structs(f"{src}/{header}", env, consts)
+        structs.update(found)
+        ids.update(found_ids)
+        consts.update(found_consts)
+
+    return structs, ids, consts
+
+
+def sizes_by_id(structs: dict, ids: dict, consts: dict) -> dict:
+    """Packet id -> wire length, for every id whose struct resolves.
+
+    A struct that will not resolve — an unknown field type, an array bound we
+    cannot find — is reported rather than quietly skipped. Skipping is how
+    0x0B09 stayed missing: the packet arrived, the reader had no length for it,
+    resynchronised past the whole inventory, and the only sign was one warning
+    line that read like a server hiccup.
+    """
     lengths = {}
+    skipped = []
     for name, pid in ids.items():
         if name not in structs:
             continue
         size = struct_size(structs[name], structs, consts)
-        if size is not None:
-            lengths[pid] = size
+        if size is None:
+            skipped.append((pid, name))
+            continue
+        lengths[pid] = size
+
+    for pid, name in sorted(skipped):
+        print(f"// WARNING: 0x{pid:04X} {name} has a struct but no resolvable"
+              " size — it will be missing from the table", file=sys.stderr)
+
     return lengths
 
 
-def collect_structs(path, env):
+def collect_structs(path, env, seed=None):
     """Collect struct definitions, their packet ids and any array-bound
     constants, honouring #if guards.
 
-    Kept separate from parse_structs so tools that need the field layout — not
+    seed carries constants already collected from earlier headers, so a bound
+    defined in terms of another header's constant still resolves.
+
+    Kept separate from sizes_by_id so tools that need the field layout — not
     just the total size — can walk the same resolved definitions.
     """
     structs = {}
     ids = {}
-    consts = dict(ARRAY_CONSTS)
+    consts = dict(ARRAY_CONSTS if seed is None else seed)
     stack = []
     current = None
     fields = []
@@ -237,6 +336,11 @@ def collect_structs(path, env):
                 header = HEADER_RE.match(line)
                 if header:
                     ids["PACKET_" + header.group(1)] = int(header.group(2), 16)
+                    continue
+
+                enum = ENUM_RE.match(line)
+                if enum and enum.group(1) not in consts:
+                    consts[enum.group(1)] = int(enum.group(2), 0)
                 continue
 
             if STRUCT_END_RE.match(line):
@@ -297,13 +401,22 @@ def active_lines(path: str, env: dict):
             yield line
 
 
-def parse(path: str, env: dict) -> dict:
+def parse(path: str, env: dict, ids: dict, structs: dict, consts: dict) -> dict:
     """Server -> client lengths, from the packet(...) entries."""
     lengths = {}
     for line in active_lines(path, env):
         match = PACKET_RE.match(line)
-        if match:
-            lengths[int(match.group(1), 16)] = int(match.group(2))
+        if not match:
+            continue
+
+        pid = value_of(match.group(1), ids, structs, consts)
+        size = value_of(match.group(2), ids, structs, consts)
+        if pid is None or size is None:
+            print(f"// WARNING: could not resolve packet({match.group(1)},"
+                  f" {match.group(2)})", file=sys.stderr)
+            continue
+
+        lengths[pid] = size
 
     return lengths
 
@@ -325,27 +438,13 @@ def parse_parseable(path: str, env: dict, ids: dict, structs: dict, consts: dict
     lengths = {}
     unresolved = []
 
-    def value_of(token: str):
-        token = token.strip()
-        if re.fullmatch(r"-?\d+", token):
-            return int(token)
-        if re.fullmatch(r"0[xX][0-9A-Fa-f]+", token):
-            return int(token, 16)
-        if token.startswith("HEADER_"):
-            return ids.get("PACKET_" + token[len("HEADER_"):])
-        # rAthena writes both sizeof(PACKET_X) and sizeof( struct PACKET_X ).
-        sizeof = re.fullmatch(r"sizeof\(\s*(?:struct\s+)?(\w+)\s*\)", token)
-        if sizeof and sizeof.group(1) in structs:
-            return struct_size(structs[sizeof.group(1)], structs, consts)
-
-        return None
-
     for line in active_lines(path, env):
         match = PARSEABLE_RE.match(line)
         if not match:
             continue
 
-        pid, size = value_of(match.group(1)), value_of(match.group(2))
+        pid = value_of(match.group(1), ids, structs, consts)
+        size = value_of(match.group(2), ids, structs, consts)
         handler = match.group(3)
         if pid is None or size is None:
             unresolved.append((match.group(1).strip(), match.group(2).strip(), handler))
@@ -364,16 +463,7 @@ def emit_client(src: str, packetver: int, env: dict) -> int:
     checked against the server that will parse it, rather than against a number
     somebody read off a wiki for a different packetver.
     """
-    structs, ids, consts = {}, {}, {}
-    for header in (
-        "src/map/packets.hpp",
-        "src/map/packets_struct.hpp",
-        "src/common/packets.hpp",
-    ):
-        s, i, c = collect_structs(f"{src}/{header}", env)
-        structs.update(s)
-        ids.update(i)
-        consts.update(c)
+    structs, ids, consts = collect_all(src, env)
 
     lengths, unresolved = parse_parseable(
         f"{src}/src/map/clif_packetdb.hpp", env, ids, structs, consts
@@ -447,16 +537,11 @@ def main() -> int:
 
     # The packet db is authoritative where it has an entry. Modern rAthena
     # declares many packets only as packed structs, so those fill the gaps.
-    lengths = parse(f"{src}/src/map/clif_packetdb.hpp", env)
+    structs, ids, consts = collect_all(src, env)
+    lengths = parse(f"{src}/src/map/clif_packetdb.hpp", env, ids, structs, consts)
     db_count = len(lengths)
 
-    from_structs = {}
-    for header in (
-        "src/map/packets.hpp",
-        "src/map/packets_struct.hpp",
-        "src/common/packets.hpp",
-    ):
-        from_structs.update(parse_structs(f"{src}/{header}", env))
+    from_structs = sizes_by_id(structs, ids, consts)
 
     conflicts = 0
     added = 0
