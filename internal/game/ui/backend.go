@@ -157,6 +157,10 @@ type InGameUIState struct {
 	// into viewport pixels.
 	EntityBars []states.EntityBar
 
+	// ItemLabel is the name of the ground item under the pointer, already
+	// projected, or nil when the pointer is not on one.
+	ItemLabel *states.HoverLabel
+
 	// Player position
 	PlayerX, PlayerY, PlayerZ float32
 	PlayerTileX, PlayerTileY  int

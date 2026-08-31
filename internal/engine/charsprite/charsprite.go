@@ -68,6 +68,11 @@ type Spec struct {
 	Female    bool // sex M/F selects the sprite folder and filename suffix
 	HairStyle int  // head sprite number
 
+	// Name identifies a KindItem sprite, which the archive files by the item
+	// table's resource name rather than by any id. Ignored for every other
+	// kind. Spec is used as a cache key, so this stays a plain string.
+	Name string
+
 	// HeadDirection is which of the three head poses to bake (see
 	// HeadStraight). Zero value looks straight ahead.
 	HeadDirection int

@@ -316,11 +316,12 @@ const (
 	// CZ_ITEM_THROW drops some of a stack on the ground:
 	// `<index>.W <amount>.W`.
 	//
-	// Not 0x00A2, which this packetver registers last as
-	// clif_parse_SolveCharName at 14 bytes. rAthena registers several ids for
-	// clif_parse_DropItem at once and any of them is parsed; this is the one
-	// whose length and field offsets match what we build.
-	CZ_ITEM_THROW uint16 = 0x0362
+	// Not 0x00A2, which the packet table registers as clif_parse_SolveCharName
+	// at 14 bytes, and not 0x0362 either: clif_shuffle.hpp reassigns that one
+	// to clif_parse_TakeItem at this packetver, so dropping on it would be
+	// read as picking up. Both are six bytes, which is why the length check
+	// alone did not notice.
+	CZ_ITEM_THROW uint16 = 0x0363
 )
 
 // EncodeUseItem asks to use the item in an inventory slot.
