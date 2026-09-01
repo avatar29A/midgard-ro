@@ -45,8 +45,10 @@ type CharSelectState struct {
 	// Timing
 	enterTime time.Time
 
-	// autoSelected keeps unattended character entry to one attempt.
+	// autoSelected keeps unattended character entry to one attempt, and
+	// autoCreated does the same for unattended creation.
 	autoSelected bool
+	autoCreated  bool
 
 	// keepAlive stops the char server dropping us while the screen is read.
 	keepAlive charKeepAlive
@@ -126,7 +128,16 @@ func (s *CharSelectState) Update(dt float64) error {
 	// Unattended character entry, the other half of --autologin. Waits for the
 	// list to arrive, then takes the first character; with no characters there
 	// is nothing to enter and the screen is left as it is.
-	if s.manager.AutoPlay && !s.manager.StopAtCharSelect &&
+	// Unattended creation: open the screen on the first slot the account has
+	// free. One attempt, like auto-select — reopening it every frame would
+	// make Go back impossible to test.
+	if s.manager.AutoPlay && s.manager.StopAtCharCreate &&
+		!s.autoCreated && s.CharListReady {
+		s.autoCreated = true
+		s.RequestCreate(len(s.Characters))
+	}
+
+	if s.manager.AutoPlay && !s.manager.StopAtCharSelect && !s.manager.StopAtCharCreate &&
 		!s.autoSelected && s.CharListReady && len(s.Characters) > 0 {
 		s.autoSelected = true
 		_ = s.SelectCharacter(0)

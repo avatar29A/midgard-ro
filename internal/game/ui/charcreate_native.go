@@ -55,14 +55,18 @@ const (
 	charCreateTurnR = float32(552)
 
 	// The hair style grid on the right. Cells and thumbnails are both 36x37.
+	//
+	// The label sits a clear 14px above its content. At the first spacing the
+	// gap was 3px and the heading read as part of the panel rather than as a
+	// heading for it.
 	charCreateHairCellW  = float32(36)
 	charCreateHairCellH  = float32(37)
 	charCreateHairCols   = 4
 	charCreateHairPitchX = float32(40)
 	charCreateHairPitchY = float32(39)
 	charCreateHairX      = float32(606)
-	charCreateHairY      = float32(62)
-	charCreateHairLabelY = float32(48)
+	charCreateHairY      = float32(69)
+	charCreateHairLabelY = float32(44)
 
 	// The hair color swatches, 16x16, five to a row under the grid.
 	charCreateColW      = float32(16)
@@ -70,8 +74,8 @@ const (
 	charCreateColCols   = 5
 	charCreateColPitch  = float32(20)
 	charCreateColX      = float32(615)
-	charCreateColY      = float32(310)
-	charCreateColLabelY = float32(296)
+	charCreateColY      = float32(330)
+	charCreateColLabelY = float32(306)
 
 	// HairColorCount is how many palettes exist per style and sex.
 	charCreateColorCount = 9

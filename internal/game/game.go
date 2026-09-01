@@ -276,6 +276,7 @@ func (g *Game) initGameState(cfg *config.Config) error {
 
 	g.stateManager.AutoPlay = config.AutoLogin()
 	g.stateManager.StopAtCharSelect = config.StopAtCharSelect()
+	g.stateManager.StopAtCharCreate = config.StopAtCharCreate()
 	loginState := states.NewLoginState(loginCfg, g.client, g.stateManager)
 	g.stateManager.Change(loginState)
 

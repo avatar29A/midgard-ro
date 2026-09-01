@@ -21,7 +21,7 @@ var (
 	flagShotAfter  = flag.Duration("screenshot-after", 0, "Capture a screenshot this long after startup, then keep running (QA aid)")
 	flagShotEvery  = flag.Duration("screenshot-every", 0, "Capture a screenshot on this interval (QA aid)")
 	flagAutoLogin  = flag.Bool("autologin", false, "Log in and enter the first character without input (QA aid)")
-	flagStopAt     = flag.String("stop-at", "", "Go this far and no further: charselect (QA aid)")
+	flagStopAt     = flag.String("stop-at", "", "Go this far and no further: charselect or charcreate (QA aid)")
 	flagDebugHUD   = flag.Bool("debug-overlay", false, "Start with the F3 debug overlay open (QA aid)")
 	flagNoBGM      = flag.Bool("no-bgm", false, "Run without background music, keeping sound effects")
 	flagWalkTo     = flag.String("walk-to", "", "Once in game, walk to this cell, e.g. 156,22 (QA aid)")
@@ -100,15 +100,28 @@ func StopAtCharSelect() bool {
 	return *flagStopAt == StopCharSelect
 }
 
+// StopAtCharCreate reports whether the client should open character creation
+// on the first free slot and hold there.
+//
+// Every check of that screen otherwise needs a person to double-click a slot,
+// which is why its spacing and layout could only be reviewed by hand.
+func StopAtCharCreate() bool {
+	return *flagStopAt == StopCharCreate
+}
+
 // StopAtSpec returns the raw --stop-at value, for reporting one that is not
 // a stage we know.
 func StopAtSpec() string {
 	return *flagStopAt
 }
 
-// StopCharSelect is the one stage --stop-at understands so far. Named rather
-// than spelled out at each use so a second stage is a small change.
-const StopCharSelect = "charselect"
+// The stages --stop-at understands.
+const (
+	// StopCharSelect holds on the character list.
+	StopCharSelect = "charselect"
+	// StopCharCreate goes one further and opens creation on a free slot.
+	StopCharCreate = "charcreate"
+)
 
 // DebugOverlay reports whether the F3 overlay should start open.
 //
