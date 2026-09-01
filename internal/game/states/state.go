@@ -111,6 +111,10 @@ type Manager struct {
 	// double-click one.
 	StopAtCharCreate bool
 
+	// MakeCharName is a name to create unattended once the creation screen
+	// is up. Empty means wait for a person.
+	MakeCharName string
+
 	// BGM is nil when audio is unavailable, which the PlayBGM helpers below
 	// tolerate so states never have to check.
 	BGM BGMController

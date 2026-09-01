@@ -1,11 +1,14 @@
 package states
 
 import (
+	"fmt"
+
 	"go.uber.org/zap"
 
 	"github.com/Faultbox/midgard-ro/internal/engine/charsprite"
 	"github.com/Faultbox/midgard-ro/internal/logger"
 	"github.com/Faultbox/midgard-ro/internal/network"
+	"github.com/Faultbox/midgard-ro/internal/network/packets"
 	"github.com/Faultbox/midgard-ro/internal/trace"
 )
 
@@ -51,9 +54,16 @@ type CharCreateState struct {
 	// the server has no field for it — it only decides which frame is drawn.
 	Facing int
 
+	// Name is what the player has typed. Validated here only for what is
+	// locally knowable; whether it is free is the server's to answer.
+	Name string
+
 	// StatusMsg and ErrorMsg are what the screen says about itself.
 	StatusMsg string
 	ErrorMsg  string
+
+	// autoCreated keeps unattended creation to one attempt.
+	autoCreated bool
 
 	// keepAlive stops the char server dropping us while a name is being
 	// thought about. Picking a name and a hair style takes longer than the
@@ -151,6 +161,11 @@ func (s *CharCreateState) GetErrorMessage() string { return s.ErrorMsg }
 
 // Enter is called when entering this state.
 func (s *CharCreateState) Enter() error {
+	if s.client != nil {
+		s.client.RegisterHandler(packets.HC_ACCEPT_MAKECHAR, s.handleCreated)
+		s.client.RegisterHandler(packets.HC_REFUSE_MAKECHAR, s.handleRefused)
+	}
+
 	trace.Emit(trace.Char, "create-open",
 		zap.Int("slot", s.slot), zap.Uint8("sex", s.Sex))
 	logger.Info("character creation opened",
@@ -174,6 +189,14 @@ func (s *CharCreateState) Update(_ float64) error {
 		return nil
 	}
 
+	// Unattended creation. One attempt: a refusal must stay on screen to be
+	// read rather than being retried forever.
+	if s.manager != nil && s.manager.MakeCharName != "" && !s.autoCreated {
+		s.autoCreated = true
+		s.SetName(s.manager.MakeCharName)
+		s.Create()
+	}
+
 	s.keepAlive.tick(s.client)
 
 	if err := s.client.Process(); err != nil {
@@ -194,6 +217,136 @@ func (s *CharCreateState) Render() error { return nil }
 
 // HandleInput processes input events.
 func (s *CharCreateState) HandleInput(_ interface{}) error { return nil }
+
+// Name rules our server applies, from char_athena.conf. Checked here so a
+// name it would certainly refuse costs no packet, and so the reason can be
+// specific rather than the server's single "denied".
+//
+//	char_name_min_length: 4
+//	char_name_option: 1 with char_name_letters — letters, digits and space
+//	NAME_LENGTH 24, so 23 usable characters
+const (
+	nameMinLength = 4
+	nameMaxLength = 23
+)
+
+// SetName records what has been typed.
+func (s *CharCreateState) SetName(name string) {
+	s.Name = name
+}
+
+// ValidateName reports why a name cannot be sent, or "" when it can.
+//
+// It deliberately does not try to answer whether the name is free: nothing
+// asks the server that, and the only way to find out is to create and be
+// refused.
+func ValidateName(name string) string {
+	if len(name) < nameMinLength {
+		return fmt.Sprintf("A name needs at least %d characters.", nameMinLength)
+	}
+
+	if len(name) > nameMaxLength {
+		return fmt.Sprintf("A name can be at most %d characters.", nameMaxLength)
+	}
+
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == ' ':
+		default:
+			return "A name can use letters, digits and spaces only."
+		}
+	}
+
+	return ""
+}
+
+// Create sends the request, or explains why it did not.
+func (s *CharCreateState) Create() {
+	if reason := ValidateName(s.Name); reason != "" {
+		s.ErrorMsg = reason
+		trace.Emit(trace.Char, "create-rejected",
+			zap.String("name", s.Name), zap.String("reason", reason))
+
+		return
+	}
+
+	if s.client == nil {
+		s.ErrorMsg = "Not connected."
+
+		return
+	}
+
+	pkt := packets.EncodeMakeChar(packets.MakeCharRequest{
+		Name:      s.Name,
+		Slot:      uint8(s.slot),
+		HairColor: uint16(s.HairColor),
+		HairStyle: uint16(s.HairStyle),
+		Job:       uint32(s.Job),
+		Sex:       s.Sex,
+	})
+	if pkt == nil {
+		s.ErrorMsg = "That name cannot be sent."
+
+		return
+	}
+
+	trace.Emit(trace.Char, "create-send",
+		zap.String("name", s.Name), zap.Int("slot", s.slot),
+		zap.Int("job", s.Job), zap.Uint8("sex", s.Sex),
+		zap.Int("hairStyle", s.HairStyle), zap.Int("hairColor", s.HairColor))
+
+	if err := s.client.Send(pkt); err != nil {
+		logger.Warn("could not send the creation request", zap.Error(err))
+		s.ErrorMsg = "Could not reach the server."
+
+		return
+	}
+
+	s.ErrorMsg = ""
+	s.StatusMsg = "Creating..."
+}
+
+// handleCreated returns to character select once the server has made the
+// character.
+//
+// The list is re-requested on the way in rather than patched here: the server
+// has just changed it, and asking is both simpler and more truthful than
+// assuming what it now contains.
+func (s *CharCreateState) handleCreated(_ []byte) error {
+	trace.Emit(trace.Char, "create-ok", zap.Int("slot", s.slot))
+	logger.Info("character created", zap.Int("slot", s.slot), zap.String("name", s.Name))
+
+	if s.back == nil || s.manager == nil {
+		return nil
+	}
+
+	s.back.ClearPendingCreate()
+	s.manager.Change(s.back)
+
+	return nil
+}
+
+// handleRefused reports why the server would not create the character and
+// leaves the screen up so it can be corrected.
+func (s *CharCreateState) handleRefused(data []byte) error {
+	code, ok := packets.DecodeMakeCharRefuse(data)
+	if !ok {
+		logger.Warn("could not read a creation refusal", zap.Int("bytes", len(data)))
+		s.ErrorMsg = "The server refused, without saying why."
+
+		return nil
+	}
+
+	s.StatusMsg = ""
+	s.ErrorMsg = packets.MakeCharFailure(code)
+
+	trace.Emit(trace.Char, "create-refused",
+		zap.Uint8("code", code), zap.String("reason", s.ErrorMsg))
+	logger.Info("character creation refused",
+		zap.Uint8("code", code), zap.String("name", s.Name))
+
+	return nil
+}
 
 // Cancel abandons creation and returns to character select.
 //

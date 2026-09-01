@@ -277,6 +277,7 @@ func (g *Game) initGameState(cfg *config.Config) error {
 	g.stateManager.AutoPlay = config.AutoLogin()
 	g.stateManager.StopAtCharSelect = config.StopAtCharSelect()
 	g.stateManager.StopAtCharCreate = config.StopAtCharCreate()
+	g.stateManager.MakeCharName = config.MakeCharName()
 	loginState := states.NewLoginState(loginCfg, g.client, g.stateManager)
 	g.stateManager.Change(loginState)
 
@@ -811,6 +812,7 @@ func (g *Game) renderUI() {
 		g.uiBackend.RenderCharCreateUI(ui.CharCreateUIState{
 			Slot:          state.Slot(),
 			Sex:           state.Sex,
+			Name:          state.Name,
 			Job:           state.Job,
 			HairStyle:     state.HairStyle,
 			HairColor:     state.HairColor,
@@ -826,6 +828,8 @@ func (g *Game) renderUI() {
 			OnSetJob:   func(job int) { state.SetJob(job) },
 			OnSetHair:  func(style int) { state.SetHairStyle(style) },
 			OnSetColor: func(color int) { state.SetHairColor(color) },
+			OnSetName:  func(name string) { state.SetName(name) },
+			OnCreate:   func() { g.pendingAction = func() { state.Create() } },
 			OnTurn:     func(delta int) { state.Turn(delta) },
 		}, viewportWidth, viewportHeight)
 

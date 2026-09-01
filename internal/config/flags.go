@@ -22,6 +22,7 @@ var (
 	flagShotEvery  = flag.Duration("screenshot-every", 0, "Capture a screenshot on this interval (QA aid)")
 	flagAutoLogin  = flag.Bool("autologin", false, "Log in and enter the first character without input (QA aid)")
 	flagStopAt     = flag.String("stop-at", "", "Go this far and no further: charselect or charcreate (QA aid)")
+	flagMakeChar   = flag.String("make-char", "", "On the creation screen, use this name and press Create (QA aid)")
 	flagDebugHUD   = flag.Bool("debug-overlay", false, "Start with the F3 debug overlay open (QA aid)")
 	flagNoBGM      = flag.Bool("no-bgm", false, "Run without background music, keeping sound effects")
 	flagWalkTo     = flag.String("walk-to", "", "Once in game, walk to this cell, e.g. 156,22 (QA aid)")
@@ -107,6 +108,15 @@ func StopAtCharSelect() bool {
 // which is why its spacing and layout could only be reviewed by hand.
 func StopAtCharCreate() bool {
 	return *flagStopAt == StopCharCreate
+}
+
+// MakeCharName returns the name --make-char asked to create, or "".
+//
+// Creating a character is the one thing in this feature that cannot be checked
+// by looking: it has to reach the server and come back. Driving it from the
+// command line is what makes that checkable without a person typing.
+func MakeCharName() string {
+	return *flagMakeChar
 }
 
 // StopAtSpec returns the raw --stop-at value, for reporting one that is not
