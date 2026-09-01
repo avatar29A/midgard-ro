@@ -63,7 +63,7 @@ func (s *InGameState) handleLevelUpEffect(data []byte) error {
 		return nil
 	}
 
-	// Only our own advancement raises a button; somebody else levelling
+	// Only our own advancement raises a button; somebody else leveling
 	// beside us is their business.
 	if effect.AID != s.selfAID() {
 		return nil
