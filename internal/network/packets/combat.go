@@ -50,9 +50,18 @@ const (
 	ActionStand uint8 = 3
 )
 
-// Damage types worth telling apart in ZC_NOTIFY_ACT.
+// Types worth telling apart in ZC_NOTIFY_ACT.
+//
+// The packet is not only about damage. rAthena sends it for a handful of
+// things a unit does that everyone nearby should see — picking an item up,
+// sitting, standing — with the same shape and a type that says which. Reading
+// them all as blows makes a character swing its weapon at the ground it just
+// picked a potato off.
 const (
 	DamageNormal     uint8 = 0
+	ActPickupItem    uint8 = 1
+	ActSitDown       uint8 = 2
+	ActStandUp       uint8 = 3
 	DamageEndure     uint8 = 4
 	DamageMultiHit   uint8 = 8
 	DamageCritical   uint8 = 10
@@ -147,6 +156,17 @@ func (d Damage) AnimationSpeed() float32 {
 // miss rather than as a zero.
 func (d Damage) Missed() bool {
 	return d.Amount == 0 && !d.IsSPDamage
+}
+
+// IsBlow reports whether this is a hit rather than one of the gestures the
+// same packet carries.
+func (d Damage) IsBlow() bool {
+	switch d.Type {
+	case ActPickupItem, ActSitDown, ActStandUp:
+		return false
+	default:
+		return true
+	}
 }
 
 // Critical reports whether to draw the blow as a critical hit.

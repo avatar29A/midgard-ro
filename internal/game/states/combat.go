@@ -246,6 +246,16 @@ func (s *InGameState) handleDamage(data []byte) error {
 		return nil
 	}
 
+	// The packet carries gestures as well as blows: picking something up,
+	// sitting, standing. Each is broadcast so everyone nearby sees it, and
+	// reading them as damage made a character swing at the ground it had just
+	// taken a potato off.
+	if !blow.IsBlow() {
+		s.playGesture(blow)
+
+		return nil
+	}
+
 	trace.Emit(trace.HUD, "damage",
 		zap.Uint32("from", blow.SourceID), zap.Uint32("to", blow.TargetID),
 		zap.Int("amount", blow.Amount), zap.Int("hits", blow.Hits),
@@ -266,6 +276,30 @@ func (s *InGameState) handleDamage(data []byte) error {
 	}
 
 	return nil
+}
+
+// playGesture plays one of the things ZC_NOTIFY_ACT carries that is not a
+// blow.
+//
+// Sitting and standing are recognised and then ignored: nothing in this
+// client sits yet, and playing something else for them would be worse than
+// playing nothing.
+func (s *InGameState) playGesture(blow packets.Damage) {
+	switch blow.Type {
+	case packets.ActPickupItem:
+		trace.Emit(trace.HUD, "gesture-pickup",
+			zap.Uint32("who", blow.SourceID), zap.Uint32("item", blow.TargetID))
+
+		s.faceTowards(blow.SourceID, blow.TargetID)
+
+		if body := s.bodyOf(blow.SourceID); body != nil {
+			body.PlayPickup()
+		}
+
+	case packets.ActSitDown, packets.ActStandUp:
+		trace.Emit(trace.HUD, "gesture-ignored",
+			zap.Uint32("who", blow.SourceID), zap.Uint8("type", blow.Type))
+	}
 }
 
 // playAttackAnimation starts a swing, run at the attacker's own attack speed.
