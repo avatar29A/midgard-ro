@@ -21,13 +21,13 @@ const (
 	damageDigitsPath = `data\sprite\이팩트\newnumber.spr`
 	damageMsgPath    = `data\sprite\이팩트\msg.spr`
 
-	// damageScale enlarges the figures.
+	// damageScale enlarges the digits.
 	//
 	// The digits are eleven pixels by twelve in the archive, which is what
 	// the original drew on a much smaller screen and is close to invisible on
 	// this one. This is the one number to turn if they want to be bigger or
 	// smaller; everything else about them is measured from the art.
-	damageScale = float32(3)
+	damageScale = float32(2)
 
 	// damageRise is how far a figure climbs over its life, in pixels, in
 	// proportion to how tall it is drawn.
@@ -37,6 +37,10 @@ const (
 	// It holds full strength for most of it and then goes quickly, which
 	// reads as a number being read rather than one dissolving throughout.
 	damageFadeFrom = float32(0.6)
+
+	// damageMissNativeHeight is the height of the word in the archive, which
+	// the drawn size is derived from.
+	damageMissNativeHeight = float32(16)
 
 	// damageDigitOverlap tightens the spacing, since each digit's own image
 	// carries a little air on both sides. Scaled with the digits so the
@@ -56,6 +60,10 @@ type damageArt struct {
 type damageGlyph struct {
 	texture       uint32
 	width, height float32
+
+	// nativeHeight is the image's own height, before scaling, which is what
+	// the word's scale is derived against.
+	nativeHeight float32
 }
 
 // ok reports whether a glyph has art behind it.
@@ -75,7 +83,7 @@ func (b *UI2DBackend) loadDamageArt() {
 		return
 	}
 
-	upload := func(path string, into func(int, damageGlyph)) {
+	upload := func(path string, scale float32, into func(int, damageGlyph)) {
 		raw, err := b.assetLoader(path)
 		if err != nil {
 			logger.Warn("no damage art", zap.String("path", path), zap.Error(err))
@@ -105,22 +113,35 @@ func (b *UI2DBackend) loadDamageArt() {
 			// the outline rather than haloing the glyph.
 			tex := b.ctx.Renderer().CreateTexture(int(img.Width), int(img.Height), img.Pixels)
 			into(i, damageGlyph{
-				texture: tex,
-				width:   float32(img.Width) * damageScale,
-				height:  float32(img.Height) * damageScale,
+				texture:      tex,
+				width:        float32(img.Width) * scale,
+				height:       float32(img.Height) * scale,
+				nativeHeight: float32(img.Height),
 			})
 		}
 	}
 
-	upload(damageDigitsPath, func(i int, g damageGlyph) {
+	upload(damageDigitsPath, damageScale, func(i int, g damageGlyph) {
 		if i < len(b.damageArt.digits) {
 			b.damageArt.digits[i] = g
 		}
 	})
 
+	// The word is drawn the same height as a digit rather than at the digits'
+	// magnification.
+	//
+	// It is already forty-nine pixels wide and sixteen tall in the archive
+	// against a digit's eleven by twelve, so enlarging it as much made a miss
+	// shout where a hit murmured. Deriving the scale from the two heights
+	// keeps them the same size on screen whatever the digits are set to.
+	missScale := damageScale
+	if digit := b.damageArt.digits[0]; digit.ok() && digit.nativeHeight > 0 {
+		missScale = digit.height / damageMissNativeHeight
+	}
+
 	// The message sprite holds several; the first is "Miss", which is the
 	// only one a blow needs.
-	upload(damageMsgPath, func(i int, g damageGlyph) {
+	upload(damageMsgPath, missScale, func(i int, g damageGlyph) {
 		if i == 0 {
 			b.damageArt.miss = g
 		}
