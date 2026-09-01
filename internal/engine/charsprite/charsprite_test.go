@@ -423,3 +423,27 @@ func TestActionMapBakesOnlyWhatItUses(t *testing.T) {
 		t.Error("a monster bakes a player's weapon attack set")
 	}
 }
+
+// TestPosedSetsAreTheIdleAndTheSit: these two ACT sets hold three head poses
+// rather than three frames of animation, so baking them as a loop swivels the
+// head forever. Nothing else is posed — the combat stance is a real six-frame
+// loop, and a monster has no head to pose at all.
+func TestPosedSetsAreTheIdleAndTheSit(t *testing.T) {
+	for _, tc := range []struct {
+		kind   Kind
+		action int
+		want   bool
+	}{
+		{KindPlayer, 0, true},
+		{KindPlayer, actSit, true},
+		{KindPlayer, actStandby, false},
+		{KindPlayer, 1, false},
+		{KindMonster, 0, false},
+		{KindMonster, actSit, false},
+		{KindNPC, 0, false},
+	} {
+		if got := posedSet(tc.kind, tc.action); got != tc.want {
+			t.Errorf("posedSet(%v, %d) = %v, want %v", tc.kind, tc.action, got, tc.want)
+		}
+	}
+}
