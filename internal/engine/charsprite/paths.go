@@ -19,6 +19,14 @@ const (
 	// Doram characters are a second race with the same tree beneath it —
 	// body and head, split by sex, named the same way. Only the root differs,
 	// which is why this is a prefix swap rather than a second resolver.
+	// Palettes live in their own tree, and the two races are not arranged
+	// the same way there: humans sit directly under 머리 with no race folder,
+	// Doram get one. That asymmetry is the archive's, not ours.
+	//
+	//	머리  "hair"
+	palHairDir      = `data\palette\머리\`
+	palDoramHairDir = `data\palette\도람족\머리\`
+
 	doramRoot    = `data\sprite\도람족\`
 	doramBodyDir = doramRoot + `몸통\`
 	doramHeadDir = doramRoot + `머리통\`
@@ -142,6 +150,30 @@ func (s Spec) headRoot() string {
 	}
 
 	return headDir
+}
+
+// HairPalettePath returns the archive path of the palette this look's hair is
+// drawn through, or "" when there is none to look for.
+//
+// Named 머리<style>_<sex>_<color>.pal. Nine colors, 0 to 8, exist per style
+// and sex; a number outside that simply will not be found, which the caller
+// treats as "use the sprite's own palette".
+func (s Spec) HairPalettePath() string {
+	if s.Kind != KindPlayer {
+		return ""
+	}
+
+	dir := palHairDir
+	if s.isDoram() {
+		dir = palDoramHairDir
+	}
+
+	hair := s.HairStyle
+	if hair <= 0 {
+		hair = 1
+	}
+
+	return fmt.Sprintf(`%s머리%d_%s_%d.pal`, dir, hair, s.sexSuffix(), s.HairColor)
 }
 
 func (s Spec) sexSuffix() string {

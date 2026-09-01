@@ -64,6 +64,18 @@ const (
 	charCreateHairY      = float32(62)
 	charCreateHairLabelY = float32(48)
 
+	// The hair color swatches, 16x16, five to a row under the grid.
+	charCreateColW      = float32(16)
+	charCreateColH      = float32(16)
+	charCreateColCols   = 5
+	charCreateColPitch  = float32(20)
+	charCreateColX      = float32(615)
+	charCreateColY      = float32(310)
+	charCreateColLabelY = float32(296)
+
+	// HairColorCount is how many palettes exist per style and sex.
+	charCreateColorCount = 9
+
 	// The race cards on the left, which the frame leaves blank.
 	charCreateCardX  = float32(18)
 	charCreateCardW  = float32(367)
@@ -167,6 +179,7 @@ func (b *UI2DBackend) renderNativeCharCreate(state CharCreateUIState, width, hei
 
 	b.drawCharCreateRaces(state, x, y)
 	b.drawCharCreateHair(skin, state, x, y)
+	b.drawCharCreateColors(state, x, y)
 	b.drawCharCreateSex(skin, state, x, y)
 	b.drawCharCreatePreview(state, x, y)
 	b.drawCharCreateTurn(skin, state, x, y)
@@ -249,6 +262,39 @@ func (b *UI2DBackend) drawCharCreateHair(skin *charCreateSkin, state CharCreateU
 	}
 }
 
+// drawCharCreateColors draws the hair palette swatches.
+//
+// Nine exist per style and sex — the archive files one .pal per color — and
+// picking one redraws the preview through it rather than tinting anything.
+func (b *UI2DBackend) drawCharCreateColors(state CharCreateUIState, x, y float32) {
+	r := b.ctx.Renderer()
+
+	r.DrawText(x+charCreateHairX, y+charCreateColLabelY, "Hair Color",
+		loginTextScale, charCreateCardInk)
+
+	for color := 0; color < charCreateColorCount; color++ {
+		col := color % charCreateColCols
+		row := color / charCreateColCols
+
+		cellX := x + charCreateColX + float32(col)*charCreateColPitch
+		cellY := y + charCreateColY + float32(row)*charCreateColPitch
+
+		name := fmt.Sprintf(`color%02d_off.bmp`, color)
+		if color == state.HairColor {
+			name = fmt.Sprintf(`color%02d_on.bmp`, color)
+		}
+
+		if tex := b.optionalTexture(makeCharVer2TexBasePath + name); tex != nil {
+			r.DrawImage(tex.ID, cellX, cellY, charCreateColW, charCreateColH, ui2d.ColorWhite)
+		}
+
+		if b.ctx.InvisibleButtonAt(fmt.Sprintf("charcreate_color_%d", color),
+			cellX, cellY, charCreateColW, charCreateColH) && state.OnSetColor != nil {
+			state.OnSetColor(color)
+		}
+	}
+}
+
 // drawCharCreateRaces draws the Human and Doram cards and switches between
 // them.
 //
@@ -327,6 +373,7 @@ func (b *UI2DBackend) drawCharCreatePreview(state CharCreateUIState, x, y float3
 		Job:       state.Job,
 		Female:    state.Sex == SexFemale,
 		HairStyle: state.HairStyle,
+		HairColor: state.HairColor,
 	}, state.Facing)
 	if portrait == nil {
 		return

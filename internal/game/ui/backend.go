@@ -160,6 +160,7 @@ type CharCreateUIState struct {
 	// Job, HairStyle and Facing are the rest of the look being built.
 	Job       int
 	HairStyle int
+	HairColor int
 	Facing    int
 
 	StatusMessage string
@@ -172,9 +173,10 @@ type CharCreateUIState struct {
 	OnSetSex func(sex uint8)
 	OnSetJob func(job int)
 
-	// OnSetHair picks a hair style.
-	OnSetHair func(style int)
-	OnTurn    func(delta int)
+	// OnSetHair picks a hair style, OnSetColor its palette.
+	OnSetHair  func(style int)
+	OnSetColor func(color int)
+	OnTurn     func(delta int)
 }
 
 // LoadingUIState contains the data needed to render the loading UI.
