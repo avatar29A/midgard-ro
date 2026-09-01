@@ -88,6 +88,8 @@ func (b *UI2DBackend) drawSkillsWindow(state InGameUIState, screenW, screenH flo
 	b.drawSkillRows(state, x, y)
 	b.drawSkillFooter(state, x, y)
 	b.ctx.EndWindow()
+
+	b.finishSkillDrag()
 }
 
 // drawSkillRows lists the skills, scrolled to wherever the bar is.
@@ -124,8 +126,11 @@ func (b *UI2DBackend) drawSkillRows(state InGameUIState, x, y float32) {
 	}
 
 	for i := 0; i < visible && offset+i < len(state.Skills); i++ {
-		b.drawSkillRow(state.Skills[offset+i], listX, listY+float32(i)*skillsRowH, listW,
-			state.SkillPoints > 0)
+		skill := state.Skills[offset+i]
+		rowY := listY + float32(i)*skillsRowH
+
+		b.drawSkillRow(skill, listX, rowY, listW, state.SkillPoints > 0)
+		b.beginSkillDrag(skill, ui2d.Rect{X: listX, Y: rowY, W: listW, H: skillsRowH})
 	}
 }
 
@@ -179,6 +184,45 @@ func (b *UI2DBackend) drawSkillRow(skill packets.Skill, x, y, w float32, afforda
 
 	if b.drawSkillRaise(skill.ID, x+w-skillsRaiseW, top+(lineH-skillsRaiseW)/2) {
 		b.skillAction = SkillAction{Skill: skill.ID}
+	}
+}
+
+// beginSkillDrag starts dragging a skill out of its row, so it can be put on
+// the quick panel.
+//
+// Only what can be cast is draggable. A passive skill on the bar would be a
+// key that does nothing, and the original does not let you put one there.
+func (b *UI2DBackend) beginSkillDrag(skill packets.Skill, row ui2d.Rect) {
+	if skill.Inf == 0 || b.skillDrag.active || b.itemDrag.active {
+		return
+	}
+
+	if in := b.ctx.Input(); in.MouseLeftPressed && row.Contains(in.MouseX, in.MouseY) {
+		b.skillDrag = skillDrag{active: true, skill: skill.ID}
+	}
+}
+
+// skillDrag is a skill being dragged out of the Skill window.
+type skillDrag struct {
+	active bool
+	skill  uint16
+}
+
+// finishSkillDrag puts a dragged skill in the cell it was let go over.
+//
+// Released anywhere else it is simply dropped: a skill is not a thing that can
+// be thrown away, and the row it came from is still there.
+func (b *UI2DBackend) finishSkillDrag() {
+	if !b.skillDrag.active || b.ctx.Input().MouseLeftDown {
+		return
+	}
+
+	in := b.ctx.Input()
+	dragged := b.skillDrag
+	b.skillDrag = skillDrag{}
+
+	if row, col, ok := b.hotkeyCellAt(in.MouseX, in.MouseY); ok {
+		b.AssignHotkey(row, col, hotkeyCell{id: uint32(dragged.skill), skill: true})
 	}
 }
 

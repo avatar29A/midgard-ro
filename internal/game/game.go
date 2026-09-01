@@ -486,6 +486,7 @@ func (g *Game) frame() {
 	g.checkTimedScreenshot()
 
 	g.checkHotkeys()
+	g.checkSit()
 
 	// F3 toggles the in-game debug overlay (player/camera/scene/network).
 	if imgui.IsKeyPressedBoolV(imgui.KeyF3, false) {
@@ -1015,6 +1016,15 @@ func (g *Game) renderUI() {
 		if skill, ok := g.uiBackend.TakeSkillAction(); ok {
 			if err := state.RaiseSkill(skill.Skill); err != nil {
 				logger.Warn("could not raise that skill", zap.Error(err))
+			}
+		}
+
+		// A skill pressed on the quick panel. What it is cast at depends on
+		// what it targets, which is the state's question rather than the
+		// interface's.
+		if cast, ok := g.uiBackend.TakeSkillCast(); ok {
+			if err := state.UseSkill(cast.Skill, 0); err != nil {
+				logger.Warn("could not use that skill", zap.Error(err))
 			}
 		}
 
@@ -1600,6 +1610,31 @@ var hotkeyRows = []hotkeyRowKeys{
 	{row: 1},
 	{row: 2, ctrl: true},
 	{row: 3, alt: true},
+}
+
+// checkSit sits the character down and stands it back up, on Insert.
+//
+// One key for both, as the original has it. Nothing fires while a field has
+// focus: Insert in a chat line is a text key, and sitting down in the middle
+// of writing a message would be the interface acting on something that was
+// never meant for it.
+func (g *Game) checkSit() {
+	if g.uiBackend != nil && g.uiBackend.TextEntryFocused() {
+		return
+	}
+
+	if !imgui.IsKeyPressedBoolV(imgui.KeyInsert, false) {
+		return
+	}
+
+	state, ok := g.stateManager.Current().(*states.InGameState)
+	if !ok {
+		return
+	}
+
+	if err := state.ToggleSit(); err != nil {
+		logger.Warn("could not sit down", zap.Error(err))
+	}
 }
 
 // checkHotkeys uses the quick panel from the keyboard.

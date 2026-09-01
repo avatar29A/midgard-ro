@@ -90,6 +90,16 @@ func EncodeAttack(targetGID uint32, repeat bool) []byte {
 		action = ActionAttackRepeat
 	}
 
+	return EncodeAction(targetGID, action)
+}
+
+// EncodeAction asks to act on a target.
+//
+// The same packet an attack goes out in. Sitting and standing name the
+// character itself as the target, which is how rAthena reads them: the id is
+// ignored for those two, but sending a zero would be sending a target the
+// server has no reason to accept.
+func EncodeAction(targetGID uint32, action uint8) []byte {
 	pkt := make([]byte, 7)
 	binary.LittleEndian.PutUint16(pkt, CZ_REQUEST_ACT)
 	binary.LittleEndian.PutUint32(pkt[2:], targetGID)

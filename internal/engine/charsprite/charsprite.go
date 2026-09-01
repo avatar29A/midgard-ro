@@ -36,6 +36,10 @@ const (
 	// holding it the rest of the time reads as a character stuck mid-fight.
 	ActionStandby
 
+	// ActionSit is the seated pose, which a player holds until they get up
+	// again. Only a player has one — nothing else in the game sits down.
+	ActionSit
+
 	// LogicalActions is how many of the above there are.
 	LogicalActions
 )
@@ -108,6 +112,11 @@ type Spec struct {
 // ACT indices that are not logical actions but are needed to reason about
 // them.
 const (
+	// actSit is the seated pose, ACT set 2 for a player. It sits between the
+	// walk and the pick-up in the body's own order, which is why the pick-up
+	// is 3 rather than 2.
+	actSit = 2
+
 	// actStandby is the armed stance, ACT set 4 for a player. A weapon is
 	// drawn in this pose and in the attack, and in nothing else — which is
 	// why an armed character stands in it rather than in the bare idle.
@@ -137,13 +146,13 @@ const (
 // nothing on the ground picks anything up but the player.
 var actionIndices = map[Kind][LogicalActions]int{
 	KindPlayer: {ActionIdle: 0, ActionWalk: 1, ActionPickup: 3, ActionAttack: actUnarmedAttack,
-		ActionHurt: 6, ActionDie: 7, ActionStandby: actStandby},
+		ActionHurt: 6, ActionDie: 7, ActionStandby: actStandby, ActionSit: actSit},
 	KindMonster: {ActionIdle: 0, ActionWalk: 1, ActionPickup: -1, ActionAttack: 2,
-		ActionHurt: 3, ActionDie: 4, ActionStandby: -1},
+		ActionHurt: 3, ActionDie: 4, ActionStandby: -1, ActionSit: -1},
 	KindNPC: {ActionIdle: 0, ActionWalk: 1, ActionPickup: -1, ActionAttack: -1,
-		ActionHurt: -1, ActionDie: -1, ActionStandby: -1},
+		ActionHurt: -1, ActionDie: -1, ActionStandby: -1, ActionSit: -1},
 	KindItem: {ActionIdle: 0, ActionWalk: -1, ActionPickup: -1, ActionAttack: -1,
-		ActionHurt: -1, ActionDie: -1, ActionStandby: -1},
+		ActionHurt: -1, ActionDie: -1, ActionStandby: -1, ActionSit: -1},
 }
 
 // ActionMap is which ACT index each logical action resolves to for one
@@ -176,7 +185,7 @@ func DefaultActionMap(kind Kind) ActionMap {
 	}
 
 	return ActionMap{ActionIdle: 0, ActionWalk: -1, ActionPickup: -1,
-		ActionAttack: -1, ActionHurt: -1, ActionDie: -1, ActionStandby: -1}
+		ActionAttack: -1, ActionHurt: -1, ActionDie: -1, ActionStandby: -1, ActionSit: -1}
 }
 
 // withWeapon moves the actions a weapon changes.
@@ -228,10 +237,9 @@ func actHasArt(act *formats.ACT, set int) bool {
 
 // bakes reports whether an ACT index is one this appearance actually uses.
 //
-// Only the indices the map names: a player never sits in this client, and a
-// monster has nothing at 5 or above, so baking either would be eight
-// directions of frames nobody looks at — and a poring's attack alone is
-// twenty-eight frames a direction.
+// Only the indices the map names: a monster has nothing at 5 or above, so
+// baking those would be eight directions of frames nobody looks at — and a
+// poring's attack alone is twenty-eight frames a direction.
 func (m ActionMap) bakes(action int) bool {
 	for _, index := range m {
 		if index == action {
@@ -244,10 +252,10 @@ func (m ActionMap) bakes(action int) bool {
 
 // bakedAction reports whether an ACT index is worth compositing for a family.
 //
-// Only the indices that family maps a logical action onto: a player never
-// sits or stands ready in this client, and a monster has nothing at 5 or
-// above, so baking either would be eight directions of frames nobody looks
-// at — and a poring's attack alone is twenty-eight frames a direction.
+// Only the indices that family maps a logical action onto: a monster has
+// nothing at 5 or above, so baking those would be eight directions of frames
+// nobody looks at — and a poring's attack alone is twenty-eight frames a
+// direction.
 func bakedAction(kind Kind, action int) bool {
 	set, ok := actionIndices[kind]
 	if !ok {

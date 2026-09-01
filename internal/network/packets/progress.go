@@ -88,3 +88,45 @@ func EncodeUnequip(index int) []byte {
 
 	return pkt
 }
+
+// Casting a skill at something, which is what a skill on the quick panel does.
+const (
+	// CZ_USE_SKILL is `<level>.W <skill>.W <target>.L`, 10 bytes.
+	//
+	// 0x0438 is what the default branch of clif_shuffle.hpp registers, which
+	// is the branch that applies at this packetver — the numbered branches
+	// above it are all `PACKETVER ==` equalities for particular 2013-era
+	// clients. The main table registers clif_parse_UseSkillToId under half a
+	// dozen other ids behind version guards, and picking one of those would
+	// be picking a different client's packet.
+	//
+	// The field order is the parse offsets rAthena declares beside the id:
+	// pos[0] at 2 is the level and pos[1] at 4 the skill, which is the
+	// opposite way round from how the packet reads.
+	CZ_USE_SKILL uint16 = 0x0438
+)
+
+// Which skills can be cast, from rAthena's e_skill_inf. A skill that targets
+// nothing is passive and has no cast at all.
+const (
+	InfAttack  = 0x01
+	InfGround  = 0x02
+	InfSelf    = 0x04
+	InfSupport = 0x10
+	InfTrap    = 0x20
+)
+
+// EncodeUseSkill asks to cast a skill at a unit.
+//
+// The target is a unit id, and for a self-cast skill that is our own: rAthena
+// takes whatever is sent and checks it against what the skill allows, so a
+// skill cast on the caster still names the caster.
+func EncodeUseSkill(skillID uint16, level int, targetGID uint32) []byte {
+	pkt := make([]byte, 10)
+	binary.LittleEndian.PutUint16(pkt, CZ_USE_SKILL)
+	binary.LittleEndian.PutUint16(pkt[2:], uint16(level))
+	binary.LittleEndian.PutUint16(pkt[4:], skillID)
+	binary.LittleEndian.PutUint32(pkt[6:], targetGID)
+
+	return pkt
+}

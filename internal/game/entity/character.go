@@ -29,10 +29,11 @@ const (
 	ActionHurt    = 4
 	ActionDie     = 5
 	ActionStandby = 6
+	ActionSit     = 7
 
 	// LoadedActions bounds the per-action tables here, matching charsprite's
 	// count of logical actions so an index is valid in both.
-	LoadedActions = 7
+	LoadedActions = 8
 )
 
 // Character represents a game character with position, movement, and animation state.
@@ -86,6 +87,12 @@ type Character struct {
 	// idle. Set while there is something to stand ready against — holding it
 	// the rest of the time reads as a character stuck mid-fight.
 	Ready bool
+
+	// Sitting holds the character in the seated pose. Set from the server's
+	// own answer rather than from the key that asked: sitting can be refused
+	// — the Basic Skill has to be high enough — and a character that sat down
+	// locally would be sitting in a game where it is standing.
+	Sitting bool
 
 	// Server-authoritative cell path and progress along the current step.
 	path        [][2]int

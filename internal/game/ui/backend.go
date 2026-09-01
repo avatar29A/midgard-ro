@@ -33,6 +33,9 @@ type UIBackend interface {
 	// TakeSkillAction returns a skill the player asked to raise.
 	TakeSkillAction() (SkillAction, bool)
 
+	// TakeSkillCast returns a skill the player asked to use.
+	TakeSkillCast() (SkillCast, bool)
+
 	// TakeLevelUpAction returns a level-up button the player pressed.
 	TakeLevelUpAction() (LevelUpAction, bool)
 
