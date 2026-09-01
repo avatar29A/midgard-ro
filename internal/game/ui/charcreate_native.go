@@ -335,9 +335,14 @@ func (b *UI2DBackend) drawCharCreateColors(state CharCreateUIState, x, y float32
 		cellX := x + charCreateColX + float32(col)*charCreateColPitch
 		cellY := swatchTop + float32(row)*charCreateColPitch
 
-		name := fmt.Sprintf(`color%02d_off.bmp`, color)
+		// The pictures are numbered from one and the palettes from zero:
+		// hair color 0 is drawn by color01. Asking for color00 finds nothing
+		// and leaves a hole where the selected swatch should be.
+		art := color + 1
+
+		name := fmt.Sprintf(`color%02d_off.bmp`, art)
 		if color == state.HairColor {
-			name = fmt.Sprintf(`color%02d_on.bmp`, color)
+			name = fmt.Sprintf(`color%02d_on.bmp`, art)
 		}
 
 		if tex := b.optionalTexture(makeCharVer2TexBasePath + name); tex != nil {
