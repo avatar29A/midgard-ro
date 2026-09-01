@@ -392,6 +392,22 @@ func Load(load Loader, spec Spec) (*Assets, error) {
 	return a, nil
 }
 
+// posedSet reports whether an ACT set holds head poses rather than an
+// animation.
+//
+// A player's idle and seated sets each carry three "frames" that are the same
+// body art with the head turned three ways. Cycling them animates nothing —
+// it swivels the head forever, which is what a seated character was doing
+// before this covered the sit as well as the idle.
+//
+// Only players, and only these two: the combat stance is a six-frame loop, and
+// baking one frame of that left the character apparently frozen mid-swing. A
+// monster or NPC has no head to pose and its idle is a real animation — a
+// Kafra has 99 idle frames of standing and shifting.
+func posedSet(kind Kind, action int) bool {
+	return kind == KindPlayer && (action == 0 || action == actSit)
+}
+
 // BuildSheet composites every frame of every loaded action/direction and pads
 // them to a common size. Padding centers horizontally and aligns to the
 // bottom, so the character's feet sit at the same place in every frame — the
@@ -422,15 +438,10 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 	}
 
 	// frameIndices returns the (bodyFrame, headFrame) pairs to bake for an
-	// action. A player's idle indexes the body by head direction too, because
-	// the body's neck anchor moves with the head pose.
+	// action. A player's posed sets index the body by head direction too,
+	// because the body's neck anchor moves with the head pose.
 	frameIndices := func(action, available int) [][2]int {
-		// Only the bare idle is a single baked pose. A player stands there on
-		// one frame per head direction, which is why it is not animated — but
-		// the combat stance an armed character stands in is a six-frame loop,
-		// and baking one frame of it left the character apparently frozen
-		// mid-swing.
-		if action == 0 && kind == KindPlayer {
+		if posedSet(kind, action) {
 			return [][2]int{{headDir, headDir}}
 		}
 		if available > MaxAnimationFrames {
@@ -451,7 +462,7 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 		if !actions.bakes(action) {
 			continue
 		}
-		if action == actions[ActionIdle] && kind == KindPlayer {
+		if posedSet(kind, action) {
 			continue
 		}
 		for dir := 0; dir < Directions; dir++ {
