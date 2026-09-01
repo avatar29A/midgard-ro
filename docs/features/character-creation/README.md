@@ -1,6 +1,6 @@
 # Feature: Character creation — the "Make Your Characters" screen
 
-**Branch:** `feature/character-creation` · **Issue:** _(filled after creation)_ · **Parent:** #49 (MVP scope)
+**Branch:** `feature/character-creation` · **Issue:** #109 · **Parent:** #49 (MVP scope)
 **Status:** Planned · **Created:** 2026-09-01
 
 ## Goal
