@@ -190,8 +190,13 @@ func CompositeWithGear(
 	headOffsetX := bodyAnchorX - headAnchorX
 	headOffsetY := bodyAnchorY - headAnchorY
 
-	// The gear aligns the same way, onto the same point.
+	// The gear aligns the same way, onto the same point — the pieces that
+	// carry an anchor to align by.
 	for i := range worn {
+		if !worn[i].aligned {
+			continue
+		}
+
 		worn[i].offsetX = bodyAnchorX - worn[i].anchorX
 		worn[i].offsetY = bodyAnchorY - worn[i].anchorY
 	}
@@ -448,6 +453,10 @@ type wornPart struct {
 
 	anchorX, anchorY int
 	offsetX, offsetY int
+
+	// aligned marks a piece that carries anchors of its own and so is moved
+	// onto the body's; one without them is drawn where it already is.
+	aligned bool
 }
 
 // resolveGear picks each piece's frame for a pose, dropping the ones that
@@ -476,10 +485,17 @@ func resolveGear(gear []Gear, action, direction, headFrame int) []wornPart {
 
 		frame := &frames[headFrame%len(frames)]
 
+		// Only gear that carries anchors is aligned onto the body's. One that
+		// does not is already drawn in the body's own coordinates and wants no
+		// offset at all — the same rule the weapon follows, and for the same
+		// reason: that anchor is the neck, and it is a correction rather than
+		// a position. Applied to a hat that has none it put a second copy of
+		// the head eighty pixels above the character.
 		resolved := wornPart{spr: part.SPR, frame: frame}
 		if len(frame.AnchorPoints) > 0 {
 			resolved.anchorX = int(frame.AnchorPoints[0].X)
 			resolved.anchorY = int(frame.AnchorPoints[0].Y)
+			resolved.aligned = true
 		}
 
 		worn = append(worn, resolved)

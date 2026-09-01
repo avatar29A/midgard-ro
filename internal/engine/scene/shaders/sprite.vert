@@ -15,6 +15,10 @@ uniform vec3 uCamUp;     // Camera up vector for billboard
 // depth of the point it stands on instead — see below.
 uniform float uDepthLift;
 
+// Where the unit actually stands, for the depth above. Not uWorldPos: that is
+// the quad's corner, which is placed so the sprite's origin lands here.
+uniform vec3 uDepthAnchor;
+
 out vec2 vTexCoord;
 
 void main() {
@@ -40,7 +44,7 @@ void main() {
     // what standing behind a hill should do.
     if (uDepthLift > 0.0) {
         vec3 toCamera = normalize(cross(uCamUp, uCamRight));
-        vec4 anchor = uViewProj * vec4(uWorldPos + toCamera * uDepthLift, 1.0);
+        vec4 anchor = uViewProj * vec4(uDepthAnchor + toCamera * uDepthLift, 1.0);
 
         corner.z = anchor.z / anchor.w * corner.w;
     }
