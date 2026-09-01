@@ -291,6 +291,8 @@ func (s *InGameState) loadPlayerSprites() {
 
 	logger.Info("character sprites loaded",
 		zap.String("sprite", s.playerRender.SpritePath()),
+		zap.Int("weaponLook", spec.Weapon),
+		zap.String("weapon", s.playerRender.WeaponPath()),
 		zap.Int("idleFrames", s.playerRender.FrameCount(entity.ActionIdle, entity.DirS)),
 		zap.Int("walkFrames", s.playerRender.FrameCount(entity.ActionWalk, entity.DirS)))
 }

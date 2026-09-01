@@ -78,6 +78,10 @@ type Spec struct {
 	Female    bool // sex M/F selects the sprite folder and filename suffix
 	HairStyle int  // head sprite number
 
+	// Weapon is the look the server sent for the character's weapon, which is
+	// either a weapon class or an item id. Zero is bare-handed. Players only.
+	Weapon int
+
 	// Name identifies a KindItem sprite, which the archive files by the item
 	// table's resource name rather than by any id. Ignored for every other
 	// kind. Spec is used as a cache key, so this stays a plain string.
@@ -87,6 +91,25 @@ type Spec struct {
 	// HeadStraight). Zero value looks straight ahead.
 	HeadDirection int
 }
+
+// ACT indices that are not logical actions but are needed to reason about
+// them.
+const (
+	// actStandby is the armed stance, ACT set 4 for a player. A weapon is
+	// drawn in this pose and in the attack, and in nothing else — which is
+	// why an armed character stands in it rather than in the bare idle.
+	actStandby = 4
+
+	// actUnarmedAttack is the swing a player makes with nothing in hand.
+	actUnarmedAttack = 5
+
+	// actWeaponAttacks are the sets a weapon's own art may live in. Which one
+	// a weapon uses is the weapon's business — a dagger is drawn in 10 and a
+	// sword in 11 — so the sprite is asked rather than told.
+	actWeaponAttacks0 = 10
+	actWeaponAttacks1 = 11
+	actWeaponAttacks2 = 12
+)
 
 // Which ACT index each family uses for each logical action.
 //
@@ -106,6 +129,14 @@ var actionIndices = map[Kind][LogicalActions]int{
 	KindItem:    {ActionIdle: 0, ActionWalk: -1, ActionPickup: -1, ActionAttack: -1, ActionHurt: -1, ActionDie: -1},
 }
 
+// ActionMap is which ACT index each logical action resolves to for one
+// appearance.
+//
+// Per appearance rather than per family because a weapon moves two of them: a
+// dagger attacks from set 10 and a sword from set 11, and an armed character
+// stands in the combat pose instead of the bare idle.
+type ActionMap [LogicalActions]int
+
 // ActionIndex is the ACT index a family uses for a logical action, or -1 when
 // it has none.
 func ActionIndex(kind Kind, logical int) int {
@@ -119,6 +150,82 @@ func ActionIndex(kind Kind, logical int) int {
 	}
 
 	return set[logical]
+}
+
+// DefaultActionMap is the mapping for a family before a weapon has its say.
+func DefaultActionMap(kind Kind) ActionMap {
+	if set, ok := actionIndices[kind]; ok {
+		return set
+	}
+
+	return ActionMap{ActionIdle: 0, ActionWalk: -1, ActionPickup: -1,
+		ActionAttack: -1, ActionHurt: -1, ActionDie: -1}
+}
+
+// withWeapon moves the actions a weapon changes.
+//
+// The weapon sprite is asked which sets it has art in, which settles two
+// things no table could: which of the attack sets this weapon swings from,
+// and that an armed character stands in the combat pose — the only idle a
+// weapon is drawn in.
+func (m ActionMap) withWeapon(weapon *formats.ACT) ActionMap {
+	if weapon == nil {
+		return m
+	}
+
+	if actHasArt(weapon, actStandby) {
+		m[ActionIdle] = actStandby
+	}
+
+	for _, set := range []int{actWeaponAttacks0, actWeaponAttacks1, actWeaponAttacks2} {
+		if actHasArt(weapon, set) {
+			m[ActionAttack] = set
+
+			break
+		}
+	}
+
+	return m
+}
+
+// actHasArt reports whether an ACT set draws anything at all.
+//
+// A weapon's ACT carries an entry for every set the body has, and leaves the
+// ones it takes no part in pointing at sprite -1. That is the difference
+// between "this weapon swings here" and "this set exists".
+func actHasArt(act *formats.ACT, set int) bool {
+	for dir := 0; dir < Directions; dir++ {
+		idx := set*Directions + dir
+		if idx >= len(act.Actions) {
+			return false
+		}
+
+		for _, frame := range act.Actions[idx].Frames {
+			for _, layer := range frame.Layers {
+				if layer.SpriteID >= 0 {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
+}
+
+// bakes reports whether an ACT index is one this appearance actually uses.
+//
+// Only the indices the map names: a player never sits in this client, and a
+// monster has nothing at 5 or above, so baking either would be eight
+// directions of frames nobody looks at — and a poring's attack alone is
+// twenty-eight frames a direction.
+func (m ActionMap) bakes(action int) bool {
+	for _, index := range m {
+		if index == action {
+			return true
+		}
+	}
+
+	return false
 }
 
 // bakedAction reports whether an ACT index is worth compositing for a family.
@@ -159,6 +266,10 @@ type Sheet struct {
 	// Dropped counts frames left unbaked by MaxAnimationFrames, so a
 	// shortened animation is reported rather than silently shortened.
 	Dropped int
+
+	// Actions is which ACT index each logical action resolves to for this
+	// appearance, after the weapon has had its say.
+	Actions ActionMap
 }
 
 // Frame is one baked animation frame: RGBA pixels at the sheet's dimensions.
@@ -174,8 +285,16 @@ type Assets struct {
 	HeadACT *formats.ACT
 	Sheet   *Sheet
 
+	// WeaponSPR and WeaponACT are the weapon in the character's hand, nil when
+	// bare-handed or when the archive has no art for what is held.
+	WeaponSPR *formats.SPR
+	WeaponACT *formats.ACT
+
 	// BodyPath is the archive path the body actually loaded from, for logs.
 	BodyPath string
+
+	// WeaponPath is empty when no weapon sprite was found.
+	WeaponPath string
 	// HeadPath is empty when no head sprite was found.
 	HeadPath string
 }
@@ -230,7 +349,20 @@ func Load(load Loader, spec Spec) (*Assets, error) {
 		a.HeadPath = headSPRPath
 	}
 
-	a.Sheet = BuildSheet(a.BodySPR, a.BodyACT, a.HeadSPR, a.HeadACT, spec.HeadDirection, spec.Kind)
+	// The weapon is a third sprite, and losing it costs a knife rather than a
+	// character, so failure here is worth no more than the head's.
+	for _, candidate := range spec.WeaponPathCandidates() {
+		if weaponSPR, weaponACT, weaponErr := loadPair(load, candidate[0], candidate[1]); weaponErr == nil {
+			a.WeaponSPR = weaponSPR
+			a.WeaponACT = weaponACT
+			a.WeaponPath = candidate[0]
+
+			break
+		}
+	}
+
+	a.Sheet = BuildSheet(a.BodySPR, a.BodyACT, a.HeadSPR, a.HeadACT,
+		a.WeaponSPR, a.WeaponACT, spec.HeadDirection, spec.Kind)
 	if a.Sheet == nil {
 		return nil, fmt.Errorf("body sprite %q produced no frames", bodySPRPath)
 	}
@@ -257,7 +389,9 @@ func Load(load Loader, spec Spec) (*Assets, error) {
 // animation: a Kafra has 99 idle frames of her standing and shifting. Baking
 // only the first leaves every one of them frozen, which is what treating them
 // like players did.
-func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR, headACT *formats.ACT, headDir int, kind Kind) *Sheet {
+func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR, headACT *formats.ACT,
+	weaponSPR *formats.SPR, weaponACT *formats.ACT, headDir int, kind Kind) *Sheet {
+	actions := DefaultActionMap(kind).withWeapon(weaponACT)
 	if bodySPR == nil || bodyACT == nil || len(bodyACT.Actions) == 0 {
 		return nil
 	}
@@ -269,7 +403,7 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 	// action. A player's idle indexes the body by head direction too, because
 	// the body's neck anchor moves with the head pose.
 	frameIndices := func(action, available int) [][2]int {
-		if action == 0 && kind == KindPlayer {
+		if action == actions[ActionIdle] && kind == KindPlayer {
 			return [][2]int{{headDir, headDir}}
 		}
 		if available > MaxAnimationFrames {
@@ -287,10 +421,10 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 	// left alone, not animation that went missing.
 	dropped := 0
 	for action := 0; action < LoadedActions; action++ {
-		if !bakedAction(kind, action) {
+		if !actions.bakes(action) {
 			continue
 		}
-		if action == 0 && kind == KindPlayer {
+		if action == actions[ActionIdle] && kind == KindPlayer {
 			continue
 		}
 		for dir := 0; dir < Directions; dir++ {
@@ -307,7 +441,7 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 	// First pass: the largest frame decides the sheet size.
 	maxW, maxH := 0, 0
 	for action := 0; action < LoadedActions; action++ {
-		if !bakedAction(kind, action) {
+		if !actions.bakes(action) {
 			continue
 		}
 		for dir := 0; dir < Directions; dir++ {
@@ -316,7 +450,8 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 				continue
 			}
 			for _, fp := range frameIndices(action, len(bodyACT.Actions[idx].Frames)) {
-				r := sprite.CompositeSprites(bodySPR, bodyACT, headSPR, headACT, action, dir, fp[0], fp[1])
+				r := sprite.CompositeWithWeapon(bodySPR, bodyACT, headSPR, headACT,
+					weaponSPR, weaponACT, action, dir, fp[0], fp[1])
 				if r.Width > maxW {
 					maxW = r.Width
 				}
@@ -332,6 +467,7 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 
 	// Second pass: bake each frame onto a canvas of that size.
 	sheet := &Sheet{
+		Actions: actions,
 		Width:   maxW,
 		Height:  maxH,
 		Frames:  make(map[int][]Frame, LoadedActions*Directions),
@@ -348,7 +484,7 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 	}
 
 	for action := 0; action < LoadedActions; action++ {
-		if !bakedAction(kind, action) {
+		if !actions.bakes(action) {
 			continue
 		}
 		for dir := 0; dir < Directions; dir++ {
@@ -364,7 +500,8 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 			pairs := frameIndices(action, available)
 			frames := make([]Frame, len(pairs))
 			for i, fp := range pairs {
-				r := sprite.CompositeSprites(bodySPR, bodyACT, headSPR, headACT, action, dir, fp[0], fp[1])
+				r := sprite.CompositeWithWeapon(bodySPR, bodyACT, headSPR, headACT,
+					weaponSPR, weaponACT, action, dir, fp[0], fp[1])
 				if r.Pixels == nil || r.Width == 0 || r.Height == 0 {
 					// Keep the slot so frame indices stay contiguous.
 					frames[i] = Frame{Pixels: make([]byte, maxW*maxH*4)}

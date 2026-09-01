@@ -166,6 +166,7 @@ func unitSpec(e *entity.Entity) charsprite.Spec {
 			Job:       e.Job,
 			Female:    e.Female,
 			HairStyle: e.HairStyle,
+			Weapon:    e.Weapon,
 		}
 	}
 }
