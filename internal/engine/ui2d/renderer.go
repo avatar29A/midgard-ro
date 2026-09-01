@@ -469,6 +469,29 @@ func (r *Renderer) DrawRectOutline(x, y, width, height, thickness float32, color
 	r.addQuad(x+width-thickness, y+thickness, thickness, height-thickness*2, color)
 }
 
+// DrawQuad draws a filled quad from its four corners, clockwise from the top
+// left.
+//
+// For edges that are not horizontal or vertical. A slanted edge built out of
+// rectangles is a staircase whose steps are as coarse as the rectangles are
+// wide; drawn as one quad it is rasterized at the display's own resolution,
+// which on a doubled display is twice as fine as anything expressible in
+// layout points.
+func (r *Renderer) DrawQuad(p0, p1, p2, p3 [2]float32, c Color) {
+	r.pushCmd(drawSolid, 0, len(r.solidVertices)/7)
+
+	r.solidVertices = append(r.solidVertices,
+		p0[0], p0[1], 0, c.R, c.G, c.B, c.A,
+		p1[0], p1[1], 0, c.R, c.G, c.B, c.A,
+		p2[0], p2[1], 0, c.R, c.G, c.B, c.A,
+	)
+	r.solidVertices = append(r.solidVertices,
+		p0[0], p0[1], 0, c.R, c.G, c.B, c.A,
+		p2[0], p2[1], 0, c.R, c.G, c.B, c.A,
+		p3[0], p3[1], 0, c.R, c.G, c.B, c.A,
+	)
+}
+
 // DrawPanel draws a panel with border.
 func (r *Renderer) DrawPanel(x, y, width, height float32, bg, border Color) {
 	// Background
