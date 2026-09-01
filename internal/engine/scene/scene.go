@@ -106,7 +106,7 @@ type Scene struct {
 	MapHeight float32
 
 	// Terrain height data
-	terrainAltitudes [][]float32
+	terrainHeightmap *terrain.Heightmap
 	terrainTileZoom  float32
 
 	// HideModels suppresses map objects, leaving only the terrain. A
@@ -231,7 +231,7 @@ func (s *Scene) BeginMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(stri
 
 	// Build heightmap for terrain height queries
 	hm := terrain.BuildHeightmap(gnd)
-	s.terrainAltitudes = hm.Altitudes
+	s.terrainHeightmap = hm
 	s.terrainTilesX = hm.TilesX
 	s.terrainTilesZ = hm.TilesZ
 	s.terrainTileZoom = hm.TileZoom
@@ -567,20 +567,19 @@ func (s *Scene) Resize(width, height int32) {
 
 // GetTerrainHeight returns the terrain height at the given world coordinates.
 func (s *Scene) GetTerrainHeight(worldX, worldZ float32) float32 {
-	if s.terrainAltitudes == nil {
-		return 0
-	}
+	return s.terrainHeightmap.HeightAt(worldX, worldZ)
+}
 
-	// Convert world coords to tile coords
-	tileX := int(worldX / s.terrainTileZoom)
-	tileZ := int(worldZ / s.terrainTileZoom)
-
-	if tileX < 0 || tileX >= s.terrainTilesX || tileZ < 0 || tileZ >= s.terrainTilesZ {
-		return 0
-	}
-
-	// Negate because GND altitudes are negative (lower = higher in RO coordinate system)
-	return -s.terrainAltitudes[tileX][tileZ]
+// TerrainProbe reports what the ground query is working from at a position:
+// the tile it lands in, where inside that tile, and the tile's four corner
+// heights.
+//
+// For telling a wrong height apart from a wrong sprite. A character that rises
+// and falls as it walks is either standing on a surface the query has got
+// wrong or being drawn off the surface it is standing on, and the two look
+// alike from outside.
+func (s *Scene) TerrainProbe(worldX, worldZ float32) (tileX, tileZ int, u, v float32, corners [4]float32) {
+	return s.terrainHeightmap.Probe(worldX, worldZ)
 }
 
 // IsWalkable returns whether the given tile coordinates are walkable.

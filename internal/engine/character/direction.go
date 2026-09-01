@@ -91,22 +91,62 @@ func CameraAngleToPlayer(cameraX, cameraZ, playerX, playerZ float32) float32 {
 	return float32(gomath.Atan2(float64(dirX), float64(dirZ)))
 }
 
-// BillboardVectors calculates camera-facing billboard vectors for sprite rendering.
-// Returns right and up vectors for Y-axis aligned billboard.
-func BillboardVectors(cameraX, cameraZ, playerX, playerZ float32) (right, up [3]float32) {
-	dirX := cameraX - playerX
-	dirZ := cameraZ - playerZ
-	length := float32(gomath.Sqrt(float64(dirX*dirX + dirZ*dirZ)))
-	if length > 0.001 {
-		dirX /= length
-		dirZ /= length
-	} else {
-		dirX = 0
-		dirZ = 1
+// BillboardVectors are the axes of a quad turned to face the camera.
+//
+// Both axes, not only the horizontal one. A quad that stands upright in the
+// world and turns about Y alone is foreshortened by however far the camera is
+// tilted: at RO's own angle of 0.85 radians that is cos(48.7°), so a character
+// is drawn at two thirds of its height and everything reads slightly squat.
+//
+// The original never does that. Its sprites are drawn against the screen, at
+// the size the art was painted, whatever the camera is doing — so the quad is
+// leaned back to match, which keeps its full height on screen.
+//
+// The unit's own Y is not needed: what decides the tilt is the direction from
+// the sprite to the camera, and taking it from the ground the sprite stands on
+// is what keeps every sprite on a map leaning the same way rather than each
+// one leaning by its own height.
+func BillboardVectors(cameraX, cameraY, cameraZ, playerX, playerY, playerZ float32) (right, up [3]float32) {
+	viewX := cameraX - playerX
+	viewY := cameraY - playerY
+	viewZ := cameraZ - playerZ
+
+	length := float32(gomath.Sqrt(float64(viewX*viewX + viewY*viewY + viewZ*viewZ)))
+	if length <= 0.001 {
+		return [3]float32{1, 0, 0}, [3]float32{0, 1, 0}
 	}
-	// Camera-facing billboard vectors (Y-axis aligned)
-	right = [3]float32{-dirZ, 0, dirX}
-	up = [3]float32{0, 1, 0}
+
+	viewX /= length
+	viewY /= length
+	viewZ /= length
+
+	// Across the view, level with the world: a sprite never rolls, however
+	// the camera is turned. The sign is the one this has always used — the
+	// other way round mirrors every sprite.
+	rightX, rightZ := -viewZ, viewX
+
+	flat := float32(gomath.Sqrt(float64(rightX*rightX + rightZ*rightZ)))
+	if flat <= 0.001 {
+		// Straight overhead, where "across" has no meaning left. Nothing in
+		// the game reaches this, but a camera that did would otherwise put a
+		// zero-width quad on screen.
+		return [3]float32{1, 0, 0}, [3]float32{0, 1, 0}
+	}
+
+	rightX /= flat
+	rightZ /= flat
+
+	right = [3]float32{rightX, 0, rightZ}
+
+	// Perpendicular to both, which is the quad's own up once it has been
+	// leaned back to face the camera: right crossed into the view, in that
+	// order, so it comes out pointing up rather than down.
+	up = [3]float32{
+		-rightZ * viewY,
+		rightZ*viewX - rightX*viewZ,
+		rightX * viewY,
+	}
+
 	return right, up
 }
 
