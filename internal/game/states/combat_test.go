@@ -245,3 +245,55 @@ func TestAttackRangeIgnoresNonsense(t *testing.T) {
 		t.Error("a 3-byte range decoded, but the packet is 4")
 	}
 }
+
+// TestFaceTowardsTurnsAUnit: the server says nothing about which way anyone
+// is looking when a blow lands, so the client turns both sides itself —
+// otherwise a monster that walked past and then attacked strikes sideways.
+func TestFaceTowardsTurnsAUnit(t *testing.T) {
+	m := entity.NewManager()
+	attacker := mobAt(1, 100, 100)
+	victim := mobAt(2, 105, 100) // due east
+	m.Add(attacker)
+	m.Add(victim)
+
+	s := &InGameState{entityManager: m}
+
+	attacker.Body.Direction = entity.DirectionFromCellDelta(0, -1) // looking north
+	s.faceTowards(1, 2)
+
+	want := entity.DirectionFromCellDelta(1, 0)
+	if attacker.Body.Direction != want {
+		t.Errorf("Direction = %d, want %d (towards the unit it is hitting)",
+			attacker.Body.Direction, want)
+	}
+}
+
+// TestFaceTowardsLeavesAWalkerAlone: a unit mid-walk is facing the way it is
+// going and the path overwrites this on the next step, so turning it here
+// only makes it flicker between the two.
+func TestFaceTowardsLeavesAWalkerAlone(t *testing.T) {
+	m := entity.NewManager()
+	walker := mobAt(1, 100, 100)
+	target := mobAt(2, 105, 100)
+	m.Add(walker)
+	m.Add(target)
+
+	walker.Body.FollowPath([][2]int{{100, 100}, {100, 101}, {100, 102}})
+	before := walker.Body.Direction
+
+	s := &InGameState{entityManager: m}
+	s.faceTowards(1, 2)
+
+	if walker.Body.Direction != before {
+		t.Error("turned a unit that is in the middle of a walk")
+	}
+}
+
+// TestFaceTowardsSurvivesTheUnknown: a blow between two units we cannot see
+// names neither, and must not be a crash.
+func TestFaceTowardsSurvivesTheUnknown(t *testing.T) {
+	s := &InGameState{entityManager: entity.NewManager()}
+
+	s.faceTowards(1, 2)
+	s.faceTowards(0, 0)
+}

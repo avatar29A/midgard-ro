@@ -134,7 +134,14 @@ func (s *InGameState) chase(e *entity.Entity, deltaMs float32) {
 }
 
 // sendAttack asks for the blow.
+//
+// The character turns to face what it is hitting first. That happens on the
+// request rather than on the server's answer, for the same reason reaching
+// for an item does: it is feedback, and a turn that arrives a round trip
+// after the swing reads as the character hitting over its shoulder.
 func (s *InGameState) sendAttack(e *entity.Entity) {
+	s.faceTowards(s.selfAID(), e.ID)
+
 	trace.Emit(trace.HUD, "attack",
 		zap.Uint32("id", e.ID), zap.String("name", e.Name),
 		zap.Int("hp", e.HP), zap.Int("maxHP", e.MaxHP))
@@ -244,6 +251,12 @@ func (s *InGameState) handleDamage(data []byte) error {
 		zap.Int("amount", blow.Amount), zap.Int("hits", blow.Hits),
 		zap.Bool("miss", blow.Missed()), zap.Bool("critical", blow.Critical()))
 
+	// Both sides turn to face each other. The server says nothing about which
+	// way anyone is looking when a blow lands, so without this a monster that
+	// walked past and then attacked would strike sideways, and a character
+	// whose target circled it would go on swinging at where it used to be.
+	s.faceTowards(blow.SourceID, blow.TargetID)
+
 	// The swing plays whether or not it connected — a miss is still a swing —
 	// while the flinch is only for a blow that landed.
 	s.playAnimation(blow.SourceID, entity.ActionAttack)
@@ -297,6 +310,13 @@ func (s *InGameState) bodyOf(id uint32) *entity.Character {
 func (s *InGameState) faceTowards(id, towards uint32) {
 	body, at := s.bodyOf(id), s.bodyOf(towards)
 	if body == nil || at == nil {
+		return
+	}
+
+	// A unit in the middle of a walk is facing the way it is going, and the
+	// path will overwrite this on the next step anyway. Turning it here only
+	// makes it flicker between the two.
+	if body.IsWalkingPath() {
 		return
 	}
 
