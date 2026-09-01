@@ -1328,6 +1328,17 @@ func (g *Game) updateCursor(state *states.InGameState, io *imgui.IO, mouseX, mou
 	hudCursor, hudAsked := g.uiBackend.WantCursor()
 
 	switch {
+	// Rotating outranks everything. The camera is swinging, so whatever the
+	// pointer was over a moment ago is not where it is now, and the cursor
+	// should say what the drag is doing rather than what it started on.
+	//
+	// Dragging rather than merely holding the button: a right click that does
+	// not move is not a rotation, and showing the rotate cursor for it would
+	// promise a camera swing that never comes.
+	case imgui.IsMouseDragging(imgui.MouseButtonRight):
+		want = cursor.StateRotate
+		state.SetHoverEntity(nil)
+
 	// An interface element under the pointer has first say: a resize corner
 	// asking for the hand is the only thing that knows it is one.
 	case hudAsked:
