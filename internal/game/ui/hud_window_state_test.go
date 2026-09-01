@@ -7,14 +7,14 @@ import "testing"
 // click that makes a noise and changes nothing reads as a fault.
 func TestOnlyTheImplementedButtonsOpenWindows(t *testing.T) {
 	opens := map[string]bool{
-		"info": true, "equip": true, "skill": true, "item": true, "map": true,
+		"info": true, "skill": true, "item": true, "map": true,
 		"party": false, "guild": false, "quest": false, "option": false,
 		"booking": false, "recruit": false,
 	}
 
 	// Info leads to the equipment window rather than to one of its own: the
-	// modern client folds the status block into it, so both buttons go to the
-	// same place.
+	// modern client folds the status block into it, and one button is enough
+	// for the one window.
 	named := map[string]bool{"info": false}
 
 	for _, name := range hudMenuButtons {
@@ -115,7 +115,6 @@ func TestDescribeHUDListsInStripOrder(t *testing.T) {
 	b.ToggleWindow(WindowEquip)
 	b.ToggleWindow(WindowSkill)
 
-	// Named once, though two buttons lead to it.
 	if got, want := b.describeHUD(), "Equip, Skill, Map"; got != want {
 		t.Errorf("describeHUD = %q, want %q", got, want)
 	}

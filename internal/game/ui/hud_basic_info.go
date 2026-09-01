@@ -144,71 +144,10 @@ var hudButtonOptions = ui2d.ButtonOptions{Silent: true}
 // lays them out. Each has three bitmaps: `<name>1` normal, `2` hovered and
 // `3` pressed.
 var hudMenuButtons = []string{
-	"info", "equip", "skill", "item",
-	"map", "party", "guild", "quest",
-	"option", "booking", "recruit",
+	"info", "skill", "item", "map",
+	"party", "guild", "quest", "option",
+	"booking", "recruit",
 }
-
-// The strip in the archive has ten buttons and no equipment among them: the
-// original opens that window from a hotkey rather than from here.
-//
-// Its own button does exist, as btn_equip_off, but it is 30x20 against the
-// row's 54x18 and its lettering is a size smaller — five pixels of x-height
-// against six. Stretched to the cell the word came out wider and heavier than
-// its neighbors; laid on at its own size it came out visibly smaller. Either
-// way it read as a button from somewhere else, which it was.
-//
-// So the word is spelled out of the row's own labels instead. Every letter of
-// "equip" is already there: q, u and e in quest, i and p in option. The two
-// bitmaps are the same button with different words — their blank faces are
-// identical byte for byte in all three states — so a letter carried across
-// brings its background with it and lands seamlessly.
-
-// menuGlyph is one letter cut out of a row label, named by the label it comes
-// from and its column range in that bitmap.
-type menuGlyph struct {
-	from string
-	x, w float32
-}
-
-// hudMenuButtonWords are the buttons spelled out this way.
-//
-// The column ranges are measured off the bitmaps: the letters of a label are
-// separated by blank columns, so each glyph is the run of inked columns
-// between two gaps. Nothing here is rounded or estimated.
-var hudMenuButtonWords = map[string][]menuGlyph{
-	"equip": {
-		{"quest", 26, 5},  // e
-		{"quest", 13, 5},  // q
-		{"quest", 20, 4},  // u
-		{"option", 29, 1}, // i
-		{"option", 18, 5}, // p
-	},
-}
-
-// hudMenuChromeFrom is the button whose art lends its frame to those.
-//
-// Any of the ten would do — they are one bitmap in three states, differing
-// only in shading — and info is the first of them.
-const hudMenuChromeFrom = "info"
-
-// menuGlyphGap is the space this font leaves between letters, which is two
-// pixels whatever the two letters are.
-const menuGlyphGap float32 = 2
-
-// The blank parts of a row button, for covering the word baked into the
-// chrome we borrowed.
-//
-// info's ink runs x 18..36 in all three of its states, so the ends are clear.
-// The middle is filled by stretching a single interior column, which is exact
-// rather than approximate: the button's face is a pure vertical gradient, and
-// columns 12, 14 and 16 of it are identical byte for byte.
-const (
-	menuChromeLeftW  float32 = 17
-	menuChromeRightW float32 = 16
-	menuChromeFillX  float32 = 14
-	menuChromeFillW  float32 = 2
-)
 
 // gaugeSkin is one gauge's three-slice fill.
 type gaugeSkin struct {
@@ -219,10 +158,6 @@ type gaugeSkin struct {
 type menuButtonSkin struct {
 	name                   string
 	normal, hover, pressed *TextureInfo
-
-	// word is the letters to lay over the chrome, for a button built from a
-	// neighbour's art. Nil for the buttons that have their own.
-	word []menuGlyph
 }
 
 // basicInfoSkin holds the panel art.
@@ -230,10 +165,6 @@ type basicInfoSkin struct {
 	panel  *TextureInfo
 	hp, sp *gaugeSkin
 	menu   []*menuButtonSkin
-
-	// glyphs are the labels a composed button cuts its letters out of, by
-	// label name and then by state.
-	glyphs map[string][3]*TextureInfo
 
 	sysOff, sysOn *TextureInfo
 }
@@ -268,7 +199,6 @@ func (b *UI2DBackend) loadBasicInfoSkin() *basicInfoSkin {
 	}
 
 	skin := &basicInfoSkin{panel: panel, hp: hp, sp: sp, menu: b.loadMenuButtons()}
-	skin.glyphs = b.loadMenuGlyphs()
 
 	// The fold control. Missing art costs the button, not the panel — Ctrl+V
 	// does the same thing.
@@ -293,17 +223,8 @@ func (b *UI2DBackend) loadMenuButtons() []*menuButtonSkin {
 	for _, name := range hudMenuButtons {
 		states := make([]*TextureInfo, 0, 3)
 
-		// A button with no art of its own borrows a neighbour's frame and has
-		// its word spelled onto it.
-		word, borrowed := hudMenuButtonWords[name]
-
-		chrome := name
-		if borrowed {
-			chrome = hudMenuChromeFrom
-		}
-
 		for state := 1; state <= 3; state++ {
-			path := fmt.Sprintf("%s%s%d.bmp", basicInterfacePath, chrome, state)
+			path := fmt.Sprintf("%s%s%d.bmp", basicInterfacePath, name, state)
 
 			tex, err := b.texCache.Load(path)
 			if err != nil {
@@ -320,64 +241,15 @@ func (b *UI2DBackend) loadMenuButtons() []*menuButtonSkin {
 			continue
 		}
 
-		button := &menuButtonSkin{
+		buttons = append(buttons, &menuButtonSkin{
 			name:    name,
 			normal:  states[0],
 			hover:   states[1],
 			pressed: states[2],
-		}
-
-		if borrowed {
-			button.word = word
-		}
-
-		buttons = append(buttons, button)
+		})
 	}
 
 	return buttons
-}
-
-// loadMenuGlyphs loads the labels a composed button cuts its letters out of.
-//
-// A label that will not load costs the button that needed it rather than the
-// row: drawMenuButtons falls back to the borrowed frame with nothing on it,
-// which is a blank button and not a broken panel.
-func (b *UI2DBackend) loadMenuGlyphs() map[string][3]*TextureInfo {
-	wanted := map[string]bool{}
-	for _, word := range hudMenuButtonWords {
-		for _, glyph := range word {
-			wanted[glyph.from] = true
-		}
-	}
-
-	loaded := make(map[string][3]*TextureInfo, len(wanted))
-
-	for name := range wanted {
-		var states [3]*TextureInfo
-
-		ok := true
-		for state := 1; state <= 3; state++ {
-			path := fmt.Sprintf("%s%s%d.bmp", basicInterfacePath, name, state)
-
-			tex, err := b.texCache.Load(path)
-			if err != nil {
-				logger.Warn("label art unavailable, a button will draw without its word",
-					zap.String("path", path), zap.Error(err))
-
-				ok = false
-
-				break
-			}
-
-			states[state-1] = tex
-		}
-
-		if ok {
-			loaded[name] = states
-		}
-	}
-
-	return loaded
 }
 
 // loadGaugeSkin loads one gauge's three pieces, named `<prefix>_left.bmp` and
@@ -712,100 +584,13 @@ func (b *UI2DBackend) drawMenuButtons(skin *basicInfoSkin, x, y float32) {
 			opts.Silent = false
 		}
 
-		btnX, btnY := x+float32(col)*hudBtnW, y+float32(row)*hudBtnH
-
-		// ImageButtonAtEx reports which of the three it drew, which is what a
-		// button that has to be painted over needs: the word laid on top has
-		// to sit on the same state the frame is showing.
-		clicked, drawn := b.ctx.ImageButtonAtExOpts("hud_menu_"+button.name,
-			btnX, btnY, hudBtnW, hudBtnH,
+		clicked := b.ctx.ImageButtonAtOpts("hud_menu_"+button.name,
+			x+float32(col)*hudBtnW, y+float32(row)*hudBtnH,
+			hudBtnW, hudBtnH,
 			normal, button.hover.ID, button.pressed.ID, opts)
-
-		if button.word != nil {
-			b.paintMenuWord(skin, button, drawn, btnX, btnY)
-		}
 
 		if clicked && opens {
 			b.ToggleWindow(window)
 		}
-	}
-}
-
-// paintMenuWord covers a borrowed button's own word and spells another onto
-// it, letter by letter.
-//
-// The frame is redrawn from its blank ends and a stretched interior column
-// rather than being drawn blank in the first place, because the archive has no
-// blank one. Each letter is then carried over as a full-height strip of its
-// own label: the faces are identical, so what lands is the letter and nothing
-// else, at the row's own size and on the row's own baseline.
-func (b *UI2DBackend) paintMenuWord(skin *basicInfoSkin, button *menuButtonSkin,
-	chrome uint32, x, y float32,
-) {
-	if chrome == 0 {
-		return
-	}
-
-	state := menuButtonState(button, chrome)
-
-	r := b.ctx.Renderer()
-
-	const w, h = hudBtnW, hudBtnH
-
-	// The two ends, at their own size, and the gap between them filled by
-	// stretching a column of the button's face.
-	r.DrawImageUV(chrome, x, y, menuChromeLeftW, h,
-		0, 0, menuChromeLeftW/w, 1, ui2d.ColorWhite)
-
-	midX := x + menuChromeLeftW
-	midW := w - menuChromeLeftW - menuChromeRightW
-
-	r.DrawImageUV(chrome, midX, y, midW, h,
-		menuChromeFillX/w, 0, (menuChromeFillX+menuChromeFillW)/w, 1, ui2d.ColorWhite)
-
-	r.DrawImageUV(chrome, x+w-menuChromeRightW, y, menuChromeRightW, h,
-		(w-menuChromeRightW)/w, 0, 1, 1, ui2d.ColorWhite)
-
-	// Centered the way the row centers its own labels, on the width the
-	// letters and their gaps actually come to.
-	at := x + (w-menuWordWidth(button.word))/2
-
-	for _, glyph := range button.word {
-		states, ok := skin.glyphs[glyph.from]
-		if !ok {
-			continue
-		}
-
-		r.DrawImageUV(states[state].ID, at, y, glyph.w, h,
-			glyph.x/w, 0, (glyph.x+glyph.w)/w, 1, ui2d.ColorWhite)
-
-		at += glyph.w + menuGlyphGap
-	}
-}
-
-// menuWordWidth is how wide a spelled word comes out, letters and gaps.
-func menuWordWidth(word []menuGlyph) float32 {
-	if len(word) == 0 {
-		return 0
-	}
-
-	total := menuGlyphGap * float32(len(word)-1)
-	for _, glyph := range word {
-		total += glyph.w
-	}
-
-	return total
-}
-
-// menuButtonState is which of the three states a texture is, so a letter is
-// taken from the same state the frame is showing.
-func menuButtonState(button *menuButtonSkin, drawn uint32) int {
-	switch drawn {
-	case button.hover.ID:
-		return 1
-	case button.pressed.ID:
-		return 2
-	default:
-		return 0
 	}
 }
