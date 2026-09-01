@@ -821,6 +821,7 @@ func (g *Game) renderUI() {
 				}
 			},
 			OnSetSex: func(sex uint8) { state.SetSex(sex) },
+			OnSetJob: func(job int) { state.SetJob(job) },
 			OnTurn:   func(delta int) { state.Turn(delta) },
 		}, viewportWidth, viewportHeight)
 

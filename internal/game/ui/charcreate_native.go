@@ -52,6 +52,24 @@ const (
 	charCreateTurnY = float32(182)
 	charCreateTurnL = float32(428)
 	charCreateTurnR = float32(552)
+
+	// The race cards on the left, which the frame leaves blank.
+	charCreateCardX  = float32(18)
+	charCreateCardW  = float32(367)
+	charCreateCardH  = float32(120)
+	charCreateHumanY = float32(45)
+	charCreateDoramY = float32(180)
+)
+
+// The race cards. Drawn rather than skinned: the frame paints nothing on its
+// left half, and the retail card art is a description and a job tree that say
+// nothing our server acts on.
+var (
+	charCreateCardFace    = ui2d.Color{R: 0.97, G: 0.97, B: 0.99, A: 1}
+	charCreateCardFaceSel = ui2d.Color{R: 0.87, G: 0.91, B: 0.99, A: 1}
+	charCreateCardEdge    = ui2d.Color{R: 0.62, G: 0.66, B: 0.78, A: 1}
+	charCreateCardEdgeSel = ui2d.Color{R: 0.25, G: 0.40, B: 0.75, A: 1}
+	charCreateCardInk     = ui2d.Color{R: 0.16, G: 0.18, B: 0.24, A: 1}
 )
 
 // charCreateSkin is the creation screen's art.
@@ -131,6 +149,7 @@ func (b *UI2DBackend) renderNativeCharCreate(state CharCreateUIState, width, hei
 
 	b.ctx.Renderer().DrawImage(skin.window.ID, x, y, charCreateWinW, charCreateWinH, ui2d.ColorWhite)
 
+	b.drawCharCreateRaces(state, x, y)
 	b.drawCharCreateSex(skin, state, x, y)
 	b.drawCharCreatePreview(state, x, y)
 	b.drawCharCreateTurn(skin, state, x, y)
@@ -138,6 +157,41 @@ func (b *UI2DBackend) renderNativeCharCreate(state CharCreateUIState, width, hei
 	b.drawCharCreateMessages(state, x, y)
 
 	return true
+}
+
+// drawCharCreateRaces draws the Human and Doram cards and switches between
+// them.
+//
+// Both are live: our server is a RENEWAL build at a packet version where
+// allowed_job_flag is 3, so Summoner is creatable alongside Novice. Retail
+// shows Doram as "coming soon", which would be a lie here.
+func (b *UI2DBackend) drawCharCreateRaces(state CharCreateUIState, x, y float32) {
+	b.drawRaceCard(state, "charcreate_human", "Human  (Novice)",
+		x+charCreateCardX, y+charCreateHumanY, state.Job == charsprite.JobNovice, charsprite.JobNovice)
+	b.drawRaceCard(state, "charcreate_doram", "Doram  (Summoner)",
+		x+charCreateCardX, y+charCreateDoramY, state.Job == charsprite.JobSummoner, charsprite.JobSummoner)
+}
+
+// drawRaceCard draws one card and reports a click by switching to its job.
+func (b *UI2DBackend) drawRaceCard(state CharCreateUIState, id, label string, x, y float32, selected bool, job int) {
+	r := b.ctx.Renderer()
+
+	face, edge := charCreateCardFace, charCreateCardEdge
+	if selected {
+		face, edge = charCreateCardFaceSel, charCreateCardEdgeSel
+	}
+
+	r.DrawRect(x, y, charCreateCardW, charCreateCardH, face)
+	r.DrawRectOutline(x, y, charCreateCardW, charCreateCardH, 2, edge)
+
+	tw, th := r.MeasureText(label, loginTextScale)
+	r.DrawText(x+(charCreateCardW-tw)/2, y+(charCreateCardH-th)/2, label,
+		loginTextScale, charCreateCardInk)
+
+	if b.ctx.InvisibleButtonAt(id, x, y, charCreateCardW, charCreateCardH) &&
+		state.OnSetJob != nil {
+		state.OnSetJob(job)
+	}
 }
 
 // drawCharCreateSex draws the male/female toggle.
