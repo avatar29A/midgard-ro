@@ -14,6 +14,27 @@ package packets
 // Source: common/packets.hpp:508-518, char/char_clif.cpp:435-451,477-481.
 const HC_ACCEPT_ENTER2 uint16 = 0x082D
 
+// CH_PING keeps a character-server session alive.
+//
+//	0187 <account id>.L
+//
+// The server drops any session that has sent nothing for stall_time seconds,
+// 60 by default (common/socket.cpp). Character select and character creation
+// both sit idle for longer than that while a person reads the screen, so
+// something has to be said on the connection or it closes underneath them.
+//
+// Source: common/packets.hpp:317-321, char/char_clif.cpp:1395,1604.
+const CH_PING uint16 = 0x0187
+
+// EncodePing builds the keep-alive.
+func EncodePing(accountID uint32) []byte {
+	pkt := make([]byte, 6)
+	writeU16(pkt, 0, CH_PING)
+	writeU32(pkt, 2, accountID)
+
+	return pkt
+}
+
 // SlotCounts is what HC_ACCEPT_ENTER2 says about an account's slots.
 type SlotCounts struct {
 	// Normal is MIN_CHARS — the slots every account has.

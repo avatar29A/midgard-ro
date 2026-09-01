@@ -48,6 +48,9 @@ type CharSelectState struct {
 	// autoSelected keeps unattended character entry to one attempt.
 	autoSelected bool
 
+	// keepAlive stops the char server dropping us while the screen is read.
+	keepAlive charKeepAlive
+
 	// CreatableSlots is how many characters this account may create, from
 	// HC_ACCEPT_ENTER2. Zero until that packet arrives.
 	//
@@ -108,8 +111,14 @@ func (s *CharSelectState) Update(dt float64) error {
 		return nil
 	}
 
+	// The server drops a session that has said nothing for 60 seconds, and
+	// this screen is read for longer than that — more so now that it pages.
+	s.keepAlive.tick(s.client)
+
 	// Process network
 	if err := s.client.Process(); err != nil {
+		logger.Warn("character server connection failed", zap.Error(err))
+
 		s.ErrorMsg = fmt.Sprintf("Network error: %v", err)
 		s.IsLoading = false
 	}

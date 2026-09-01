@@ -37,6 +37,11 @@ type CharCreateState struct {
 	// StatusMsg and ErrorMsg are what the screen says about itself.
 	StatusMsg string
 	ErrorMsg  string
+
+	// keepAlive stops the char server dropping us while a name is being
+	// thought about. Picking a name and a hair style takes longer than the
+	// server's 60-second patience.
+	keepAlive charKeepAlive
 }
 
 // NewCharCreateState creates the character creation screen for one slot.
@@ -89,7 +94,15 @@ func (s *CharCreateState) Update(_ float64) error {
 		return nil
 	}
 
+	s.keepAlive.tick(s.client)
+
 	if err := s.client.Process(); err != nil {
+		// Logged as well as shown: a message that only ever reaches the
+		// screen is invisible to an unattended run, and this one took a
+		// while to explain because nothing recorded it.
+		logger.Warn("character server connection failed while creating",
+			zap.Int("slot", s.slot), zap.Error(err))
+
 		s.ErrorMsg = "Network error: " + err.Error()
 	}
 
