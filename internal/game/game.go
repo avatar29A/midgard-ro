@@ -839,6 +839,9 @@ func (g *Game) renderUI() {
 		stats := state.Stats()
 		dialog := state.Dialog()
 
+		baseUp, jobUp := state.LevelUpPending()
+		levelUpButtons := ui.LevelUpButtons{Base: baseUp, Job: jobUp}
+
 		var targetMarker *states.TargetMarker
 		if marker, ok := state.TargetMarker(viewportWidth, viewportHeight); ok {
 			targetMarker = &marker
@@ -858,6 +861,7 @@ func (g *Game) renderUI() {
 			WorldLabels:     state.WorldLabels(viewportWidth, viewportHeight),
 			TargetMarker:    targetMarker,
 			DamageNumbers:   state.DamageNumbers(viewportWidth, viewportHeight),
+			LevelUpButtons:  levelUpButtons,
 			PlayerX:         playerX,
 			PlayerY:         playerY,
 			PlayerZ:         playerZ,
@@ -942,6 +946,13 @@ func (g *Game) renderUI() {
 			if err != nil {
 				logger.Warn("could not act on item", zap.Error(err))
 			}
+		}
+
+		// A level-up button pressed. The window it points at is opened by the
+		// interface; this is only the acknowledgement that takes the button
+		// away.
+		if levelUp, ok := g.uiBackend.TakeLevelUpAction(); ok {
+			state.AcknowledgeLevelUp(levelUp.Base)
 		}
 
 		// A status point spent on a stat. The server decides whether it can
