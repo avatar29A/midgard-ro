@@ -65,11 +65,21 @@ type InGameState struct {
 	// marker is the cell highlight under the cursor. hoverCellX/Y is the cell
 	// it sits on and hoverValid whether the cursor is over the ground at all;
 	// markerPulse counts down the flourish a click sets off.
-	marker      *scene.GroundMarker
-	hoverCellX  int
-	hoverCellY  int
-	hoverValid  bool
-	markerPulse float32
+	marker     *scene.GroundMarker
+	hoverCellX int
+	hoverCellY int
+	hoverValid bool
+
+	// hoverEntity is whatever the pointer is over this frame, set by the
+	// cursor pass so the label and the cursor cannot disagree.
+	hoverEntity *entity.Entity
+
+	// pendingPickup is a ground item being walked to, picked up once the
+	// character is close enough. pendingPickupIdleMs counts how long it has
+	// stood still on the way, which is how an unreachable item is given up on.
+	pendingPickup       uint32
+	pendingPickupIdleMs float32
+	markerPulse         float32
 
 	// markerTraceAt rate limits the marker diagnostics.
 	markerTraceAt time.Time
@@ -674,14 +684,17 @@ func (s *InGameState) Update(dt float64) error {
 		}
 		s.wasWalking = walking
 
+		s.updatePendingPickup(deltaMs, walking)
+
 		// Advance the sprite animation. Frame counts come from the loaded
 		// sheet; with no sprites this parks on frame 0 harmlessly.
-		idleFrames, walkFrames := 0, 0
+		idleFrames, walkFrames, pickupFrames := 0, 0, 0
 		if s.playerRender != nil {
 			idleFrames = s.playerRender.FrameCount(entity.ActionIdle, s.player.Direction)
 			walkFrames = s.playerRender.FrameCount(entity.ActionWalk, s.player.Direction)
+			pickupFrames = s.playerRender.FrameCount(entity.ActionPickup, s.player.Direction)
 		}
-		s.player.AdvanceAnimation(deltaMs, idleFrames, walkFrames)
+		s.player.AdvanceAnimation(deltaMs, idleFrames, walkFrames, pickupFrames)
 
 		// Update cell position
 		s.TileX, s.TileY = s.player.CurrentCell()
@@ -1229,6 +1242,11 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_INVENTORY_ITEMLIST_NORMAL, s.handleInventoryNormal)
 	s.client.RegisterHandler(packets.ZC_INVENTORY_ITEMLIST_EQUIP, s.handleInventoryEquip)
 	s.client.RegisterHandler(packets.ZC_USE_ITEM_ACK, s.handleUseItemAck)
+	s.client.RegisterHandler(packets.ZC_ITEM_ENTRY, s.handleGroundItemEntry)
+	s.client.RegisterHandler(packets.ZC_ITEM_FALL_ENTRY, s.handleGroundItemFall)
+	s.client.RegisterHandler(packets.ZC_ITEM_DISAPPEAR, s.handleGroundItemGone)
+	s.client.RegisterHandler(packets.ZC_ITEM_PICKUP_ACK, s.handlePickupAck)
+	s.client.RegisterHandler(packets.ZC_ITEM_THROW_ACK, s.handleDropAck)
 	s.client.RegisterHandler(packets.ZC_COUPLESTATUS, s.handleCoupleStatus)
 	s.client.RegisterHandler(packets.ZC_LONGPAR_CHANGE, s.handleStatusChange)
 	s.client.RegisterHandler(packets.ZC_LONGLONGPAR_CHANGE, s.handleStatusChange)
@@ -1863,6 +1881,10 @@ func (s *InGameState) ClickWorld(mouseX, mouseY, viewportW, viewportH float32) {
 		return
 	}
 
+	// Whatever this click turns out to mean, it replaces any errand still in
+	// progress. PickUpItem sets a new one if that is what this click was.
+	s.forgetPendingPickup()
+
 	// A unit under the pointer takes the click. For an NPC, walking there
 	// instead would be the wrong thing twice over: the conversation would not
 	// start, and the server would refuse a step into the cell the NPC is
@@ -1886,6 +1908,15 @@ func (s *InGameState) ClickWorld(mouseX, mouseY, viewportW, viewportH float32) {
 			if err := s.RequestMove(stepX, stepY); err != nil {
 				logger.Warn("walk to warp failed", zap.Error(err))
 			}
+			return
+		}
+
+		if e.Type == entity.TypeItem {
+			// The server decides whether we are close enough, and refuses
+			// with a message rather than by walking us there. Walking to it
+			// ourselves would be a guess at a range only the server knows.
+			s.PickUpItem(e)
+
 			return
 		}
 

@@ -837,6 +837,11 @@ func (g *Game) renderUI() {
 		stats := state.Stats()
 		dialog := state.Dialog()
 
+		var itemLabel *states.HoverLabel
+		if label, ok := state.HoverItemLabel(viewportWidth, viewportHeight); ok {
+			itemLabel = &label
+		}
+
 		mapCellsX, mapCellsY := 0, 0
 		if gat := state.GetGAT(); gat != nil {
 			mapCellsX, mapCellsY = int(gat.Width), int(gat.Height)
@@ -848,6 +853,7 @@ func (g *Game) renderUI() {
 			MapCellsY:       mapCellsY,
 			ChatLines:       state.ChatLines(),
 			EntityBars:      state.EntityBars(viewportWidth, viewportHeight),
+			ItemLabel:       itemLabel,
 			PlayerX:         playerX,
 			PlayerY:         playerY,
 			PlayerZ:         playerZ,
@@ -931,6 +937,14 @@ func (g *Game) renderUI() {
 			}
 			if err != nil {
 				logger.Warn("could not act on item", zap.Error(err))
+			}
+		}
+
+		// An item dragged out of the inventory window and let go over the
+		// world, which is how the original drops one.
+		if drop, ok := g.uiBackend.TakeDropAction(); ok {
+			if err := state.DropItem(drop.Index, drop.Amount); err != nil {
+				logger.Warn("could not drop item", zap.Error(err))
 			}
 		}
 
@@ -1316,11 +1330,17 @@ func (g *Game) updateCursor(state *states.InGameState, io *imgui.IO, mouseX, mou
 	// asking for the hand is the only thing that knows it is one.
 	case hudAsked:
 		want = hudCursor
+		state.SetHoverEntity(nil)
 
 	// Otherwise the pointer belongs to whatever is under it in the world.
 	case !io.WantCaptureMouse() && !g.uiBackend.MouseCaptured():
 		viewportW, viewportH := g.uiBackend.GetScreenSize()
-		want = cursorFor(state.HoverEntity(mouseX, mouseY, viewportW, viewportH))
+		hovered := state.HoverEntity(mouseX, mouseY, viewportW, viewportH)
+		state.SetHoverEntity(hovered)
+		want = cursorFor(hovered)
+
+	default:
+		state.SetHoverEntity(nil)
 	}
 
 	g.uiBackend.SetCursorState(want)
@@ -1460,6 +1480,8 @@ func cursorFor(e *entity.Entity) cursor.State {
 		return cursor.StateTalk
 	case entity.TypeWarp:
 		return cursor.StateWarp
+	case entity.TypeItem:
+		return cursor.StatePick
 	default:
 		return cursor.StateDefault
 	}

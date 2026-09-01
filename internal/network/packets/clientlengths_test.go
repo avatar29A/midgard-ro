@@ -190,3 +190,83 @@ func TestCZResetSkillIsNotRegistered(t *testing.T) {
 			"MAIN>=20220216 || ZERO>=20220203 and we are RE 20211103", size)
 	}
 }
+
+// TestEncodersReachTheRightHandler pins each encoder to the server function
+// that will parse it.
+//
+// Length is not identity. Six bytes covers picking an item up, dropping one,
+// asking a character's name and half a dozen other things, so an encoder can
+// carry an id that means something else entirely and still pass every check
+// that only measures. Dropping was briefly sent on 0x0362, which is six bytes
+// and is clif_parse_TakeItem — the right size, the wrong verb.
+//
+// Handlers come from clif_shuffle.hpp where it overrides the main table, which
+// is the last word at this packetver and disagrees with it on 27 ids.
+func TestEncodersReachTheRightHandler(t *testing.T) {
+	tests := []struct {
+		name    string
+		id      uint16
+		handler string
+	}{
+		{"CZ_USE_ITEM", CZ_USE_ITEM, "clif_parse_UseItem"},
+		{"CZ_REQ_WEAR_EQUIP", CZ_REQ_WEAR_EQUIP, "clif_parse_EquipItem"},
+		{"CZ_ITEM_THROW", CZ_ITEM_THROW, "clif_parse_DropItem"},
+		{"CZ_ITEM_PICKUP", CZ_ITEM_PICKUP, "clif_parse_TakeItem"},
+		{"CZ_REQUEST_CHAT", CZ_REQUEST_CHAT, "clif_parse_GlobalMessage"},
+		{"CZ_WHISPER", CZ_WHISPER, "clif_parse_WisMessage"},
+		{"CZ_CONTACTNPC", CZ_CONTACTNPC, "clif_parse_NpcClicked"},
+		{"CZ_CHOOSE_MENU", CZ_CHOOSE_MENU, "clif_parse_NpcSelectMenu"},
+		{"CZ_REQ_DISCONNECT", CZ_REQ_DISCONNECT, "clif_parse_QuitGame"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := ClientPacketHandler(tt.id)
+			if !ok {
+				t.Fatalf("%s (0x%04X) is not parsed at this PACKETVER", tt.name, tt.id)
+			}
+			if got != tt.handler {
+				t.Errorf("%s (0x%04X) reaches %s, want %s — the server will do "+
+					"the wrong thing with it", tt.name, tt.id, got, tt.handler)
+			}
+		})
+	}
+}
+
+// TestShuffledIDsFollowTheShuffleTable guards the file the generator used to
+// ignore entirely.
+//
+// clif.cpp includes clif_shuffle.hpp after clif_packetdb.hpp and
+// packetdb_addpacket overwrites, so these are the ids the server ends up with.
+// Reading only the main table put TakeItem on 0x07E4, which this packetver
+// hands to a variable-length packet: the server read the payload as a length
+// and closed the connection.
+func TestShuffledIDsFollowTheShuffleTable(t *testing.T) {
+	tests := []struct {
+		id      uint16
+		length  int
+		handler string
+	}{
+		{0x0362, 6, "clif_parse_TakeItem"},
+		{0x0363, 6, "clif_parse_DropItem"},
+		{0x07E4, VariableLength, "clif_parse_ItemListWindowSelected"},
+		// The map-server login packet, which the main table calls
+		// FriendsListAdd at 26 bytes.
+		{0x0436, 23, "clif_parse_WantToConnection"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.handler, func(t *testing.T) {
+			length, ok := ClientPacketLength(tt.id)
+			if !ok {
+				t.Fatalf("0x%04X missing from the client table", tt.id)
+			}
+			if length != tt.length {
+				t.Errorf("0x%04X length = %d, want %d", tt.id, length, tt.length)
+			}
+			if handler, _ := ClientPacketHandler(tt.id); handler != tt.handler {
+				t.Errorf("0x%04X reaches %s, want %s", tt.id, handler, tt.handler)
+			}
+		})
+	}
+}

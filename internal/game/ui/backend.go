@@ -24,6 +24,9 @@ type UIBackend interface {
 	// TakeItemAction returns a double click on an inventory item.
 	TakeItemAction() (ItemAction, bool)
 
+	// TakeDropAction returns an item dragged out of the inventory window.
+	TakeDropAction() (DropAction, bool)
+
 	// SetSoundSettings seeds the sound dialog from what is actually playing.
 	SetSoundSettings(s SoundSettings)
 
@@ -156,6 +159,10 @@ type InGameUIState struct {
 	// EntityBars are the HP/SP bars to draw under units, already projected
 	// into viewport pixels.
 	EntityBars []states.EntityBar
+
+	// ItemLabel is the name of the ground item under the pointer, already
+	// projected, or nil when the pointer is not on one.
+	ItemLabel *states.HoverLabel
 
 	// Player position
 	PlayerX, PlayerY, PlayerZ float32
