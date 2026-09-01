@@ -103,7 +103,8 @@ func (s *CharSelectState) Update(dt float64) error {
 	// Unattended character entry, the other half of --autologin. Waits for the
 	// list to arrive, then takes the first character; with no characters there
 	// is nothing to enter and the screen is left as it is.
-	if s.manager.AutoPlay && !s.autoSelected && s.CharListReady && len(s.Characters) > 0 {
+	if s.manager.AutoPlay && !s.manager.StopAtCharSelect &&
+		!s.autoSelected && s.CharListReady && len(s.Characters) > 0 {
 		s.autoSelected = true
 		_ = s.SelectCharacter(0)
 	}

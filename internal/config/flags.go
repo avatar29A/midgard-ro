@@ -21,6 +21,7 @@ var (
 	flagShotAfter  = flag.Duration("screenshot-after", 0, "Capture a screenshot this long after startup, then keep running (QA aid)")
 	flagShotEvery  = flag.Duration("screenshot-every", 0, "Capture a screenshot on this interval (QA aid)")
 	flagAutoLogin  = flag.Bool("autologin", false, "Log in and enter the first character without input (QA aid)")
+	flagStopAt     = flag.String("stop-at", "", "Go this far and no further: charselect (QA aid)")
 	flagDebugHUD   = flag.Bool("debug-overlay", false, "Start with the F3 debug overlay open (QA aid)")
 	flagNoBGM      = flag.Bool("no-bgm", false, "Run without background music, keeping sound effects")
 	flagWalkTo     = flag.String("walk-to", "", "Once in game, walk to this cell, e.g. 156,22 (QA aid)")
@@ -86,6 +87,28 @@ func ScreenshotEvery() time.Duration {
 func AutoLogin() bool {
 	return *flagAutoLogin
 }
+
+// StopAtCharSelect reports whether the client should hold on the character
+// select screen instead of entering the game.
+//
+// --autologin drives login and character select in one go, and without it the
+// client sits at the login window with no way to press its button. So there
+// was no way to leave anything on the character select screen long enough to
+// look at it, which is where every check of that screen and of character
+// creation has to start.
+func StopAtCharSelect() bool {
+	return *flagStopAt == StopCharSelect
+}
+
+// StopAtSpec returns the raw --stop-at value, for reporting one that is not
+// a stage we know.
+func StopAtSpec() string {
+	return *flagStopAt
+}
+
+// StopCharSelect is the one stage --stop-at understands so far. Named rather
+// than spelled out at each use so a second stage is a small change.
+const StopCharSelect = "charselect"
 
 // DebugOverlay reports whether the F3 overlay should start open.
 //

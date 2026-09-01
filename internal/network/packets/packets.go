@@ -25,7 +25,11 @@ const (
 	// Client -> Char Server
 	CH_ENTER       uint16 = 0x0065 // Enter char server
 	CH_SELECT_CHAR uint16 = 0x0066 // Select character
-	CH_MAKE_CHAR   uint16 = 0x0067 // Create character
+	// CH_MAKE_CHAR carries a new character. The id moves with the packet
+	// version: 0x0067 carried starting stats, 0x0970 dropped them, and from
+	// PACKETVER 20151001 — which is us — it is 0x0A39 with job and sex added.
+	// See common/packets.hpp:122-157 in the server we build.
+	CH_MAKE_CHAR   uint16 = 0x0A39 // Create character
 	CH_DELETE_CHAR uint16 = 0x0068 // Delete character
 
 	// Char Server -> Client
