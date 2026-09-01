@@ -84,9 +84,17 @@ func (s *CharSelectState) Enter() error {
 
 	s.enterTime = time.Now()
 	s.ErrorMsg = ""
-	s.IsLoading = true
-	s.CharListReady = false
-	s.Characters = nil
+
+	// Only ask for the character list the first time. Coming back from
+	// character creation used to clear it and ask again, and the char server
+	// does not answer a second CH_ENTER — that packet is how a session
+	// connects, not how it refreshes. The result was a screen with every slot
+	// empty and no way to recover it.
+	first := !s.CharListReady
+	if first {
+		s.IsLoading = true
+		s.Characters = nil
+	}
 
 	// Register packet handlers
 	s.client.RegisterHandler(packets.HC_ACCEPT_ENTER2, s.handleSlotCounts)
@@ -95,8 +103,25 @@ func (s *CharSelectState) Enter() error {
 	s.client.RegisterHandler(packets.HC_NOTIFY_ZONESVR, s.handleMapServerInfo)
 	s.client.RegisterHandler(packets.HC_NOTIFY_ZONESVR2, s.handleMapServerInfo) // Modern rAthena
 
+	if !first {
+		return nil
+	}
+
 	// Send character server enter request
 	return s.sendCharEnter()
+}
+
+// AddCharacter records a character the server has just made, so the list this
+// screen already holds stays true without asking for it again.
+func (s *CharSelectState) AddCharacter(char *packets.CharInfo) int {
+	if char == nil {
+		return -1
+	}
+
+	s.Characters = append(s.Characters, char)
+	s.StatusMsg = fmt.Sprintf("Found %d character(s)", len(s.Characters))
+
+	return len(s.Characters) - 1
 }
 
 // Exit is called when leaving this state.
