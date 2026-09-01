@@ -15,7 +15,7 @@ import (
 // rather than into the body, which keeps the dialog one row tall — at this
 // size a caption line would double its height to repeat what the title says.
 //
-// No Cancel button. Closing it is cancelling, and the title bar's close and a
+// No Cancel button. Closing it is canceling, and the title bar's close and a
 // click anywhere outside both do that; a third way to say no would be the
 // widest thing in the row.
 const (
