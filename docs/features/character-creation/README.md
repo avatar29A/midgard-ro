@@ -199,6 +199,11 @@ No layer boundary is crossed, so **no ADR**.
 - **Done when:** every slot draws a frame; empty ones read as empty; a double-click logs `char.slot-click` with `empty=true`. Nothing navigates yet.
 - **Proved by:** `--stop-at charselect --screenshot-after 6s`; UC-219
 
+### Step 1b — All nine slots are reachable
+- **Changes:** `internal/game/ui/charselect_native.go`, `internal/game/states/charselect.go`
+- **Done when:** the select screen pages through the account's slots in threes, so a character can be created into any of the nine the account allows. Paging is disabled when the account has three or fewer.
+- **Proved by:** a screenshot per page with `--stop-at charselect`; UC-219
+
 ### Step 2 — The creation screen opens, drawn from `bg_back2.tga`
 - **Changes:** new `CharCreateState`, new `internal/game/ui/charcreate_native.go`
 - **Done when:** the double-click opens the ref-01 layout — race cards, sex toggle, empty preview area, name field, hair grid, Go back / Create. Go back returns having sent nothing.
@@ -245,22 +250,16 @@ No layer boundary is crossed, so **no ADR**.
 
 - **Character deletion** (`CH_DELETE_CHAR`) — its own flow with a timer.
 - **Spending the 48 status points** — the stat window, PR #108.
-- **Slot paging** — see Open question 2.
 
 ## Open questions
 
-1. **Doram: build it now or leave the card "coming soon"?** Our server accepts
-   Summoner and the sprites are in the archive, so it is genuinely available.
-   It does mean a second body sprite set through the preview and in game.
-   Planned as **build it**, per "complete, matched to our server" — say if it
-   should wait.
-2. **Three slots or nine?** The UI draws three rects while the accounts allow
-   nine, and the original pages in threes. Creating into slot 3+ is
-   unreachable until paging exists. Planned as **add paging**, since "full
-   functionality" implies reaching every slot the account has.
-3. **Should the preview rotate, or just face front?** ref-01 has turn arrows.
-   Cheap if `charsprite` already exposes the eight directions; otherwise it is
-   its own small piece of work. Planned as **yes**.
+All three answered by Boris on 2026-09-01 and folded into the steps above.
+
+1. ~~Doram now, or "coming soon"?~~ → **Build it.** Both race cards are live.
+2. ~~Three slots or nine?~~ → **Nine, with paging.** The select screen draws
+   three rects today; every slot the account has must be reachable, so paging
+   is in scope and becomes Step 1b.
+3. ~~Should the preview rotate?~~ → **Yes.** The turn arrows work.
 
 ## Investigation notes
 
@@ -276,6 +275,7 @@ No layer boundary is crossed, so **no ADR**.
 ## Revision log
 
 - 2026-09-01 — Created against `win_make.bmp` (classic hexagon layout).
+- 2026-09-01 — Open questions answered: Doram in, nine slots with paging (new Step 1b), preview rotation in.
 - 2026-09-01 — **Rebuilt around `make_character_ver2` (ref-01).** Boris: the
   old RFC scope is not current; build the full functionality our server
   supports. Consequences: the screen now has a control for every field
