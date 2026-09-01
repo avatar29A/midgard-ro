@@ -46,11 +46,11 @@ const (
 	itemsTabShutR float32 = 18
 
 	// itemsTabSlant is the shape the tabs actually have. The boundary between
-	// two of them is not a straight line but a shallow stair: in the art it
-	// steps from the left edge to the right over five rows, about three and a
-	// half pixels a row. Drawn square instead — which is what this did before
-	// — the strip reads as three stacked boxes rather than as tabs.
-	itemsTabSlant = 5
+	// two of them is not level but slanted: in the art it falls from the left
+	// edge to the right over five rows. Drawn square instead — which is what
+	// this did before — the strip reads as three stacked boxes rather than as
+	// tabs.
+	itemsTabSlant float32 = 5
 
 	itemsFooterH float32 = 24
 
@@ -163,30 +163,26 @@ func (b *UI2DBackend) drawItemHover(screenW, screenH float32) {
 // it, tab_itm_01 to 03, has its labels baked in and in Korean. What is taken
 // from that art is its shape, which is all flat colors and one-pixel edges:
 // the open tab's face is the window body, the shut ones are a shade of grey,
-// and every boundary between them is a stepped diagonal.
+// and every boundary between them is a slanted line rather than a straight
+// one.
+//
+// Each tab is one quad with slanted top and bottom edges, not a stack of
+// one-pixel rows. A slant built out of rows is a staircase whose steps are as
+// coarse as the rows are wide — three pixels here, which is what it looked
+// like — where a quad is rasterized at the display's own resolution.
 func (b *UI2DBackend) drawItemTabs(x, bodyY float32) {
 	top := bodyY + itemsPad
 
-	// Faces first, each tab whole. The boundaries are drawn over them
-	// afterwards and repair the rows the stair cuts through, which saves
-	// every fill from having to know about its neighbors.
 	for i, tab := range itemTabs {
-		box := b.itemTabBox(x, top, i)
-
-		b.drawItemTabFace(x, box, i == b.itemTab)
-		b.drawTabLabel(box, tab.label, i == b.itemTab)
+		b.drawItemTab(x, top, i, tab.label)
 	}
 
-	for i := 0; i < len(itemTabs)-1; i++ {
-		b.drawItemTabSlant(x, top+float32(i+1)*itemsTabH, i, i+1)
+	// The edges last, over the faces they divide, so a face never covers half
+	// the line above it.
+	for k := 1; k <= len(itemTabs); k++ {
+		b.drawItemTabEdge(x, top, k)
 	}
 
-	// The strip closes with a stair of its own below the last tab, as the art
-	// does: without it the run of tabs stops on a square edge and the last one
-	// reads as a box again.
-	b.drawItemTabSlant(x, top+float32(len(itemTabs))*itemsTabH, len(itemTabs)-1, -1)
-
-	// The presses go last so a tab is not claimed by the strip it sits in.
 	for i, tab := range itemTabs {
 		box := b.itemTabBox(x, top, i)
 
@@ -197,37 +193,140 @@ func (b *UI2DBackend) drawItemTabs(x, bodyY float32) {
 	}
 }
 
-// itemTabBox is one tab's cell in the strip.
+// itemTabBox is the band one tab is pressed in. Square, unlike the tab drawn
+// in it: a slanted hit area would leave slivers between the tabs that answer
+// to nothing.
 func (b *UI2DBackend) itemTabBox(x, top float32, i int) ui2d.Rect {
 	return ui2d.Rect{X: x, Y: top + float32(i)*itemsTabH, W: itemsTabW, H: itemsTabH}
 }
 
-// drawItemTabFace fills one tab and draws its edges.
-func (b *UI2DBackend) drawItemTabFace(x float32, box ui2d.Rect, open bool) {
-	r := b.ctx.Renderer()
-
-	left, face := itemsTabShutX, itemsTabIdle
-	if open {
-		left, face = itemsTabOpenX, ui2d.ColorWindowBody
+// itemTabLeft is where a tab's left edge falls. The open one reaches two
+// pixels further out than the shut ones, which is half of how the strip says
+// which is open; the other half is that it has no right edge at all.
+func (b *UI2DBackend) itemTabLeft(i int) float32 {
+	if i == b.itemTab {
+		return itemsTabOpenX
 	}
 
-	// The hatched band down the outside, which the art has for the strip's
-	// whole height: rows of the body color and of the shut grey in turn.
-	b.drawTabHatch(x, box.Y, left, box.H)
+	return itemsTabShutX
+}
 
-	r.DrawRect(x+left, box.Y, itemsTabW-left, box.H, face)
-	r.DrawRect(x+left, box.Y, 1, box.H, itemsTabBorder)
+// itemTabRight is where it ends. The open tab runs into the grid.
+func (b *UI2DBackend) itemTabRight(i int) float32 {
+	if i == b.itemTab {
+		return itemsTabW
+	}
 
-	// A shut tab stops short of the grid; the open one does not, which is the
-	// whole of how the strip marks it.
-	if !open {
-		r.DrawRect(x+itemsTabShutR, box.Y, 1, box.H, itemsTabBorder)
-		r.DrawRect(x+itemsTabShutR+1, box.Y, itemsTabW-itemsTabShutR-1, box.H, ui2d.ColorWindowBody)
+	return itemsTabShutR
+}
+
+// itemTabEdgeY is where boundary k sits at a given x.
+//
+// Boundary zero is the top of the strip and is level; every other one slants,
+// starting at the leftmost edge either of its two tabs has and reaching the
+// far side of the strip after itemsTabSlant rows.
+func (b *UI2DBackend) itemTabEdgeY(top float32, k int, x float32) float32 {
+	y := top + float32(k)*itemsTabH
+	if k == 0 {
+		return y
+	}
+
+	left := b.itemTabEdgeLeft(k)
+
+	switch {
+	case x <= left:
+		return y
+	case x >= itemsTabShutR:
+		return y + itemsTabSlant
+	default:
+		return y + itemsTabSlant*(x-left)/(itemsTabShutR-left)
 	}
 }
 
+// itemTabEdgeLeft is where boundary k's slant begins.
+func (b *UI2DBackend) itemTabEdgeLeft(k int) float32 {
+	if k-1 == b.itemTab || k == b.itemTab {
+		return itemsTabOpenX
+	}
+
+	return itemsTabShutX
+}
+
+// drawItemTab fills one tab, hatches the band outside it and draws its
+// upright edges.
+func (b *UI2DBackend) drawItemTab(x, top float32, i int, label string) {
+	r := b.ctx.Renderer()
+
+	left, right := b.itemTabLeft(i), b.itemTabRight(i)
+
+	face := itemsTabIdle
+	if i == b.itemTab {
+		face = ui2d.ColorWindowBody
+	}
+
+	// The face, slanted top and bottom.
+	r.DrawQuad(
+		[2]float32{x + left, b.itemTabEdgeY(top, i, left)},
+		[2]float32{x + right, b.itemTabEdgeY(top, i, right)},
+		[2]float32{x + right, b.itemTabEdgeY(top, i+1, right)},
+		[2]float32{x + left, b.itemTabEdgeY(top, i+1, left)},
+		face)
+
+	// The band outside it, and beyond a shut tab the window itself. Both are
+	// square: the slant starts at the tab's own edge, so nothing outside it
+	// is cut by one.
+	bandTop := b.itemTabEdgeY(top, i, 0)
+	bandH := b.itemTabEdgeY(top, i+1, 0) - bandTop
+
+	b.drawTabHatch(x, bandTop, left, bandH)
+
+	if i != b.itemTab {
+		r.DrawRect(x+itemsTabShutR+1, bandTop, itemsTabW-itemsTabShutR-1, bandH, ui2d.ColorWindowBody)
+	}
+
+	// The upright edges, each running between the two slants.
+	b.drawItemTabUpright(x, top, i, left)
+
+	if i != b.itemTab {
+		b.drawItemTabUpright(x, top, i, itemsTabShutR)
+	}
+
+	b.drawTabLabel(b.itemTabBox(x, top, i), label, i == b.itemTab)
+}
+
+// drawItemTabUpright draws one of a tab's vertical edges, between the slants
+// above and below it.
+func (b *UI2DBackend) drawItemTabUpright(x, top float32, i int, at float32) {
+	edgeTop := b.itemTabEdgeY(top, i, at)
+	edgeBottom := b.itemTabEdgeY(top, i+1, at)
+
+	b.ctx.Renderer().DrawRect(x+at, edgeTop, 1, edgeBottom-edgeTop, itemsTabBorder)
+}
+
+// drawItemTabEdge draws the slanted line at one boundary.
+func (b *UI2DBackend) drawItemTabEdge(x, top float32, k int) {
+	left := b.itemTabEdgeLeft(k)
+
+	startY := b.itemTabEdgeY(top, k, left)
+	endY := b.itemTabEdgeY(top, k, itemsTabShutR)
+
+	b.ctx.Renderer().DrawQuad(
+		[2]float32{x + left, startY},
+		[2]float32{x + itemsTabShutR + 1, endY},
+		[2]float32{x + itemsTabShutR + 1, endY + 1},
+		[2]float32{x + left, startY + 1},
+		itemsTabBorder)
+}
+
 // drawTabHatch draws the band down the outside of the strip.
+//
+// Rows of the body color and of the shut grey in turn, which is how the art
+// fills the sliver beside the tabs.
 func (b *UI2DBackend) drawTabHatch(x, y, w, h float32) {
+	if w <= 0 || h <= 0 {
+		return
+	}
+
 	r := b.ctx.Renderer()
 
 	for row := float32(0); row < h; row++ {
@@ -237,42 +336,6 @@ func (b *UI2DBackend) drawTabHatch(x, y, w, h float32) {
 		}
 
 		r.DrawRect(x, y+row, w, 1, shade)
-	}
-}
-
-// drawItemTabSlant draws the stepped boundary between two tabs.
-//
-// Left of the step is the tab below and right of it the tab above, which is
-// what gives the open tab its wedge: the boundary leaves its edge low and
-// meets the grid high.
-func (b *UI2DBackend) drawItemTabSlant(x, y float32, above, below int) {
-	r := b.ctx.Renderer()
-
-	// Below the last tab there is no tab at all, only the window, which is
-	// what closes the strip off.
-	faceOf := func(i int) ui2d.Color {
-		if i < 0 || i == b.itemTab {
-			return ui2d.ColorWindowBody
-		}
-
-		return itemsTabIdle
-	}
-
-	// Between the leftmost edge either tab has and the grid.
-	left := itemsTabShutX
-	if above == b.itemTab || below == b.itemTab {
-		left = itemsTabOpenX
-	}
-
-	step := (itemsTabShutR - left) / itemsTabSlant
-
-	for i := 0; i < itemsTabSlant; i++ {
-		rowY := y + float32(i)
-		edge := left + float32(i)*step
-
-		r.DrawRect(x+left, rowY, edge-left, 1, faceOf(below))
-		r.DrawRect(x+edge, rowY, step, 1, itemsTabBorder)
-		r.DrawRect(x+edge+step, rowY, itemsTabShutR-edge-step, 1, faceOf(above))
 	}
 }
 
