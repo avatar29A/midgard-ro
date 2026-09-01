@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strconv"
 
 	"go.uber.org/zap"
@@ -53,6 +54,16 @@ const (
 	charCreateTurnL = float32(428)
 	charCreateTurnR = float32(552)
 
+	// The hair style grid on the right. Cells and thumbnails are both 36x37.
+	charCreateHairCellW  = float32(36)
+	charCreateHairCellH  = float32(37)
+	charCreateHairCols   = 4
+	charCreateHairPitchX = float32(40)
+	charCreateHairPitchY = float32(39)
+	charCreateHairX      = float32(606)
+	charCreateHairY      = float32(62)
+	charCreateHairLabelY = float32(48)
+
 	// The race cards on the left, which the frame leaves blank.
 	charCreateCardX  = float32(18)
 	charCreateCardW  = float32(367)
@@ -83,6 +94,9 @@ type charCreateSkin struct {
 	maleOff, maleOn     *TextureInfo
 	femaleOff, femaleOn *TextureInfo
 	turnLeft, turnRight *TextureInfo
+
+	// hairCell and hairCellSel frame one grid cell, unselected and selected.
+	hairCell, hairCellSel *TextureInfo
 }
 
 // loadCharCreateSkin loads the creation frame. A miss leaves the skin nil and
@@ -115,6 +129,8 @@ func (b *UI2DBackend) loadCharCreateSkin() *charCreateSkin {
 	skin.femaleOn = b.optionalTexture(makeCharVer2TexBasePath + `bt_female_on.bmp`)
 	skin.turnLeft = b.optionalTexture(makeCharVer2TexBasePath + `bt_leftturn_normal.bmp`)
 	skin.turnRight = b.optionalTexture(makeCharVer2TexBasePath + `bt_rightturn_normal.bmp`)
+	skin.hairCell = b.optionalTexture(makeCharVer2TexBasePath + `bt_hairstyle_normal.bmp`)
+	skin.hairCellSel = b.optionalTexture(makeCharVer2TexBasePath + `bt_hairstyle_select.bmp`)
 
 	b.charCreateSkin = skin
 
@@ -150,6 +166,7 @@ func (b *UI2DBackend) renderNativeCharCreate(state CharCreateUIState, width, hei
 	b.ctx.Renderer().DrawImage(skin.window.ID, x, y, charCreateWinW, charCreateWinH, ui2d.ColorWhite)
 
 	b.drawCharCreateRaces(state, x, y)
+	b.drawCharCreateHair(skin, state, x, y)
 	b.drawCharCreateSex(skin, state, x, y)
 	b.drawCharCreatePreview(state, x, y)
 	b.drawCharCreateTurn(skin, state, x, y)
@@ -157,6 +174,79 @@ func (b *UI2DBackend) renderNativeCharCreate(state CharCreateUIState, width, hei
 	b.drawCharCreateMessages(state, x, y)
 
 	return true
+}
+
+// hairStyleCount is how many styles the screen offers for a look.
+//
+// The archive holds more head sprites than thumbnails — 42 per sex for humans
+// against 23 pictures, 10 against 6 for Doram — and the original offers the
+// pictured ones. Offering a style with no thumbnail would be a blank cell that
+// still worked, which reads as a broken grid.
+func hairStyleCount(job int) int {
+	if job == charsprite.JobSummoner {
+		return 6
+	}
+
+	return 23
+}
+
+// hairThumbPath is the archive path of one style's picture.
+func hairThumbPath(job int, female bool, style int) string {
+	name := fmt.Sprintf(`img_hairstyle%02d.bmp`, style)
+
+	switch {
+	case job == charsprite.JobSummoner && female:
+		name = fmt.Sprintf(`img_hairstyle_doramgirl%02d.bmp`, style)
+	case job == charsprite.JobSummoner:
+		name = fmt.Sprintf(`img_hairstyle_doramboy%02d.bmp`, style)
+	case female:
+		name = fmt.Sprintf(`img_hairstyle_girl%02d.bmp`, style)
+	}
+
+	return makeCharVer2TexBasePath + name
+}
+
+// drawCharCreateHair draws the style grid and picks one.
+//
+// The thumbnails change with both sex and race, so the whole grid is rebuilt
+// from the current look rather than cached against the first one drawn.
+func (b *UI2DBackend) drawCharCreateHair(skin *charCreateSkin, state CharCreateUIState, x, y float32) {
+	r := b.ctx.Renderer()
+
+	r.DrawText(x+charCreateHairX, y+charCreateHairLabelY, "Hair Style",
+		loginTextScale, charCreateCardInk)
+
+	count := hairStyleCount(state.Job)
+	female := state.Sex == SexFemale
+
+	for i := 0; i < count; i++ {
+		style := i + 1
+		col := i % charCreateHairCols
+		row := i / charCreateHairCols
+
+		cellX := x + charCreateHairX + float32(col)*charCreateHairPitchX
+		cellY := y + charCreateHairY + float32(row)*charCreateHairPitchY
+
+		frame := skin.hairCell
+		if style == state.HairStyle {
+			frame = skin.hairCellSel
+		}
+		if frame != nil {
+			r.DrawImage(frame.ID, cellX, cellY,
+				charCreateHairCellW, charCreateHairCellH, ui2d.ColorWhite)
+		}
+
+		if thumb := b.optionalTexture(hairThumbPath(state.Job, female, style)); thumb != nil {
+			r.DrawImage(thumb.ID, cellX, cellY,
+				charCreateHairCellW, charCreateHairCellH, ui2d.ColorWhite)
+		}
+
+		if b.ctx.InvisibleButtonAt(fmt.Sprintf("charcreate_hair_%d", style),
+			cellX, cellY, charCreateHairCellW, charCreateHairCellH) &&
+			state.OnSetHair != nil {
+			state.OnSetHair(style)
+		}
+	}
 }
 
 // drawCharCreateRaces draws the Human and Doram cards and switches between

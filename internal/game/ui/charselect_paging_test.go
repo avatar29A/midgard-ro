@@ -1,6 +1,10 @@
 package ui
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/Faultbox/midgard-ro/internal/engine/charsprite"
+)
 
 // TestCharSelectPageCount: nine slots shown three at a time is three pages,
 // and the arithmetic has to round up or the last stragglers are unreachable —
@@ -81,5 +85,47 @@ func TestLastPageIsReachable(t *testing.T) {
 	if highest < state.CreatableSlots-1 {
 		t.Errorf("highest reachable slot is %d, but the account has %d",
 			highest, state.CreatableSlots)
+	}
+}
+
+// TestHairThumbPath: the grid's pictures are named four different ways
+// depending on sex and race, and a wrong name is a blank cell that still
+// selects — a style you cannot see but can pick.
+func TestHairThumbPath(t *testing.T) {
+	const base = `data\texture\유저인터페이스\make_character_ver2\`
+
+	tests := []struct {
+		name   string
+		job    int
+		female bool
+		style  int
+		want   string
+	}{
+		{"human male", charsprite.JobNovice, false, 1, base + `img_hairstyle01.bmp`},
+		{"human female", charsprite.JobNovice, true, 7, base + `img_hairstyle_girl07.bmp`},
+		{"doram male", charsprite.JobSummoner, false, 3, base + `img_hairstyle_doramboy03.bmp`},
+		{"doram female", charsprite.JobSummoner, true, 6, base + `img_hairstyle_doramgirl06.bmp`},
+		// Two digits, always: the archive names them 01..23.
+		{"a two-digit style", charsprite.JobNovice, false, 23, base + `img_hairstyle23.bmp`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hairThumbPath(tt.job, tt.female, tt.style); got != tt.want {
+				t.Errorf("path = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestHairStyleCountMatchesThumbnails: the grid offers what it has pictures
+// for. The archive holds more head sprites than thumbnails, and offering an
+// unpictured style would draw an empty cell that still worked.
+func TestHairStyleCountMatchesThumbnails(t *testing.T) {
+	if got := hairStyleCount(charsprite.JobNovice); got != 23 {
+		t.Errorf("human styles = %d, want 23", got)
+	}
+	if got := hairStyleCount(charsprite.JobSummoner); got != 6 {
+		t.Errorf("doram styles = %d, want 6", got)
 	}
 }
