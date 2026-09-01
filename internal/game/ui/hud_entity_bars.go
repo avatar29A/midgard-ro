@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"github.com/Faultbox/midgard-ro/internal/engine/cursor"
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
 	"github.com/Faultbox/midgard-ro/internal/game/entity"
 	"github.com/Faultbox/midgard-ro/internal/game/states"
@@ -162,9 +163,10 @@ var (
 	itemLabelPlate = ui2d.Color{R: 0, G: 0, B: 0, A: 0.6}
 )
 
-// drawItemLabel names the ground item under the pointer.
-func (b *UI2DBackend) drawItemLabel(label *states.HoverLabel) {
-	if label == nil || label.Text == "" {
+// drawWorldLabel names something on the map — a ground item or a monster,
+// pointed at or being fought.
+func (b *UI2DBackend) drawWorldLabel(label states.HoverLabel) {
+	if label.Text == "" {
 		return
 	}
 
@@ -177,4 +179,29 @@ func (b *UI2DBackend) drawItemLabel(label *states.HoverLabel) {
 	r.DrawRect(x-itemLabelPadX, y-itemLabelPadY,
 		width+2*itemLabelPadX, height+2*itemLabelPadY, itemLabelPlate)
 	r.DrawText(x, y, label.Text, itemLabelScale, itemLabelColor)
+}
+
+// targetMarkerRise is how far above the target's head the mark floats.
+const targetMarkerRise = float32(6)
+
+// drawTargetMarker puts the mark over the unit being fought.
+//
+// The same arrowhead the pointer shows over a locked target, drawn in world
+// space instead: it is action 3 of cursors.spr, which is what the original
+// marks a chosen target with. Taking it from there rather than drawing one
+// means it animates with the cursor and looks like it belongs.
+func (b *UI2DBackend) drawTargetMarker(marker *states.TargetMarker) {
+	if marker == nil || b.cursor == nil {
+		return
+	}
+
+	frame, ok := b.cursor.FrameOf(cursor.StateLock)
+	if !ok {
+		return
+	}
+
+	b.ctx.Renderer().DrawImage(frame.Texture,
+		marker.ScreenX-frame.Width/2,
+		marker.ScreenY-frame.Height-targetMarkerRise,
+		frame.Width, frame.Height, ui2d.ColorWhite)
 }

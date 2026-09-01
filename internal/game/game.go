@@ -839,9 +839,9 @@ func (g *Game) renderUI() {
 		stats := state.Stats()
 		dialog := state.Dialog()
 
-		var itemLabel *states.HoverLabel
-		if label, ok := state.HoverItemLabel(viewportWidth, viewportHeight); ok {
-			itemLabel = &label
+		var targetMarker *states.TargetMarker
+		if marker, ok := state.TargetMarker(viewportWidth, viewportHeight); ok {
+			targetMarker = &marker
 		}
 
 		mapCellsX, mapCellsY := 0, 0
@@ -855,7 +855,8 @@ func (g *Game) renderUI() {
 			MapCellsY:       mapCellsY,
 			ChatLines:       state.ChatLines(),
 			EntityBars:      state.EntityBars(viewportWidth, viewportHeight),
-			ItemLabel:       itemLabel,
+			WorldLabels:     state.WorldLabels(viewportWidth, viewportHeight),
+			TargetMarker:    targetMarker,
 			PlayerX:         playerX,
 			PlayerY:         playerY,
 			PlayerZ:         playerZ,

@@ -18,11 +18,21 @@ import (
 // there is a weapon that reaches.
 const attackRange = 1
 
-// attackIdleGiveUpMs is how long the character may stand still on the way to
-// a target before the attack is abandoned. Same reasoning as the pick-up: a
-// walk pauses between acknowledged paths, so a stop has to be sustained
-// before it counts as one.
-const attackIdleGiveUpMs = 600
+// targetRepathMs is how often the walk towards a target is reissued while
+// chasing it.
+//
+// A target that walks is the normal case — porings wander, and anything
+// hostile closes on you — so a single walk to where it stood when you clicked
+// arrives at an empty cell. The route is reissued as it moves, throttled so
+// this does not become a move request every frame.
+const targetRepathMs = 350
+
+// attackResendMs is how often the attack is reissued while in range.
+//
+// The request repeats server-side, so once is usually enough; this is the
+// safety net for the case where the target stepped out of reach and back,
+// which stops the server's repeat without telling us.
+const attackResendMs = 1200
 
 // AttackTarget attacks a unit, walking to it first if it is out of reach.
 //
@@ -34,17 +44,86 @@ func (s *InGameState) AttackTarget(e *entity.Entity) {
 		return
 	}
 
-	s.targetID = e.ID
+	trace.Emit(trace.HUD, "attack-target",
+		zap.Uint32("id", e.ID), zap.String("name", e.Name))
 
-	if s.withinAttackRange(e) {
-		s.sendAttack(e)
+	s.targetID = e.ID
+	s.attacking = false
+	s.repathMs = 0
+	s.resendMs = 0
+
+	// The rest is updateCombat's, every frame: closing the distance, swinging
+	// when close enough, and closing it again when the target moves off.
+	// Doing it here as well would be the same decision made twice.
+}
+
+// updateCombat chases the target and hits it.
+//
+// A target is kept until it dies, leaves, or another click countermands it —
+// not until one walk finishes. Anything worth fighting moves, so a single
+// walk to where it stood when you clicked arrives at an empty cell, which is
+// what made the first version give up a step short of everything.
+func (s *InGameState) updateCombat(deltaMs float32, walking bool) {
+	if s.targetID == 0 || s.entityManager == nil {
+		return
+	}
+
+	e := s.entityManager.Get(s.targetID)
+	if !s.isAttackable(e) {
+		trace.Emit(trace.HUD, "attack-target-gone", zap.Uint32("id", s.targetID))
+		s.forgetAttack()
 
 		return
 	}
 
-	// Out of reach: walk to it and swing on arrival. Walking onto the target's
-	// own cell is not possible and not the point — the server's pathing stops
-	// on the last free cell before it, which is where a melee blow lands from.
+	if s.withinAttackRange(e) {
+		s.closeWith(e, deltaMs, walking)
+
+		return
+	}
+
+	s.chase(e, deltaMs)
+}
+
+// closeWith swings at a target that is already within reach.
+//
+// Nothing is sent while the character is still walking, for the reason the
+// pick-up learned: the client reaches a cell before word of it reaches the
+// server, so a blow measured from where the client thinks it stands is
+// refused.
+func (s *InGameState) closeWith(e *entity.Entity, deltaMs float32, walking bool) {
+	s.repathMs = 0
+
+	if walking {
+		return
+	}
+
+	s.resendMs -= deltaMs
+	if s.attacking && s.resendMs > 0 {
+		return
+	}
+
+	s.sendAttack(e)
+	s.attacking = true
+	s.resendMs = attackResendMs
+}
+
+// chase walks towards a target that is out of reach, reissuing the route as
+// it moves.
+func (s *InGameState) chase(e *entity.Entity, deltaMs float32) {
+	// Out of reach means the server has stopped swinging, whatever it was
+	// last told.
+	s.attacking = false
+
+	s.repathMs -= deltaMs
+	if s.repathMs > 0 {
+		return
+	}
+	s.repathMs = targetRepathMs
+
+	// Walking onto the target's own cell is not possible and not the point —
+	// the server's pathing stops on the last free cell before it, which is
+	// where a melee blow lands from.
 	cellX, cellY := e.Body.CurrentCell()
 
 	trace.Emit(trace.HUD, "attack-approach",
@@ -53,12 +132,7 @@ func (s *InGameState) AttackTarget(e *entity.Entity) {
 
 	if err := s.RequestMove(cellX, cellY); err != nil {
 		logger.Warn("could not walk to that target", zap.Error(err))
-
-		return
 	}
-
-	s.pendingAttack = e.ID
-	s.pendingAttackIdleMs = 0
 }
 
 // sendAttack asks for the blow.
@@ -92,59 +166,21 @@ func (s *InGameState) withinAttackRange(e *entity.Entity) bool {
 	return abs(targetX-playerX) <= attackRange && abs(targetY-playerY) <= attackRange
 }
 
-// updatePendingAttack swings once the walk to a target has ended.
-//
-// Nothing is sent while walking, for the reason the pick-up learned the hard
-// way: the client reaches a cell before word of it reaches the server, so a
-// request sent on arrival-as-the-client-sees-it is measured against a
-// character the server still has further back, and is refused.
-func (s *InGameState) updatePendingAttack(deltaMs float32, walking bool) {
-	if s.pendingAttack == 0 || s.entityManager == nil {
-		return
-	}
-
-	e := s.entityManager.Get(s.pendingAttack)
-	if !s.isAttackable(e) {
-		trace.Emit(trace.HUD, "attack-target-gone", zap.Uint32("id", s.pendingAttack))
-		s.pendingAttack = 0
-
-		return
-	}
-
-	if walking {
-		s.pendingAttackIdleMs = 0
-
-		return
-	}
-
-	if s.withinAttackRange(e) {
-		s.pendingAttack = 0
-		s.sendAttack(e)
-
-		return
-	}
-
-	s.pendingAttackIdleMs += deltaMs
-	if s.pendingAttackIdleMs >= attackIdleGiveUpMs {
-		trace.Emit(trace.HUD, "attack-unreachable", zap.Uint32("id", s.pendingAttack))
-		s.pendingAttack = 0
-	}
-}
-
 // forgetAttack drops the target and any errand to reach it.
 //
 // Clicking somewhere else breaks off the fight. The server stops swinging
 // when it is told to walk, so the walk request that follows is what actually
 // cancels it — this is the client agreeing rather than the client deciding.
 func (s *InGameState) forgetAttack() {
-	if s.pendingAttack == 0 && s.targetID == 0 {
+	if s.targetID == 0 {
 		return
 	}
 
 	trace.Emit(trace.HUD, "attack-cancelled", zap.Uint32("id", s.targetID))
-	s.pendingAttack = 0
-	s.pendingAttackIdleMs = 0
 	s.targetID = 0
+	s.attacking = false
+	s.repathMs = 0
+	s.resendMs = 0
 }
 
 // TargetID is the unit being attacked, or zero.
@@ -201,4 +237,38 @@ func (s *InGameState) handleMonsterHP(data []byte) error {
 		zap.Uint32("id", id), zap.Int("hp", hp), zap.Int("maxHP", maxHP))
 
 	return nil
+}
+
+// TargetMarker is where to draw the mark over the unit being fought, in
+// viewport pixels.
+type TargetMarker struct {
+	ScreenX, ScreenY float32
+}
+
+// TargetMarker is the mark over the target's head, or nothing when there is
+// no target on screen.
+//
+// Above the head rather than at the feet, which is where the original puts
+// it and where it does not fight the HP bar and the name for the same pixels.
+func (s *InGameState) TargetMarker(viewportW, viewportH float32) (TargetMarker, bool) {
+	if s.targetID == 0 || s.entityManager == nil {
+		return TargetMarker{}, false
+	}
+
+	e := s.entityManager.Get(s.targetID)
+	if e == nil || e.Body == nil {
+		return TargetMarker{}, false
+	}
+
+	// The top of the box the unit is drawn in, so the mark sits over a poring
+	// and over something tall alike.
+	box := s.unitBox(e)
+
+	x, y := s.projectToScreen(e.Body.RenderX, box.Max[1], e.Body.RenderZ,
+		viewportW, viewportH)
+	if x < 0 {
+		return TargetMarker{}, false
+	}
+
+	return TargetMarker{ScreenX: x, ScreenY: y}, true
 }

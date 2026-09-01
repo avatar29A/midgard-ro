@@ -84,10 +84,15 @@ type InGameState struct {
 	// to before the first blow. pendingAttackIdleMs counts how long the
 	// character has stood still on the way, which is how an unreachable
 	// target is given up on.
-	targetID            uint32
-	pendingAttack       uint32
-	pendingAttackIdleMs float32
-	markerPulse         float32
+	// targetID is the unit being fought, kept until it dies, leaves, or
+	// another click countermands it. attacking records whether the server has
+	// been told to swing, and the two timers throttle chasing it and
+	// reissuing the blow.
+	targetID    uint32
+	attacking   bool
+	repathMs    float32
+	resendMs    float32
+	markerPulse float32
 
 	// markerTraceAt rate limits the marker diagnostics.
 	markerTraceAt time.Time
@@ -693,7 +698,7 @@ func (s *InGameState) Update(dt float64) error {
 		s.wasWalking = walking
 
 		s.updatePendingPickup(deltaMs, walking)
-		s.updatePendingAttack(deltaMs, walking)
+		s.updateCombat(deltaMs, walking)
 
 		// Advance the sprite animation. Frame counts come from the loaded
 		// sheet; with no sprites this parks on frame 0 harmlessly.

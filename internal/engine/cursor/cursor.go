@@ -225,6 +225,26 @@ func (c *Cursor) Update(dt time.Duration) {
 }
 
 // Frame returns what to draw, and whether there is anything to draw.
+// FrameOf is the current frame of a state other than the one the pointer is
+// showing.
+//
+// The marker over a locked target is drawn from the same sprite as the
+// cursor, in world space rather than under the pointer, so it needs a frame
+// from a state that is not the current one. It rides the same clock, which
+// keeps the two in step and costs nothing.
+func (c *Cursor) FrameOf(s State) (Frame, bool) {
+	if c == nil {
+		return Frame{}, false
+	}
+
+	a := c.actions[s]
+	if a == nil || len(a.frames) == 0 {
+		return Frame{}, false
+	}
+
+	return a.frames[c.frame%len(a.frames)], true
+}
+
 func (c *Cursor) Frame() (Frame, bool) {
 	if c == nil {
 		return Frame{}, false
