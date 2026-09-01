@@ -508,10 +508,23 @@ func (r *Renderer) selectFrame(char *entity.Character, camPosX, camPosZ float32,
 		action = sh.actIndex(charsprite.ActionIdle)
 	}
 
+	// Not every sprite has eight facings. A ground item has exactly one, so
+	// asking it for the facing the camera happens to want finds nothing — and
+	// since the facing follows the camera, rotating the view made every
+	// dropped item on the map disappear.
+	//
+	// So: this facing, then this action's first facing, then the idle's. A
+	// sprite with one direction draws it whichever way the camera is pointing,
+	// which is what a potato lying on the ground should do.
 	frames := sh.frames[action*charsprite.Directions+visualDir]
 	if len(frames) == 0 {
-		// Fall back to idle for this facing rather than dropping the draw.
+		frames = sh.frames[action*charsprite.Directions]
+	}
+	if len(frames) == 0 {
 		frames = sh.frames[visualDir]
+		if len(frames) == 0 {
+			frames = sh.frames[0]
+		}
 		if len(frames) == 0 {
 			return 0, 0, 0
 		}

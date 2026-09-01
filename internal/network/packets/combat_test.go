@@ -118,3 +118,32 @@ func TestDamageAnimationSpeed(t *testing.T) {
 		})
 	}
 }
+
+// TestIsBlowTellsGesturesApart: ZC_NOTIFY_ACT is not only about damage.
+// rAthena sends it for picking an item up, sitting and standing too, with the
+// same shape and a type that says which — and clif_takeitem is exactly that.
+// Reading them all as blows made a character swing its weapon at the ground it
+// had just taken a potato off.
+func TestIsBlowTellsGesturesApart(t *testing.T) {
+	tests := []struct {
+		name string
+		kind uint8
+		blow bool
+	}{
+		{"an ordinary hit", DamageNormal, true},
+		{"a critical", DamageCritical, true},
+		{"a lucky dodge", DamageLuckyDodge, true},
+		{"multi-hit", DamageMultiHit, true},
+		{"picking something up", ActPickupItem, false},
+		{"sitting", ActSitDown, false},
+		{"standing", ActStandUp, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := (Damage{Type: tt.kind}).IsBlow(); got != tt.blow {
+				t.Errorf("IsBlow() = %v, want %v", got, tt.blow)
+			}
+		})
+	}
+}
