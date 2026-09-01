@@ -76,35 +76,38 @@ func TestIsAttackable(t *testing.T) {
 	}
 }
 
-// TestPendingAttackWaitsForTheWalkToEnd is the same guard the pick-up needed:
-// the client reaches a cell before word of it reaches the server, so a blow
-// swung while still walking is measured against a character the server has
-// further back, and refused.
-func TestPendingAttackWaitsForTheWalkToEnd(t *testing.T) {
+// TestCombatKeepsTheTargetWhileWalking: nothing is swung mid-walk, for the
+// reason the pick-up learned — the client reaches a cell before word of it
+// reaches the server, so a blow measured from where the client thinks it
+// stands is refused. The target is kept, which is how we know nothing was
+// sent: sending would have set attacking.
+func TestCombatKeepsTheTargetWhileWalking(t *testing.T) {
 	m := entity.NewManager()
 	m.Add(mobAt(42, 100, 100))
 
 	s := &InGameState{
 		player:        entity.NewCharacter(0, 0, 0),
 		entityManager: m,
-		pendingAttack: 42,
+		targetID:      42,
 	}
 	s.player.SetCell(100, 100)
 
-	// Standing on the target, but still walking: nothing is sent, which is
-	// visible in the errand still being pending — sending clears it.
 	for i := 0; i < 30; i++ {
-		s.updatePendingAttack(16, true)
+		s.updateCombat(16, true)
 	}
 
-	if s.pendingAttack != 42 {
+	if s.targetID != 42 {
+		t.Error("lost the target while walking to it")
+	}
+	if s.attacking {
 		t.Error("swung mid-walk; the server measures from where it thinks the " +
 			"character is, and refuses")
 	}
 }
 
-// TestPendingAttackGivesUpWhenTheTargetDies: nothing left to hit.
-func TestPendingAttackGivesUpWhenTheTargetDies(t *testing.T) {
+// TestCombatDropsADeadTarget: there is nothing left to hit, and holding the
+// target would keep the marker over a corpse.
+func TestCombatDropsADeadTarget(t *testing.T) {
 	m := entity.NewManager()
 	dead := mobAt(42, 100, 100)
 	dead.IsDead = true
@@ -113,51 +116,82 @@ func TestPendingAttackGivesUpWhenTheTargetDies(t *testing.T) {
 	s := &InGameState{
 		player:        entity.NewCharacter(0, 0, 0),
 		entityManager: m,
-		pendingAttack: 42,
+		targetID:      42,
 	}
 
-	s.updatePendingAttack(16, true)
+	s.updateCombat(16, false)
 
-	if s.pendingAttack != 0 {
-		t.Error("still walking towards a target that is dead")
+	if s.targetID != 0 {
+		t.Error("still fighting something that is dead")
 	}
 }
 
-// TestPendingAttackGivesUpAfterStandingStill: the character stopped short,
-// which is what an unreachable target looks like from here. Walking resets
-// the clock, because a walk pauses between acknowledged paths.
-func TestPendingAttackGivesUpAfterStandingStill(t *testing.T) {
+// TestCombatDropsAVanishedTarget: it walked out of view, or someone else
+// killed it.
+func TestCombatDropsAVanishedTarget(t *testing.T) {
+	s := &InGameState{
+		player:        entity.NewCharacter(0, 0, 0),
+		entityManager: entity.NewManager(),
+		targetID:      42,
+	}
+
+	s.updateCombat(16, false)
+
+	if s.targetID != 0 {
+		t.Error("still fighting something that is not on the map")
+	}
+}
+
+// TestChaseIsThrottled: the route to a moving target is reissued as it moves,
+// but not every frame — that would be sixty move requests a second.
+//
+// The throttle is checked before anything is sent, which is what lets this
+// run without a connection.
+func TestChaseIsThrottled(t *testing.T) {
 	m := entity.NewManager()
 	m.Add(mobAt(42, 200, 200))
 
 	s := &InGameState{
 		player:        entity.NewCharacter(0, 0, 0),
 		entityManager: m,
-		pendingAttack: 42,
+		targetID:      42,
+		repathMs:      targetRepathMs,
 	}
 	s.player.SetCell(100, 100)
 
-	s.updatePendingAttack(attackIdleGiveUpMs/2, false)
-	if s.pendingAttack != 42 {
-		t.Fatal("gave up during the gap between two acknowledged paths")
-	}
+	// Well inside the interval: the target is far away, so this is the chase
+	// path, and it returns before asking for anything.
+	s.updateCombat(16, false)
 
-	s.updatePendingAttack(attackIdleGiveUpMs, false)
-	if s.pendingAttack != 0 {
-		t.Error("still waiting after standing still well past the limit")
+	if s.repathMs != targetRepathMs-16 {
+		t.Errorf("repathMs = %v, want the interval counted down by one frame",
+			s.repathMs)
+	}
+	if s.targetID != 42 {
+		t.Error("gave up on a target that is merely far away")
+	}
+}
+
+// TestCombatGivesUpOnNothing: no target is not a crash.
+func TestCombatGivesUpOnNothing(t *testing.T) {
+	var s InGameState
+	s.updateCombat(16, false)
+
+	if s.targetID != 0 {
+		t.Error("acquired a target from nowhere")
 	}
 }
 
 // TestForgetAttack: another click breaks off the fight.
 func TestForgetAttack(t *testing.T) {
-	s := &InGameState{targetID: 42, pendingAttack: 42, pendingAttackIdleMs: 120}
+	s := &InGameState{targetID: 42, attacking: true, repathMs: 120, resendMs: 90}
 
 	s.forgetAttack()
 
-	if s.targetID != 0 || s.pendingAttack != 0 {
+	if s.targetID != 0 {
 		t.Error("still fighting after a click elsewhere")
 	}
-	if s.pendingAttackIdleMs != 0 {
-		t.Error("the idle clock carried over into the next errand")
+	if s.attacking || s.repathMs != 0 || s.resendMs != 0 {
+		t.Error("the old fight's state carried into the next one")
 	}
 }
