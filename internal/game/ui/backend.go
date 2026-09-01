@@ -80,6 +80,9 @@ type UIBackend interface {
 	// RenderCharSelectUI renders the character selection screen.
 	RenderCharSelectUI(state CharSelectUIState, width, height float32)
 
+	// RenderCharCreateUI renders the character creation screen.
+	RenderCharCreateUI(state CharCreateUIState, width, height float32)
+
 	// RenderLoadingUI renders the map loading screen.
 	RenderLoadingUI(state LoadingUIState, width, height float32)
 
@@ -135,6 +138,22 @@ type CharSelectUIState struct {
 	// double click on the slot and by the Make button, which the original
 	// shows in the place Ok occupies for a filled one.
 	OnCreateSlot func(slot int)
+}
+
+// CharCreateUIState contains the data needed to render character creation.
+type CharCreateUIState struct {
+	// Slot is where the character will go, decided before this screen opened.
+	Slot int
+
+	// Sex is the character's sex. At our packet version the client chooses
+	// and sends it, so this is a choice rather than a report.
+	Sex uint8
+
+	StatusMessage string
+	ErrorMessage  string
+
+	// OnCancel abandons creation and returns to character select.
+	OnCancel func()
 }
 
 // LoadingUIState contains the data needed to render the loading UI.

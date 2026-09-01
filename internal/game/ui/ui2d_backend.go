@@ -56,6 +56,8 @@ type UI2DBackend struct {
 	// Character select art, and where its window has been dragged to.
 	charSelSkin        *charSelectSkin
 	charSelTried       bool
+	charCreateSkin     *charCreateSkin
+	charCreateTried    bool
 	charSelX, charSelY float32
 	charSelPlaced      bool
 
@@ -421,6 +423,9 @@ const (
 	// makeCharTexBasePath holds the creation screen's art. Character select
 	// borrows its paging arrows from here — see charselect_native.go.
 	makeCharTexBasePath = uiTexBasePath + `make_character\`
+	// makeCharVer2TexBasePath holds the modern creation screen's art —
+	// the frame, the hair thumbnails, the color swatches, the sex toggle.
+	makeCharVer2TexBasePath = uiTexBasePath + `make_character_ver2\`
 
 	// The login screen backdrop. Verified present in data.grf — the previous
 	// login_bg.bmp / login_logo.bmp were not in the archive at all, which is

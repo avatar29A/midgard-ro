@@ -42,25 +42,33 @@ a control for each.
 
 ### ref-01 — the screen to build
 
-![grf-bg_back2](./grf-bg_back2.png)
+![grf-bg_makebg](./grf-bg_makebg.png)
 
-`data/texture/유저인터페이스/make_character_ver2/bg_back2.tga`, **997×626**,
-from our own `data.grf`. This is the background; the rest is drawn on top.
+`data/texture/유저인터페이스/make_character_ver2/bg_makebg.bmp`, **794×422**,
+from our own `data.grf` — the same size as the retail screenshot Boris sent.
+This is the frame; everything else is drawn on top of it.
 
-1. **Title bar** "Create Character" with a close button at the right.
-2. **Race cards, left.** Human with its description and the job-tree icons
-   beneath it; Doram below. In the retail client Doram shows "COMING SOON" —
-   **on our server it is creatable**, so both cards are live for us.
-3. **Job-tree icons** on the Human card. Informational — the jobs a Human can
-   later become. Creation itself only ever sends Novice or Summoner, so these
-   are not buttons.
-4. **Sex toggle**, ♂ / ♀, above the preview.
-5. **Sprite preview** with turn arrows either side.
-6. **Name field** under the preview.
-7. **Hair Style grid**, right — 23 thumbnails per sex.
-8. **Hair Colour swatches**, below it — 10, the first being "default" (drawn
-   with a cross through it).
-9. **Go back / Create** along the bottom.
+**Painted into the texture** (nothing to build):
+
+1. **Title bar** with its account glyph, and the close **X** at the right.
+2. **The pastel panel** filling the right two-thirds.
+3. **The sprite podium** — the soft shadow the character stands on.
+4. **The name input well** beneath the podium.
+5. **The swatch box** outline at bottom right, for hair colour.
+6. **The scrollbar track** down the right edge of the hair-style area.
+
+**Drawn by the client** (what the steps below build): the race cards on the
+left half, which is deliberately blank here; the sex toggle; the character
+sprite; the hair-style thumbnails in the scrolling area; the colour swatches
+inside the box; **Go back** and **Create**, which are *not* painted in; and
+every piece of text.
+
+> **Corrected 2026-09-01.** This entry previously named `bg_back2.tga`
+> (997×626) and described race cards and a hair grid on it. That was wrong:
+> `bg_back2.tga` is the **modern character *select*** — a 15-slot grid with an
+> info panel and its own "Character List ◀ 1/1 ▶" paging. It was identified
+> from its filename and dimensions without being opened. `bg_makebg.bmp` is
+> the creation frame. See Investigation notes.
 
 ### ref-02 — the classic screen, and why it is not this one
 
@@ -227,9 +235,9 @@ No layer boundary is crossed, so **no ADR**.
 - **Done when:** the select screen pages through the account's slots in threes, so a character can be created into any of the nine the account allows. Paging is disabled when the account has three or fewer.
 - **Proved by:** a screenshot per page with `--stop-at charselect`; UC-219
 
-### Step 2 — The creation screen opens, drawn from `bg_back2.tga`
+### Step 2 — The creation screen opens, drawn from `bg_makebg.bmp`
 - **Changes:** new `CharCreateState`, new `internal/game/ui/charcreate_native.go`
-- **Done when:** the double-click opens the ref-01 layout — race cards, sex toggle, empty preview area, name field, hair grid, Go back / Create. Go back returns having sent nothing.
+- **Done when:** the double-click opens the ref-01 frame with Go back and Create drawn on it. Go back returns having sent nothing.
 - **Proved by:** screenshot matching ref-01; UC-219
 - **Reference:** ref-01 ①②④⑥⑦⑨
 
@@ -291,6 +299,12 @@ All three answered by Boris on 2026-09-01 and folded into the steps above.
 - The GRF holds **four** creation layouts from four client eras. Searching
   `make_character` finds the newest two and misses the classic screen entirely,
   which lives under `login_interface/`.
+- **An asset was named from its filename and never opened**, and the wrong
+  one reached the published plan: `bg_back2.tga` is the modern character
+  *select* (a 15-slot grid, which is `MAX_CHARS`), not creation. The creation
+  frame is `bg_makebg.bmp`, 794×422 — the size of the retail screenshot, which
+  is the check that would have caught it immediately. Open the image before
+  writing its legend.
 - Korean directory names are EUC-KR inside the archive. Decoding a listing as
   UTF-8 with replacement characters produces a path `extract` cannot find —
   pass raw bytes.
@@ -298,6 +312,7 @@ All three answered by Boris on 2026-09-01 and folded into the steps above.
 ## Revision log
 
 - 2026-09-01 — Created against `win_make.bmp` (classic hexagon layout).
+- 2026-09-01 — **ref-01 corrected** from `bg_back2.tga` to `bg_makebg.bmp`; the first was the modern character select, not creation.
 - 2026-09-01 — Open questions answered: Doram in, nine slots with paging (new Step 1b), preview rotation in.
 - 2026-09-01 — **Rebuilt around `make_character_ver2` (ref-01).** Boris: the
   old RFC scope is not current; build the full functionality our server
