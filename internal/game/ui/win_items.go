@@ -302,19 +302,46 @@ func (b *UI2DBackend) drawItemTabUpright(x, top float32, i int, at float32) {
 	b.ctx.Renderer().DrawRect(x+at, edgeTop, 1, edgeBottom-edgeTop, itemsTabBorder)
 }
 
-// drawItemTabEdge draws the slanted line at one boundary.
+// drawItemTabEdge draws the slanted line at one boundary, and the step that
+// joins the upright edges either side of it.
 func (b *UI2DBackend) drawItemTabEdge(x, top float32, k int) {
+	r := b.ctx.Renderer()
+
 	left := itemsTabSlantX
 
 	startY := b.itemTabEdgeY(top, k, left)
 	endY := b.itemTabEdgeY(top, k, itemsTabShutR)
 
-	b.ctx.Renderer().DrawQuad(
+	// The two tabs a boundary divides do not have their upright edges in the
+	// same place — the open one reaches two pixels further out — so the line
+	// has to step across to meet the next one. Without it the edge simply
+	// stops and starts again further in, and the corner reads as open.
+	b.drawItemTabStep(x, startY, k)
+
+	r.DrawQuad(
 		[2]float32{x + left, startY},
 		[2]float32{x + itemsTabShutR + 1, endY},
 		[2]float32{x + itemsTabShutR + 1, endY + 1},
 		[2]float32{x + left, startY + 1},
 		itemsTabBorder)
+}
+
+// drawItemTabStep joins the upright edge above a boundary to the one below it.
+func (b *UI2DBackend) drawItemTabStep(x, y float32, k int) {
+	above := b.itemTabLeft(k - 1)
+
+	below := above
+	if k < len(itemTabs) {
+		below = b.itemTabLeft(k)
+	}
+
+	if above == below {
+		return
+	}
+
+	from, to := min(above, below), max(above, below)
+
+	b.ctx.Renderer().DrawRect(x+from, y, to-from+1, 1, itemsTabBorder)
 }
 
 // drawTabHatch draws the band down the outside of the strip.
