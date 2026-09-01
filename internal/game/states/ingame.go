@@ -95,6 +95,11 @@ type InGameState struct {
 	// damageNumbers are the figures floating up from recent blows.
 	damageNumbers []floatingDamage
 
+	// pendingLevelUp and pendingJobLevelUp are levels reached and not yet
+	// acknowledged, which the buttons at the foot of the screen offer.
+	pendingLevelUp    bool
+	pendingJobLevelUp bool
+
 	targetID    uint32
 	attacking   bool
 	repathMs    float32
@@ -1056,6 +1061,43 @@ func (s *InGameState) handleInventoryEquip(data []byte) error {
 	return s.takeInventory(data, packets.EquipItemLen, "equip", packets.DecodeInventoryEquip)
 }
 
+// mergeInventory folds a delivered list into what we already hold, keyed by
+// slot, and reports how much of it was new.
+//
+// Keyed rather than appended because the server delivers the inventory more
+// than once — on a map change among other things — and appending gave a
+// second row for every item each time you walked through a warp. The slot is
+// the server's own name for an item and cannot collide, so a repeat delivery
+// lands back on the rows it came from.
+//
+// Rows the list does not mention are left alone: the two lists arrive
+// separately and each covers half the bag, so dropping what is missing from
+// one would empty the other.
+func (s *InGameState) mergeInventory(items []packets.InventoryItem) (added, replaced int) {
+	for _, item := range items {
+		existing := -1
+		for i := range s.inventory {
+			if s.inventory[i].Index == item.Index {
+				existing = i
+
+				break
+			}
+		}
+
+		if existing >= 0 {
+			s.inventory[existing] = item
+			replaced++
+
+			continue
+		}
+
+		s.inventory = append(s.inventory, item)
+		added++
+	}
+
+	return added, replaced
+}
+
 // takeInventory folds one of the two lists into the inventory, and complains
 // loudly if the entries did not divide evenly.
 //
@@ -1078,11 +1120,12 @@ func (s *InGameState) takeInventory(
 	}
 
 	items := decode(data)
-	s.inventory = append(s.inventory, items...)
+	added, replaced := s.mergeInventory(items)
 
 	trace.Emit(trace.HUD, "inventory",
 		zap.String("list", which),
-		zap.Int("added", len(items)),
+		zap.Int("added", added),
+		zap.Int("replaced", replaced),
 		zap.Int("total", len(s.inventory)))
 
 	return nil
@@ -1289,6 +1332,7 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_NOTIFY_ACT, s.handleDamage)
 	s.client.RegisterHandler(packets.ZC_MONSTER_HP_INFO, s.handleMonsterHP)
 	s.client.RegisterHandler(packets.ZC_ATTACK_RANGE, s.handleAttackRange)
+	s.client.RegisterHandler(packets.ZC_NOTIFY_EFFECT, s.handleLevelUpEffect)
 	s.client.RegisterHandler(packets.ZC_COUPLESTATUS, s.handleCoupleStatus)
 	s.client.RegisterHandler(packets.ZC_LONGPAR_CHANGE, s.handleStatusChange)
 	s.client.RegisterHandler(packets.ZC_LONGLONGPAR_CHANGE, s.handleStatusChange)

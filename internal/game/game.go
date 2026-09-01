@@ -944,6 +944,14 @@ func (g *Game) renderUI() {
 			}
 		}
 
+		// A status point spent on a stat. The server decides whether it can
+		// be afforded and answers with the new value.
+		if stat, ok := g.uiBackend.TakeStatAction(); ok {
+			if err := state.RaiseStat(stat.Stat); err != nil {
+				logger.Warn("could not raise that stat", zap.Error(err))
+			}
+		}
+
 		// An item dragged out of the inventory window and let go over the
 		// world, which is how the original drops one.
 		if drop, ok := g.uiBackend.TakeDropAction(); ok {

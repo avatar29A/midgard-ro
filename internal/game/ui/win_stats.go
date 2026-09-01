@@ -123,11 +123,19 @@ func (b *UI2DBackend) drawStatValues(state InGameUIState, x, y float32) {
 			r.DrawText(x+statsValueX+4+valueW, textY, label, statsTextScale, color)
 		}
 
-		// The raise button, in the cell between the two, and only when there
-		// is a point to spend: the original leaves the cell empty otherwise,
-		// and a button that cannot do anything is worse than no button.
-		if state.StatusPoints > 0 {
-			b.drawStatRaise(x+statsArrowX, rowY)
+		// The raise button, in the cell between the two, and only when this
+		// stat can actually be raised: the original leaves the cell empty
+		// otherwise, and a button that cannot do anything is worse than none.
+		//
+		// Affordability is the server's own rule rather than a cap written
+		// down here. Each stat's next point costs more than the last, and
+		// rAthena reports that cost per stat in ZC_STATUS — so a stat at its
+		// ceiling prices itself out of reach without the client needing to
+		// know where the ceiling is.
+		if cost := state.PrimaryCost[i]; cost > 0 && state.StatusPoints >= cost {
+			if b.drawStatRaise("hud_stat_raise_"+strconv.Itoa(i), x+statsArrowX, rowY) {
+				b.statAction = StatAction{Stat: packets.SP_STR + uint16(i)}
+			}
 		}
 
 		// What raising it by one would cost, in the third cell.
@@ -211,16 +219,12 @@ var (
 	statsArrowHot = ui2d.Color{R: 1, G: 1, B: 0.75, A: 1}
 )
 
-// drawStatRaise draws the button that spends a status point on one stat.
-//
-// It is drawn and not yet wired: raising a stat is CZ_STATUS_CHANGE, which
-// this window does not send. Showing it is still right — the cell is there in
-// the bitmap and the original fills it whenever there are points — and it is
-// hidden when there are none, so it never offers something it cannot do.
-func (b *UI2DBackend) drawStatRaise(x, y float32) {
+// drawStatRaise draws the button that spends a status point on one stat, and
+// reports a click on it.
+func (b *UI2DBackend) drawStatRaise(id string, x, y float32) bool {
 	tex, err := b.texCache.Load(statsArrow)
 	if err != nil {
-		return
+		return false
 	}
 
 	arrowY := y + (statsBoxH-statsArrowW)/2
@@ -232,4 +236,26 @@ func (b *UI2DBackend) drawStatRaise(x, y float32) {
 	}
 
 	b.ctx.Renderer().DrawImage(tex.ID, box.X, box.Y, box.W, box.H, tint)
+
+	return b.ctx.InvisibleButtonAt(id, box.X, box.Y, box.W, box.H)
+}
+
+// StatAction is a status point being spent on one stat.
+type StatAction struct {
+	// Stat is the status id — SP_STR through SP_LUK — not the row it sits on
+	// in the window.
+	Stat uint16
+}
+
+// TakeStatAction returns a stat the player asked to raise and clears it. The
+// interface has no connection, so sending it is the caller's job.
+func (b *UI2DBackend) TakeStatAction() (StatAction, bool) {
+	action := b.statAction
+	if action.Stat == 0 {
+		return StatAction{}, false
+	}
+
+	b.statAction = StatAction{}
+
+	return action, true
 }

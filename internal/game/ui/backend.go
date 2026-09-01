@@ -27,6 +27,9 @@ type UIBackend interface {
 	// TakeDropAction returns an item dragged out of the inventory window.
 	TakeDropAction() (DropAction, bool)
 
+	// TakeStatAction returns a stat the player asked to raise.
+	TakeStatAction() (StatAction, bool)
+
 	// PressHotkey asks for the item in a quick-panel cell to be used.
 	PressHotkey(row, col int)
 
