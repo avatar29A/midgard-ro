@@ -17,6 +17,14 @@ const (
 	// ZC_NOTIFY_ACT, the result of a blow, is declared in packets.go with the
 	// rest of the unit notifications. It is 34 bytes at this packetver.
 
+	// ZC_ATTACK_RANGE is how far the character can reach: `<range>.W`, 4
+	// bytes, sent whenever the weapon changes.
+	//
+	// The server's own figure, and the one battle_check_range measures a blow
+	// against. Guessing it as one cell put the character on top of everything
+	// it fought and would have been wrong the moment a bow was equipped.
+	ZC_ATTACK_RANGE uint16 = 0x013A
+
 	// ZC_MONSTER_HP_INFO carries a monster's health for the bar over its
 	// head: `<GID>.L <hp>.L <maxHP>.L`, 14 bytes.
 	//
@@ -153,4 +161,14 @@ func DecodeMonsterHP(data []byte) (id uint32, hp, maxHP int, ok bool) {
 		int(int32(binary.LittleEndian.Uint32(data[6:]))),
 		int(int32(binary.LittleEndian.Uint32(data[10:]))),
 		true
+}
+
+// DecodeAttackRange reads ZC_ATTACK_RANGE, the reach of the equipped weapon
+// in cells.
+func DecodeAttackRange(data []byte) (int, bool) {
+	if len(data) < 4 {
+		return 0, false
+	}
+
+	return int(int16(binary.LittleEndian.Uint16(data[2:]))), true
 }

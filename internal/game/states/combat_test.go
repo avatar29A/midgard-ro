@@ -1,9 +1,11 @@
 package states
 
 import (
+	"encoding/binary"
 	"testing"
 
 	"github.com/Faultbox/midgard-ro/internal/game/entity"
+	"github.com/Faultbox/midgard-ro/internal/network/packets"
 )
 
 // mobAt puts a monster on a cell.
@@ -193,5 +195,53 @@ func TestForgetAttack(t *testing.T) {
 	}
 	if s.attacking || s.repathMs != 0 || s.resendMs != 0 {
 		t.Error("the old fight's state carried into the next one")
+	}
+}
+
+// TestReachFollowsTheServer: the range is the server's to decide, and it
+// sends it whenever the weapon changes. Guessing one cell put the character
+// on top of everything it fought.
+func TestReachFollowsTheServer(t *testing.T) {
+	var s InGameState
+
+	if got := s.reach(); got != defaultAttackRange {
+		t.Errorf("reach before the server has said = %d, want %d", got, defaultAttackRange)
+	}
+
+	s.attackRange = 5
+	if got := s.reach(); got != 5 {
+		t.Errorf("reach = %d, want the 5 the server gave", got)
+	}
+}
+
+// TestAttackRangeIgnoresNonsense: standing off at a range the server will
+// refuse is worse than standing too close, so an implausible figure is left
+// alone rather than believed.
+func TestAttackRangeIgnoresNonsense(t *testing.T) {
+	pkt := func(reach int16) []byte {
+		b := make([]byte, 4)
+		binary.LittleEndian.PutUint16(b, packets.ZC_ATTACK_RANGE)
+		binary.LittleEndian.PutUint16(b[2:], uint16(reach))
+
+		return b
+	}
+
+	s := &InGameState{attackRange: 3}
+
+	for _, reach := range []int16{0, -1, 21, 1000} {
+		_ = s.handleAttackRange(pkt(reach))
+		if s.attackRange != 3 {
+			t.Errorf("took %d as a range, replacing the sensible one", reach)
+			s.attackRange = 3
+		}
+	}
+
+	_ = s.handleAttackRange(pkt(9))
+	if s.attackRange != 9 {
+		t.Errorf("attackRange = %d, want the 9 the server sent", s.attackRange)
+	}
+
+	if _, ok := packets.DecodeAttackRange(make([]byte, 3)); ok {
+		t.Error("a 3-byte range decoded, but the packet is 4")
 	}
 }
