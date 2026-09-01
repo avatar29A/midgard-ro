@@ -195,7 +195,7 @@ const pickupRange = 2
 // pickupIdleGiveUpMs is how long the character may stand still on the way to
 // an item before the pick-up is abandoned.
 //
-// Not cancelled the moment the character is not walking: a walk is
+// Not canceled the moment the character is not walking: a walk is
 // acknowledged one path at a time, so there is a gap between steps where
 // nothing is moving and the next acknowledgement is still in flight. This is
 // comfortably longer than that gap and shorter than anyone's patience.
@@ -325,7 +325,7 @@ func (s *InGameState) forgetPendingPickup() {
 		return
 	}
 
-	trace.Emit(trace.HUD, "pickup-cancelled", zap.Uint32("id", s.pendingPickup))
+	trace.Emit(trace.HUD, "pickup-canceled", zap.Uint32("id", s.pendingPickup))
 	s.pendingPickup = 0
 	s.pendingPickupIdleMs = 0
 }
