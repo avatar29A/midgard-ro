@@ -75,10 +75,13 @@ func TestPickupPlaysOnceThenReturns(t *testing.T) {
 		t.Fatalf("CurrentAction = %d, want ActionPickup", c.CurrentAction)
 	}
 
-	// Three frames at the default rate, then one more tick to run off the end.
+	// Three frames at the rate the pick-up actually runs at — its own, times
+	// the slowdown that gives the stoop room to be seen — then off the end.
 	const frames = 3
+
+	step := AnimIntervalMs(ActionPickup) * PickupSlowdown
 	for i := 0; i < frames; i++ {
-		c.AdvanceAnimation(AnimIntervalMs(ActionPickup), 1, 8, frames, 0)
+		c.AdvanceAnimation(step, 1, 8, frames, 0)
 	}
 
 	if c.CurrentAction == ActionPickup {
