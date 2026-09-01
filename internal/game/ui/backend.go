@@ -163,8 +163,15 @@ type CharCreateUIState struct {
 	HairColor int
 	Facing    int
 
+	// Name is what has been typed so far.
+	Name string
+
 	StatusMessage string
 	ErrorMessage  string
+
+	// OnSetName records a keystroke, OnCreate sends the request.
+	OnSetName func(name string)
+	OnCreate  func()
 
 	// OnCancel abandons creation and returns to character select.
 	OnCancel func()

@@ -33,9 +33,13 @@ const (
 	CH_DELETE_CHAR uint16 = 0x0068 // Delete character
 
 	// Char Server -> Client
-	HC_ACCEPT_ENTER    uint16 = 0x006B // Enter accepted + char list
-	HC_REFUSE_ENTER    uint16 = 0x006C // Enter refused
-	HC_ACCEPT_MAKECHAR uint16 = 0x006D // Character created
+	HC_ACCEPT_ENTER uint16 = 0x006B // Enter accepted + char list
+	HC_REFUSE_ENTER uint16 = 0x006C // Enter refused
+	// HC_ACCEPT_MAKECHAR moved with the packet version: 0x006D up to
+	// PACKETVER_MAIN 20201007 / PACKETVER_RE 20211103, and 0x0B6F from
+	// there. Ours is exactly the RE boundary, so this is the new one.
+	// See common/packets.hpp:259-270.
+	HC_ACCEPT_MAKECHAR uint16 = 0x0B6F // Character created
 	HC_NOTIFY_ZONESVR  uint16 = 0x0071 // Map server info (old)
 	HC_NOTIFY_ZONESVR2 uint16 = 0x0AC5 // Map server info (modern rAthena)
 )

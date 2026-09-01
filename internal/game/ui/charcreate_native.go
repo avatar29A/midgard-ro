@@ -86,6 +86,15 @@ const (
 	// HairColorCount is how many palettes exist per style and sex.
 	charCreateColorCount = 9
 
+	// The name field, under the podium. Sized to the well painted into the
+	// frame; the exact well is hard to find by scanning because its border
+	// barely differs from the panel behind it, so these are read off the
+	// retail screenshot's proportions rather than measured.
+	charCreateNameX = float32(421)
+	charCreateNameY = float32(262)
+	charCreateNameW = float32(157)
+	charCreateNameH = float32(28)
+
 	// The race cards on the left, which the frame leaves blank.
 	charCreateCardX  = float32(18)
 	charCreateCardW  = float32(367)
@@ -193,6 +202,7 @@ func (b *UI2DBackend) renderNativeCharCreate(state CharCreateUIState, width, hei
 	b.drawCharCreateSex(skin, state, x, y)
 	b.drawCharCreatePreview(state, x, y)
 	b.drawCharCreateTurn(skin, state, x, y)
+	b.drawCharCreateName(state, x, y)
 	b.drawCharCreateButtons(state, x, y)
 	b.drawCharCreateMessages(state, x, y)
 
@@ -429,6 +439,26 @@ func (b *UI2DBackend) drawCharCreateTurn(skin *charCreateSkin, state CharCreateU
 	}
 }
 
+// drawCharCreateName draws the name field.
+//
+// Whether a name is free is not knowable here — nothing asks the server that —
+// so this only collects what was typed. What can be judged locally is judged
+// before a packet is spent; the rest comes back as a refusal.
+func (b *UI2DBackend) drawCharCreateName(state CharCreateUIState, x, y float32) {
+	value, changed, submitted := b.ctx.TextInputAt("charcreate_name",
+		x+charCreateNameX, y+charCreateNameY,
+		charCreateNameW, charCreateNameH, state.Name)
+
+	if changed && state.OnSetName != nil {
+		state.OnSetName(value)
+	}
+
+	// Enter creates, which is what a name field in a dialog should do.
+	if submitted && state.OnCreate != nil {
+		state.OnCreate()
+	}
+}
+
 // drawCharCreateButtons draws Go back and Create along the bottom.
 //
 // Neither is in the frame, so both are drawn rather than skinned. Create sends
@@ -448,9 +478,11 @@ func (b *UI2DBackend) drawCharCreateButtons(state CharCreateUIState, x, y float3
 	}
 
 	if b.ctx.ButtonAt("charcreate_create", createX, btnY, charCreateBtnW, charCreateBtnH, "Create") {
-		// Deliberately inert until step 5 wires CH_MAKE_CHAR. Traced so a
-		// press is visible rather than looking like a dead button.
 		trace.Emit(trace.Char, "create-click", zap.Int("slot", state.Slot))
+
+		if state.OnCreate != nil {
+			state.OnCreate()
+		}
 	}
 }
 
