@@ -79,6 +79,14 @@ type InGameState struct {
 	// stood still on the way, which is how an unreachable item is given up on.
 	pendingPickup       uint32
 	pendingPickupIdleMs float32
+
+	// targetID is the unit being attacked, and pendingAttack one being walked
+	// to before the first blow. pendingAttackIdleMs counts how long the
+	// character has stood still on the way, which is how an unreachable
+	// target is given up on.
+	targetID            uint32
+	pendingAttack       uint32
+	pendingAttackIdleMs float32
 	markerPulse         float32
 
 	// markerTraceAt rate limits the marker diagnostics.
@@ -685,6 +693,7 @@ func (s *InGameState) Update(dt float64) error {
 		s.wasWalking = walking
 
 		s.updatePendingPickup(deltaMs, walking)
+		s.updatePendingAttack(deltaMs, walking)
 
 		// Advance the sprite animation. Frame counts come from the loaded
 		// sheet; with no sprites this parks on frame 0 harmlessly.
@@ -1247,6 +1256,8 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_ITEM_DISAPPEAR, s.handleGroundItemGone)
 	s.client.RegisterHandler(packets.ZC_ITEM_PICKUP_ACK, s.handlePickupAck)
 	s.client.RegisterHandler(packets.ZC_ITEM_THROW_ACK, s.handleDropAck)
+	s.client.RegisterHandler(packets.ZC_NOTIFY_ACT, s.handleDamage)
+	s.client.RegisterHandler(packets.ZC_MONSTER_HP_INFO, s.handleMonsterHP)
 	s.client.RegisterHandler(packets.ZC_COUPLESTATUS, s.handleCoupleStatus)
 	s.client.RegisterHandler(packets.ZC_LONGPAR_CHANGE, s.handleStatusChange)
 	s.client.RegisterHandler(packets.ZC_LONGLONGPAR_CHANGE, s.handleStatusChange)
@@ -1884,6 +1895,7 @@ func (s *InGameState) ClickWorld(mouseX, mouseY, viewportW, viewportH float32) {
 	// Whatever this click turns out to mean, it replaces any errand still in
 	// progress. PickUpItem sets a new one if that is what this click was.
 	s.forgetPendingPickup()
+	s.forgetAttack()
 
 	// A unit under the pointer takes the click. For an NPC, walking there
 	// instead would be the wrong thing twice over: the conversation would not
@@ -1908,6 +1920,12 @@ func (s *InGameState) ClickWorld(mouseX, mouseY, viewportW, viewportH float32) {
 			if err := s.RequestMove(stepX, stepY); err != nil {
 				logger.Warn("walk to warp failed", zap.Error(err))
 			}
+			return
+		}
+
+		if s.isAttackable(e) {
+			s.AttackTarget(e)
+
 			return
 		}
 

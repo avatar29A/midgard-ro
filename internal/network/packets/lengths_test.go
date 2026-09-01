@@ -185,3 +185,45 @@ func TestUseItemAckIsFramed(t *testing.T) {
 		t.Errorf("ZC_USE_ITEM_ACK length = %d, want 15", length)
 	}
 }
+
+// TestCombatPacketsAreFramed guards the packets a fight is made of.
+//
+// ZC_NOTIFY_ACT is the one to watch. Its id is guarded three ways — 0x008A,
+// 0x02E1 and 0x08C8 — and almost every reference gives the first. This client
+// carried 0x008A as the constant for a long time without noticing, because
+// nothing handled it: at this packetver 0x008A is not framed at all, so a
+// handler on it would never have run and the fight would have been silent.
+func TestCombatPacketsAreFramed(t *testing.T) {
+	tests := []struct {
+		name string
+		id   uint16
+		want int
+	}{
+		{"ZC_NOTIFY_ACT", ZC_NOTIFY_ACT, 34},
+		{"ZC_NOTIFY_VANISH", ZC_NOTIFY_VANISH, 7},
+		{"ZC_PAR_CHANGE", ZC_PAR_CHANGE, 8},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			length, known := Length(tt.id)
+			if !known {
+				t.Fatalf("%s (0x%04X) is not framed", tt.name, tt.id)
+			}
+			if length != tt.want {
+				t.Errorf("%s length = %d, want %d", tt.name, length, tt.want)
+			}
+		})
+	}
+}
+
+// TestNotifyActIsNotTheOldID: 0x008A is the id this packetver does not use,
+// and the one a reference will hand you.
+func TestNotifyActIsNotTheOldID(t *testing.T) {
+	if ZC_NOTIFY_ACT == 0x008A {
+		t.Error("ZC_NOTIFY_ACT is 0x008A, which PACKETVER_RE 20211103 does not send")
+	}
+	if _, known := Length(0x008A); known {
+		t.Error("0x008A is framed, so the reasoning in this test needs revisiting")
+	}
+}
