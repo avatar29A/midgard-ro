@@ -219,7 +219,7 @@ func (s *InGameState) forgetAttack() {
 		return
 	}
 
-	trace.Emit(trace.HUD, "attack-cancelled", zap.Uint32("id", s.targetID))
+	trace.Emit(trace.HUD, "attack-canceled", zap.Uint32("id", s.targetID))
 	s.targetID = 0
 	s.attacking = false
 	s.repathMs = 0
@@ -282,7 +282,7 @@ func (s *InGameState) handleDamage(data []byte) error {
 // playGesture plays one of the things ZC_NOTIFY_ACT carries that is not a
 // blow.
 //
-// Sitting and standing are recognised and then ignored: nothing in this
+// Sitting and standing are recognized and then ignored: nothing in this
 // client sits yet, and playing something else for them would be worse than
 // playing nothing.
 func (s *InGameState) playGesture(blow packets.Damage) {

@@ -171,7 +171,7 @@ func (r *Renderer) LoadCharacter(load charsprite.Loader, spec charsprite.Spec) e
 		return err
 	}
 
-	baked := newSheet(assets, spec.Kind)
+	baked := newSheet(assets)
 	if baked == nil {
 		return fmt.Errorf("sprite sheet for %q produced no frames", assets.BodyPath)
 	}
@@ -197,7 +197,6 @@ func (r *Renderer) HasSprites() bool {
 	return r != nil && r.player != nil
 }
 
-// SpritePath returns the archive path the loaded body sprite came from.
 // WeaponPath is the archive path the player's weapon loaded from, empty when
 // bare-handed or when the archive had no art for what is held.
 func (r *Renderer) WeaponPath() string {
@@ -208,6 +207,7 @@ func (r *Renderer) WeaponPath() string {
 	return r.player.weaponPath
 }
 
+// SpritePath returns the archive path the loaded body sprite came from.
 func (r *Renderer) SpritePath() string {
 	if r == nil || r.player == nil {
 		return ""
@@ -340,7 +340,7 @@ func (r *Renderer) unitSheet(load charsprite.Loader, spec charsprite.Spec) *shee
 	var baked *sheet
 	assets, err := charsprite.Load(load, spec)
 	if err == nil {
-		baked = newSheet(assets, spec.Kind)
+		baked = newSheet(assets)
 	}
 	r.units[spec] = baked
 
@@ -578,7 +578,7 @@ type sheet struct {
 // was nothing to upload.
 //
 // Must be called on the GL thread.
-func newSheet(assets *charsprite.Assets, kind charsprite.Kind) *sheet {
+func newSheet(assets *charsprite.Assets) *sheet {
 	if assets == nil || len(assets.Sheet.Frames) == 0 {
 		return nil
 	}
