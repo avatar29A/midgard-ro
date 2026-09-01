@@ -570,6 +570,17 @@ func (s *Scene) GetTerrainHeight(worldX, worldZ float32) float32 {
 	return s.terrainHeightmap.HeightAt(worldX, worldZ)
 }
 
+// GatHeight is the walkable surface's height at a position, as the collision
+// map gives it.
+//
+// The collision map is not the ground mesh. A town's raised plaza is built
+// out of map models standing on flat ground, so the mesh says one height for
+// the whole square while the collision map carries the height you actually
+// walk at.
+func (s *Scene) GatHeight(worldX, worldZ float32) float32 {
+	return terrain.GetInterpolatedHeight(s.GAT, worldX, worldZ)
+}
+
 // TerrainProbe reports what the ground query is working from at a position:
 // the tile it lands in, where inside that tile, and the tile's four corner
 // heights.

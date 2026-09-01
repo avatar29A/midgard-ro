@@ -46,7 +46,7 @@ func unitType(kind packets.EntityKind, job int16) entity.Type {
 // Units are keyed by AID: rAthena fills GID with the character id, which is
 // zero for every monster and NPC on the map, so keying by GID would collapse
 // them all onto one entity.
-func upsertUnit(m *entity.Manager, u *packets.Entity, path PathFunc) *entity.Entity {
+func upsertUnit(m *entity.Manager, u *packets.Entity, path PathFunc, ground GroundFunc) *entity.Entity {
 	if m == nil || u == nil || u.AID == 0 {
 		return nil
 	}
@@ -81,6 +81,13 @@ func upsertUnit(m *entity.Manager, u *packets.Entity, path PathFunc) *entity.Ent
 	if e.Body == nil {
 		e.Body = newUnitBody(u)
 	}
+
+	// Before it is placed, not after: placing asks the ground how high it is,
+	// and a unit placed without a ground to ask stands at nought. A unit that
+	// then never moves — which is most of them, since an NPC stands where it
+	// was put — keeps that height for as long as it is on screen, and on a map
+	// whose floor is not at nought it hangs in the air.
+	e.Body.TerrainHeight = ground
 	e.Body.WalkSpeedMs = walkSpeedOf(u)
 
 	if u.Moving {
@@ -91,6 +98,9 @@ func upsertUnit(m *entity.Manager, u *packets.Entity, path PathFunc) *entity.Ent
 
 	return e
 }
+
+// GroundFunc reports the terrain altitude at a world position.
+type GroundFunc func(worldX, worldZ float32) float32
 
 // newUnitBody puts a newly seen unit at the cell it was reported on. Its
 // render position starts there too, so it fades in where it belongs instead of
@@ -255,6 +265,15 @@ func updateUnits(m *entity.Manager, deltaMs float32, anim UnitAnimFunc) {
 
 		if e.Body == nil {
 			continue
+		}
+
+		// A standing unit is put on the ground every frame rather than only
+		// when it is placed. The map is not always loaded when a unit is
+		// first reported — the server sends them while it is still coming up
+		// — and one placed before there was any ground to ask would otherwise
+		// stand at nought for as long as it never moves.
+		if !e.Body.IsMoving {
+			e.Body.SettleOnGround()
 		}
 
 		e.Body.Update(deltaMs)
