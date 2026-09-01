@@ -1590,12 +1590,9 @@ func (s *InGameState) applyUnit(u *packets.Entity, kind string) error {
 		return nil
 	}
 
-	e := upsertUnit(s.entityManager, u, s.unitPath)
+	e := upsertUnit(s.entityManager, u, s.unitPath, s.terrainHeight)
 	if e == nil {
 		return nil
-	}
-	if e.Body != nil {
-		e.Body.TerrainHeight = s.terrainHeight
 	}
 
 	// sheets says whether the appearance actually baked, which is what
@@ -1830,6 +1827,7 @@ func (s *InGameState) traceGround() {
 	trace.Emit(trace.Move, "ground",
 		zap.Float32("renderY", s.player.RenderY),
 		zap.Float32("groundY", s.scene.GetTerrainHeight(s.player.RenderX, s.player.RenderZ)),
+		zap.Float32("gatY", s.scene.GatHeight(s.player.RenderX, s.player.RenderZ)),
 		zap.Int("tileX", tileX), zap.Int("tileZ", tileZ),
 		zap.Float32("u", u), zap.Float32("v", v),
 		zap.Float32("sw", corners[0]), zap.Float32("se", corners[1]),

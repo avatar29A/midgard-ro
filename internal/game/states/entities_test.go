@@ -28,7 +28,7 @@ func TestUpsertUnitCreatesEntity(t *testing.T) {
 	u.Level = 42
 	u.HP, u.MaxHP = 300, 500
 
-	e := upsertUnit(m, u, nil)
+	e := upsertUnit(m, u, nil, nil)
 	if e == nil {
 		t.Fatal("upsertUnit returned nil for a well-formed unit")
 	}
@@ -58,7 +58,7 @@ func TestUpsertUnitKeyedByAID(t *testing.T) {
 		u := standingAt(aid, 100+i, 100)
 		u.Kind = packets.EntityMob
 		u.GID = 0 // as the server sends it for a monster
-		upsertUnit(m, u, nil)
+		upsertUnit(m, u, nil, nil)
 	}
 
 	if got := m.Count(); got != 3 {
@@ -73,10 +73,10 @@ func TestUpsertUnitKeyedByAID(t *testing.T) {
 func TestUpsertUnitUpdatesInPlace(t *testing.T) {
 	m := entity.NewManager()
 
-	first := upsertUnit(m, standingAt(2000042, 10, 10), nil)
+	first := upsertUnit(m, standingAt(2000042, 10, 10), nil, nil)
 	firstBody := first.Body
 
-	second := upsertUnit(m, standingAt(2000042, 11, 10), nil)
+	second := upsertUnit(m, standingAt(2000042, 11, 10), nil, nil)
 
 	if m.Count() != 1 {
 		t.Errorf("manager holds %d entities, want 1", m.Count())
@@ -99,7 +99,7 @@ func TestUpsertUnitStartsWalk(t *testing.T) {
 	u.ToX, u.ToY = 13, 10
 	u.Dir = -1 // the walking packet carries no facing
 
-	e := upsertUnit(m, u, nil)
+	e := upsertUnit(m, u, nil, nil)
 	if e == nil || e.Body == nil {
 		t.Fatal("no entity or body for a walking unit")
 	}
@@ -144,7 +144,7 @@ func TestUpsertUnitUsesSuppliedPath(t *testing.T) {
 		return detour
 	}
 
-	e := upsertUnit(m, u, path)
+	e := upsertUnit(m, u, path, nil)
 	if !called {
 		t.Fatal("the supplied path function was never consulted")
 	}
@@ -162,7 +162,7 @@ func TestUpsertUnitFallsBackToStraightLine(t *testing.T) {
 	u.Moving = true
 	u.ToX, u.ToY = 8, 5
 
-	e := upsertUnit(m, u, func(_, _, _, _ int) [][2]int { return nil })
+	e := upsertUnit(m, u, func(_, _, _, _ int) [][2]int { return nil }, nil)
 	if !e.Body.IsWalkingPath() {
 		t.Fatal("no walk started when the path function returned nothing")
 	}
@@ -183,12 +183,12 @@ func TestStandingReportStopsAWalk(t *testing.T) {
 	moving := standingAt(2000042, 0, 0)
 	moving.Moving = true
 	moving.ToX, moving.ToY = 9, 0
-	e := upsertUnit(m, moving, nil)
+	e := upsertUnit(m, moving, nil, nil)
 	if !e.Body.IsWalkingPath() {
 		t.Fatal("test setup: the unit should be walking")
 	}
 
-	upsertUnit(m, standingAt(2000042, 3, 0), nil)
+	upsertUnit(m, standingAt(2000042, 3, 0), nil, nil)
 
 	if e.Body.IsWalkingPath() {
 		t.Error("a standing report left the old walk running")
@@ -204,7 +204,7 @@ func TestStandingReportStopsAWalk(t *testing.T) {
 // away, or every unit jerks backward at the start of each step.
 func TestWalkKeepsRenderPosition(t *testing.T) {
 	m := entity.NewManager()
-	e := upsertUnit(m, standingAt(2000042, 10, 10), nil)
+	e := upsertUnit(m, standingAt(2000042, 10, 10), nil, nil)
 
 	// Draw it a little ahead of where the server last placed it.
 	e.Body.RenderX += 3
@@ -213,7 +213,7 @@ func TestWalkKeepsRenderPosition(t *testing.T) {
 	walk := standingAt(2000042, 10, 10)
 	walk.Moving = true
 	walk.ToX, walk.ToY = 14, 10
-	upsertUnit(m, walk, nil)
+	upsertUnit(m, walk, nil, nil)
 
 	if e.Body.RenderX != drawnBefore {
 		t.Errorf("drawn position jumped from %v to %v when the walk started",
@@ -271,13 +271,13 @@ func TestWalkSpeedFallback(t *testing.T) {
 func TestUpsertUnitIgnoresUnusableInput(t *testing.T) {
 	m := entity.NewManager()
 
-	if upsertUnit(m, nil, nil) != nil {
+	if upsertUnit(m, nil, nil, nil) != nil {
 		t.Error("accepted a nil unit")
 	}
-	if upsertUnit(nil, standingAt(1, 0, 0), nil) != nil {
+	if upsertUnit(nil, standingAt(1, 0, 0), nil, nil) != nil {
 		t.Error("accepted a nil manager")
 	}
-	if upsertUnit(m, standingAt(0, 0, 0), nil) != nil {
+	if upsertUnit(m, standingAt(0, 0, 0), nil, nil) != nil {
 		t.Error("accepted a unit with no id; it would collide with every other")
 	}
 	if m.Count() != 0 {
@@ -292,7 +292,7 @@ func TestRemoveUnitKeepsPlayer(t *testing.T) {
 	m := entity.NewManager()
 	player := entity.NewEntity(2000042, entity.TypePlayer)
 	m.SetPlayer(player)
-	upsertUnit(m, standingAt(110000001, 5, 5), nil)
+	upsertUnit(m, standingAt(110000001, 5, 5), nil, nil)
 
 	// Removal starts a fade rather than dropping the unit outright, so it is
 	// still there until updateUnits retires it.
@@ -317,7 +317,7 @@ func TestRemoveUnitKeepsPlayer(t *testing.T) {
 // instant, and units blink in and out of nothing as the player moves.
 func TestUnitsFadeInAndOut(t *testing.T) {
 	m := entity.NewManager()
-	e := upsertUnit(m, standingAt(110000001, 5, 5), nil)
+	e := upsertUnit(m, standingAt(110000001, 5, 5), nil, nil)
 
 	if got := e.Alpha(); got != 0 {
 		t.Errorf("a unit starts at alpha %v, want 0 so it fades in", got)
@@ -353,14 +353,14 @@ func TestUnitsFadeInAndOut(t *testing.T) {
 // nothing.
 func TestReappearingUnitResumesFromWhereItWas(t *testing.T) {
 	m := entity.NewManager()
-	e := upsertUnit(m, standingAt(110000001, 5, 5), nil)
+	e := upsertUnit(m, standingAt(110000001, 5, 5), nil, nil)
 	updateUnits(m, entity.FadeDurationMs, nil) // fully visible
 
 	removeUnit(m, 110000001)
 	updateUnits(m, entity.FadeDurationMs/2, nil)
 	half := e.Alpha()
 
-	upsertUnit(m, standingAt(110000001, 5, 5), nil)
+	upsertUnit(m, standingAt(110000001, 5, 5), nil, nil)
 	if e.Leaving {
 		t.Error("a unit the server mentioned again is still leaving")
 	}
@@ -377,7 +377,7 @@ func TestUpdateUnitsAdvancesWalks(t *testing.T) {
 	u := standingAt(2000042, 0, 0)
 	u.Moving = true
 	u.ToX, u.ToY = 4, 0
-	e := upsertUnit(m, u, nil)
+	e := upsertUnit(m, u, nil, nil)
 
 	// Four straight cells, advanced in slices the size of real frames.
 	const frame = 16.0
@@ -395,7 +395,7 @@ func TestUpdateUnitsAdvancesWalks(t *testing.T) {
 func TestUpdateUnitsSkipsBodilessEntities(t *testing.T) {
 	m := entity.NewManager()
 	m.SetPlayer(entity.NewEntity(2000042, entity.TypePlayer))
-	upsertUnit(m, standingAt(110000001, 5, 5), nil)
+	upsertUnit(m, standingAt(110000001, 5, 5), nil, nil)
 
 	updateUnits(m, 16, nil) // must not panic
 	updateUnits(nil, 16, nil)
@@ -405,7 +405,7 @@ func TestUpdateUnitsSkipsBodilessEntities(t *testing.T) {
 // own sprite length rather than the player's.
 func TestUpdateUnitsUsesFrameCounts(t *testing.T) {
 	m := entity.NewManager()
-	e := upsertUnit(m, standingAt(2000042, 5, 5), nil)
+	e := upsertUnit(m, standingAt(2000042, 5, 5), nil, nil)
 
 	asked := map[int]bool{}
 	frames := func(unit *entity.Entity, action, _ int) (int, float32) {
@@ -449,7 +449,7 @@ func TestUnitSpecFollowsAppearance(t *testing.T) {
 	u.HairStyle = 12
 	u.Sex = 0 // rAthena sends 0 for female
 
-	e := upsertUnit(m, u, nil)
+	e := upsertUnit(m, u, nil, nil)
 	spec := unitSpec(e)
 
 	if spec.Job != 4054 || spec.HairStyle != 12 || !spec.Female {
@@ -458,7 +458,7 @@ func TestUnitSpecFollowsAppearance(t *testing.T) {
 	}
 
 	u.Sex = 1
-	spec = unitSpec(upsertUnit(m, u, nil))
+	spec = unitSpec(upsertUnit(m, u, nil, nil))
 	if spec.Female {
 		t.Error("sex 1 should select the male sprite")
 	}
@@ -492,7 +492,7 @@ func TestDrawableNeedsANamedSprite(t *testing.T) {
 			u := standingAt(uint32(1000+i), 5, 5)
 			u.Kind = tt.kind
 			u.Job = tt.job
-			if got := unitIsDrawable(upsertUnit(m, u, nil)); got != tt.want {
+			if got := unitIsDrawable(upsertUnit(m, u, nil, nil)); got != tt.want {
 				t.Errorf("drawable = %v, want %v", got, tt.want)
 			}
 		})
@@ -527,7 +527,7 @@ func TestUnitSpecPicksTheSpriteFamily(t *testing.T) {
 			u := standingAt(uint32(2000+i), 5, 5)
 			u.Kind = tt.kind
 			u.Job = 1002
-			if got := unitSpec(upsertUnit(m, u, nil)).Kind; got != tt.want {
+			if got := unitSpec(upsertUnit(m, u, nil, nil)).Kind; got != tt.want {
 				t.Errorf("spec kind = %d, want %d", got, tt.want)
 			}
 		})
@@ -559,7 +559,7 @@ func TestWarpsAreTheirOwnType(t *testing.T) {
 
 	// And through upsert, so the type on the entity is what the renderer sees.
 	m := entity.NewManager()
-	e := upsertUnit(m, &packets.Entity{Kind: packets.EntityNPC, AID: 110000001, Job: packets.JobWarpPortal, Name: "prt05"}, nil)
+	e := upsertUnit(m, &packets.Entity{Kind: packets.EntityNPC, AID: 110000001, Job: packets.JobWarpPortal, Name: "prt05"}, nil, nil)
 	if e.Type != entity.TypeWarp {
 		t.Fatalf("upserted warp has type %d", e.Type)
 	}
