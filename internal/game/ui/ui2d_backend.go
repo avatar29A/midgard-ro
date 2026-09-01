@@ -130,12 +130,17 @@ type UI2DBackend struct {
 	itemTab     int
 
 	// mapWorldView switches the Map window between this map and the world.
-	mapWorldView  bool
-	mapPlaced     bool
-	mapSaved      ui2d.Rect
-	itemAction    ItemAction
-	itemDrag      itemDrag
-	itemHover     itemHover
+	mapWorldView bool
+	mapPlaced    bool
+	mapSaved     ui2d.Rect
+	itemAction   ItemAction
+	itemDrag     itemDrag
+	itemHover    itemHover
+
+	// equipPage is which tab of the equipment window is open, and showEquip
+	// a click on its checkbox waiting to be sent.
+	equipPage     int
+	showEquip     *bool
 	dropAction    DropAction
 	dropPrompt    dropPrompt
 	damageArt     damageArt
@@ -1001,7 +1006,6 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 
 	b.drawEscMenu(width, height)
 	b.drawSoundConfig(width, height)
-	b.drawStatsWindow(state, width, height)
 	b.drawSkillsWindow(state, width, height)
 	b.drawEquipWindow(state, width, height)
 	b.drawItemsWindow(state, width, height)

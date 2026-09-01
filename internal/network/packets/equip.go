@@ -144,3 +144,43 @@ var EquipSlots = []uint32{
 	EQP_HAND_R, EQP_HAND_L,
 	EQP_ACC_R, EQP_ACC_L,
 }
+
+// CZ_CONFIG carries one of the switches the interface offers:
+// `<type>.L <flag>.L`, 10 bytes.
+//
+// Only in the main packet table, not the shuffle, so this id holds at every
+// packetver the shuffle covers.
+const CZ_CONFIG uint16 = 0x02D8
+
+// ConfigShowEquipment is the equipment window's own checkbox, which decides
+// whether other players may look at what you are wearing.
+//
+// The first of rAthena's e_config_type, and the only one offered here — the
+// rest are about pets, homunculi and costumes.
+const ConfigShowEquipment uint32 = 0
+
+// EncodeConfig sets one of those switches.
+func EncodeConfig(setting uint32, on bool) []byte {
+	pkt := make([]byte, 10)
+	binary.LittleEndian.PutUint16(pkt, CZ_CONFIG)
+	binary.LittleEndian.PutUint32(pkt[2:], setting)
+
+	if on {
+		binary.LittleEndian.PutUint32(pkt[6:], 1)
+	}
+
+	return pkt
+}
+
+// ZC_CONFIG_NOTIFY is the server stating the equipment switch: `<flag>.B`,
+// 3 bytes. Sent once as the map is entered, and again whenever it changes.
+const ZC_CONFIG_NOTIFY uint16 = 0x02DA
+
+// DecodeConfigNotify reads it.
+func DecodeConfigNotify(data []byte) (bool, bool) {
+	if len(data) < 3 {
+		return false, false
+	}
+
+	return data[2] != 0, true
+}

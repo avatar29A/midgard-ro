@@ -7,11 +7,12 @@ import (
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
 )
 
-// The Status window the Info button opens.
+// The status block, which is the foot of the equipment window.
 //
 // statwin_bg.bmp carries the whole layout — the six names down the left, the
-// derived headings on the right — with the numbers left out. So this draws
-// the bitmap and fills in the boxes, rather than laying anything out itself.
+// derived headings on the right — with the numbers left out. So this fills in
+// the boxes rather than laying anything out itself, and the window it sits in
+// draws the bitmap under them.
 const (
 	statsTexture = basicInterfacePath + "statwin_bg.bmp"
 
@@ -43,56 +44,6 @@ const (
 
 	statsTextScale float32 = 0.75
 )
-
-// drawStatsWindow draws the Status window when the Info button has opened it.
-func (b *UI2DBackend) drawStatsWindow(state InGameUIState, screenW, screenH float32) {
-	if !b.IsWindowOpen(WindowInfo) {
-		return
-	}
-
-	tex, err := b.texCache.Load(statsTexture)
-	if err != nil {
-		return
-	}
-
-	title := hudWindowTitles[WindowInfo]
-	frameH := statsH + ui2d.FrameTitleH
-
-	openX := (screenW - statsW) / 2
-	openY := (screenH - frameH) / 2
-
-	// The body is statwin_bg.bmp, so the frame must not paint one: rectangles
-	// and images go in separate batches, and the fill would cover the bitmap
-	// however the calls are ordered.
-	opts := ui2d.DefaultWindowOptions()
-
-	if !b.ctx.BeginWindowEx(statsWindowID, openX, openY, statsW, frameH, title, opts) {
-		// Minimized is not closed: the frame has already drawn its title bar
-		// and the window is still open, just collapsed. Only a real close
-		// takes the menu button back out.
-		if b.ctx.WindowClosed(statsWindowID) {
-			b.ToggleWindow(WindowInfo)
-		}
-
-		return
-	}
-
-	// After BeginWindow, so the contents move with the frame rather than
-	// trailing it by a frame while it is dragged.
-	x, y := openX, openY
-	if rect, ok := b.ctx.WindowRect(statsWindowID); ok {
-		x, y = rect.X, rect.Y
-	}
-
-	b.ctx.CaptureMouse(ui2d.Rect{X: x, Y: y, W: statsW, H: frameH})
-
-	body := y + ui2d.FrameTitleH
-	r := b.ctx.Renderer()
-	r.DrawImage(tex.ID, x, body, statsW, statsH, ui2d.ColorWhite)
-
-	b.drawStatValues(state, x, body)
-	b.ctx.EndWindow()
-}
 
 // drawStatValues fills in the six boxes and the status point total.
 func (b *UI2DBackend) drawStatValues(state InGameUIState, x, y float32) {
@@ -205,9 +156,6 @@ func rangeText(a, b int) string {
 
 	return strconv.Itoa(low) + " ~ " + strconv.Itoa(high)
 }
-
-// statsWindowID is the frame's id, needed to read its position back.
-const statsWindowID = "hud_win_stats"
 
 var (
 	// A bonus is green when it helps and red when it does not, which is the

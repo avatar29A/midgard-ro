@@ -11,16 +11,16 @@ import (
 // the icons are bigger than they are, so the top and bottom rows hang over the
 // body unless they are nudged back in.
 func TestEquipSlotsStayInsideTheWindow(t *testing.T) {
-	const x, bodyY = 100, 200
+	const x, pageY = 100, 200
 
 	for _, place := range equipLayout {
-		cell := equipSlotRect(x, bodyY, place.right, place.row)
+		cell := equipSlotRect(x, pageY, place.right, place.row)
 
-		if cell.Y < bodyY {
-			t.Errorf("slot %#x row %d starts %v above the body", place.slot, place.row, bodyY-cell.Y)
+		if cell.Y < pageY {
+			t.Errorf("slot %#x row %d starts %v above the body", place.slot, place.row, pageY-cell.Y)
 		}
-		if bottom := cell.Y + cell.H; bottom > bodyY+equipBodyH {
-			t.Errorf("slot %#x row %d ends %v below the body", place.slot, place.row, bottom-(bodyY+equipBodyH))
+		if bottom := cell.Y + cell.H; bottom > pageY+equipPageH {
+			t.Errorf("slot %#x row %d ends %v below the body", place.slot, place.row, bottom-(pageY+equipPageH))
 		}
 		if cell.X < x || cell.X+cell.W > x+equipW {
 			t.Errorf("slot %#x is outside the window horizontally: x=%v w=%v", place.slot, cell.X, cell.W)
@@ -31,11 +31,11 @@ func TestEquipSlotsStayInsideTheWindow(t *testing.T) {
 // TestEquipSlotsDoNotOverlap: two slots that share pixels would take each
 // other's clicks, and the one drawn second would swallow the drop.
 func TestEquipSlotsDoNotOverlap(t *testing.T) {
-	const x, bodyY = 0, 0
+	const x, pageY = 0, 0
 
 	cells := make([]ui2d.Rect, 0, len(equipLayout))
 	for _, place := range equipLayout {
-		cells = append(cells, equipSlotRect(x, bodyY, place.right, place.row))
+		cells = append(cells, equipSlotRect(x, pageY, place.right, place.row))
 	}
 
 	for i := range cells {

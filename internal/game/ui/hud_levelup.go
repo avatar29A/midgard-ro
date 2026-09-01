@@ -54,7 +54,7 @@ func (b *UI2DBackend) drawLevelUpButtons(buttons LevelUpButtons, screenW, screen
 	if buttons.Base {
 		if b.drawLevelUpButton("hud_levelup_base", levelUpMargin, y) {
 			b.levelUpAction = LevelUpAction{Base: true, Pressed: true}
-			b.OpenWindow(WindowInfo)
+			b.OpenWindow(WindowEquip)
 		}
 	}
 
