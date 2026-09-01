@@ -806,6 +806,19 @@ func (g *Game) renderUI() {
 			},
 		}, viewportWidth, viewportHeight)
 
+	case *states.CharCreateState:
+		g.uiBackend.RenderCharCreateUI(ui.CharCreateUIState{
+			Slot:          state.Slot(),
+			Sex:           state.Sex,
+			StatusMessage: state.GetStatusMessage(),
+			ErrorMessage:  state.GetErrorMessage(),
+			OnCancel: func() {
+				g.pendingAction = func() {
+					state.Cancel()
+				}
+			},
+		}, viewportWidth, viewportHeight)
+
 	case *states.LoadingState:
 		g.uiBackend.RenderLoadingUI(ui.LoadingUIState{
 			MapName:       state.GetMapName(),

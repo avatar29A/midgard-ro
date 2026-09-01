@@ -123,6 +123,16 @@ func (s *CharSelectState) Update(dt float64) error {
 		_ = s.SelectCharacter(0)
 	}
 
+	// Open creation for a slot that was asked for. Done here rather than in
+	// the click handler so the state change happens between frames, with the
+	// screen that requested it no longer mid-draw.
+	if s.CreateSlot >= 0 {
+		slot := s.CreateSlot
+		s.CreateSlot = -1
+
+		s.manager.Change(NewCharCreateState(slot, s.client, s.manager, s))
+	}
+
 	return nil
 }
 
@@ -199,6 +209,12 @@ func (s *CharSelectState) RequestCreate(slot int) {
 // that pages over them.
 func (s *CharSelectState) CreatableSlotCount() int {
 	return s.creatableSlots()
+}
+
+// ClearPendingCreate forgets a creation request, so returning to this screen
+// does not immediately open the creation one again.
+func (s *CharSelectState) ClearPendingCreate() {
+	s.CreateSlot = -1
 }
 
 // PendingCreateSlot returns the slot creation was asked for, or -1.
