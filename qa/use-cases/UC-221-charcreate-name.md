@@ -19,8 +19,9 @@ it — so the refusal path is the feature, not a fallback.
 4. Verify `0x0B6F` comes back and `char.create-ok` is traced
 5. Verify character select returns with `QaFreshName` in the slot chosen
 6. Verify the character can be entered and reaches Prontera
-7. Verify in the database that its six stats are all **1** and it holds the
-   server's starting status points (`make server-shell-db`)
+7. Verify in the database that its six stats are all **1** and that it holds
+   **48** status points (`make server-shell-db`) — the server assigns both
+   (`char/char_clif.cpp:1278-1285`, `char/char.cpp:2800`)
 
 ### A taken name is refused
 1. Repeat with `--make-char "MidgardTest"`
@@ -30,9 +31,15 @@ it — so the refusal path is the feature, not a fallback.
 5. Verify no character was created (slot still empty, database unchanged)
 
 ### Locally-rejectable names never reach the wire
-1. Try an empty name, and a name longer than 23 characters
-2. Verify each is refused on the screen
-3. Verify `--trace=net` shows **no** `0x0A39` for either
+Our server's rules, from `char_athena.conf`: 4–23 characters
+(`char_name_min_length: 4`, `NAME_LENGTH 24`), and letters, digits or space
+only (`char_name_option: 1` with `char_name_letters`).
+
+1. Try an empty name, a 3-character name, a 24-character name, and one
+   containing a symbol such as `!`
+2. Verify each is refused on the screen with a reason
+3. Verify `--trace=net` shows **no** `0x0A39` for any of them
+4. Verify a 4-character alphanumeric name **is** accepted and does send
 
 ## Expected Result
 A free name creates a character with the stats the screen showed; a taken name

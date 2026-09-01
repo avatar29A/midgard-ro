@@ -1,43 +1,63 @@
-# UC-220: Character creation — sex from the account, hair from the arrows
+# UC-220: Character creation — race, sex, hair style and hair colour
 
 ## Description
-The creation screen takes the account's sex rather than asking for it, and the
-hair arrows cycle style and colour with the preview following.
+Every appearance choice the wire can carry must work on the screen and survive
+into the game: race (Human or Doram), sex, one of 23 hair styles, one of 10
+hair colours.
 
-Account sex already reaches the client — `client.Session()` returns it and
-`CH_ENTER` already carries it (`charselect.go:126`).
+Our server accepts both Novice and Summoner at creation — it is a RENEWAL
+build at `PACKETVER_RE 20211103`, so `allowed_job_flag = 3`
+(`char/char.cpp:2814-2818`). Sex is per character, sent by the client, and only
+male or female are accepted (`char/char.cpp:1424-1434`).
+
+Hair colour needs external `.pal` support, which the engine does not have
+today — this use case is what proves it was added.
 
 ## Preconditions
-- Local rAthena stack running
-- Two accounts of different sex: `midgard-sword` (M) and `midgard-mage` (F)
-  — see `docs/TEST_ACCOUNTS.md`
+- Local rAthena stack running (`make server-up`)
+- An account with a free slot; see `docs/TEST_ACCOUNTS.md`
+- `--stop-at charselect` available (Step 0b)
 
 ## Test Steps
 
-### The sprite matches the account, male
-1. Launch: `./build/midgard --username midgard-sword --password midgard-sword --stop-at charselect --screenshot-after 8s`
+### Sex
+1. Launch: `./build/midgard --stop-at charselect --trace=char --screenshot-after 8s`
 2. Double-click an empty slot
-3. Verify the preview sprite is **male**
-4. Verify it stands on the shadow ellipse painted into the background
+3. Verify the ♂/♀ toggle shows which sex is selected
+4. Click ♀ — verify the preview sprite becomes female
+5. Click ♂ — verify it becomes male
+6. Verify the created character ends up with the sex that was selected
 
-### The sprite matches the account, female
-1. Repeat with `--username midgard-mage --password midgard-mage`
-2. Verify the preview sprite is **female**
-3. Verify no control on the screen offers to change sex
+### Race
+1. Select the **Human** card — verify the preview is a Novice body
+2. Select the **Doram** card — verify the preview is a Doram body
+3. Verify Doram is selectable rather than "coming soon" (our server allows it)
+4. Verify the job sent is Novice for Human and Summoner for Doram
 
-### Hair style and colour
-1. Click the left/right arrows either side of the sprite
-2. Verify the hair style changes and the preview redraws each time
-3. Verify cycling past the last style wraps to the first
-4. Click the arrow above the sprite
-5. Verify the hair colour changes and wraps the same way
-6. Verify style and colour are independent — changing one leaves the other
+### Hair style
+1. Verify the grid shows **23** thumbnails, and that they change with sex
+2. Click several cells — verify the preview's hair changes to match each
+3. Verify the selected cell is visibly marked
+4. Verify every one of the 23 renders a sprite (none blank or missing)
+
+### Hair colour
+1. Verify **10** swatches, the first being "default" (crossed through)
+2. Click each — verify the preview's hair recolours
+3. Verify the colour applies to the hair only, not the body or clothes
+4. Create the character and enter the game
+5. Verify the character in Prontera has **the same hair style and colour** as
+   the preview showed
+
+### Turn arrows
+1. Click the left and right arrows
+2. Verify the preview rotates through its directions and the hair follows
 
 ## Expected Result
-Sex is taken, never asked. Hair style and colour cycle and the preview follows
-both.
+Race, sex, hair style and hair colour all change the preview, and all four
+survive creation into the game.
 
 ## Notes
-The sex byte is sent back in `0x0A39` unchanged. The server accepts only male
-or female and refuses anything else (`char/char.cpp:1424-1434`), so a wrong
-value here surfaces as a `0xFF` refusal, not a wrong sprite.
+Hair sprites live at `data/sprite/인간족/머리통/<sex>/<style>_<sex>.spr` — 42
+styles exist per sex, of which 23 have thumbnails. Palettes are external
+`.pal` files, 9 colour ids (0–8) per sex, which is why 10 swatches means
+"default plus nine".
