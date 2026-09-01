@@ -259,9 +259,13 @@ type InGameUIState struct {
 	Equipment map[uint32]packets.InventoryItem
 
 	// Portrait is the character's own sprite, for the equipment window to
-	// show what it is dressing, with the size of the baked frame.
-	Portrait             uint32
-	PortraitW, PortraitH float32
+	// show what it is dressing: the texture, the size of the character's own
+	// art within it, and the coordinates that cut that art out of the padded
+	// frame it was baked into.
+	Portrait               uint32
+	PortraitW, PortraitH   float32
+	PortraitU0, PortraitV0 float32
+	PortraitU1, PortraitV1 float32
 
 	// ShowEquipment is the server's word on whether other players may look
 	// at what this character is wearing.

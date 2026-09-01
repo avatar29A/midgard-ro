@@ -300,6 +300,16 @@ type Sheet struct {
 	// Actions is which ACT index each logical action resolves to for this
 	// appearance, after the weapon has had its say.
 	Actions ActionMap
+
+	// Where the standing frame's own art sits inside the padded frame.
+	//
+	// Every frame is padded onto a canvas as big as the widest and tallest
+	// the sheet holds — a swing with a spear in it, or a hat that reaches
+	// above the head — so a standing character occupies a fraction of it and
+	// the rest is empty. Anything drawing the character flat, rather than as
+	// a billboard the camera is looking at, wants that fraction and not the
+	// canvas.
+	PortraitX, PortraitY, PortraitW, PortraitH int
 }
 
 // Frame is one baked animation frame: RGBA pixels at the sheet's dimensions.
@@ -576,6 +586,15 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 					continue
 				}
 				frames[i] = Frame{Pixels: pad(r, maxW, maxH)}
+
+				// The standing frame facing the viewer is the one anything
+				// drawing the character flat will ask for.
+				if action == actions[ActionIdle] && dir == 0 && i == 0 {
+					sheet.PortraitX = (maxW - r.Width) / 2
+					sheet.PortraitY = maxH - r.Height
+					sheet.PortraitW = r.Width
+					sheet.PortraitH = r.Height
+				}
 			}
 			sheet.Frames[idx] = frames
 		}

@@ -191,11 +191,15 @@ func (s *InGameState) wearOnHead(position uint32, view int) {
 //
 // The idle facing the viewer, not whatever pose the character is in on the
 // map: a character caught mid-swing in a window that is not about the fight
-// reads as a fault. The size is the baked frame's own, so the interface can
-// fit it without guessing the sprite's proportions.
-func (s *InGameState) Portrait() (texture uint32, w, h float32) {
+// reads as a fault.
+//
+// The size is the character's own art rather than the frame it was baked
+// into, with the texture coordinates that cut it out — a frame is padded to
+// the widest thing the sheet holds, and fitting the whole of it to a window
+// fits mostly nothing.
+func (s *InGameState) Portrait() (texture uint32, w, h, u0, v0, u1, v1 float32) {
 	if s.playerRender == nil {
-		return 0, 0, 0
+		return 0, 0, 0, 0, 0, 0, 0
 	}
 
 	return s.playerRender.PortraitFrame(entity.ActionIdle, portraitFacing, 0)

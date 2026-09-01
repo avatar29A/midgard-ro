@@ -1024,7 +1024,9 @@ func (g *Game) renderUI() {
 			Flee: stats.Flee, FleeBonus: stats.FleeBonus,
 			Hit: stats.Hit, Critical: stats.Critical, Aspd: stats.Aspd,
 		}
-		uiState.Portrait, uiState.PortraitW, uiState.PortraitH = state.Portrait()
+		uiState.Portrait, uiState.PortraitW, uiState.PortraitH,
+			uiState.PortraitU0, uiState.PortraitV0,
+			uiState.PortraitU1, uiState.PortraitV1 = state.Portrait()
 
 		populateDebugFields(&uiState, state, g.client)
 		g.uiBackend.RenderInGameUI(uiState, g.dt, viewportWidth, viewportHeight)
