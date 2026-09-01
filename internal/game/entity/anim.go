@@ -13,12 +13,21 @@ const (
 	// WalkAnimIntervalMs is how long each walk frame is held.
 	WalkAnimIntervalMs = 70.0
 
-	// PickupAnimIntervalMs is how long each frame of the pick-up is held.
+	// PickupAnimIntervalMs is the fallback rate for the pick-up, used only by
+	// a sprite whose ACT gives no interval of its own.
+	PickupAnimIntervalMs = 100.0
+
+	// PickupSlowdown stretches the pick-up against the rate its ACT asks for.
 	//
-	// Nearer the walk's rate than the idle's: bending down and straightening
-	// up is a quick motion, and at the idle rate the whole thing took over a
-	// second, which reads as the character being reluctant rather than busy.
-	PickupAnimIntervalMs = 60.0
+	// A Novice's pick-up is three frames at four ticks each, which is three
+	// hundred milliseconds for a whole stoop-and-rise — quick enough that it
+	// reads as a twitch rather than as bending down. Doubling it gives the
+	// motion room to be seen without becoming a character that is reluctant
+	// to pick anything up.
+	//
+	// This is the one number to turn if it still reads wrong; everything else
+	// about the pick-up comes from the sprite.
+	PickupSlowdown = 2.0
 
 	// ActionAnimIntervalMs is how long each frame of a blow — thrown, taken,
 	// or fatal — is held.
@@ -166,8 +175,8 @@ func (c *Character) PlayOnceAt(action int, speed float32) {
 	c.FrameTime = 0
 }
 
-// PlayPickup starts the pick-up motion.
-func (c *Character) PlayPickup() { c.PlayOnce(ActionPickup) }
+// PlayPickup starts the pick-up motion, stretched so the stoop can be seen.
+func (c *Character) PlayPickup() { c.PlayOnceAt(ActionPickup, PickupSlowdown) }
 
 // PlayAttack starts a swing.
 func (c *Character) PlayAttack() { c.PlayOnce(ActionAttack) }
