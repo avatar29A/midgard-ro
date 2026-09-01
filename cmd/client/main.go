@@ -65,6 +65,10 @@ func main() {
 	if lines := config.Say(); len(lines) > 0 {
 		g.SetSay(lines)
 	}
+	if spec := config.StopAtSpec(); spec != "" && !config.StopAtCharSelect() {
+		logger.Warn("--stop-at not understood, want charselect",
+			zap.String("value", spec))
+	}
 
 	// Run the game loop
 	if err := g.Run(); err != nil {

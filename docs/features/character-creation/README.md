@@ -86,7 +86,21 @@ it does not. That is the whole argument.
 NAME / GENDER / HAIR STYLE / HAIR COLOR labels. Same field set as ref-01, much
 plainer. Not used.
 
-**Current state:** none. There is no creation screen to compare against.
+### current — our character select, captured for the first time
+
+![current-charselect](./current-charselect.jpg)
+
+Taken with `--stop-at charselect` (Step 0b), which is what made an unattended
+capture of this screen possible at all. It confirms both things the plan
+assumed:
+
+1. **Empty slots draw nothing** — slots 2 and 3 are bare but for the shadow
+   ellipse painted into the background. No frame, no affordance, nothing to
+   click. That is `charselect_native.go:215` skipping them, and it is the seam
+   Step 1 opens.
+2. **Three slot rects**, against the nine the account allows — Step 1b.
+
+There is no creation screen yet to compare against.
 
 ## Assets
 
