@@ -65,7 +65,7 @@ func TestAcknowledgeLevelUpClearsOnlyItsOwn(t *testing.T) {
 	}
 }
 
-// TestLevelUpIgnoresOtherPeople: somebody levelling beside us is their
+// TestLevelUpIgnoresOtherPeople: somebody leveling beside us is their
 // business, and must not put a button on our screen.
 func TestLevelUpIgnoresOtherPeople(t *testing.T) {
 	s := &InGameState{}

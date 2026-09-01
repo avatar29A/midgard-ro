@@ -192,6 +192,13 @@ type InventoryItem struct {
 	// the body rather than a count.
 	Equipped bool
 
+	// WearState is where it is worn right now, zero for something merely
+	// carried. One of the EQP_ bits, and the only thing that says which slot
+	// of the equipment window an item belongs in — EquipPositions says where
+	// it *may* go, which for an accessory or a two-hander is more than one
+	// place.
+	WearState uint32
+
 	// EquipPositions is where on the body this can go, as the server told us.
 	// Equipping sends it straight back: the server uses the value rather than
 	// working it out, so a client that invents one equips the wrong slot or
@@ -249,6 +256,7 @@ func DecodeInventoryEquip(data []byte) []InventoryItem {
 			// location is where it may go; WearState where it is now, zero
 			// for something carried rather than worn.
 			EquipPositions: readU32(entry, 7),
+			WearState:      readU32(entry, 11),
 			Equipped:       readU32(entry, 11) != 0,
 		}
 	})

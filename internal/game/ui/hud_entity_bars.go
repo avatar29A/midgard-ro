@@ -170,15 +170,25 @@ func (b *UI2DBackend) drawWorldLabel(label states.HoverLabel) {
 		return
 	}
 
+	b.drawNamePlate(label.Text, label.ScreenX, label.ScreenY+itemLabelDrop)
+}
+
+// drawNamePlate draws a name on its plate, centered on x with its top at y.
+//
+// The one place the naming style lives, so a monster on the field, an item on
+// the ground and an item in the bag are all named the same way. Splitting it
+// out was the point of asking for the inventory to match: two copies of the
+// scale, the padding and the plate color would drift apart the first time one
+// of them was adjusted.
+func (b *UI2DBackend) drawNamePlate(text string, x, y float32) {
 	r := b.ctx.Renderer()
 
-	width, height := r.MeasureText(label.Text, itemLabelScale)
-	x := label.ScreenX - width/2
-	y := label.ScreenY + itemLabelDrop
+	width, height := r.MeasureText(text, itemLabelScale)
+	left := x - width/2
 
-	r.DrawRect(x-itemLabelPadX, y-itemLabelPadY,
+	r.DrawRect(left-itemLabelPadX, y-itemLabelPadY,
 		width+2*itemLabelPadX, height+2*itemLabelPadY, itemLabelPlate)
-	r.DrawText(x, y, label.Text, itemLabelScale, itemLabelColor)
+	r.DrawText(left, y, text, itemLabelScale, itemLabelColor)
 }
 
 // targetMarkerRise is how far above the target's head the mark floats.

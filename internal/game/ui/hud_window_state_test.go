@@ -2,12 +2,12 @@ package ui
 
 import "testing"
 
-// TestOnlyTheFourButtonsOpenWindows: the strip has ten buttons and only the
-// first row leads anywhere yet. A button with no window has to stay quiet —
-// a click that makes a noise and changes nothing reads as a fault.
-func TestOnlyTheFourButtonsOpenWindows(t *testing.T) {
+// TestOnlyTheImplementedButtonsOpenWindows: the strip has eleven buttons and
+// only five lead anywhere yet. A button with no window has to stay quiet — a
+// click that makes a noise and changes nothing reads as a fault.
+func TestOnlyTheImplementedButtonsOpenWindows(t *testing.T) {
 	opens := map[string]bool{
-		"info": true, "skill": true, "item": true, "map": true,
+		"info": true, "equip": true, "skill": true, "item": true, "map": true,
 		"party": false, "guild": false, "quest": false, "option": false,
 		"booking": false, "recruit": false,
 	}

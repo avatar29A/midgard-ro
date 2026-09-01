@@ -98,11 +98,50 @@ func (b *UI2DBackend) drawItemsWindow(state InGameUIState, screenW, screenH floa
 	bodyY := y + ui2d.FrameTitleH
 	b.ctx.Renderer().DrawRect(x, bodyY, itemsW, itemsH-ui2d.FrameTitleH, ui2d.ColorWindowBody)
 
+	b.itemHover = itemHover{}
+
 	b.drawItemTabs(x, bodyY)
 	b.drawItemGrid(state, x, bodyY)
 	b.drawItemsFooter(state, x, y)
-	b.finishItemDrag(ui2d.Rect{X: x, Y: y, W: itemsW, H: itemsH})
+	b.drawItemHover(screenW, screenH)
 	b.ctx.EndWindow()
+}
+
+// itemHover is the cell the pointer is over, waiting to be named once the
+// grid has finished drawing.
+//
+// Deferred rather than drawn from the cell: a name is wider than the cell it
+// belongs to and would go under the cells drawn after it.
+type itemHover struct {
+	text string
+
+	// x is the middle of the cell and y its bottom, which is where the name
+	// hangs from — under the item, as the world labels hang under a monster.
+	x, y float32
+}
+
+// drawItemHover names the item under the pointer, in the same plate the world
+// uses for a monster or an item on the ground.
+func (b *UI2DBackend) drawItemHover(screenW, screenH float32) {
+	if b.itemHover.text == "" {
+		return
+	}
+
+	r := b.ctx.Renderer()
+	width, height := r.MeasureText(b.itemHover.text, itemLabelScale)
+
+	// Kept on screen: the inventory can be dragged against either edge, and a
+	// name centered on a cell in the far column would otherwise run off it.
+	x := min(max(b.itemHover.x, width/2+itemLabelPadX), screenW-width/2-itemLabelPadX)
+
+	// Above the cell instead when there is no room below, so the name is
+	// never clipped by the bottom of the screen.
+	y := b.itemHover.y + itemLabelDrop
+	if y+height+itemLabelPadY > screenH {
+		y = b.itemHover.y - itemsCell - itemLabelDrop - height
+	}
+
+	b.drawNamePlate(b.itemHover.text, x, y)
 }
 
 // drawItemTabs draws the three tabs down the left edge.
@@ -224,6 +263,20 @@ func (b *UI2DBackend) drawItemCell(cell ui2d.Rect, shown []packets.InventoryItem
 		r.DrawRect(cell.X+1, cell.Y+1, 4, 4, statsBonusUp)
 	}
 
+	// The name, once the grid is done: what is in a cell is an icon and a
+	// count, and neither says what the thing is called.
+	//
+	// Not while dragging — the icon is already under the pointer then, and a
+	// name that followed it would be naming the cell it happens to be over
+	// rather than what is being carried.
+	if in := b.ctx.Input(); !b.itemDrag.active && cell.Contains(in.MouseX, in.MouseY) {
+		b.itemHover = itemHover{
+			text: items.Name(item.ID),
+			x:    cell.X + cell.W/2,
+			y:    cell.Y + cell.H,
+		}
+	}
+
 	// Double click uses it, or wears it, depending on which tab it is on.
 	// Single clicks do nothing yet: selecting is what a single click means in
 	// the original, and there is nothing to select for.
@@ -286,7 +339,7 @@ func (b *UI2DBackend) drawDraggedItem() {
 //
 // There is no rearranging within the grid to confuse the last case with,
 // because the server decides which slot an item sits in.
-func (b *UI2DBackend) finishItemDrag(window ui2d.Rect) {
+func (b *UI2DBackend) finishItemDrag() {
 	if !b.itemDrag.active {
 		return
 	}
@@ -299,13 +352,35 @@ func (b *UI2DBackend) finishItemDrag(window ui2d.Rect) {
 	dragged := b.itemDrag
 	b.itemDrag = itemDrag{}
 
+	// A slot of the equipment window: wear it there. The slot is passed on
+	// rather than left to the server, so dropping a ring on the left hand
+	// means the left hand and not whichever one the server would have picked.
+	if slot, ok := b.equipSlotAt(in.MouseX, in.MouseY); ok {
+		if !dragged.fromEquip {
+			b.itemAction = ItemAction{Index: dragged.index, Equip: true, Mask: slot}
+		}
+
+		return
+	}
+
+	// Coming off the body: anywhere but back onto the body takes it off. The
+	// original is no stricter than this — there is nowhere else a worn item
+	// can go, and it is never dropped on the ground by dragging it out.
+	if dragged.fromEquip {
+		if window, ok := b.equipWindowRect(); !ok || !window.Contains(in.MouseX, in.MouseY) {
+			b.itemAction = ItemAction{Index: dragged.index, Unequip: true}
+		}
+
+		return
+	}
+
 	if row, col, ok := b.hotkeyCellAt(in.MouseX, in.MouseY); ok {
 		b.AssignHotkey(row, col, dragged.itemID)
 
 		return
 	}
 
-	if window.Contains(in.MouseX, in.MouseY) {
+	if window, ok := b.itemsWindowRect(); ok && window.Contains(in.MouseX, in.MouseY) {
 		return
 	}
 
@@ -320,12 +395,29 @@ func (b *UI2DBackend) finishItemDrag(window ui2d.Rect) {
 	b.dropAction = DropAction{Index: dragged.index, Amount: 1}
 }
 
+// itemsWindowRect is the inventory window, when it is open.
+func (b *UI2DBackend) itemsWindowRect() (ui2d.Rect, bool) {
+	if !b.IsWindowOpen(WindowItem) {
+		return ui2d.Rect{}, false
+	}
+
+	return b.ctx.WindowRect(itemsWindowID)
+}
+
 // itemDrag is an inventory drag in progress.
 type itemDrag struct {
 	active bool
 	index  int
 	itemID uint32
 	count  int
+
+	// fromEquip marks a drag that started on the body rather than in the bag,
+	// and slot which place it was worn in. Both directions use the same drag
+	// so that one release can be resolved in one place; without knowing where
+	// it started, a release over the inventory cannot tell "put this back" from
+	// "you dropped it where it already was".
+	fromEquip bool
+	slot      uint32
 }
 
 // DropAction is an item dragged out of the window, waiting to be sent.
@@ -386,7 +478,7 @@ func (b *UI2DBackend) drawItemsFooter(state InGameUIState, x, y float32) {
 	r.DrawText(x+itemsW-itemsPad-zenyW, textY, zeny, itemsTextScale, ui2d.ColorText)
 }
 
-// ItemAction is a double click on an item, waiting to be sent.
+// ItemAction is something asked of one item, waiting to be sent.
 type ItemAction struct {
 	// Index is the inventory slot, which is how the server names an item.
 	Index int
@@ -394,6 +486,15 @@ type ItemAction struct {
 	// Equip is set when the double click was on the equipment tab, where
 	// using an item means wearing it.
 	Equip bool
+
+	// Unequip is set for taking something off, which is what a double click
+	// in the equipment window means.
+	Unequip bool
+
+	// Mask narrows where on the body it should go, for an item dropped on a
+	// particular slot. Zero leaves the choice to the server, which is what a
+	// double click means: it names no slot.
+	Mask uint32
 }
 
 // TakeItemAction returns a double click on an item and clears it. The

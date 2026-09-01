@@ -10,15 +10,16 @@ import (
 
 // HUDWindow is one of the windows the menu buttons open.
 //
-// Only the four the first row promises are named. The rest of the strip —
-// party, guild, quest and the others — still opens nothing, and a name here
-// would suggest otherwise.
+// Only the ones that open something are named. The rest of the strip — party,
+// guild, quest and the others — still opens nothing, and a name here would
+// suggest otherwise.
 type HUDWindow string
 
 // The windows the menu buttons open. The values match the button names in
 // hudMenuButtons, so a button knows its own window without a second table.
 const (
 	WindowInfo  HUDWindow = "info"
+	WindowEquip HUDWindow = "equip"
 	WindowSkill HUDWindow = "skill"
 	WindowItem  HUDWindow = "item"
 	WindowMap   HUDWindow = "map"
@@ -30,6 +31,7 @@ const (
 // back.
 var hudWindowFrames = map[HUDWindow]string{
 	WindowInfo:  statsWindowID,
+	WindowEquip: equipWindowID,
 	WindowSkill: skillsWindowID,
 	WindowItem:  itemsWindowID,
 	WindowMap:   mapWindowID,
@@ -38,6 +40,7 @@ var hudWindowFrames = map[HUDWindow]string{
 // hudWindowTitles are what each window calls itself, matching the original.
 var hudWindowTitles = map[HUDWindow]string{
 	WindowInfo:  "Status",
+	WindowEquip: "Equipment",
 	WindowSkill: "Skill",
 	WindowItem:  "Item",
 	WindowMap:   "Map",
@@ -49,6 +52,12 @@ var hudWindowTitles = map[HUDWindow]string{
 // hovers, and clicking it does nothing quietly. Announcing a click that
 // changes nothing reads as a fault.
 func opensWindow(buttonName string) (HUDWindow, bool) {
+	return OpensWindow(buttonName)
+}
+
+// OpensWindow is opensWindow for callers outside this package — the command
+// line names a window by its button name too.
+func OpensWindow(buttonName string) (HUDWindow, bool) {
 	w := HUDWindow(buttonName)
 	_, ok := hudWindowTitles[w]
 

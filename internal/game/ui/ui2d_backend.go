@@ -135,10 +135,12 @@ type UI2DBackend struct {
 	mapSaved      ui2d.Rect
 	itemAction    ItemAction
 	itemDrag      itemDrag
+	itemHover     itemHover
 	dropAction    DropAction
 	dropPrompt    dropPrompt
 	damageArt     damageArt
 	statAction    StatAction
+	skillAction   SkillAction
 	levelUpAction LevelUpAction
 
 	escOpen   bool
@@ -997,8 +999,13 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 	b.drawSoundConfig(width, height)
 	b.drawStatsWindow(state, width, height)
 	b.drawSkillsWindow(state, width, height)
+	b.drawEquipWindow(state, width, height)
 	b.drawItemsWindow(state, width, height)
 	b.drawMapWindow(state, width, height)
+
+	// After every window that a drag can start in or end on, so one release
+	// is resolved once and against all of them.
+	b.finishItemDrag()
 
 	// After the inventory, which is what it belongs to: drawn before it, the
 	// window it was dragged out of covered it.

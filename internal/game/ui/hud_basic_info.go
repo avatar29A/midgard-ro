@@ -144,9 +144,25 @@ var hudButtonOptions = ui2d.ButtonOptions{Silent: true}
 // lays them out. Each has three bitmaps: `<name>1` normal, `2` hovered and
 // `3` pressed.
 var hudMenuButtons = []string{
-	"info", "skill", "item", "map",
-	"party", "guild", "quest", "option",
-	"booking", "recruit",
+	"info", "equip", "skill", "item",
+	"map", "party", "guild", "quest",
+	"option", "booking", "recruit",
+}
+
+// hudMenuButtonArt names the bitmaps for a button whose art is not filed
+// under `<name>1..3`.
+//
+// The strip in the archive has ten buttons and no equipment among them: the
+// original opens that window from a hotkey rather than from here. Its own
+// button does exist, as btn_equip_off/on/dis, at 30x20 rather than the 54x18
+// the row uses — stretched to the cell it reads as one of the row, which is
+// better than either leaving the window unreachable by mouse or drawing a
+// button in a style the rest of the panel does not use.
+//
+// Three states, in the row's order: normal, hovered, pressed. The archive has
+// only two useful ones, so hovered doubles as pressed.
+var hudMenuButtonArt = map[string][3]string{
+	"equip": {"btn_equip_off.bmp", "btn_equip_on.bmp", "btn_equip_on.bmp"},
 }
 
 // gaugeSkin is one gauge's three-slice fill.
@@ -225,6 +241,9 @@ func (b *UI2DBackend) loadMenuButtons() []*menuButtonSkin {
 
 		for state := 1; state <= 3; state++ {
 			path := fmt.Sprintf("%s%s%d.bmp", basicInterfacePath, name, state)
+			if art, ok := hudMenuButtonArt[name]; ok {
+				path = basicInterfacePath + art[state-1]
+			}
 
 			tex, err := b.texCache.Load(path)
 			if err != nil {
