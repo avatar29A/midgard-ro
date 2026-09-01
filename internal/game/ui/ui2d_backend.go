@@ -119,6 +119,12 @@ type UI2DBackend struct {
 	hotkeyPlaced bool
 	hotkeyDirty  bool
 
+	// hotkeyItems is what each quick-panel cell holds, by row and column: an
+	// item id, or zero for an empty cell.
+	hotkeyItems [hotkeyMaxRows][hotkeySlots]uint32
+	hotkeyDrag  hotkeyDrag
+	hotkeyPress hotkeyPress
+
 	skillScroll int
 	itemScroll  int
 	itemTab     int
@@ -976,7 +982,7 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 
 	b.drawMinimap(state, width)
 	b.drawChat(state, height)
-	b.drawHotkeys(width, height)
+	b.drawHotkeys(state, width, height)
 
 	b.drawEscMenu(width, height)
 	b.drawSoundConfig(width, height)
@@ -988,6 +994,10 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 	// After the inventory, which is what it belongs to: drawn before it, the
 	// window it was dragged out of covered it.
 	b.drawDropQuantity(width, height)
+
+	// Last: whatever is being dragged rides over everything it might be
+	// dropped on.
+	b.drawDraggedItem()
 
 	// After the windows, so it sees whichever grip the pointer ended on. RO
 	// has no resize pointer of its own, so this is the hand it shows for
