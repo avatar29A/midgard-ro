@@ -426,14 +426,20 @@ func (s *InGameState) SetHoverEntity(e *entity.Entity) {
 	s.hoverEntity = e
 }
 
-// HoverItemLabel is the name to show for a ground item under the pointer.
+// HoverItemLabel is the name to show for whatever is under the pointer.
 //
-// Only ground items get one. Units carry their names above their heads all the
-// time, which is a different thing drawn from a different place; an item is
-// unlabelled until you point at it, the way the original does it.
+// Items and monsters get one: an item is unlabelled until you point at it, and
+// a monster's name appears with the pointer on it, both the way the original
+// does. NPCs are left out because theirs sit above their heads permanently,
+// which is a different thing drawn from a different place — and not yet drawn
+// at all.
 func (s *InGameState) HoverItemLabel(viewportW, viewportH float32) (HoverLabel, bool) {
 	e := s.hoverEntity
-	if e == nil || e.Type != entity.TypeItem || e.Body == nil || e.Name == "" {
+	if e == nil || e.Body == nil || e.Name == "" {
+		return HoverLabel{}, false
+	}
+
+	if e.Type != entity.TypeItem && e.Type != entity.TypeMonster {
 		return HoverLabel{}, false
 	}
 
@@ -444,7 +450,7 @@ func (s *InGameState) HoverItemLabel(viewportW, viewportH float32) (HoverLabel, 
 	}
 
 	text := e.Name
-	if e.Amount > 1 {
+	if e.Type == entity.TypeItem && e.Amount > 1 {
 		text = fmt.Sprintf("%s %d ea.", e.Name, e.Amount)
 	}
 

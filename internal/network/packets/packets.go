@@ -64,7 +64,11 @@ const (
 	ZC_NOTIFY_MOVEENTRY  uint16 = 0x09FD // Unit walking
 	ZC_NOTIFY_VANISH     uint16 = 0x0080 // Unit removed
 	ZC_NOTIFY_PLAYERMOVE uint16 = 0x0087 // Own player walk-OK (start_tick + packed positions)
-	ZC_NOTIFY_ACT        uint16 = 0x008A // Entity action
+	// ZC_NOTIFY_ACT is the result of a blow. Its id is guarded three ways —
+	// 0x008A, 0x02E1 and 0x08C8 — and PACKETVER_RE 20211103 takes the last.
+	// It was 0x008A here, which is what most references give and which this
+	// packetver does not frame at all: a handler on it would never have run.
+	ZC_NOTIFY_ACT        uint16 = 0x08C8 // Damage dealt
 	ZC_NPCACK_MAPMOVE    uint16 = 0x0091 // Map change (server-driven warp)
 	ZC_NPCACK_SERVERMOVE uint16 = 0x0AC7 // Map change onto another map server (0x0092 before PACKETVER 20170315)
 	ZC_NOTIFY_TIME       uint16 = 0x007F // Server tick reply to CZ_REQUEST_TIME

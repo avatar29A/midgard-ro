@@ -1495,6 +1495,8 @@ func cursorFor(e *entity.Entity) cursor.State {
 		return cursor.StateWarp
 	case entity.TypeItem:
 		return cursor.StatePick
+	case entity.TypeMonster:
+		return cursor.StateAttack
 	default:
 		return cursor.StateDefault
 	}
