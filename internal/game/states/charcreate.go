@@ -43,6 +43,10 @@ type CharCreateState struct {
 	// has a style 1, which is where the screen starts.
 	HairStyle int
 
+	// HairColor is which palette the hair is drawn through, 0..8. Sent to the
+	// server, which stores it.
+	HairColor int
+
 	// Facing is which way the preview is turned, 0..7. Not sent anywhere —
 	// the server has no field for it — it only decides which frame is drawn.
 	Facing int
@@ -114,6 +118,19 @@ func (s *CharCreateState) SetHairStyle(style int) {
 	s.HairStyle = style
 	trace.Emit(trace.Char, "set-hair", zap.Int("style", style))
 }
+
+// SetHairColor picks a hair palette. Nine exist per style and sex, 0 to 8.
+func (s *CharCreateState) SetHairColor(color int) {
+	if color < 0 || color >= HairColorCount || s.HairColor == color {
+		return
+	}
+
+	s.HairColor = color
+	trace.Emit(trace.Char, "set-hair-color", zap.Int("color", color))
+}
+
+// HairColorCount is how many hair palettes exist per style and sex.
+const HairColorCount = 9
 
 // Turn rotates the preview by one step, wrapping in both directions.
 func (s *CharCreateState) Turn(delta int) {

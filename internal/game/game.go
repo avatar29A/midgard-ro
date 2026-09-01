@@ -812,6 +812,7 @@ func (g *Game) renderUI() {
 			Sex:           state.Sex,
 			Job:           state.Job,
 			HairStyle:     state.HairStyle,
+			HairColor:     state.HairColor,
 			Facing:        state.Facing,
 			StatusMessage: state.GetStatusMessage(),
 			ErrorMessage:  state.GetErrorMessage(),
@@ -820,10 +821,11 @@ func (g *Game) renderUI() {
 					state.Cancel()
 				}
 			},
-			OnSetSex:  func(sex uint8) { state.SetSex(sex) },
-			OnSetJob:  func(job int) { state.SetJob(job) },
-			OnSetHair: func(style int) { state.SetHairStyle(style) },
-			OnTurn:    func(delta int) { state.Turn(delta) },
+			OnSetSex:   func(sex uint8) { state.SetSex(sex) },
+			OnSetJob:   func(job int) { state.SetJob(job) },
+			OnSetHair:  func(style int) { state.SetHairStyle(style) },
+			OnSetColor: func(color int) { state.SetHairColor(color) },
+			OnTurn:     func(delta int) { state.Turn(delta) },
 		}, viewportWidth, viewportHeight)
 
 	case *states.LoadingState:
