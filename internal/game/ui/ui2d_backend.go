@@ -120,6 +120,12 @@ type UI2DBackend struct {
 	hotkeyPlaced bool
 	hotkeyDirty  bool
 
+	// hotkeyItems is what each quick-panel cell holds, by row and column: an
+	// item id, or zero for an empty cell.
+	hotkeyItems [hotkeyMaxRows][hotkeySlots]hotkeyCell
+	hotkeyDrag  hotkeyDrag
+	hotkeyPress hotkeyPress
+
 	skillScroll int
 	itemScroll  int
 	itemTab     int
@@ -129,6 +135,21 @@ type UI2DBackend struct {
 	mapPlaced    bool
 	mapSaved     ui2d.Rect
 	itemAction   ItemAction
+	itemDrag     itemDrag
+	itemHover    itemHover
+
+	// equipPage is which tab of the equipment window is open, and showEquip
+	// a click on its checkbox waiting to be sent.
+	equipPage     int
+	showEquip     *bool
+	dropAction    DropAction
+	dropPrompt    dropPrompt
+	damageArt     damageArt
+	statAction    StatAction
+	skillAction   SkillAction
+	skillCast     SkillCast
+	skillDrag     skillDrag
+	levelUpAction LevelUpAction
 
 	escOpen   bool
 	escAction EscAction
@@ -977,16 +998,41 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 		b.drawEntityBars(bar)
 	}
 
+	// Over the bars, still under the panels: the label belongs to the item it
+	// names, and a window drawn later covers it like anything else in the
+	// world.
+	b.drawDamageNumbers(state.DamageNumbers)
+	b.drawTargetMarker(state.TargetMarker)
+
+	for _, label := range state.WorldLabels {
+		b.drawWorldLabel(label)
+	}
+
+	b.drawWorldEffects(state.WorldEffects)
+
 	b.drawMinimap(state, width)
 	b.drawChat(state, height)
-	b.drawHotkeys(width, height)
+	b.drawHotkeys(state, width, height)
+	b.drawLevelUpButtons(state.LevelUpButtons, width, height)
 
 	b.drawEscMenu(width, height)
 	b.drawSoundConfig(width, height)
-	b.drawStatsWindow(state, width, height)
 	b.drawSkillsWindow(state, width, height)
+	b.drawEquipWindow(state, width, height)
 	b.drawItemsWindow(state, width, height)
 	b.drawMapWindow(state, width, height)
+
+	// After every window that a drag can start in or end on, so one release
+	// is resolved once and against all of them.
+	b.finishItemDrag()
+
+	// After the inventory, which is what it belongs to: drawn before it, the
+	// window it was dragged out of covered it.
+	b.drawDropQuantity(width, height)
+
+	// Last: whatever is being dragged rides over everything it might be
+	// dropped on.
+	b.drawDraggedItem()
 
 	// After the windows, so it sees whichever grip the pointer ended on. RO
 	// has no resize pointer of its own, so this is the hand it shows for

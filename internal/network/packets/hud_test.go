@@ -180,3 +180,63 @@ func TestItemListRemainderCatchesWrongEntrySize(t *testing.T) {
 		t.Errorf("decoded %v with the wrong entry size, want nothing", got)
 	}
 }
+
+// TestDecodeUseItemAck reads the answer to using an item.
+//
+// The amount is what is left rather than what was spent, and the account id
+// matters because rAthena broadcasts the success case to everyone nearby — an
+// ack decoded without checking it would let a stranger's potion decrement our
+// own inventory.
+func TestDecodeUseItemAck(t *testing.T) {
+	pkt := make([]byte, 15)
+	binary.LittleEndian.PutUint16(pkt, ZC_USE_ITEM_ACK)
+	binary.LittleEndian.PutUint16(pkt[2:], 2)       // index
+	binary.LittleEndian.PutUint32(pkt[4:], 501)     // red potion
+	binary.LittleEndian.PutUint32(pkt[8:], 2000000) // account
+	binary.LittleEndian.PutUint16(pkt[12:], 4)      // four left
+	pkt[14] = 1                                     // used
+
+	ack, ok := DecodeUseItemAck(pkt)
+	if !ok {
+		t.Fatal("a 15-byte ack should decode")
+	}
+	if ack.Index != 2 {
+		t.Errorf("Index = %d, want 2", ack.Index)
+	}
+	if ack.ItemID != 501 {
+		t.Errorf("ItemID = %d, want 501", ack.ItemID)
+	}
+	if ack.AccountID != 2000000 {
+		t.Errorf("AccountID = %d, want 2000000", ack.AccountID)
+	}
+	if ack.Amount != 4 {
+		t.Errorf("Amount = %d, want 4 (what is left, not what was spent)", ack.Amount)
+	}
+	if !ack.OK {
+		t.Error("OK = false, want true")
+	}
+}
+
+// TestDecodeUseItemAckRefused: result 0 means the server kept the item.
+func TestDecodeUseItemAckRefused(t *testing.T) {
+	pkt := make([]byte, 15)
+	binary.LittleEndian.PutUint16(pkt, ZC_USE_ITEM_ACK)
+	binary.LittleEndian.PutUint16(pkt[2:], 2)
+	pkt[14] = 0
+
+	ack, ok := DecodeUseItemAck(pkt)
+	if !ok {
+		t.Fatal("a 15-byte ack should decode")
+	}
+	if ack.OK {
+		t.Error("OK = true for result 0, which would spend an item the server kept")
+	}
+}
+
+// TestDecodeUseItemAckShort: a truncated ack must report false rather than
+// read past the end of the buffer.
+func TestDecodeUseItemAckShort(t *testing.T) {
+	if _, ok := DecodeUseItemAck(make([]byte, 14)); ok {
+		t.Error("a 14-byte ack decoded, but the packet is 15")
+	}
+}

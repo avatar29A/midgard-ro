@@ -19,8 +19,21 @@ const (
 
 // Action constants for character animations.
 const (
-	ActionIdle = 0
-	ActionWalk = 1
+	// Logical actions, mirroring charsprite's. These say what to play, not
+	// where a sprite keeps it: a monster's attack is set 2 of its ACT and a
+	// player's is set 5, and charsprite.ActionIndex is what knows that.
+	ActionIdle    = 0
+	ActionWalk    = 1
+	ActionPickup  = 2
+	ActionAttack  = 3
+	ActionHurt    = 4
+	ActionDie     = 5
+	ActionStandby = 6
+	ActionSit     = 7
+
+	// LoadedActions bounds the per-action tables here, matching charsprite's
+	// count of logical actions so an index is valid in both.
+	LoadedActions = 8
 )
 
 // Character represents a game character with position, movement, and animation state.
@@ -57,6 +70,30 @@ type Character struct {
 	// hold the walk animation across the gap between consecutive steps.
 	sinceWalkMs float32
 
+	// playingOnce is set while a one-shot action — the pick-up motion — is
+	// running. It outranks the movement state until it finishes or the
+	// character starts moving.
+	playingOnce bool
+
+	// OnceAction is which action the one-shot is playing, and OnceSpeed
+	// scales how fast it runs: 1 is the sprite's own rate, 0.5 twice as fast.
+	OnceAction int
+	OnceSpeed  float32
+
+	// Dead holds the character on its death animation until it is revived.
+	Dead bool
+
+	// Ready stands the character in the armed stance instead of the plain
+	// idle. Set while there is something to stand ready against — holding it
+	// the rest of the time reads as a character stuck mid-fight.
+	Ready bool
+
+	// Sitting holds the character in the seated pose. Set from the server's
+	// own answer rather than from the key that asked: sitting can be refused
+	// — the Basic Skill has to be high enough — and a character that sat down
+	// locally would be sitting in a game where it is standing.
+	Sitting bool
+
 	// Server-authoritative cell path and progress along the current step.
 	path        [][2]int
 	pathIdx     int
@@ -74,7 +111,7 @@ type Character struct {
 
 	// AnimIntervalMs overrides the default frame duration per action, taken
 	// from the sprite's own ACT. Zero for an action means use the default.
-	AnimIntervalMs [2]float32
+	AnimIntervalMs [LoadedActions]float32
 
 	// Animation state
 	CurrentAction    int     // 0=Idle, 1=Walk

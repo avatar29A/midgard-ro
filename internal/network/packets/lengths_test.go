@@ -101,10 +101,14 @@ func TestLengthsAreSane(t *testing.T) {
 }
 
 // TestInventoryListsAreFramed is the guard for a gap that cost the inventory
-// entirely: the generator reads packet_db and DEFINE_PACKET_HEADER structs,
-// and these two ids are declared as enum constants that it sees neither way.
-// Without a length the reader treats them as corruption and resynchronises
-// past them, so the handler never runs.
+// entirely: these two ids are declared as enum constants, and rAthena then
+// registers them with packet(inventorylistnormalType, ...) rather than a
+// literal. A table built from literals alone loses them, and without a length
+// the reader treats them as corruption and resynchronises past them, so the
+// handler never runs.
+//
+// They were carried by hand in lengths_extra.go until the generator learned to
+// resolve those names. This test is what makes deleting that file safe.
 func TestInventoryListsAreFramed(t *testing.T) {
 	for _, id := range []uint16{ZC_INVENTORY_ITEMLIST_NORMAL, ZC_INVENTORY_ITEMLIST_EQUIP} {
 		length, known := Length(id)
@@ -119,5 +123,107 @@ func TestInventoryListsAreFramed(t *testing.T) {
 		if !IsKnown(id) {
 			t.Errorf("0x%04X is not IsKnown, so resync will not stop on it", id)
 		}
+	}
+}
+
+// TestGroundItemsAreFramed guards the four packets a ground item needs.
+//
+// They were missing for a subtler reason than the inventory lists: the
+// generator paired an id to its struct one header at a time, and
+// ZC_ITEM_ENTRY is a struct in packets_struct.hpp whose DEFINE_PACKET_HEADER
+// is in packets.hpp, under a comment reading "Other packets without struct
+// defined in this file". ZC_ITEM_PICKUP_ACK resolved in neither, because its
+// option array is bounded by MAX_ITEM_OPTIONS, which is defined in mmo.hpp.
+//
+// The sizes are pinned because both are packetver-dependent and would be
+// wrong if the generator silently fell back to an older branch: ZC_ITEM_ENTRY
+// is 19 rather than 17 because its item id widened to uint32 at RE 20180704,
+// and ZC_ITEM_PICKUP_ACK carries five item options at this packetver.
+func TestGroundItemsAreFramed(t *testing.T) {
+	tests := []struct {
+		name string
+		id   uint16
+		want int
+	}{
+		{"ZC_ITEM_ENTRY", 0x009D, 19},
+		{"ZC_ITEM_FALL_ENTRY", 0x009E, 17},
+		{"ZC_ITEM_DISAPPEAR", 0x00A1, 6},
+		{"ZC_ITEM_PICKUP_ACK", 0x0B41, 70},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			length, known := Length(tt.id)
+			if !known {
+				t.Fatalf("0x%04X is not framed — the reader will resynchronise past it", tt.id)
+			}
+			if length != tt.want {
+				t.Errorf("0x%04X length = %d, want %d", tt.id, length, tt.want)
+			}
+			if !IsKnown(tt.id) {
+				t.Errorf("0x%04X is not IsKnown, so resync will not stop on it", tt.id)
+			}
+		})
+	}
+}
+
+// TestUseItemAckIsFramed guards the server's answer to using an item.
+//
+// It is declared as packet(useItemAckType, sizeof(struct PACKET_ZC_USE_ITEM_ACK))
+// — an enum constant for the id and a sizeof for the length, neither of them a
+// number — so it was missing for the same reason the inventory lists were. The
+// symptom was precise: use a potion, the server replies, and the client
+// resynchronises past the reply, so nothing on screen changes and the only
+// trace is one warning line.
+func TestUseItemAckIsFramed(t *testing.T) {
+	length, known := Length(0x01C8)
+	if !known {
+		t.Fatal("ZC_USE_ITEM_ACK is not framed — the reply to using an item " +
+			"will be resynchronised past")
+	}
+	if length != 15 {
+		t.Errorf("ZC_USE_ITEM_ACK length = %d, want 15", length)
+	}
+}
+
+// TestCombatPacketsAreFramed guards the packets a fight is made of.
+//
+// ZC_NOTIFY_ACT is the one to watch. Its id is guarded three ways — 0x008A,
+// 0x02E1 and 0x08C8 — and almost every reference gives the first. This client
+// carried 0x008A as the constant for a long time without noticing, because
+// nothing handled it: at this packetver 0x008A is not framed at all, so a
+// handler on it would never have run and the fight would have been silent.
+func TestCombatPacketsAreFramed(t *testing.T) {
+	tests := []struct {
+		name string
+		id   uint16
+		want int
+	}{
+		{"ZC_NOTIFY_ACT", ZC_NOTIFY_ACT, 34},
+		{"ZC_NOTIFY_VANISH", ZC_NOTIFY_VANISH, 7},
+		{"ZC_PAR_CHANGE", ZC_PAR_CHANGE, 8},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			length, known := Length(tt.id)
+			if !known {
+				t.Fatalf("%s (0x%04X) is not framed", tt.name, tt.id)
+			}
+			if length != tt.want {
+				t.Errorf("%s length = %d, want %d", tt.name, length, tt.want)
+			}
+		})
+	}
+}
+
+// TestNotifyActIsNotTheOldID: 0x008A is the id this packetver does not use,
+// and the one a reference will hand you.
+func TestNotifyActIsNotTheOldID(t *testing.T) {
+	if ZC_NOTIFY_ACT == 0x008A {
+		t.Error("ZC_NOTIFY_ACT is 0x008A, which PACKETVER_RE 20211103 does not send")
+	}
+	if _, known := Length(0x008A); known {
+		t.Error("0x008A is framed, so the reasoning in this test needs revisiting")
 	}
 }

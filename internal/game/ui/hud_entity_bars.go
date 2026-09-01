@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"github.com/Faultbox/midgard-ro/internal/engine/cursor"
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
 	"github.com/Faultbox/midgard-ro/internal/game/entity"
 	"github.com/Faultbox/midgard-ro/internal/game/states"
@@ -128,4 +129,89 @@ func (b *UI2DBackend) drawEntityBars(bar states.EntityBar) {
 		fill(x+1, y+5, (entityBarW-2)*sp, entityBarFillH,
 			entityBarSP.WithAlpha(bar.Alpha))
 	}
+}
+
+// The name over a ground item the pointer is on.
+const (
+	// itemLabelScale is small: the label names something on the map rather
+	// than saying anything the interface needs to shout, and at full size a
+	// monster's name was wider than the monster and sat across it.
+	itemLabelScale = float32(0.55)
+
+	// itemLabelDrop is how far below the unit's feet the line sits.
+	//
+	// Below rather than above, which is where a name can be read without
+	// covering the thing it names — a poring is not much taller than its own
+	// label. Far enough down to clear the HP bar, which is drawn under the
+	// feet as well.
+	itemLabelDrop = entityBarDrop + entityBarHSP + 3
+
+	// itemLabelPadX and itemLabelPadY inset the text from the plate behind it.
+	itemLabelPadX = float32(4)
+	itemLabelPadY = float32(2)
+)
+
+var (
+	itemLabelColor = ui2d.Color{R: 1, G: 1, B: 1, A: 1}
+
+	// itemLabelPlate is the plate the text sits on. A shadow alone was not
+	// enough: the label lands on whatever the ground happens to be — pale
+	// flagstones in Prontera, snow, sand — and white text on a one-pixel
+	// shadow disappears against the light ones. Dark and mostly opaque, so
+	// the text carries wherever it falls, but still see-through enough to
+	// read as part of the world rather than a panel.
+	itemLabelPlate = ui2d.Color{R: 0, G: 0, B: 0, A: 0.6}
+)
+
+// drawWorldLabel names something on the map — a ground item or a monster,
+// pointed at or being fought.
+func (b *UI2DBackend) drawWorldLabel(label states.HoverLabel) {
+	if label.Text == "" {
+		return
+	}
+
+	b.drawNamePlate(label.Text, label.ScreenX, label.ScreenY+itemLabelDrop)
+}
+
+// drawNamePlate draws a name on its plate, centered on x with its top at y.
+//
+// The one place the naming style lives, so a monster on the field, an item on
+// the ground and an item in the bag are all named the same way. Splitting it
+// out was the point of asking for the inventory to match: two copies of the
+// scale, the padding and the plate color would drift apart the first time one
+// of them was adjusted.
+func (b *UI2DBackend) drawNamePlate(text string, x, y float32) {
+	r := b.ctx.Renderer()
+
+	width, height := r.MeasureText(text, itemLabelScale)
+	left := x - width/2
+
+	r.DrawRect(left-itemLabelPadX, y-itemLabelPadY,
+		width+2*itemLabelPadX, height+2*itemLabelPadY, itemLabelPlate)
+	r.DrawText(left, y, text, itemLabelScale, itemLabelColor)
+}
+
+// targetMarkerRise is how far above the target's head the mark floats.
+const targetMarkerRise = float32(6)
+
+// drawTargetMarker puts the mark over the unit being fought.
+//
+// The same arrowhead the pointer shows over a locked target, drawn in world
+// space instead: it is action 3 of cursors.spr, which is what the original
+// marks a chosen target with. Taking it from there rather than drawing one
+// means it animates with the cursor and looks like it belongs.
+func (b *UI2DBackend) drawTargetMarker(marker *states.TargetMarker) {
+	if marker == nil || b.cursor == nil {
+		return
+	}
+
+	frame, ok := b.cursor.FrameOf(cursor.StateLock)
+	if !ok {
+		return
+	}
+
+	b.ctx.Renderer().DrawImage(frame.Texture,
+		marker.ScreenX-frame.Width/2,
+		marker.ScreenY-frame.Height-targetMarkerRise,
+		frame.Width, frame.Height, ui2d.ColorWhite)
 }

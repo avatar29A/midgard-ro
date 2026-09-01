@@ -40,6 +40,15 @@ type Entity struct {
 	Direction uint8 // 0-7 for 8 directions
 	State     State
 
+	// ItemID is what a TypeItem entity is — an item lying on the ground is
+	// the one kind identified by an item id rather than by a job, and it is
+	// what names both its sprite and its label.
+	ItemID uint32
+
+	// Amount is how many are in a ground item's pile. Zero for everything
+	// else.
+	Amount int
+
 	// Visual
 	SpriteID     int  // Base sprite ID (job ID for players, monster ID for mobs)
 	HeadSprite   int  // Head sprite for players

@@ -41,6 +41,11 @@ const (
 	// in, kept clear of the name beside it.
 	skillsRightW float32 = 58
 
+	// skillsRaiseW is the raise button, the same mark and size the status
+	// window spends a point with. It sits on the name's line, in the column
+	// the cost is right-aligned in below it.
+	skillsRaiseW float32 = 11
+
 	skillsTextScale float32 = 0.75
 )
 
@@ -83,6 +88,8 @@ func (b *UI2DBackend) drawSkillsWindow(state InGameUIState, screenW, screenH flo
 	b.drawSkillRows(state, x, y)
 	b.drawSkillFooter(state, x, y)
 	b.ctx.EndWindow()
+
+	b.finishSkillDrag()
 }
 
 // drawSkillRows lists the skills, scrolled to wherever the bar is.
@@ -119,13 +126,20 @@ func (b *UI2DBackend) drawSkillRows(state InGameUIState, x, y float32) {
 	}
 
 	for i := 0; i < visible && offset+i < len(state.Skills); i++ {
-		b.drawSkillRow(state.Skills[offset+i], listX, listY+float32(i)*skillsRowH, listW)
+		skill := state.Skills[offset+i]
+		rowY := listY + float32(i)*skillsRowH
+
+		b.drawSkillRow(skill, listX, rowY, listW, state.SkillPoints > 0)
+		b.beginSkillDrag(skill, ui2d.Rect{X: listX, Y: rowY, W: listW, H: skillsRowH})
 	}
 }
 
 // drawSkillRow draws one skill: its icon, then its name over its level, with
 // what it costs against the right.
-func (b *UI2DBackend) drawSkillRow(skill packets.Skill, x, y, w float32) {
+//
+// affordable is whether there is a point left to spend, which decides — with
+// the server's own Raisable — whether the row offers to spend one.
+func (b *UI2DBackend) drawSkillRow(skill packets.Skill, x, y, w float32, affordable bool) {
 	r := b.ctx.Renderer()
 
 	b.drawSkillIcon(skill.ID, x, y+(skillsRowH-skillsIcon)/2)
@@ -159,6 +173,97 @@ func (b *UI2DBackend) drawSkillRow(skill packets.Skill, x, y, w float32) {
 	// lines them up, not against the name above it.
 	costW, _ := r.MeasureText(cost, skillsTextScale)
 	r.DrawText(x+w-costW, top+lineH+skillsLineGap, cost, skillsTextScale, ui2d.ColorText)
+
+	// The raise button goes on the name's line, above the cost. Whether a
+	// skill can be leveled at all is the server's answer rather than a rule
+	// worked out here: prerequisites, job and ceiling all feed Raisable, and
+	// none of them are knowable from the packet alone.
+	if !affordable || !skill.Raisable {
+		return
+	}
+
+	if b.drawSkillRaise(skill.ID, x+w-skillsRaiseW, top+(lineH-skillsRaiseW)/2) {
+		b.skillAction = SkillAction{Skill: skill.ID}
+	}
+}
+
+// beginSkillDrag starts dragging a skill out of its row, so it can be put on
+// the quick panel.
+//
+// Only what can be cast is draggable. A passive skill on the bar would be a
+// key that does nothing, and the original does not let you put one there.
+func (b *UI2DBackend) beginSkillDrag(skill packets.Skill, row ui2d.Rect) {
+	if skill.Inf == 0 || b.skillDrag.active || b.itemDrag.active {
+		return
+	}
+
+	if in := b.ctx.Input(); in.MouseLeftPressed && row.Contains(in.MouseX, in.MouseY) {
+		b.skillDrag = skillDrag{active: true, skill: skill.ID}
+	}
+}
+
+// skillDrag is a skill being dragged out of the Skill window.
+type skillDrag struct {
+	active bool
+	skill  uint16
+}
+
+// finishSkillDrag puts a dragged skill in the cell it was let go over.
+//
+// Released anywhere else it is simply dropped: a skill is not a thing that can
+// be thrown away, and the row it came from is still there.
+func (b *UI2DBackend) finishSkillDrag() {
+	if !b.skillDrag.active || b.ctx.Input().MouseLeftDown {
+		return
+	}
+
+	in := b.ctx.Input()
+	dragged := b.skillDrag
+	b.skillDrag = skillDrag{}
+
+	if row, col, ok := b.hotkeyCellAt(in.MouseX, in.MouseY); ok {
+		b.AssignHotkey(row, col, hotkeyCell{id: uint32(dragged.skill), skill: true})
+	}
+}
+
+// drawSkillRaise draws the button that spends a skill point on one skill, and
+// reports a press. The same mark as the status window's, for the same act.
+func (b *UI2DBackend) drawSkillRaise(id uint16, x, y float32) bool {
+	tex, err := b.texCache.Load(statsArrow)
+	if err != nil {
+		return false
+	}
+
+	widget := "hud_skill_raise_" + strconv.Itoa(int(id))
+	box := ui2d.Rect{X: x, Y: y, W: skillsRaiseW, H: skillsRaiseW}
+
+	tint := ui2d.ColorWhite
+	if box.Contains(b.ctx.Input().MouseX, b.ctx.Input().MouseY) {
+		tint = statsArrowHot
+	}
+
+	b.ctx.Renderer().DrawImage(tex.ID, box.X, box.Y, box.W, box.H, tint)
+
+	return b.ctx.InvisibleButtonAt(widget, box.X, box.Y, box.W, box.H)
+}
+
+// SkillAction is a skill point being spent on one skill.
+type SkillAction struct {
+	// Skill is the skill id. Zero is no skill: NV_BASIC is 1, so nothing real
+	// collides with the empty value.
+	Skill uint16
+}
+
+// TakeSkillAction returns a skill the player asked to raise and clears it.
+func (b *UI2DBackend) TakeSkillAction() (SkillAction, bool) {
+	action := b.skillAction
+	if action.Skill == 0 {
+		return SkillAction{}, false
+	}
+
+	b.skillAction = SkillAction{}
+
+	return action, true
 }
 
 // drawSkillIcon draws a skill's icon, or the empty frame the original leaves
@@ -197,16 +302,14 @@ func (b *UI2DBackend) drawSkillFooter(state InGameUIState, x, y float32) {
 	_, capH := r.MeasureText(points, skillsTextScale)
 	r.DrawText(x+skillsPad, footerY+(skillsFooterH-capH)/2, points, skillsTextScale, ui2d.ColorText)
 
+	// No "use" button beside close: a point is spent on the row it goes to,
+	// which is where the original puts it too. A footer button would have to
+	// ask which skill afterwards.
 	btnY := footerY + (skillsFooterH-skillsBtnH)/2
 	closeX := x + skillsW - skillsPad - skillsBtnW
-	useX := closeX - skillsPad - skillsBtnW
-
-	// "use" spends a skill point, which needs CZ_UPGRADE_SKILLLEVEL — not
-	// sent yet, so it is drawn disabled rather than drawn working.
-	b.drawEscButton(ui2d.Rect{X: useX, Y: btnY, W: skillsBtnW, H: skillsBtnH}, "use", true)
 
 	closeBox := ui2d.Rect{X: closeX, Y: btnY, W: skillsBtnW, H: skillsBtnH}
-	b.drawEscButton(closeBox, "close", false)
+	b.drawFlatButton(closeBox, "close", false)
 
 	if b.ctx.InvisibleButtonAt("hud_skills_close", closeBox.X, closeBox.Y, closeBox.W, closeBox.H) {
 		b.ToggleWindow(WindowSkill)

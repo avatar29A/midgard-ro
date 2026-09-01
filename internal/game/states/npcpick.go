@@ -119,9 +119,13 @@ func (s *InGameState) projectToScreen(x, y, z, viewportW, viewportH float32) (fl
 }
 
 // isClickable reports whether a unit answers to the pointer: an NPC, which
-// can be talked to, or a visible warp, which can be walked into. Never the
-// player — a click on yourself is a click on the ground you are standing on
-// — and never a hidden warp, which the original shows nothing for.
+// can be talked to, a visible warp, which can be walked into, an item on the
+// ground, which can be picked up, or a monster, which can be hit. Never the player — a click on yourself
+// is a click on the ground you are standing on — and never a hidden warp,
+// which the original shows nothing for.
+//
+// An item we cannot draw is not clickable either. It is not on screen, so a
+// hit box for it would take clicks meant for the ground underneath.
 func (s *InGameState) isClickable(e *entity.Entity) bool {
 	if e == nil || e.Body == nil {
 		return false
@@ -131,6 +135,12 @@ func (s *InGameState) isClickable(e *entity.Entity) bool {
 		return e.ID != s.selfAID()
 	case entity.TypeWarp:
 		return e.Job == packets.JobWarpPortal
+	case entity.TypeItem:
+		return unitIsDrawable(e)
+	case entity.TypeMonster:
+		// A monster we cannot draw is not clickable either: it is not on
+		// screen, so a hit box for it would take clicks meant for the ground.
+		return unitIsDrawable(e)
 	default:
 		return false
 	}
