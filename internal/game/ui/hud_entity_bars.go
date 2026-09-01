@@ -132,13 +132,18 @@ func (b *UI2DBackend) drawEntityBars(bar states.EntityBar) {
 
 // The name over a ground item the pointer is on.
 const (
-	// itemLabelScale matches the bars' world-scale text rather than the
-	// panels', so a label on the map does not read as part of the interface.
-	itemLabelScale = float32(1)
+	// itemLabelScale is small: the label names something on the map rather
+	// than saying anything the interface needs to shout, and at full size a
+	// monster's name was wider than the monster and sat across it.
+	itemLabelScale = float32(0.55)
 
-	// itemLabelRise is how far above the item's base the line sits. An item
-	// sprite is about twenty pixels tall, so this clears it without floating.
-	itemLabelRise = float32(26)
+	// itemLabelDrop is how far below the unit's feet the line sits.
+	//
+	// Below rather than above, which is where a name can be read without
+	// covering the thing it names — a poring is not much taller than its own
+	// label. Far enough down to clear the HP bar, which is drawn under the
+	// feet as well.
+	itemLabelDrop = entityBarDrop + entityBarHSP + 3
 
 	// itemLabelPadX and itemLabelPadY inset the text from the plate behind it.
 	itemLabelPadX = float32(4)
@@ -167,7 +172,7 @@ func (b *UI2DBackend) drawItemLabel(label *states.HoverLabel) {
 
 	width, height := r.MeasureText(label.Text, itemLabelScale)
 	x := label.ScreenX - width/2
-	y := label.ScreenY - itemLabelRise
+	y := label.ScreenY + itemLabelDrop
 
 	r.DrawRect(x-itemLabelPadX, y-itemLabelPadY,
 		width+2*itemLabelPadX, height+2*itemLabelPadY, itemLabelPlate)
