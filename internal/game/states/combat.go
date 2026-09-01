@@ -259,13 +259,20 @@ func (s *InGameState) handleDamage(data []byte) error {
 
 	// The swing plays whether or not it connected — a miss is still a swing —
 	// while the flinch is only for a blow that landed.
-	s.playAnimation(blow.SourceID, entity.ActionAttack)
+	s.playAttackAnimation(blow.SourceID, blow.AnimationSpeed())
 	if !blow.Missed() {
 		s.faceTowards(blow.TargetID, blow.SourceID)
 		s.playAnimation(blow.TargetID, entity.ActionHurt)
 	}
 
 	return nil
+}
+
+// playAttackAnimation starts a swing, run at the attacker's own attack speed.
+func (s *InGameState) playAttackAnimation(id uint32, speed float32) {
+	if body := s.bodyOf(id); body != nil {
+		body.PlayAttackAt(speed)
+	}
 }
 
 // playAnimation starts a one-shot on whichever unit the id names, including

@@ -74,8 +74,10 @@ type Character struct {
 	// character starts moving.
 	playingOnce bool
 
-	// OnceAction is which action the one-shot is playing.
+	// OnceAction is which action the one-shot is playing, and OnceSpeed
+	// scales how fast it runs: 1 is the sprite's own rate, 0.5 twice as fast.
 	OnceAction int
+	OnceSpeed  float32
 
 	// Dead holds the character on its death animation until it is revived.
 	Dead bool

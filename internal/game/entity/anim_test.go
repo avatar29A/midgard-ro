@@ -158,3 +158,41 @@ func TestWalkingOutranksTheStance(t *testing.T) {
 		t.Errorf("CurrentAction = %d, want the walk while moving", c.CurrentAction)
 	}
 }
+
+// TestOneShotSpeedScalesTheRate: a character that attacks quickly swings
+// quickly. The scale multiplies the frame interval, so half runs it twice as
+// fast.
+func TestOneShotSpeedScalesTheRate(t *testing.T) {
+	const frames = 4
+
+	fast := NewCharacter(0, 0, 0)
+	fast.PlayOnceAt(ActionAttack, 0.5)
+
+	slow := NewCharacter(0, 0, 0)
+	slow.PlayOnceAt(ActionAttack, 1)
+
+	// One frame's worth at the halved rate advances the fast one and not the
+	// other.
+	step := AnimIntervalMs(ActionAttack) * 0.5
+	fast.AdvanceAnimation(step, 1, 8, frames, 0)
+	slow.AdvanceAnimation(step, 1, 8, frames, 0)
+
+	if fast.CurrentFrame == slow.CurrentFrame {
+		t.Errorf("both on frame %d; the scale did not change the rate", fast.CurrentFrame)
+	}
+	if fast.CurrentFrame <= slow.CurrentFrame {
+		t.Errorf("fast on frame %d, slow on %d — the faster swing should be ahead",
+			fast.CurrentFrame, slow.CurrentFrame)
+	}
+}
+
+// TestOneShotSpeedRejectsNonsense: a speed of zero would stall the animation
+// on its first frame forever.
+func TestOneShotSpeedRejectsNonsense(t *testing.T) {
+	c := NewCharacter(0, 0, 0)
+	c.PlayOnceAt(ActionAttack, 0)
+
+	if c.OnceSpeed != 1 {
+		t.Errorf("OnceSpeed = %v, want 1 when given nonsense", c.OnceSpeed)
+	}
+}
