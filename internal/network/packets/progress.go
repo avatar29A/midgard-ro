@@ -22,7 +22,7 @@ const (
 	// ZC_NOTIFY_EFFECT announces something worth showing:
 	// `<AID>.L <effect>.L`, 10 bytes.
 	//
-	// Levelling is not its own packet. The server sends this for a base level,
+	// Leveling is not its own packet. The server sends this for a base level,
 	// a job level, a refine succeeding or failing and a pharmacy brew alike,
 	// and the code says which.
 	ZC_NOTIFY_EFFECT uint16 = 0x019B
