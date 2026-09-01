@@ -92,6 +92,9 @@ type InGameState struct {
 	// it. Zero until the first ZC_ATTACK_RANGE arrives.
 	attackRange int
 
+	// damageNumbers are the figures floating up from recent blows.
+	damageNumbers []floatingDamage
+
 	targetID    uint32
 	attacking   bool
 	repathMs    float32
@@ -705,6 +708,7 @@ func (s *InGameState) Update(dt float64) error {
 
 		s.updatePendingPickup(deltaMs, walking)
 		s.updateCombat(deltaMs, walking)
+		s.updateDamageNumbers(deltaMs)
 
 		// Advance the sprite animation. Frame counts come from the loaded
 		// sheet; with no sprites this parks on frame 0 harmlessly.

@@ -21,13 +21,13 @@ const (
 	//
 	// A Novice's pick-up is three frames at four ticks each, which is three
 	// hundred milliseconds for a whole stoop-and-rise — quick enough that it
-	// reads as a twitch rather than as bending down. Doubling it gives the
-	// motion room to be seen without becoming a character that is reluctant
-	// to pick anything up.
+	// reads as a twitch rather than as bending down. Half again as long gives the motion
+	// room to be seen without becoming a character that is reluctant to pick
+	// anything up.
 	//
 	// This is the one number to turn if it still reads wrong; everything else
 	// about the pick-up comes from the sprite.
-	PickupSlowdown = 2.0
+	PickupSlowdown = 1.5
 
 	// ActionAnimIntervalMs is how long each frame of a blow — thrown, taken,
 	// or fatal — is held.

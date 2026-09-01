@@ -137,6 +137,7 @@ type UI2DBackend struct {
 	itemDrag     itemDrag
 	dropAction   DropAction
 	dropPrompt   dropPrompt
+	damageArt    damageArt
 
 	escOpen   bool
 	escAction EscAction
@@ -978,6 +979,7 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 	// Over the bars, still under the panels: the label belongs to the item it
 	// names, and a window drawn later covers it like anything else in the
 	// world.
+	b.drawDamageNumbers(state.DamageNumbers)
 	b.drawTargetMarker(state.TargetMarker)
 
 	for _, label := range state.WorldLabels {
