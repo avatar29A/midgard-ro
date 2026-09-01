@@ -244,10 +244,14 @@ func (b *UI2DBackend) drawEquipPage(state InGameUIState, x, y float32) {
 // drawEquipPortrait draws the character between the two columns of slots.
 //
 // Fitted by height alone, and centered on the window rather than on the strip
-// the art paints. A baked frame is padded to the widest thing the sheet holds
-// — a swing with a weapon in it — so most of its width is empty, and bounding
-// it by that width leaves the character a third the size of the space it has.
-// The original lets it overlap the labels either side too.
+// the art paints: the original lets the character overlap the labels either
+// side.
+//
+// What is fitted is the character's own art, cut out of the frame it was baked
+// into. That frame is padded to the widest and tallest the sheet holds — a
+// swing with a weapon in it, a hat that reaches above the head — so fitting
+// the whole frame fits mostly empty space and leaves the character a fraction
+// of the room it has.
 func (b *UI2DBackend) drawEquipPortrait(state InGameUIState, x, y float32) {
 	if state.Portrait == 0 || state.PortraitH <= 0 {
 		return
@@ -260,8 +264,10 @@ func (b *UI2DBackend) drawEquipPortrait(state InGameUIState, x, y float32) {
 	scale := stand / state.PortraitH
 	w, h := state.PortraitW*scale, state.PortraitH*scale
 
-	b.ctx.Renderer().DrawImage(state.Portrait,
-		x+(equipW-w)/2, y+stand-h, w, h, ui2d.ColorWhite)
+	b.ctx.Renderer().DrawImageUV(state.Portrait,
+		x+(equipW-w)/2, y+stand-h, w, h,
+		state.PortraitU0, state.PortraitV0, state.PortraitU1, state.PortraitV1,
+		ui2d.ColorWhite)
 }
 
 // drawEquipDivider draws the strip between the slots and the status block,
