@@ -273,6 +273,11 @@ func (b *UI2DBackend) drawCharSelectSlots(skin *charSelectSkin, state CharSelect
 			b.drawCharSelectPortrait(state.Characters[slot], left, top)
 		}
 
+		// While the list is still coming, every slot looks empty because there
+		// is nothing to draw in it. Offering creation then would offer it on
+		// slots that are actually occupied.
+		offersCreate := state.IsReady && !hasChar
+
 		// Double click first: it must be seen whether or not the press also
 		// counts as a select, and on an empty slot it is the shortcut
 		// straight into creation.
@@ -281,7 +286,7 @@ func (b *UI2DBackend) drawCharSelectSlots(skin *charSelectSkin, state CharSelect
 			trace.Emit(trace.Char, "slot-doubleclick",
 				zap.Int("slot", slot), zap.Bool("empty", !hasChar))
 
-			if !hasChar && state.OnCreateSlot != nil {
+			if offersCreate && state.OnCreateSlot != nil {
 				state.OnCreateSlot(slot)
 			}
 		}
