@@ -41,10 +41,17 @@ const (
 )
 
 const (
-	// LoadedActions bounds the ACT indices we bake composites for. Eight
-	// covers a player's die at 7, which is the highest index anything asks
-	// for; bakedAction keeps each family to the ones it actually uses.
-	LoadedActions = 8
+	// LoadedActions bounds the ACT indices we bake composites for.
+	//
+	// Thirteen, which is every set a player's body has. It has to reach that
+	// far because a weapon chooses which set it swings from and a sword's is
+	// 11 — bounding this at eight left a dagger's attack at set 10 outside
+	// the loops entirely, so it baked no frames and the swing ended the
+	// instant it began.
+	//
+	// The count is not the cost: ActionMap.bakes keeps each appearance to the
+	// handful of sets it actually maps something onto.
+	LoadedActions = 13
 
 	// Directions is the number of facings every action provides.
 	Directions = 8

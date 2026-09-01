@@ -224,6 +224,22 @@ func (r *Renderer) FrameCount(action, direction int) int {
 	return r.player.frameCount(action, direction)
 }
 
+// FrameInterval is how long the player holds one frame of an action, in
+// milliseconds, taken from its own ACT. Zero when the sheet is not baked or
+// the file did not say.
+func (r *Renderer) FrameInterval(action int) float32 {
+	if r == nil || r.player == nil {
+		return 0
+	}
+
+	index := r.player.actIndex(action)
+	if index < 0 || index >= len(r.player.intervals) {
+		return 0
+	}
+
+	return r.player.intervals[index]
+}
+
 // Render draws the player billboard at the character's render position.
 // camPosX/Z are the camera world XZ — used both to orient the billboard and to
 // choose which of the 8 sprite facings to show.

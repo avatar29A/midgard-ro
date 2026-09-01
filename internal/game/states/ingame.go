@@ -719,6 +719,11 @@ func (s *InGameState) Update(dt float64) error {
 
 			if playing := s.player.PlayingAction(); playing >= 0 {
 				onceFrames = s.playerRender.FrameCount(playing, s.player.Direction)
+
+				// The sprite's own rate, the way a unit's is taken. The pick-up
+				// was running at a rate picked by hand and was first too slow
+				// and then too fast; the ACT has said all along.
+				s.player.AnimIntervalMs[playing] = s.playerRender.FrameInterval(playing)
 			}
 			if s.player.Ready {
 				standbyFrames = s.playerRender.FrameCount(entity.ActionStandby, s.player.Direction)

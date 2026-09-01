@@ -386,3 +386,40 @@ func TestPlayerHeadPosesAreNotCountedAsDropped(t *testing.T) {
 		t.Errorf("Dropped = %d, want 0; the unbaked idle entries are head poses", sheet.Dropped)
 	}
 }
+
+// TestLoadedActionsReachesTheWeaponAttacks: a weapon chooses which set it
+// swings from, and a sword's is 11. Bounding the bake below that left the
+// attack with no frames at all, which showed up as a swing that ended the
+// instant it began.
+func TestLoadedActionsReachesTheWeaponAttacks(t *testing.T) {
+	for _, set := range []int{actStandby, actUnarmedAttack, actWeaponAttacks0, actWeaponAttacks1, actWeaponAttacks2} {
+		if set >= LoadedActions {
+			t.Errorf("set %d is outside the bake range of %d, so nothing would be baked for it",
+				set, LoadedActions)
+		}
+	}
+}
+
+// TestActionMapBakesOnlyWhatItUses: the bake range reaches thirteen sets, but
+// an appearance uses a handful. Baking the rest would be eight directions of
+// frames nobody looks at — and a poring's attack alone is twenty-eight frames
+// a direction.
+func TestActionMapBakesOnlyWhatItUses(t *testing.T) {
+	m := DefaultActionMap(KindMonster)
+
+	baked := 0
+	for action := 0; action < LoadedActions; action++ {
+		if m.bakes(action) {
+			baked++
+		}
+	}
+
+	// Idle, walk, attack, hurt, die — and nothing else.
+	if baked != 5 {
+		t.Errorf("a monster bakes %d sets, want the 5 it maps something onto", baked)
+	}
+
+	if m.bakes(actWeaponAttacks0) {
+		t.Error("a monster bakes a player's weapon attack set")
+	}
+}
