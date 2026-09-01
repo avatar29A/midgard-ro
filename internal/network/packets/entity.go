@@ -39,7 +39,14 @@ const (
 	offHead       = 25
 	offWeapon     = 27
 	offShield     = 31
+
+	// The three head gear looks. rAthena's names for them do not run in the
+	// order they read: accessory is the lower slot, accessory2 the upper and
+	// accessory3 the middle, which clif_set_unit_idle assigns in as many
+	// words. Taking them in field order would put a hat where a mask goes.
 	offAccessory  = 35
+	offAccessory2 = 37
+	offAccessory3 = 39
 )
 
 // Fields shared by packet_idle_unit (0x09FF) and packet_spawn_unit (0x09FE),
@@ -136,13 +143,20 @@ type Entity struct {
 	Weapon       uint32
 	Shield       uint32
 	Accessory    uint16
-	Robe         uint16
-	HeadDir      int16
-	Sex          uint8
-	Level        int16
-	MaxHP        int32
-	HP           int32
-	Name         string
+
+	// The three head gear looks, as accessory ids. The client's own table
+	// says which sprite each is.
+	HeadTop    uint16
+	HeadMid    uint16
+	HeadBottom uint16
+
+	Robe    uint16
+	HeadDir int16
+	Sex     uint8
+	Level   int16
+	MaxHP   int32
+	HP      int32
+	Name    string
 
 	// X, Y is where the unit is. Dir is its facing, in server directions.
 	X, Y int
@@ -259,6 +273,10 @@ func decodeEntityPrefix(data []byte) *Entity {
 		Weapon:    readU32(data, offWeapon),
 		Shield:    readU32(data, offShield),
 		Accessory: readU16(data, offAccessory),
+
+		HeadBottom: readU16(data, offAccessory),
+		HeadTop:    readU16(data, offAccessory2),
+		HeadMid:    readU16(data, offAccessory3),
 	}
 }
 

@@ -62,6 +62,11 @@ var localCommands = map[string]localCommand{
 	"music": cmdBGM,
 	"sound": cmdSound,
 
+	// One command for both, as slash.json records it: /sit and /stand are
+	// aliases of each other, and which one it means is read off the pose.
+	"sit":   cmdSit,
+	"stand": cmdSit,
+
 	// The GM three. Aliases as tools/chatcmds/slash.json records them.
 	"mm":      cmdMapMove,
 	"mapmove": cmdMapMove,
@@ -88,6 +93,25 @@ func cmdWhere(s *InGameState, _ string) (ChatKind, string) {
 	// in others; the player should always see the plain name.
 	return ChatNotice, fmt.Sprintf("%s : %d, %d",
 		packets.MapBaseName(s.MapName), cellX, cellY)
+}
+
+// cmdSit sits the character down, or stands it back up.
+//
+// Nothing is said in answer on success. The pose changing is the answer, and
+// the server may refuse — a character whose Basic Skill is below three cannot
+// sit — in which case the server says so itself.
+func cmdSit(s *InGameState, _ string) (ChatKind, string) {
+	if s.client == nil {
+		return ChatError, "Not connected."
+	}
+
+	if err := s.ToggleSit(); err != nil {
+		logger.Warn("could not sit down", zap.Error(err))
+
+		return ChatError, "Could not ask the server."
+	}
+
+	return ChatNotice, ""
 }
 
 // cmdWho asks the server how many players are online.
@@ -127,6 +151,7 @@ var commandHelp = []struct {
 	{"help", []string{"h"}},
 	{"bgm", []string{"music"}},
 	{"sound", nil},
+	{"sit", []string{"stand"}},
 	{"mm", []string{"mapmove"}},
 	{"b", []string{"nb"}},
 	{"lb", []string{"nlb"}},

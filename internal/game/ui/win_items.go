@@ -5,6 +5,7 @@ import (
 
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
 	"github.com/Faultbox/midgard-ro/internal/game/items"
+	"github.com/Faultbox/midgard-ro/internal/game/skills"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
 )
 
@@ -30,14 +31,39 @@ const (
 	itemsSlotInset float32 = 4
 	itemsSlotH     float32 = 14
 
-	// itemsTabW is the strip of tabs down the left, and itemsTabH one tab.
-	//
-	// A tab has to be tall enough for its label stacked a letter to a line,
-	// and "equip" is five of them: at the body scale they overran the tab and
-	// ran into the one below, so the labels have a smaller scale of their own.
-	itemsTabW     float32 = 18
-	itemsTabH     float32 = 62
+	// The strip of tabs down the left, measured off tab_itm_01.bmp — the art
+	// the archive ships for this very window. Twenty wide, so its borders
+	// land on whole pixels the way they do there.
+	itemsTabW     float32 = 20
 	itemsTabScale float32 = 0.45
+
+	// itemsBodyH is the height the grid and the tab strip share, between the
+	// title bar and the footer.
+	itemsBodyH = itemsH - ui2d.FrameTitleH - itemsFooterH - 2*itemsPad
+
+	// Where the edges fall inside those twenty. The open tab reaches two
+	// pixels further left than the shut ones and has no right edge at all, so
+	// it runs into the grid — which is how the strip says which one is open.
+	itemsTabOpenX float32 = 3
+	itemsTabShutX float32 = 5
+	itemsTabShutR float32 = 18
+
+	// itemsTabSlant is the shape the tabs actually have. The boundary between
+	// two of them is not level but slanted: in the art it falls from the left
+	// edge to the right over five rows. Drawn square instead — which is what
+	// this did before — the strip reads as three stacked boxes rather than as
+	// tabs.
+	itemsTabSlant float32 = 5
+
+	// itemsTabSlantX is where a slant begins: at the shut edge, which is the
+	// innermost of the two a boundary divides, since only the open tab reaches
+	// further out.
+	//
+	// The art begins it at the outermost instead and turns the corner over a
+	// single row. At the height the original draws a tab that reads as a
+	// corner; at the height this one does, the same two pixels read as a spur
+	// running past the tab below and into the band outside it.
+	itemsTabSlantX = itemsTabShutX
 
 	itemsFooterH float32 = 24
 
@@ -98,45 +124,80 @@ func (b *UI2DBackend) drawItemsWindow(state InGameUIState, screenW, screenH floa
 	bodyY := y + ui2d.FrameTitleH
 	b.ctx.Renderer().DrawRect(x, bodyY, itemsW, itemsH-ui2d.FrameTitleH, ui2d.ColorWindowBody)
 
+	b.itemHover = itemHover{}
+
 	b.drawItemTabs(x, bodyY)
 	b.drawItemGrid(state, x, bodyY)
 	b.drawItemsFooter(state, x, y)
-	b.finishItemDrag(ui2d.Rect{X: x, Y: y, W: itemsW, H: itemsH})
+	b.drawItemHover(screenW, screenH)
 	b.ctx.EndWindow()
 }
 
-// drawItemTabs draws the three tabs down the left edge.
-func (b *UI2DBackend) drawItemTabs(x, bodyY float32) {
+// itemHover is the cell the pointer is over, waiting to be named once the
+// grid has finished drawing.
+//
+// Deferred rather than drawn from the cell: a name is wider than the cell it
+// belongs to and would go under the cells drawn after it.
+type itemHover struct {
+	text string
+
+	// x is the middle of the cell and y its bottom, which is where the name
+	// hangs from — under the item, as the world labels hang under a monster.
+	x, y float32
+}
+
+// drawItemHover names the item under the pointer, in the same plate the world
+// uses for a monster or an item on the ground.
+func (b *UI2DBackend) drawItemHover(screenW, screenH float32) {
+	if b.itemHover.text == "" {
+		return
+	}
+
 	r := b.ctx.Renderer()
+	width, height := r.MeasureText(b.itemHover.text, itemLabelScale)
+
+	// Kept on screen: the inventory can be dragged against either edge, and a
+	// name centered on a cell in the far column would otherwise run off it.
+	x := min(max(b.itemHover.x, width/2+itemLabelPadX), screenW-width/2-itemLabelPadX)
+
+	// Above the cell instead when there is no room below, so the name is
+	// never clipped by the bottom of the screen.
+	y := b.itemHover.y + itemLabelDrop
+	if y+height+itemLabelPadY > screenH {
+		y = b.itemHover.y - itemsCell - itemLabelDrop - height
+	}
+
+	b.drawNamePlate(b.itemHover.text, x, y)
+}
+
+// drawItemTabs draws the three tabs down the left edge.
+//
+// The strip is drawn rather than blitted because the art the archive ships for
+// it, tab_itm_01 to 03, has its labels baked in and in Korean. What is taken
+// from that art is its shape, which is all flat colors and one-pixel edges:
+// the open tab's face is the window body, the shut ones are a shade of grey,
+// and every boundary between them is a slanted line rather than a straight
+// one.
+//
+// Each tab is one quad with slanted top and bottom edges, not a stack of
+// one-pixel rows. A slant built out of rows is a staircase whose steps are as
+// coarse as the rows are wide — three pixels here, which is what it looked
+// like — where a quad is rasterized at the display's own resolution.
+func (b *UI2DBackend) drawItemTabs(x, bodyY float32) {
+	top := bodyY + itemsPad
 
 	for i, tab := range itemTabs {
-		box := ui2d.Rect{X: x + 1, Y: bodyY + itemsPad + float32(i)*itemsTabH, W: itemsTabW, H: itemsTabH}
+		b.drawItemTab(x, top, i, tab.label)
+	}
 
-		face := itemsTabIdle
-		if i == b.itemTab {
-			face = ui2d.ColorWindowBody
-		}
+	// The edges last, over the faces they divide, so a face never covers half
+	// the line above it.
+	for k := 1; k <= len(itemTabs); k++ {
+		b.drawItemTabEdge(x, top, k)
+	}
 
-		r.DrawRect(box.X, box.Y, box.W, box.H, face)
-
-		// Edged rather than boxed, and in a grey of its own: the panel border
-		// is a dark blue-grey meant for a window's outline, and a full box of
-		// it around every tab read as three black rectangles.
-		//
-		// The open tab keeps no right edge, so it runs into the grid beside
-		// it — which is how a tab says it is the open one.
-		r.DrawRect(box.X, box.Y, box.W, 1, itemsTabBorder)
-		r.DrawRect(box.X, box.Y+box.H-1, box.W, 1, itemsTabBorder)
-		r.DrawRect(box.X, box.Y, 1, box.H, itemsTabBorder)
-
-		if i != b.itemTab {
-			r.DrawRect(box.X+box.W-1, box.Y, 1, box.H, itemsTabBorder)
-		}
-
-		// Stacked down the tab, a letter to a line: the strip is 18px wide,
-		// the labels do not fit across it, and cutting them to one letter
-		// gave two tabs both reading "e".
-		b.drawStackedLabel(box, tab.label)
+	for i, tab := range itemTabs {
+		box := b.itemTabBox(x, top, i)
 
 		if b.ctx.InvisibleButtonAt("hud_item_tab_"+tab.label, box.X, box.Y, box.W, box.H) {
 			b.itemTab = i
@@ -145,21 +206,207 @@ func (b *UI2DBackend) drawItemTabs(x, bodyY float32) {
 	}
 }
 
-// drawStackedLabel writes a label down a narrow tab, one letter to a line.
-func (b *UI2DBackend) drawStackedLabel(box ui2d.Rect, label string) {
+// itemsTabHeight is how tall one tab is.
+//
+// Shared out of the height the strip has rather than fixed, so the run of
+// them ends where the grid does. Fixed at sixty-two they came to twelve
+// pixels more than there was room for, and the last tab and the slant closing
+// it hung over the line above the footer.
+//
+// The slant is taken off the top because it belongs to the strip too: the
+// closing one starts where the last tab ends and needs its own rows below.
+func itemsTabHeight() float32 {
+	return (itemsBodyH - itemsTabSlant) / float32(len(itemTabs))
+}
+
+// itemTabBox is the band one tab is pressed in. Square, unlike the tab drawn
+// in it: a slanted hit area would leave slivers between the tabs that answer
+// to nothing.
+func (b *UI2DBackend) itemTabBox(x, top float32, i int) ui2d.Rect {
+	h := itemsTabHeight()
+
+	return ui2d.Rect{X: x, Y: top + float32(i)*h, W: itemsTabW, H: h}
+}
+
+// itemTabLeft is where a tab's left edge falls. The open one reaches two
+// pixels further out than the shut ones, which is half of how the strip says
+// which is open; the other half is that it has no right edge at all.
+func (b *UI2DBackend) itemTabLeft(i int) float32 {
+	if i == b.itemTab {
+		return itemsTabOpenX
+	}
+
+	return itemsTabShutX
+}
+
+// itemTabRight is where it ends. The open tab runs into the grid.
+func (b *UI2DBackend) itemTabRight(i int) float32 {
+	if i == b.itemTab {
+		return itemsTabW
+	}
+
+	return itemsTabShutR
+}
+
+// itemTabEdgeY is where boundary k sits at a given x.
+//
+// Boundary zero is the top of the strip and is level; every other one slants,
+// starting at the leftmost edge either of its two tabs has and reaching the
+// far side of the strip after itemsTabSlant rows.
+func (b *UI2DBackend) itemTabEdgeY(top float32, k int, x float32) float32 {
+	y := top + float32(k)*itemsTabHeight()
+	if k == 0 {
+		return y
+	}
+
+	switch {
+	case x <= itemsTabSlantX:
+		return y
+	case x >= itemsTabShutR:
+		return y + itemsTabSlant
+	default:
+		return y + itemsTabSlant*(x-itemsTabSlantX)/(itemsTabShutR-itemsTabSlantX)
+	}
+}
+
+// drawItemTab fills one tab, hatches the band outside it and draws its
+// upright edges.
+func (b *UI2DBackend) drawItemTab(x, top float32, i int, label string) {
 	r := b.ctx.Renderer()
 
-	letters := []rune(label)
+	left, right := b.itemTabLeft(i), b.itemTabRight(i)
 
-	_, lineH := r.MeasureText(label, itemsTabScale)
-	top := box.Y + (box.H-lineH*float32(len(letters)))/2
-
-	for i, letter := range letters {
-		text := string(letter)
-
-		capW, _ := r.MeasureText(text, itemsTabScale)
-		r.DrawText(box.X+(box.W-capW)/2, top+float32(i)*lineH, text, itemsTabScale, ui2d.ColorText)
+	face := itemsTabIdle
+	if i == b.itemTab {
+		face = ui2d.ColorWindowBody
 	}
+
+	// The face, slanted top and bottom.
+	r.DrawQuad(
+		[2]float32{x + left, b.itemTabEdgeY(top, i, left)},
+		[2]float32{x + right, b.itemTabEdgeY(top, i, right)},
+		[2]float32{x + right, b.itemTabEdgeY(top, i+1, right)},
+		[2]float32{x + left, b.itemTabEdgeY(top, i+1, left)},
+		face)
+
+	// The band outside it, and beyond a shut tab the window itself. Both are
+	// square: the slant starts at the tab's own edge, so nothing outside it
+	// is cut by one.
+	bandTop := b.itemTabEdgeY(top, i, 0)
+	bandH := b.itemTabEdgeY(top, i+1, 0) - bandTop
+
+	b.drawTabHatch(x, bandTop, left, bandH)
+
+	if i != b.itemTab {
+		r.DrawRect(x+itemsTabShutR+1, bandTop, itemsTabW-itemsTabShutR-1, bandH, ui2d.ColorWindowBody)
+	}
+
+	// The upright edges, each running between the two slants.
+	b.drawItemTabUpright(x, top, i, left)
+
+	if i != b.itemTab {
+		b.drawItemTabUpright(x, top, i, itemsTabShutR)
+	}
+
+	b.drawTabLabel(b.itemTabBox(x, top, i), label, i == b.itemTab)
+}
+
+// drawItemTabUpright draws one of a tab's vertical edges, between the slants
+// above and below it.
+func (b *UI2DBackend) drawItemTabUpright(x, top float32, i int, at float32) {
+	edgeTop := b.itemTabEdgeY(top, i, at)
+	edgeBottom := b.itemTabEdgeY(top, i+1, at)
+
+	b.ctx.Renderer().DrawRect(x+at, edgeTop, 1, edgeBottom-edgeTop, itemsTabBorder)
+}
+
+// drawItemTabEdge draws the slanted line at one boundary, and the step that
+// joins the upright edges either side of it.
+func (b *UI2DBackend) drawItemTabEdge(x, top float32, k int) {
+	r := b.ctx.Renderer()
+
+	left := itemsTabSlantX
+
+	startY := b.itemTabEdgeY(top, k, left)
+	endY := b.itemTabEdgeY(top, k, itemsTabShutR)
+
+	// The two tabs a boundary divides do not have their upright edges in the
+	// same place — the open one reaches two pixels further out — so the line
+	// has to step across to meet the next one. Without it the edge simply
+	// stops and starts again further in, and the corner reads as open.
+	b.drawItemTabStep(x, startY, k)
+
+	r.DrawQuad(
+		[2]float32{x + left, startY},
+		[2]float32{x + itemsTabShutR + 1, endY},
+		[2]float32{x + itemsTabShutR + 1, endY + 1},
+		[2]float32{x + left, startY + 1},
+		itemsTabBorder)
+}
+
+// drawItemTabStep joins the upright edge above a boundary to the one below it.
+func (b *UI2DBackend) drawItemTabStep(x, y float32, k int) {
+	above := b.itemTabLeft(k - 1)
+
+	below := above
+	if k < len(itemTabs) {
+		below = b.itemTabLeft(k)
+	}
+
+	if above == below {
+		return
+	}
+
+	from, to := min(above, below), max(above, below)
+
+	b.ctx.Renderer().DrawRect(x+from, y, to-from+1, 1, itemsTabBorder)
+}
+
+// drawTabHatch draws the band down the outside of the strip.
+//
+// Rows of the body color and of the shut grey in turn, which is how the art
+// fills the sliver beside the tabs.
+func (b *UI2DBackend) drawTabHatch(x, y, w, h float32) {
+	if w <= 0 || h <= 0 {
+		return
+	}
+
+	r := b.ctx.Renderer()
+
+	for row := float32(0); row < h; row++ {
+		shade := ui2d.ColorWindowBody
+		if int(row)%2 == 0 {
+			shade = itemsTabIdle
+		}
+
+		r.DrawRect(x, y+row, w, 1, shade)
+	}
+}
+
+// drawTabLabel writes a label down a narrow tab, turned on its side.
+//
+// Turned rather than stacked a letter to a line, which is what this did
+// before. The archive's own tab strips carry their words a quarter turn round
+// — tab_cmd_03 reads WIN, EXE and ON/OFF that way up the side of the window —
+// and a column of upright letters reads as letters rather than as a word.
+//
+// The measured width and height swap round once the line is turned, so
+// centering it in the tab is the ordinary arithmetic with the two exchanged.
+func (b *UI2DBackend) drawTabLabel(box ui2d.Rect, label string, open bool) {
+	r := b.ctx.Renderer()
+
+	width, height := r.MeasureText(label, itemsTabScale)
+
+	// Darker on the open tab than on the shut ones, as the art has it.
+	color := itemsTabTextShut
+	if open {
+		color = itemsTabTextOpen
+	}
+
+	r.DrawTextVertical(
+		box.X+(box.W-height)/2,
+		box.Y+(box.H+width)/2,
+		label, itemsTabScale, color)
 }
 
 // drawItemGrid draws the cells and whatever is in them.
@@ -224,6 +471,20 @@ func (b *UI2DBackend) drawItemCell(cell ui2d.Rect, shown []packets.InventoryItem
 		r.DrawRect(cell.X+1, cell.Y+1, 4, 4, statsBonusUp)
 	}
 
+	// The name, once the grid is done: what is in a cell is an icon and a
+	// count, and neither says what the thing is called.
+	//
+	// Not while dragging — the icon is already under the pointer then, and a
+	// name that followed it would be naming the cell it happens to be over
+	// rather than what is being carried.
+	if in := b.ctx.Input(); !b.itemDrag.active && cell.Contains(in.MouseX, in.MouseY) {
+		b.itemHover = itemHover{
+			text: items.Name(item.ID),
+			x:    cell.X + cell.W/2,
+			y:    cell.Y + cell.H,
+		}
+	}
+
 	// Double click uses it, or wears it, depending on which tab it is on.
 	// Single clicks do nothing yet: selecting is what a single click means in
 	// the original, and there is nothing to select for.
@@ -253,20 +514,12 @@ func (b *UI2DBackend) drawItemCell(cell ui2d.Rect, shown []packets.InventoryItem
 // dragged out of the inventory should ride over that window rather than under
 // it.
 func (b *UI2DBackend) drawDraggedItem() {
-	itemID := b.itemDrag.itemID
-	if !b.itemDrag.active {
-		if !b.hotkeyDrag.active {
-			return
-		}
-		itemID = b.hotkeyDrag.itemID
-	}
-
-	info, ok := items.Lookup(itemID)
-	if !ok || info.Resource == "" {
+	path, dragging := b.draggedIconPath()
+	if !dragging {
 		return
 	}
 
-	tex, err := b.texCache.Load(itemIconPath + info.Resource + ".bmp")
+	tex, err := b.texCache.Load(path)
 	if err != nil {
 		return
 	}
@@ -275,6 +528,50 @@ func (b *UI2DBackend) drawDraggedItem() {
 	b.ctx.Renderer().DrawImage(tex.ID,
 		in.MouseX-itemsDragIconH/2, in.MouseY-itemsDragIconH/2,
 		itemsDragIconH, itemsDragIconH, itemsDragTint)
+}
+
+// draggedIconPath is the art for whatever is under the pointer, if anything
+// is being dragged.
+//
+// One place for all three kinds of drag — an item out of the bag or off the
+// body, a cell moved along the bar, a skill out of its window — because the
+// icon that follows the pointer is the same affordance in each case and the
+// only difference is which table the art comes from.
+func (b *UI2DBackend) draggedIconPath() (string, bool) {
+	switch {
+	case b.itemDrag.active:
+		return itemIconFor(b.itemDrag.itemID)
+	case b.skillDrag.active:
+		return skillIconFor(b.skillDrag.skill)
+	case b.hotkeyDrag.active:
+		if b.hotkeyDrag.cell.skill {
+			return skillIconFor(uint16(b.hotkeyDrag.cell.id))
+		}
+
+		return itemIconFor(b.hotkeyDrag.cell.id)
+	}
+
+	return "", false
+}
+
+// itemIconFor and skillIconFor are where each kind of art lives, empty when
+// the archive has none — which is most of what has been added recently.
+func itemIconFor(itemID uint32) (string, bool) {
+	info, ok := items.Lookup(itemID)
+	if !ok || info.Resource == "" {
+		return "", false
+	}
+
+	return itemIconPath + info.Resource + ".bmp", true
+}
+
+func skillIconFor(skillID uint16) (string, bool) {
+	sprite := skills.Sprite(skillID)
+	if sprite == "" {
+		return "", false
+	}
+
+	return skillIconPath + sprite + ".bmp", true
 }
 
 // finishItemDrag decides what a released drag meant.
@@ -286,7 +583,7 @@ func (b *UI2DBackend) drawDraggedItem() {
 //
 // There is no rearranging within the grid to confuse the last case with,
 // because the server decides which slot an item sits in.
-func (b *UI2DBackend) finishItemDrag(window ui2d.Rect) {
+func (b *UI2DBackend) finishItemDrag() {
 	if !b.itemDrag.active {
 		return
 	}
@@ -299,13 +596,35 @@ func (b *UI2DBackend) finishItemDrag(window ui2d.Rect) {
 	dragged := b.itemDrag
 	b.itemDrag = itemDrag{}
 
-	if row, col, ok := b.hotkeyCellAt(in.MouseX, in.MouseY); ok {
-		b.AssignHotkey(row, col, dragged.itemID)
+	// A slot of the equipment window: wear it there. The slot is passed on
+	// rather than left to the server, so dropping a ring on the left hand
+	// means the left hand and not whichever one the server would have picked.
+	if slot, ok := b.equipSlotAt(in.MouseX, in.MouseY); ok {
+		if !dragged.fromEquip {
+			b.itemAction = ItemAction{Index: dragged.index, Equip: true, Mask: slot}
+		}
 
 		return
 	}
 
-	if window.Contains(in.MouseX, in.MouseY) {
+	// Coming off the body: anywhere but back onto the body takes it off. The
+	// original is no stricter than this — there is nowhere else a worn item
+	// can go, and it is never dropped on the ground by dragging it out.
+	if dragged.fromEquip {
+		if window, ok := b.equipWindowRect(); !ok || !window.Contains(in.MouseX, in.MouseY) {
+			b.itemAction = ItemAction{Index: dragged.index, Unequip: true}
+		}
+
+		return
+	}
+
+	if row, col, ok := b.hotkeyCellAt(in.MouseX, in.MouseY); ok {
+		b.AssignHotkey(row, col, hotkeyCell{id: dragged.itemID})
+
+		return
+	}
+
+	if window, ok := b.itemsWindowRect(); ok && window.Contains(in.MouseX, in.MouseY) {
 		return
 	}
 
@@ -320,12 +639,29 @@ func (b *UI2DBackend) finishItemDrag(window ui2d.Rect) {
 	b.dropAction = DropAction{Index: dragged.index, Amount: 1}
 }
 
+// itemsWindowRect is the inventory window, when it is open.
+func (b *UI2DBackend) itemsWindowRect() (ui2d.Rect, bool) {
+	if !b.IsWindowOpen(WindowItem) {
+		return ui2d.Rect{}, false
+	}
+
+	return b.ctx.WindowRect(itemsWindowID)
+}
+
 // itemDrag is an inventory drag in progress.
 type itemDrag struct {
 	active bool
 	index  int
 	itemID uint32
 	count  int
+
+	// fromEquip marks a drag that started on the body rather than in the bag,
+	// and slot which place it was worn in. Both directions use the same drag
+	// so that one release can be resolved in one place; without knowing where
+	// it started, a release over the inventory cannot tell "put this back" from
+	// "you dropped it where it already was".
+	fromEquip bool
+	slot      uint32
 }
 
 // DropAction is an item dragged out of the window, waiting to be sent.
@@ -386,7 +722,7 @@ func (b *UI2DBackend) drawItemsFooter(state InGameUIState, x, y float32) {
 	r.DrawText(x+itemsW-itemsPad-zenyW, textY, zeny, itemsTextScale, ui2d.ColorText)
 }
 
-// ItemAction is a double click on an item, waiting to be sent.
+// ItemAction is something asked of one item, waiting to be sent.
 type ItemAction struct {
 	// Index is the inventory slot, which is how the server names an item.
 	Index int
@@ -394,6 +730,15 @@ type ItemAction struct {
 	// Equip is set when the double click was on the equipment tab, where
 	// using an item means wearing it.
 	Equip bool
+
+	// Unequip is set for taking something off, which is what a double click
+	// in the equipment window means.
+	Unequip bool
+
+	// Mask narrows where on the body it should go, for an item dropped on a
+	// particular slot. Zero leaves the choice to the server, which is what a
+	// double click means: it names no slot.
+	Mask uint32
 }
 
 // TakeItemAction returns a double click on an item and clears it. The
@@ -419,8 +764,13 @@ var (
 	// The slot mark: a blue-grey, not the neutral grey the rest of the panel
 	// uses. It has to read as blue against a white body or the grid looks
 	// like smudges rather than slots.
-	itemsCellBg    = ui2d.Color{R: 0.88, G: 0.91, B: 0.97, A: 1}
-	itemsTabIdle   = ui2d.Color{R: 0.82, G: 0.83, B: 0.86, A: 1}
-	itemsTabBorder = ui2d.Color{R: 0.62, G: 0.63, B: 0.68, A: 1}
-	itemsCountText = ui2d.Color{R: 0.1, G: 0.1, B: 0.15, A: 1}
+	itemsCellBg = ui2d.Color{R: 0.88, G: 0.91, B: 0.97, A: 1}
+	// The strip's own greys, taken from tab_itm_01.bmp: f2f2f2 for a shut
+	// tab's face, c0c0c0 for every edge, and 404040 and 767676 for the label
+	// on the open tab and on a shut one.
+	itemsTabIdle     = ui2d.Color{R: 0.949, G: 0.949, B: 0.949, A: 1}
+	itemsTabBorder   = ui2d.Color{R: 0.753, G: 0.753, B: 0.753, A: 1}
+	itemsTabTextOpen = ui2d.Color{R: 0.251, G: 0.251, B: 0.251, A: 1}
+	itemsTabTextShut = ui2d.Color{R: 0.463, G: 0.463, B: 0.463, A: 1}
+	itemsCountText   = ui2d.Color{R: 0.1, G: 0.1, B: 0.15, A: 1}
 )

@@ -281,10 +281,6 @@ func (s *InGameState) handleDamage(data []byte) error {
 
 // playGesture plays one of the things ZC_NOTIFY_ACT carries that is not a
 // blow.
-//
-// Sitting and standing are recognized and then ignored: nothing in this
-// client sits yet, and playing something else for them would be worse than
-// playing nothing.
 func (s *InGameState) playGesture(blow packets.Damage) {
 	switch blow.Type {
 	case packets.ActPickupItem:
@@ -298,9 +294,45 @@ func (s *InGameState) playGesture(blow packets.Damage) {
 		}
 
 	case packets.ActSitDown, packets.ActStandUp:
-		trace.Emit(trace.HUD, "gesture-ignored",
-			zap.Uint32("who", blow.SourceID), zap.Uint8("type", blow.Type))
+		// The server's answer, not the key that asked: sitting can be refused
+		// — a character whose Basic Skill is below three cannot — and this
+		// packet is the only thing that says it happened.
+		sitting := blow.Type == packets.ActSitDown
+
+		trace.Emit(trace.HUD, "gesture-sit",
+			zap.Uint32("who", blow.SourceID), zap.Bool("sitting", sitting))
+
+		if body := s.bodyOf(blow.SourceID); body != nil {
+			body.Sitting = sitting
+		}
 	}
+}
+
+// ToggleSit sits the character down, or stands it back up.
+//
+// One key for both, as the original has it: whether it means sit or stand is
+// read off what the character is doing now. Nothing changes here — the server
+// answers with ZC_NOTIFY_ACT and that is what moves the sprite, because the
+// request can be refused and a character sitting on a refusal would be seated
+// in a game where it is standing.
+func (s *InGameState) ToggleSit() error {
+	if s.client == nil || s.player == nil {
+		return nil
+	}
+
+	action := packets.ActionSit
+	if s.player.Sitting {
+		action = packets.ActionStand
+	}
+
+	trace.Emit(trace.HUD, "toggle-sit", zap.Bool("sitting", s.player.Sitting))
+
+	return s.client.Send(packets.EncodeAction(s.selfAID(), action))
+}
+
+// Sitting reports whether the character is seated.
+func (s *InGameState) Sitting() bool {
+	return s.player != nil && s.player.Sitting
 }
 
 // playAttackAnimation starts a swing, run at the attacker's own attack speed.

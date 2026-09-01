@@ -65,14 +65,22 @@ func TestHotkeyCellAtFindsOnlyOpenRows(t *testing.T) {
 func TestSetHotkeyItemReplaces(t *testing.T) {
 	b := &UI2DBackend{hotkeyRows: hotkeyMaxRows}
 
-	if !b.setHotkeyItem(0, 0, 501) {
+	if !b.setHotkeyItem(0, 0, hotkeyCell{id: 501}) {
 		t.Fatal("could not assign to the first cell")
 	}
-	if !b.setHotkeyItem(0, 0, 512) {
+	if !b.setHotkeyItem(0, 0, hotkeyCell{id: 512}) {
 		t.Fatal("could not assign over an occupied cell")
 	}
-	if got := b.hotkeyItems[0][0]; got != 512 {
-		t.Errorf("cell holds %d, want the item that replaced it", got)
+	if got := b.hotkeyItems[0][0]; got != (hotkeyCell{id: 512}) {
+		t.Errorf("cell holds %+v, want the item that replaced it", got)
+	}
+
+	// A skill takes an item's cell over too, and stops being an item.
+	if !b.setHotkeyItem(0, 0, hotkeyCell{id: 28, skill: true}) {
+		t.Fatal("could not assign a skill over an item")
+	}
+	if got := b.hotkeyItems[0][0]; !got.skill || got.id != 28 {
+		t.Errorf("cell holds %+v, want the skill that replaced it", got)
 	}
 }
 
@@ -84,7 +92,7 @@ func TestSetHotkeyItemRejectsCellsOffTheBar(t *testing.T) {
 	for _, tt := range []struct{ row, col int }{
 		{-1, 0}, {0, -1}, {hotkeyMaxRows, 0}, {0, hotkeySlots},
 	} {
-		if b.setHotkeyItem(tt.row, tt.col, 501) {
+		if b.setHotkeyItem(tt.row, tt.col, hotkeyCell{id: 501}) {
 			t.Errorf("assigned to (%d,%d), which is not a cell", tt.row, tt.col)
 		}
 	}
@@ -95,10 +103,10 @@ func TestSetHotkeyItemRejectsCellsOffTheBar(t *testing.T) {
 func TestSetHotkeyItemToAClosedRow(t *testing.T) {
 	b := &UI2DBackend{hotkeyRows: 1}
 
-	if !b.setHotkeyItem(3, 8, 501) {
+	if !b.setHotkeyItem(3, 8, hotkeyCell{id: 501}) {
 		t.Fatal("could not assign to a row that is currently shut")
 	}
-	if b.hotkeyItems[3][8] != 501 {
+	if b.hotkeyItems[3][8] != (hotkeyCell{id: 501}) {
 		t.Error("a shut row did not keep what it was given")
 	}
 }
@@ -137,13 +145,35 @@ func TestLoadHotkeyItemsSkipsWhatIsNotACell(t *testing.T) {
 		"0,99": 512, // a column it does not have
 		"junk": 512,
 		"1,1":  0, // an empty cell, saved by mistake
+	}, map[string]uint32{
+		"0,1": 28,
+		"9,9": 28, // not a cell either
 	})
 
-	if b.hotkeyItems[0][0] != 501 {
+	if b.hotkeyItems[0][0] != (hotkeyCell{id: 501}) {
 		t.Error("the one good entry did not load")
 	}
-	if b.hotkeyItems[1][1] != 0 {
+	if b.hotkeyItems[1][1] != (hotkeyCell{}) {
 		t.Error("a zero id was loaded as a shortcut")
+	}
+	if got := b.hotkeyItems[0][1]; !got.skill || got.id != 28 {
+		t.Errorf("the saved skill loaded as %+v", got)
+	}
+}
+
+// TestLoadHotkeyItemsKeepsSkillsAndItemsApart: the two are saved in separate
+// maps because an id alone cannot say which it is — item 1 and skill 1 are
+// both real, and folding them together would put a potion where a skill was.
+func TestLoadHotkeyItemsKeepsSkillsAndItemsApart(t *testing.T) {
+	b := &UI2DBackend{}
+
+	b.loadHotkeyItems(map[string]uint32{"0,0": 1}, map[string]uint32{"0,1": 1})
+
+	if b.hotkeyItems[0][0].skill {
+		t.Error("an item loaded as a skill")
+	}
+	if !b.hotkeyItems[0][1].skill {
+		t.Error("a skill loaded as an item")
 	}
 }
 
@@ -151,15 +181,19 @@ func TestLoadHotkeyItemsSkipsWhatIsNotACell(t *testing.T) {
 // writing every cell would put four rows of nine zeroes in every config file.
 func TestSavedHotkeyItemsWritesOnlyFilledCells(t *testing.T) {
 	b := &UI2DBackend{}
-	b.setHotkeyItem(0, 0, 501)
-	b.setHotkeyItem(3, 8, 512)
+	b.setHotkeyItem(0, 0, hotkeyCell{id: 501})
+	b.setHotkeyItem(3, 8, hotkeyCell{id: 512})
+	b.setHotkeyItem(1, 0, hotkeyCell{id: 28, skill: true})
 
-	saved := b.savedHotkeyItems()
+	saved, skills := b.savedHotkeyItems()
 
 	if len(saved) != 2 {
-		t.Errorf("saved %d cells, want the 2 that are filled", len(saved))
+		t.Errorf("saved %d item cells, want the 2 that are filled", len(saved))
 	}
 	if saved["0,0"] != 501 || saved["3,8"] != 512 {
 		t.Errorf("saved the wrong contents: %v", saved)
+	}
+	if len(skills) != 1 || skills["1,0"] != 28 {
+		t.Errorf("saved %v for skills, want the one that is filled", skills)
 	}
 }

@@ -572,6 +572,10 @@ type sheet struct {
 	// dropped is how many animation frames the bake left out, from
 	// charsprite.MaxAnimationFrames.
 	dropped int
+
+	// portrait is where the standing frame's own art sits inside the padded
+	// frame, for anything drawing the character flat.
+	portrait struct{ x, y, w, h int }
 }
 
 // newSheet uploads every frame of a baked appearance, returning nil when there
@@ -593,6 +597,10 @@ func newSheet(assets *charsprite.Assets) *sheet {
 		intervals:  assets.Sheet.IntervalMs,
 		actions:    assets.Sheet.Actions,
 	}
+	sh.portrait.x = assets.Sheet.PortraitX
+	sh.portrait.y = assets.Sheet.PortraitY
+	sh.portrait.w = assets.Sheet.PortraitW
+	sh.portrait.h = assets.Sheet.PortraitH
 	for key, frames := range assets.Sheet.Frames {
 		textures := make([]uint32, len(frames))
 		for i, f := range frames {
@@ -706,4 +714,52 @@ func (r *Renderer) Destroy() {
 		gl.DeleteProgram(r.program)
 		r.program = 0
 	}
+}
+
+// PortraitFrame is one frame of the player's own sheet, for drawing flat in
+// the interface — the equipment window shows the character it is dressing.
+//
+// What comes back is the texture, the size of the character's own art, and
+// where that art sits inside the texture. The frame is padded to the widest
+// and tallest the sheet holds — a swing with a spear in it — so drawing the
+// whole of it is drawing a character a third the size of mostly nothing.
+//
+// Zero texture means the sheet is not baked yet, which is the ordinary state
+// for the first frames after entering a map.
+func (r *Renderer) PortraitFrame(action, direction, frame int) (
+	texture uint32, w, h float32, u0, v0, u1, v1 float32,
+) {
+	if r == nil || r.player == nil {
+		return 0, 0, 0, 0, 0, 0, 0
+	}
+
+	index := r.player.actIndex(action)
+	if index < 0 {
+		return 0, 0, 0, 0, 0, 0, 0
+	}
+
+	frames := r.player.frames[index*charsprite.Directions+direction]
+	if len(frames) == 0 {
+		frames = r.player.frames[index*charsprite.Directions]
+	}
+	if len(frames) == 0 {
+		return 0, 0, 0, 0, 0, 0, 0
+	}
+
+	sheetW, sheetH := float32(r.player.width), float32(r.player.height)
+	if sheetW <= 0 || sheetH <= 0 {
+		return 0, 0, 0, 0, 0, 0, 0
+	}
+
+	// The sheet did not record where the art sits — an older bake, or a
+	// family with no portrait frame — so the whole frame is the best answer.
+	box := r.player.portrait
+	if box.w <= 0 || box.h <= 0 {
+		return frames[frame%len(frames)], sheetW, sheetH, 0, 0, 1, 1
+	}
+
+	return frames[frame%len(frames)],
+		float32(box.w), float32(box.h),
+		float32(box.x) / sheetW, float32(box.y) / sheetH,
+		float32(box.x+box.w) / sheetW, float32(box.y+box.h) / sheetH
 }

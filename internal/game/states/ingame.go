@@ -95,6 +95,27 @@ type InGameState struct {
 	// damageNumbers are the figures floating up from recent blows.
 	damageNumbers []floatingDamage
 
+	// effects are the STR animations playing over the world, and effectCache
+	// the files they were parsed from.
+	effects     []*activeEffect
+	effectCache map[string]*formats.STR
+
+	// celebrations are level-ups waiting to be shown, and celebrationWaitMs
+	// how long before the next may start. soundRequest is a sound the world
+	// wants played, which the game plays because the state has no audio.
+	// showEquipment is the server's word on whether other players may look at
+	// what this character is wearing.
+	showEquipment bool
+
+	celebrations      int
+	celebrationWaitMs float32
+	soundRequest      string
+
+	// pendingLevelUp and pendingJobLevelUp are levels reached and not yet
+	// acknowledged, which the buttons at the foot of the screen offer.
+	pendingLevelUp    bool
+	pendingJobLevelUp bool
+
 	targetID    uint32
 	attacking   bool
 	repathMs    float32
@@ -709,14 +730,17 @@ func (s *InGameState) Update(dt float64) error {
 		s.updatePendingPickup(deltaMs, walking)
 		s.updateCombat(deltaMs, walking)
 		s.updateDamageNumbers(deltaMs)
+		s.updateEffects(deltaMs)
+		s.updateCelebrations(deltaMs)
 
 		// Advance the sprite animation. Frame counts come from the loaded
 		// sheet; with no sprites this parks on frame 0 harmlessly.
 		// The armed stance is worn while there is something to stand ready
-		// against, and dropped the moment the fight is over.
-		s.player.Ready = s.targetID != 0
+		// against, and dropped the moment the fight is over. Not while
+		// seated: standing ready is standing.
+		s.player.Ready = s.targetID != 0 && !s.player.Sitting
 
-		idleFrames, walkFrames, onceFrames, standbyFrames := 0, 0, 0, 0
+		idleFrames, walkFrames, onceFrames, standbyFrames, sitFrames := 0, 0, 0, 0, 0
 		if s.playerRender != nil {
 			idleFrames = s.playerRender.FrameCount(entity.ActionIdle, s.player.Direction)
 			walkFrames = s.playerRender.FrameCount(entity.ActionWalk, s.player.Direction)
@@ -732,8 +756,11 @@ func (s *InGameState) Update(dt float64) error {
 			if s.player.Ready {
 				standbyFrames = s.playerRender.FrameCount(entity.ActionStandby, s.player.Direction)
 			}
+			if s.player.Sitting {
+				sitFrames = s.playerRender.FrameCount(entity.ActionSit, s.player.Direction)
+			}
 		}
-		s.player.AdvanceAnimation(deltaMs, idleFrames, walkFrames, onceFrames, standbyFrames)
+		s.player.AdvanceAnimation(deltaMs, idleFrames, walkFrames, onceFrames, standbyFrames, sitFrames)
 
 		// Update cell position
 		s.TileX, s.TileY = s.player.CurrentCell()
@@ -1056,6 +1083,43 @@ func (s *InGameState) handleInventoryEquip(data []byte) error {
 	return s.takeInventory(data, packets.EquipItemLen, "equip", packets.DecodeInventoryEquip)
 }
 
+// mergeInventory folds a delivered list into what we already hold, keyed by
+// slot, and reports how much of it was new.
+//
+// Keyed rather than appended because the server delivers the inventory more
+// than once — on a map change among other things — and appending gave a
+// second row for every item each time you walked through a warp. The slot is
+// the server's own name for an item and cannot collide, so a repeat delivery
+// lands back on the rows it came from.
+//
+// Rows the list does not mention are left alone: the two lists arrive
+// separately and each covers half the bag, so dropping what is missing from
+// one would empty the other.
+func (s *InGameState) mergeInventory(items []packets.InventoryItem) (added, replaced int) {
+	for _, item := range items {
+		existing := -1
+		for i := range s.inventory {
+			if s.inventory[i].Index == item.Index {
+				existing = i
+
+				break
+			}
+		}
+
+		if existing >= 0 {
+			s.inventory[existing] = item
+			replaced++
+
+			continue
+		}
+
+		s.inventory = append(s.inventory, item)
+		added++
+	}
+
+	return added, replaced
+}
+
 // takeInventory folds one of the two lists into the inventory, and complains
 // loudly if the entries did not divide evenly.
 //
@@ -1078,11 +1142,12 @@ func (s *InGameState) takeInventory(
 	}
 
 	items := decode(data)
-	s.inventory = append(s.inventory, items...)
+	added, replaced := s.mergeInventory(items)
 
 	trace.Emit(trace.HUD, "inventory",
 		zap.String("list", which),
-		zap.Int("added", len(items)),
+		zap.Int("added", added),
+		zap.Int("replaced", replaced),
 		zap.Int("total", len(s.inventory)))
 
 	return nil
@@ -1097,34 +1162,6 @@ func (s *InGameState) UseItem(index int) error {
 	trace.Emit(trace.HUD, "use-item", zap.Int("index", index))
 
 	return s.client.Send(packets.EncodeUseItem(index))
-}
-
-// EquipItem asks to wear the item in an inventory slot.
-//
-// The position is the item's own, as the equip list reported it: rAthena
-// passes it straight through rather than working one out, so it has to be the
-// value the server gave us. An item the server said nothing about — anything
-// not in the equip list — cannot be worn, and saying so here is better than
-// sending a zero the server will silently refuse.
-func (s *InGameState) EquipItem(index int) error {
-	for _, item := range s.inventory {
-		if item.Index != index {
-			continue
-		}
-
-		if item.EquipPositions == 0 {
-			logger.Info("that item cannot be worn", zap.Int("index", index))
-
-			return nil
-		}
-
-		trace.Emit(trace.HUD, "equip-item",
-			zap.Int("index", index), zap.Uint32("position", item.EquipPositions))
-
-		return s.client.Send(packets.EncodeEquipItem(index, item.EquipPositions))
-	}
-
-	return nil
 }
 
 // Inventory returns what the character is carrying, for the interface.
@@ -1281,6 +1318,9 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_INVENTORY_ITEMLIST_NORMAL, s.handleInventoryNormal)
 	s.client.RegisterHandler(packets.ZC_INVENTORY_ITEMLIST_EQUIP, s.handleInventoryEquip)
 	s.client.RegisterHandler(packets.ZC_USE_ITEM_ACK, s.handleUseItemAck)
+	s.client.RegisterHandler(packets.ZC_REQ_WEAR_EQUIP_ACK, s.handleEquipAck)
+	s.client.RegisterHandler(packets.ZC_REQ_TAKEOFF_EQUIP_ACK, s.handleUnequipAck)
+	s.client.RegisterHandler(packets.ZC_CONFIG_NOTIFY, s.handleConfigNotify)
 	s.client.RegisterHandler(packets.ZC_ITEM_ENTRY, s.handleGroundItemEntry)
 	s.client.RegisterHandler(packets.ZC_ITEM_FALL_ENTRY, s.handleGroundItemFall)
 	s.client.RegisterHandler(packets.ZC_ITEM_DISAPPEAR, s.handleGroundItemGone)
@@ -1289,6 +1329,7 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_NOTIFY_ACT, s.handleDamage)
 	s.client.RegisterHandler(packets.ZC_MONSTER_HP_INFO, s.handleMonsterHP)
 	s.client.RegisterHandler(packets.ZC_ATTACK_RANGE, s.handleAttackRange)
+	s.client.RegisterHandler(packets.ZC_NOTIFY_EFFECT, s.handleLevelUpEffect)
 	s.client.RegisterHandler(packets.ZC_COUPLESTATUS, s.handleCoupleStatus)
 	s.client.RegisterHandler(packets.ZC_LONGPAR_CHANGE, s.handleStatusChange)
 	s.client.RegisterHandler(packets.ZC_LONGLONGPAR_CHANGE, s.handleStatusChange)
@@ -2015,10 +2056,37 @@ func (s *InGameState) ClickWorld(mouseX, mouseY, viewportW, viewportH float32) {
 // player's actual intent so a destination beyond one request's reach can be
 // walked in stages.
 func (s *InGameState) RequestMove(tileX, tileY int) error {
+	// A seated character does not go anywhere. The server would refuse it
+	// anyway — unit_can_move is false while sitting — so asking would leave
+	// the client walking toward a cell no acknowledgement is ever coming for,
+	// which is what made a sitting character slide across the ground.
+	//
+	// Turning is still worth doing: it is the only thing a click can mean
+	// here, and a seated character that ignores the pointer entirely reads as
+	// one that has stopped responding.
+	if s.Sitting() {
+		s.faceCell(tileX, tileY)
+
+		return nil
+	}
+
 	s.destCellX, s.destCellY = tileX, tileY
 	s.hasDest = true
 	s.chainCellX, s.chainCellY = -1, -1
+
 	return s.sendWalkRequest(tileX, tileY)
+}
+
+// faceCell turns the character to look at a cell.
+func (s *InGameState) faceCell(tileX, tileY int) {
+	if s.player == nil {
+		return
+	}
+
+	fromX, fromY := s.player.CurrentCell()
+	if dir := entity.DirectionFromCellDelta(tileX-fromX, tileY-fromY); dir >= 0 {
+		s.player.Direction = dir
+	}
 }
 
 // sendWalkRequest sends one walk packet toward a cell, clamped to a distance

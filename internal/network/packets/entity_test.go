@@ -1,6 +1,9 @@
 package packets
 
-import "testing"
+import (
+	"encoding/binary"
+	"testing"
+)
 
 // The entity packets are the ones where a wrong offset is least likely to be
 // noticed: every field is a small integer, so reading a neighboring one still
@@ -297,5 +300,29 @@ func TestEntityKindIsCharacter(t *testing.T) {
 		if kind.IsCharacter() {
 			t.Errorf("kind 0x%X should not be drawn as a character", kind)
 		}
+	}
+}
+
+// TestUnitHeadGearFieldsAreNotInFieldOrder: rAthena's names for the three
+// head looks do not run in the order they read — accessory is the lower slot,
+// accessory2 the upper and accessory3 the middle, which clif_set_unit_idle
+// assigns in as many words. Taking them in field order puts a hat where a
+// mask goes.
+func TestUnitHeadGearFieldsAreNotInFieldOrder(t *testing.T) {
+	data := make([]byte, 128)
+	binary.LittleEndian.PutUint16(data[offAccessory:], 11)  // head bottom
+	binary.LittleEndian.PutUint16(data[offAccessory2:], 22) // head top
+	binary.LittleEndian.PutUint16(data[offAccessory3:], 33) // head mid
+
+	e := decodeEntityPrefix(data)
+
+	if e.HeadBottom != 11 {
+		t.Errorf("HeadBottom = %d, want the accessory field", e.HeadBottom)
+	}
+	if e.HeadTop != 22 {
+		t.Errorf("HeadTop = %d, want the accessory2 field", e.HeadTop)
+	}
+	if e.HeadMid != 33 {
+		t.Errorf("HeadMid = %d, want the accessory3 field", e.HeadMid)
 	}
 }

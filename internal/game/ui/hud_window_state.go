@@ -10,15 +10,15 @@ import (
 
 // HUDWindow is one of the windows the menu buttons open.
 //
-// Only the four the first row promises are named. The rest of the strip —
-// party, guild, quest and the others — still opens nothing, and a name here
-// would suggest otherwise.
+// Only the ones that open something are named. The rest of the strip — party,
+// guild, quest and the others — still opens nothing, and a name here would
+// suggest otherwise.
 type HUDWindow string
 
 // The windows the menu buttons open. The values match the button names in
 // hudMenuButtons, so a button knows its own window without a second table.
 const (
-	WindowInfo  HUDWindow = "info"
+	WindowEquip HUDWindow = "equip"
 	WindowSkill HUDWindow = "skill"
 	WindowItem  HUDWindow = "item"
 	WindowMap   HUDWindow = "map"
@@ -29,7 +29,7 @@ const (
 // bar set. Without that a window closes once and the button never brings it
 // back.
 var hudWindowFrames = map[HUDWindow]string{
-	WindowInfo:  statsWindowID,
+	WindowEquip: equipWindowID,
 	WindowSkill: skillsWindowID,
 	WindowItem:  itemsWindowID,
 	WindowMap:   mapWindowID,
@@ -37,7 +37,7 @@ var hudWindowFrames = map[HUDWindow]string{
 
 // hudWindowTitles are what each window calls itself, matching the original.
 var hudWindowTitles = map[HUDWindow]string{
-	WindowInfo:  "Status",
+	WindowEquip: "Equip",
 	WindowSkill: "Skill",
 	WindowItem:  "Item",
 	WindowMap:   "Map",
@@ -49,6 +49,25 @@ var hudWindowTitles = map[HUDWindow]string{
 // hovers, and clicking it does nothing quietly. Announcing a click that
 // changes nothing reads as a fault.
 func opensWindow(buttonName string) (HUDWindow, bool) {
+	return OpensWindow(buttonName)
+}
+
+// hudButtonWindows are buttons that open a window not named after them.
+//
+// Info is one: the modern client folds the status block into the equipment
+// window rather than giving it one of its own, so both buttons lead to the
+// same place — which is where both of the things they promise now are.
+var hudButtonWindows = map[string]HUDWindow{
+	"info": WindowEquip,
+}
+
+// OpensWindow is opensWindow for callers outside this package — the command
+// line names a window by its button name too.
+func OpensWindow(buttonName string) (HUDWindow, bool) {
+	if w, ok := hudButtonWindows[buttonName]; ok {
+		return w, true
+	}
+
 	w := HUDWindow(buttonName)
 	_, ok := hudWindowTitles[w]
 
@@ -58,6 +77,19 @@ func opensWindow(buttonName string) (HUDWindow, bool) {
 // IsWindowOpen reports whether a menu window is currently open.
 func (b *UI2DBackend) IsWindowOpen(w HUDWindow) bool {
 	return b.hudOpen[w]
+}
+
+// OpenWindow opens a menu window, leaving an already open one alone.
+//
+// Distinct from ToggleWindow because the caller sometimes means "show me
+// this" rather than "swap it": a level-up button pointing at the status
+// window should open it, not close a window the player already had up.
+func (b *UI2DBackend) OpenWindow(w HUDWindow) {
+	if b.IsWindowOpen(w) {
+		return
+	}
+
+	b.ToggleWindow(w)
 }
 
 // ToggleWindow opens a closed menu window or closes an open one, and reports
@@ -106,11 +138,20 @@ func (b *UI2DBackend) describeHUD() string {
 		return "no windows open"
 	}
 
+	// Named once each, not once per button: two buttons lead to the
+	// equipment window, and listing it twice would read as two windows.
 	open := make([]string, 0, len(b.hudOpen))
+	listed := make(map[HUDWindow]bool, len(b.hudOpen))
+
 	for _, name := range hudMenuButtons {
-		if w, ok := opensWindow(name); ok && b.hudOpen[w] {
-			open = append(open, hudWindowTitles[w])
+		w, ok := opensWindow(name)
+		if !ok || !b.hudOpen[w] || listed[w] {
+			continue
 		}
+
+		listed[w] = true
+
+		open = append(open, hudWindowTitles[w])
 	}
 
 	return strings.Join(open, ", ")

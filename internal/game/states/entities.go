@@ -65,6 +65,9 @@ func upsertUnit(m *entity.Manager, u *packets.Entity, path PathFunc) *entity.Ent
 	// rAthena sends 0 for female and 1 for male.
 	e.Female = u.Sex == 0
 	e.HairStyle = int(u.HairStyle)
+	e.HeadTop = int(u.HeadTop)
+	e.HeadMid = int(u.HeadMid)
+	e.HeadBottom = int(u.HeadBottom)
 	e.HairColor = int(u.HairColor)
 	e.ClothesColor = int(u.ClothesColor)
 	e.Weapon = int(u.Weapon)
@@ -167,6 +170,10 @@ func unitSpec(e *entity.Entity) charsprite.Spec {
 			Female:    e.Female,
 			HairStyle: e.HairStyle,
 			Weapon:    e.Weapon,
+
+			HeadTop: e.HeadTop,
+			HeadMid: e.HeadMid,
+			HeadLow: e.HeadBottom,
 		}
 	}
 }
@@ -279,6 +286,9 @@ func updateUnits(m *entity.Manager, deltaMs float32, anim UnitAnimFunc) {
 				e.Body.AnimIntervalMs[playing] = onceMs
 			}
 		}
-		e.Body.AdvanceAnimation(deltaMs, idle, walk, once, standby)
+		// Nothing but a player sits, so no unit here needs a seated frame
+		// count. Other players will, once ZC_NOTIFY_ACT's sit is applied to
+		// them too rather than only to us.
+		e.Body.AdvanceAnimation(deltaMs, idle, walk, once, standby, 0)
 	}
 }

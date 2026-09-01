@@ -8,6 +8,7 @@ import (
 	"github.com/Faultbox/midgard-ro/internal/engine/cursor"
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
 	"github.com/Faultbox/midgard-ro/internal/game/items"
+	"github.com/Faultbox/midgard-ro/internal/game/skills"
 	"github.com/Faultbox/midgard-ro/internal/logger"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
 
@@ -207,7 +208,7 @@ func (b *UI2DBackend) placeHotkeys() {
 
 	b.hotkeyX, b.hotkeyY = saved.HotkeyX, saved.HotkeyY
 	b.hotkeyRows = min(saved.HotkeyRows, hotkeyMaxRows)
-	b.loadHotkeyItems(saved.HotkeyItems)
+	b.loadHotkeyItems(saved.HotkeyItems, saved.HotkeySkills)
 }
 
 // hotkeyCellKey names a cell in the saved state.
@@ -220,14 +221,17 @@ func hotkeyCellKey(row, col int) string {
 // A key that is not a cell on this bar is skipped rather than refused: a
 // config written when the bar had more rows should lose the rows that are
 // gone and keep the rest, not fail to load at all.
-func (b *UI2DBackend) loadHotkeyItems(saved map[string]uint32) {
-	for key, itemID := range saved {
-		row, col, ok := parseHotkeyCellKey(key)
-		if !ok || itemID == 0 {
-			continue
+func (b *UI2DBackend) loadHotkeyItems(items, skills map[string]uint32) {
+	for key, id := range items {
+		if row, col, ok := parseHotkeyCellKey(key); ok && id != 0 {
+			b.setHotkeyItem(row, col, hotkeyCell{id: id})
 		}
+	}
 
-		b.setHotkeyItem(row, col, itemID)
+	for key, id := range skills {
+		if row, col, ok := parseHotkeyCellKey(key); ok && id != 0 {
+			b.setHotkeyItem(row, col, hotkeyCell{id: id, skill: true})
+		}
 	}
 }
 
@@ -251,18 +255,27 @@ func parseHotkeyCellKey(key string) (row, col int, ok bool) {
 	return row, col, true
 }
 
-// savedHotkeyItems is the filled cells, ready to write out.
-func (b *UI2DBackend) savedHotkeyItems() map[string]uint32 {
-	items := make(map[string]uint32)
+// savedHotkeyItems is the filled cells, ready to write out, split into the
+// two maps the config keeps them in.
+func (b *UI2DBackend) savedHotkeyItems() (items, skills map[string]uint32) {
+	items, skills = make(map[string]uint32), make(map[string]uint32)
+
 	for row := 0; row < hotkeyMaxRows; row++ {
 		for col := 0; col < hotkeySlots; col++ {
-			if id := b.hotkeyItems[row][col]; id != 0 {
-				items[hotkeyCellKey(row, col)] = id
+			cell := b.hotkeyItems[row][col]
+			if cell.id == 0 {
+				continue
+			}
+
+			if cell.skill {
+				skills[hotkeyCellKey(row, col)] = cell.id
+			} else {
+				items[hotkeyCellKey(row, col)] = cell.id
 			}
 		}
 	}
 
-	return items
+	return items, skills
 }
 
 // saveHotkeyPlacement records where the bar was left and how far it was open.
@@ -272,7 +285,7 @@ func (b *UI2DBackend) saveHotkeyPlacement() {
 	err := config.UpdateUIState(func(state *config.UIState) {
 		state.HotkeyX, state.HotkeyY = b.hotkeyX, b.hotkeyY
 		state.HotkeyRows = b.hotkeyRows
-		state.HotkeyItems = b.savedHotkeyItems()
+		state.HotkeyItems, state.HotkeySkills = b.savedHotkeyItems()
 	})
 	if err != nil {
 		logger.Warn("could not save hotkey placement", zap.Error(err))
@@ -312,7 +325,7 @@ func maxF(a, b float32) float32 {
 type hotkeyDrag struct {
 	active   bool
 	row, col int
-	itemID   uint32
+	cell     hotkeyCell
 }
 
 // hotkeyPress is a shortcut pressed this frame, resolved when the bar is
@@ -350,14 +363,23 @@ func (b *UI2DBackend) hotkeyCellAt(px, py float32) (row, col int, ok bool) {
 // Rows that are not open still take assignments: the bar can be pulled shut
 // over a row without emptying it, and pulling it back open should find the
 // row as it was left.
-func (b *UI2DBackend) setHotkeyItem(row, col int, itemID uint32) bool {
+func (b *UI2DBackend) setHotkeyItem(row, col int, cell hotkeyCell) bool {
 	if row < 0 || row >= hotkeyMaxRows || col < 0 || col >= hotkeySlots {
 		return false
 	}
 
-	b.hotkeyItems[row][col] = itemID
+	b.hotkeyItems[row][col] = cell
 
 	return true
+}
+
+// hotkeyCell is what one cell of the quick panel holds.
+//
+// The zero value is an empty cell. An id alone would not do: item 1 and skill
+// 1 are both real things, so which kind it is has to travel with it.
+type hotkeyCell struct {
+	id    uint32
+	skill bool
 }
 
 // AssignHotkey puts an item in a cell, replacing whatever was there, and
@@ -366,8 +388,8 @@ func (b *UI2DBackend) setHotkeyItem(row, col int, itemID uint32) bool {
 // Saved on the change rather than on the next mouse release: an assignment
 // arrives from the inventory window, which is drawn after the bar, so by the
 // time the bar next looks the release that made it is a frame gone.
-func (b *UI2DBackend) AssignHotkey(row, col int, itemID uint32) bool {
-	if !b.setHotkeyItem(row, col, itemID) {
+func (b *UI2DBackend) AssignHotkey(row, col int, cell hotkeyCell) bool {
+	if !b.setHotkeyItem(row, col, cell) {
 		return false
 	}
 
@@ -418,23 +440,87 @@ func inventoryCount(inventory []packets.InventoryItem, itemID uint32) int {
 // A cell whose item is all gone does nothing. The shortcut is not cleared:
 // running out of potions is not a reason to lose the key you drink them with.
 func (b *UI2DBackend) useHotkey(state InGameUIState, row, col int) {
-	itemID := b.hotkeyItems[row][col]
-	if itemID == 0 {
+	cell := b.hotkeyItems[row][col]
+	if cell.id == 0 {
+		return
+	}
+
+	// A skill needs nothing looked up: the server knows what level it is at,
+	// and which unit it goes to depends on what the skill targets, which is a
+	// question for the state rather than for the bar.
+	if cell.skill {
+		b.skillCast = SkillCast{Skill: uint16(cell.id)}
+
 		return
 	}
 
 	for _, item := range state.Inventory {
-		if item.ID != itemID {
+		if item.ID != cell.id {
 			continue
 		}
 
 		b.itemAction = ItemAction{
 			Index: item.Index,
-			Equip: items.CategoryOf(itemID) == items.CategoryEquip,
+			Equip: items.CategoryOf(cell.id) == items.CategoryEquip,
 		}
 
 		return
 	}
+}
+
+// SkillCast is a skill the player asked for from the quick panel.
+type SkillCast struct {
+	// Skill is the skill id. Zero is none: NV_BASIC is 1, so nothing real
+	// collides with the empty value.
+	Skill uint16
+}
+
+// TakeSkillCast returns a skill the player asked to use and clears it.
+func (b *UI2DBackend) TakeSkillCast() (SkillCast, bool) {
+	cast := b.skillCast
+	if cast.Skill == 0 {
+		return SkillCast{}, false
+	}
+
+	b.skillCast = SkillCast{}
+
+	return cast, true
+}
+
+// drawHotkeySkill draws a skill shortcut: its icon, and the level it is at.
+//
+// The level rather than a count, in the corner a count would go in: that is
+// the number that changes about a skill, and the cell is too small for both a
+// name and a number.
+func (b *UI2DBackend) drawHotkeySkill(state InGameUIState, skillID uint32, cell ui2d.Rect) {
+	r := b.ctx.Renderer()
+
+	if sprite := skills.Sprite(uint16(skillID)); sprite != "" {
+		if tex, err := b.texCache.Load(skillIconPath + sprite + ".bmp"); err == nil {
+			r.DrawImage(tex.ID, cell.X, cell.Y, cell.W, cell.H, ui2d.ColorWhite)
+		}
+	}
+
+	// A skill the character no longer has — reset, or a config from another
+	// character — is drawn dim rather than removed. Losing a shortcut because
+	// the wrong character logged in would be worse than showing a dead one.
+	level, known := 0, false
+	for _, skill := range state.Skills {
+		if skill.ID == uint16(skillID) {
+			level, known = skill.Level, true
+
+			break
+		}
+	}
+
+	label := strconv.Itoa(level)
+	color := itemsCountText
+	if !known {
+		color = hotkeyCountEmpty
+	}
+
+	capW, capH := r.MeasureText(label, hotkeyCountScale)
+	r.DrawText(cell.X+cell.W-capW, cell.Y+cell.H-capH, label, hotkeyCountScale, color)
 }
 
 // drawHotkeyCells draws what is in the cells: the icon, and how many are
@@ -444,14 +530,20 @@ func (b *UI2DBackend) drawHotkeyCells(state InGameUIState) {
 
 	for row := 0; row < b.hotkeyRows; row++ {
 		for col := 0; col < hotkeySlots; col++ {
-			itemID := b.hotkeyItems[row][col]
-			if itemID == 0 {
+			held := b.hotkeyItems[row][col]
+			if held.id == 0 {
 				continue
 			}
 
 			cell := b.hotkeyCellRect(row, col)
 
-			info, known := items.Lookup(itemID)
+			if held.skill {
+				b.drawHotkeySkill(state, held.id, cell)
+
+				continue
+			}
+
+			info, known := items.Lookup(held.id)
 			if known && info.Resource != "" {
 				if tex, err := b.texCache.Load(itemIconPath + info.Resource + ".bmp"); err == nil {
 					r.DrawImage(tex.ID, cell.X, cell.Y, cell.W, cell.H, ui2d.ColorWhite)
@@ -461,7 +553,7 @@ func (b *UI2DBackend) drawHotkeyCells(state InGameUIState) {
 			// How many are left. Dimmed at zero rather than hidden: an empty
 			// shortcut you can still see is the difference between "none
 			// left" and "nothing assigned".
-			count := inventoryCount(state.Inventory, itemID)
+			count := inventoryCount(state.Inventory, held.id)
 			label := strconv.Itoa(count)
 			color := itemsCountText
 			if count == 0 {
@@ -487,7 +579,7 @@ func (b *UI2DBackend) hotkeyCellInput(state InGameUIState) {
 
 	for row := 0; row < b.hotkeyRows; row++ {
 		for col := 0; col < hotkeySlots; col++ {
-			if b.hotkeyItems[row][col] == 0 {
+			if b.hotkeyItems[row][col].id == 0 {
 				continue
 			}
 
@@ -505,7 +597,7 @@ func (b *UI2DBackend) hotkeyCellInput(state InGameUIState) {
 					active: true,
 					row:    row,
 					col:    col,
-					itemID: b.hotkeyItems[row][col],
+					cell:   b.hotkeyItems[row][col],
 				}
 			}
 		}
@@ -532,12 +624,12 @@ func (b *UI2DBackend) finishHotkeyDrag() {
 	moved := false
 	if row, col, ok := b.hotkeyCellAt(in.MouseX, in.MouseY); ok {
 		if row != from.row || col != from.col {
-			b.hotkeyItems[row][col] = from.itemID
-			b.hotkeyItems[from.row][from.col] = 0
+			b.hotkeyItems[row][col] = from.cell
+			b.hotkeyItems[from.row][from.col] = hotkeyCell{}
 			moved = true
 		}
 	} else {
-		b.hotkeyItems[from.row][from.col] = 0
+		b.hotkeyItems[from.row][from.col] = hotkeyCell{}
 		moved = true
 	}
 
