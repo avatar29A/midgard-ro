@@ -210,6 +210,20 @@ func (s *CharSelectState) RequestCreate(slot int) {
 		return
 	}
 
+	// Nothing is known about which slots are free until the list has arrived,
+	// and "not known" must not read as "empty". Entering this state clears
+	// the characters and asks for them again, so there is a window after
+	// every successful creation where the check below would pass for a slot
+	// that is actually occupied — which is exactly what happened: create a
+	// character, and the screen reopened on slot 0 and was refused by the
+	// server for the rest of the session.
+	if !s.CharListReady {
+		logger.Warn("asked to create before the character list arrived",
+			zap.Int("slot", slot))
+
+		return
+	}
+
 	if slot < len(s.Characters) {
 		// Not an error: the UI only offers this on an empty slot, so reaching
 		// here means the two disagree about what is empty.

@@ -9,7 +9,12 @@ import (
 // newCharSelectForTest builds a state holding `filled` characters out of
 // `slots`, without a client or a manager — RequestCreate touches neither.
 func newCharSelectForTest(filled, slots int) *CharSelectState {
-	s := &CharSelectState{SelectedSlot: -1, CreateSlot: -1, MaxSlots: slots}
+	s := &CharSelectState{
+		SelectedSlot:  -1,
+		CreateSlot:    -1,
+		MaxSlots:      slots,
+		CharListReady: true,
+	}
 	for i := 0; i < filled; i++ {
 		s.Characters = append(s.Characters, &packets.CharInfo{})
 	}
@@ -85,5 +90,50 @@ func TestRequestCreateTakesTheFirstFreeSlotBoundary(t *testing.T) {
 	s.RequestCreate(3)
 	if s.PendingCreateSlot() != 3 {
 		t.Errorf("slot 3 is free but was refused (pending = %d)", s.PendingCreateSlot())
+	}
+}
+
+// TestRequestCreateWaitsForTheCharacterList is a regression test for a bug
+// that only appeared *after* a character was successfully created.
+//
+// Returning to character select re-enters it, which clears the characters and
+// asks the server for them again. In the window before they arrive the list is
+// empty — and "not known yet" must not read as "every slot is free", or the
+// screen reopens on slot 0 and the server refuses everything from then on.
+// That is exactly what happened: one character made, then nothing would create.
+func TestRequestCreateWaitsForTheCharacterList(t *testing.T) {
+	s := newCharSelectForTest(2, 9)
+
+	// Re-entering does this.
+	s.Characters = nil
+	s.CharListReady = false
+
+	s.RequestCreate(0)
+
+	if got := s.PendingCreateSlot(); got != -1 {
+		t.Errorf("pending slot = %d, want -1 — slot 0 holds a character, the "+
+			"list just had not arrived to say so", got)
+	}
+}
+
+// TestRequestCreateResumesOnceTheListArrives: the guard above must not be a
+// permanent refusal.
+func TestRequestCreateResumesOnceTheListArrives(t *testing.T) {
+	s := newCharSelectForTest(2, 9)
+	s.Characters = nil
+	s.CharListReady = false
+
+	s.RequestCreate(2)
+	if s.PendingCreateSlot() != -1 {
+		t.Fatal("accepted a slot before the list arrived")
+	}
+
+	// The list comes back with two characters, so slot 2 is genuinely free.
+	s.Characters = newCharSelectForTest(2, 9).Characters
+	s.CharListReady = true
+
+	s.RequestCreate(2)
+	if got := s.PendingCreateSlot(); got != 2 {
+		t.Errorf("pending slot = %d, want 2 once the list is known", got)
 	}
 }
