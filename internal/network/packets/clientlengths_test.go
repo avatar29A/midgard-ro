@@ -271,3 +271,33 @@ func TestShuffledIDsFollowTheShuffleTable(t *testing.T) {
 		})
 	}
 }
+
+// TestProgressPacketsReachTheRightHandler pins the packets that spend a
+// level's points and take equipment off.
+func TestProgressPacketsReachTheRightHandler(t *testing.T) {
+	tests := []struct {
+		name    string
+		id      uint16
+		length  int
+		handler string
+	}{
+		{"CZ_STATUS_CHANGE", CZ_STATUS_CHANGE, 5, "clif_parse_StatusUp"},
+		{"CZ_UPGRADE_SKILLLEVEL", CZ_UPGRADE_SKILLLEVEL, 4, "clif_parse_SkillUp"},
+		{"CZ_REQ_TAKEOFF_EQUIP", CZ_REQ_TAKEOFF_EQUIP, 4, "clif_parse_UnequipItem"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			length, ok := ClientPacketLength(tt.id)
+			if !ok {
+				t.Fatalf("%s is not parsed at this PACKETVER", tt.name)
+			}
+			if length != tt.length {
+				t.Errorf("%s length = %d, want %d", tt.name, length, tt.length)
+			}
+			if got, _ := ClientPacketHandler(tt.id); got != tt.handler {
+				t.Errorf("%s reaches %s, want %s", tt.name, got, tt.handler)
+			}
+		})
+	}
+}

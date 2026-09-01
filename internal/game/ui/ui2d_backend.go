@@ -138,6 +138,7 @@ type UI2DBackend struct {
 	dropAction   DropAction
 	dropPrompt   dropPrompt
 	damageArt    damageArt
+	statAction   StatAction
 
 	escOpen   bool
 	escAction EscAction
