@@ -168,10 +168,10 @@ func (s *InGameState) Portrait() (texture uint32, w, h float32) {
 
 // portraitFacing is which of the eight facings the portrait uses.
 //
-// Four is the one drawn from the front — the direction a character faces when
-// it is walking toward the camera — which is how the original stands them in
-// the window.
-const portraitFacing = 4
+// South, which in RO's sprite art is index zero and the one drawn face on.
+// The server's own compass runs the other way round the circle — north is its
+// zero — and taking that one stood the character with its back to the window.
+const portraitFacing = entity.DirS
 
 // ShowEquipment tells the server whether other players may look at what this
 // character is wearing, which is the checkbox on the equipment window.
