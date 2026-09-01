@@ -81,6 +81,7 @@ func (s *InGameState) handleEquipAck(data []byte) error {
 
 	// The place the server chose, not the place that was asked for.
 	s.setWearState(ack.Index, ack.Position)
+	s.wearOnHead(ack.Position, int(ack.Sprite))
 
 	trace.Emit(trace.HUD, "equip-ack",
 		zap.Int("index", ack.Index), zap.Uint32("position", ack.Position))
@@ -106,6 +107,7 @@ func (s *InGameState) handleUnequipAck(data []byte) error {
 	}
 
 	s.setWearState(ack.Index, 0)
+	s.wearOnHead(ack.Position, 0)
 
 	trace.Emit(trace.HUD, "unequip-ack",
 		zap.Int("index", ack.Index), zap.Uint32("position", ack.Position))
@@ -149,6 +151,39 @@ func (s *InGameState) Equipment() map[uint32]packets.InventoryItem {
 	}
 
 	return worn
+}
+
+// wearOnHead puts a hat, a mask or a pair of glasses on the character, or
+// takes one off, and rebakes the sprite so it shows.
+//
+// The view is the ack's own: the wear ack carries the sprite number of what
+// was just put on, which is exactly what the character's appearance needs.
+// Nothing else has to be asked for, and nothing has to wait for a relog.
+//
+// Rebaking is not cheap — every frame of every action is composited again —
+// but a hat is not put on often, and the alternative is a character wearing
+// what it wore when it logged in.
+func (s *InGameState) wearOnHead(position uint32, view int) {
+	char := s.CharInfo()
+	if char == nil {
+		return
+	}
+
+	switch {
+	case position&packets.EQP_HEAD_TOP != 0:
+		char.HeadTop = uint16(view)
+	case position&packets.EQP_HEAD_MID != 0:
+		char.HeadMid = uint16(view)
+	case position&packets.EQP_HEAD_LOW != 0:
+		char.HeadBottom = uint16(view)
+	default:
+		return
+	}
+
+	trace.Emit(trace.HUD, "head-gear",
+		zap.Uint32("position", position), zap.Int("view", view))
+
+	s.loadPlayerSprites()
 }
 
 // Portrait is the character's own sprite, for the equipment window to show

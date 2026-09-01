@@ -65,6 +65,9 @@ func upsertUnit(m *entity.Manager, u *packets.Entity, path PathFunc) *entity.Ent
 	// rAthena sends 0 for female and 1 for male.
 	e.Female = u.Sex == 0
 	e.HairStyle = int(u.HairStyle)
+	e.HeadTop = int(u.HeadTop)
+	e.HeadMid = int(u.HeadMid)
+	e.HeadBottom = int(u.HeadBottom)
 	e.HairColor = int(u.HairColor)
 	e.ClothesColor = int(u.ClothesColor)
 	e.Weapon = int(u.Weapon)
@@ -167,6 +170,10 @@ func unitSpec(e *entity.Entity) charsprite.Spec {
 			Female:    e.Female,
 			HairStyle: e.HairStyle,
 			Weapon:    e.Weapon,
+
+			HeadTop: e.HeadTop,
+			HeadMid: e.HeadMid,
+			HeadLow: e.HeadBottom,
 		}
 	}
 }
