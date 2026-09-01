@@ -52,6 +52,16 @@ const (
 	// tabs.
 	itemsTabSlant float32 = 5
 
+	// itemsTabSlantX is where a slant begins: at the shut edge, which is the
+	// innermost of the two a boundary divides, since only the open tab reaches
+	// further out.
+	//
+	// The art begins it at the outermost instead and turns the corner over a
+	// single row. At the height the original draws a tab that reads as a
+	// corner; at the height this one does, the same two pixels read as a spur
+	// running past the tab below and into the band outside it.
+	itemsTabSlantX = itemsTabShutX
+
 	itemsFooterH float32 = 24
 
 	itemsTextScale float32 = 0.65
@@ -231,25 +241,14 @@ func (b *UI2DBackend) itemTabEdgeY(top float32, k int, x float32) float32 {
 		return y
 	}
 
-	left := b.itemTabEdgeLeft(k)
-
 	switch {
-	case x <= left:
+	case x <= itemsTabSlantX:
 		return y
 	case x >= itemsTabShutR:
 		return y + itemsTabSlant
 	default:
-		return y + itemsTabSlant*(x-left)/(itemsTabShutR-left)
+		return y + itemsTabSlant*(x-itemsTabSlantX)/(itemsTabShutR-itemsTabSlantX)
 	}
-}
-
-// itemTabEdgeLeft is where boundary k's slant begins.
-func (b *UI2DBackend) itemTabEdgeLeft(k int) float32 {
-	if k-1 == b.itemTab || k == b.itemTab {
-		return itemsTabOpenX
-	}
-
-	return itemsTabShutX
 }
 
 // drawItemTab fills one tab, hatches the band outside it and draws its
@@ -305,7 +304,7 @@ func (b *UI2DBackend) drawItemTabUpright(x, top float32, i int, at float32) {
 
 // drawItemTabEdge draws the slanted line at one boundary.
 func (b *UI2DBackend) drawItemTabEdge(x, top float32, k int) {
-	left := b.itemTabEdgeLeft(k)
+	left := itemsTabSlantX
 
 	startY := b.itemTabEdgeY(top, k, left)
 	endY := b.itemTabEdgeY(top, k, itemsTabShutR)
