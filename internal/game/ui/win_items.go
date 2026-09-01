@@ -35,8 +35,11 @@ const (
 	// the archive ships for this very window. Twenty wide, so its borders
 	// land on whole pixels the way they do there.
 	itemsTabW     float32 = 20
-	itemsTabH     float32 = 62
 	itemsTabScale float32 = 0.45
+
+	// itemsBodyH is the height the grid and the tab strip share, between the
+	// title bar and the footer.
+	itemsBodyH = itemsH - ui2d.FrameTitleH - itemsFooterH - 2*itemsPad
 
 	// Where the edges fall inside those twenty. The open tab reaches two
 	// pixels further left than the shut ones and has no right edge at all, so
@@ -203,11 +206,26 @@ func (b *UI2DBackend) drawItemTabs(x, bodyY float32) {
 	}
 }
 
+// itemsTabHeight is how tall one tab is.
+//
+// Shared out of the height the strip has rather than fixed, so the run of
+// them ends where the grid does. Fixed at sixty-two they came to twelve
+// pixels more than there was room for, and the last tab and the slant closing
+// it hung over the line above the footer.
+//
+// The slant is taken off the top because it belongs to the strip too: the
+// closing one starts where the last tab ends and needs its own rows below.
+func itemsTabHeight() float32 {
+	return (itemsBodyH - itemsTabSlant) / float32(len(itemTabs))
+}
+
 // itemTabBox is the band one tab is pressed in. Square, unlike the tab drawn
 // in it: a slanted hit area would leave slivers between the tabs that answer
 // to nothing.
 func (b *UI2DBackend) itemTabBox(x, top float32, i int) ui2d.Rect {
-	return ui2d.Rect{X: x, Y: top + float32(i)*itemsTabH, W: itemsTabW, H: itemsTabH}
+	h := itemsTabHeight()
+
+	return ui2d.Rect{X: x, Y: top + float32(i)*h, W: itemsTabW, H: h}
 }
 
 // itemTabLeft is where a tab's left edge falls. The open one reaches two
@@ -236,7 +254,7 @@ func (b *UI2DBackend) itemTabRight(i int) float32 {
 // starting at the leftmost edge either of its two tabs has and reaching the
 // far side of the strip after itemsTabSlant rows.
 func (b *UI2DBackend) itemTabEdgeY(top float32, k int, x float32) float32 {
-	y := top + float32(k)*itemsTabH
+	y := top + float32(k)*itemsTabHeight()
 	if k == 0 {
 		return y
 	}
