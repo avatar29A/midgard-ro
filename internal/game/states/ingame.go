@@ -2037,10 +2037,37 @@ func (s *InGameState) ClickWorld(mouseX, mouseY, viewportW, viewportH float32) {
 // player's actual intent so a destination beyond one request's reach can be
 // walked in stages.
 func (s *InGameState) RequestMove(tileX, tileY int) error {
+	// A seated character does not go anywhere. The server would refuse it
+	// anyway — unit_can_move is false while sitting — so asking would leave
+	// the client walking toward a cell no acknowledgement is ever coming for,
+	// which is what made a sitting character slide across the ground.
+	//
+	// Turning is still worth doing: it is the only thing a click can mean
+	// here, and a seated character that ignores the pointer entirely reads as
+	// one that has stopped responding.
+	if s.Sitting() {
+		s.faceCell(tileX, tileY)
+
+		return nil
+	}
+
 	s.destCellX, s.destCellY = tileX, tileY
 	s.hasDest = true
 	s.chainCellX, s.chainCellY = -1, -1
+
 	return s.sendWalkRequest(tileX, tileY)
+}
+
+// faceCell turns the character to look at a cell.
+func (s *InGameState) faceCell(tileX, tileY int) {
+	if s.player == nil {
+		return
+	}
+
+	fromX, fromY := s.player.CurrentCell()
+	if dir := entity.DirectionFromCellDelta(tileX-fromX, tileY-fromY); dir >= 0 {
+		s.player.Direction = dir
+	}
 }
 
 // sendWalkRequest sends one walk packet toward a cell, clamped to a distance
