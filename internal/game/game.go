@@ -857,6 +857,7 @@ func (g *Game) renderUI() {
 			EntityBars:      state.EntityBars(viewportWidth, viewportHeight),
 			WorldLabels:     state.WorldLabels(viewportWidth, viewportHeight),
 			TargetMarker:    targetMarker,
+			DamageNumbers:   state.DamageNumbers(viewportWidth, viewportHeight),
 			PlayerX:         playerX,
 			PlayerY:         playerY,
 			PlayerZ:         playerZ,

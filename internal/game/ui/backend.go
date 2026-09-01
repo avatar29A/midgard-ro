@@ -175,6 +175,10 @@ type InGameUIState struct {
 	// or nil when nothing is being fought.
 	TargetMarker *states.TargetMarker
 
+	// DamageNumbers are the figures floating up from recent blows, already
+	// projected.
+	DamageNumbers []states.DamageNumber
+
 	// Player position
 	PlayerX, PlayerY, PlayerZ float32
 	PlayerTileX, PlayerTileY  int

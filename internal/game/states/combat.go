@@ -269,6 +269,7 @@ func (s *InGameState) handleDamage(data []byte) error {
 
 	// The swing plays whether or not it connected — a miss is still a swing —
 	// while the flinch is only for a blow that landed.
+	s.addDamageNumber(blow)
 	s.playAttackAnimation(blow.SourceID, blow.AnimationSpeed())
 	if !blow.Missed() {
 		s.faceTowards(blow.TargetID, blow.SourceID)
