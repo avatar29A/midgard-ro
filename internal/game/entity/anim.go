@@ -20,6 +20,14 @@ const (
 	// second, which reads as the character being reluctant rather than busy.
 	PickupAnimIntervalMs = 60.0
 
+	// ActionAnimIntervalMs is how long each frame of a blow — thrown, taken,
+	// or fatal — is held.
+	//
+	// A swing has to finish inside the attack it belongs to or the next one
+	// starts before the last has landed, and a flinch has to be over quickly
+	// enough to take the following hit.
+	ActionAnimIntervalMs = 50.0
+
 	// WalkHoldMs is how long the walk cycle keeps playing after a path ends.
 	//
 	// Walking is server-acknowledged one path at a time, so a character
@@ -39,6 +47,8 @@ func AnimIntervalMs(action int) float32 {
 		return WalkAnimIntervalMs
 	case ActionPickup:
 		return PickupAnimIntervalMs
+	case ActionAttack, ActionHurt, ActionDie:
+		return ActionAnimIntervalMs
 	default:
 		return IdleAnimIntervalMs
 	}
@@ -68,18 +78,26 @@ func (c *Character) frameIntervalMs(action int) float32 {
 // exactly during the gap this is here to smooth over. Counts come from
 // whatever holds the loaded sprite sheet; zero (no sprites yet) parks the
 // animation on frame 0.
-func (c *Character) AdvanceAnimation(deltaMs float32, idleFrames, walkFrames, pickupFrames int) {
+func (c *Character) AdvanceAnimation(deltaMs float32, idleFrames, walkFrames, onceFrames int) {
+	// Death outranks everything and does not end: a corpse is not idle, and
+	// nothing it might otherwise be doing matters any more.
+	if c.Dead {
+		c.holdDeath(deltaMs, onceFrames)
+
+		return
+	}
+
 	if c.IsMoving {
 		c.sinceWalkMs = 0
 
-		// Moving cancels the pick-up: walking away should look like walking,
-		// not like still bending over.
+		// Moving cancels a one-shot: walking away from a blow should look
+		// like walking, not like still swinging.
 		c.playingOnce = false
 	} else {
 		c.sinceWalkMs += deltaMs
 	}
 
-	if c.playingOnce && c.advancePickup(deltaMs, pickupFrames) {
+	if c.playingOnce && c.advanceOnce(deltaMs, onceFrames) {
 		return
 	}
 
@@ -112,36 +130,106 @@ func (c *Character) AdvanceAnimation(deltaMs float32, idleFrames, walkFrames, pi
 	c.CurrentFrame %= frameCount
 }
 
-// PlayPickup starts the pick-up motion, which plays through once and then
-// gives way to whatever the movement state says.
+// PlayOnce starts an action that plays through once and then gives way to
+// whatever the movement state says.
 //
-// Started on the click rather than on the server's answer. It is feedback,
-// not a change to anything the server owns: the item is not removed, the
-// inventory is not touched, and a refused pick-up costs one motion nobody
-// will mistake for an item arriving.
-func (c *Character) PlayPickup() {
+// Started when the thing it depicts is asked for or reported, not when its
+// consequences are confirmed: it is feedback, and a motion nobody will
+// mistake for an outcome costs nothing when the server disagrees.
+func (c *Character) PlayOnce(action int) {
 	c.playingOnce = true
-	c.CurrentAction = ActionPickup
+	c.OnceAction = action
+	c.CurrentAction = action
 	c.CurrentFrame = 0
 	c.FrameTime = 0
 }
 
-// advancePickup plays the pick-up through once, reporting whether it is still
+// PlayPickup starts the pick-up motion.
+func (c *Character) PlayPickup() { c.PlayOnce(ActionPickup) }
+
+// PlayAttack starts a swing.
+func (c *Character) PlayAttack() { c.PlayOnce(ActionAttack) }
+
+// PlayHurt starts a flinch.
+func (c *Character) PlayHurt() { c.PlayOnce(ActionHurt) }
+
+// Die stops the character on its death animation, where it stays.
+func (c *Character) Die() {
+	if c.Dead {
+		return
+	}
+
+	c.Dead = true
+	c.playingOnce = false
+	c.OnceAction = ActionDie
+	c.CurrentAction = ActionDie
+	c.CurrentFrame = 0
+	c.FrameTime = 0
+	c.ClearDestination()
+}
+
+// Revive puts a dead character back on its feet.
+func (c *Character) Revive() {
+	c.Dead = false
+	c.playingOnce = false
+	c.OnceAction = ActionIdle
+	c.CurrentAction = ActionIdle
+	c.CurrentFrame = 0
+	c.FrameTime = 0
+}
+
+// OnceAction is the action a one-shot is playing, which the caller needs in
+// order to look up how many frames it has.
+func (c *Character) PlayingAction() int {
+	if c.Dead {
+		return ActionDie
+	}
+	if c.playingOnce {
+		return c.OnceAction
+	}
+
+	return -1
+}
+
+// holdDeath runs the death animation to its last frame and stops there.
+func (c *Character) holdDeath(deltaMs float32, frames int) {
+	c.CurrentAction = ActionDie
+	if frames <= 0 {
+		c.CurrentFrame = 0
+
+		return
+	}
+
+	if c.CurrentFrame >= frames-1 {
+		c.CurrentFrame = frames - 1
+
+		return
+	}
+
+	interval := c.frameIntervalMs(ActionDie)
+	c.FrameTime += deltaMs
+	for c.FrameTime >= interval && c.CurrentFrame < frames-1 {
+		c.FrameTime -= interval
+		c.CurrentFrame++
+	}
+}
+
+// advanceOnce plays a one-shot through once, reporting whether it is still
 // running.
 //
-// A sprite with no pick-up frames ends it immediately rather than freezing
-// mid-motion — not every sheet has the action, and one that lacks it should
-// simply not play it.
-func (c *Character) advancePickup(deltaMs float32, frames int) bool {
+// A sprite with no frames for the action ends it immediately rather than
+// freezing mid-motion — not every sheet has every action, and one that lacks
+// it should simply not play it.
+func (c *Character) advanceOnce(deltaMs float32, frames int) bool {
 	if frames <= 0 {
 		c.playingOnce = false
 
 		return false
 	}
 
-	c.CurrentAction = ActionPickup
+	c.CurrentAction = c.OnceAction
 
-	interval := c.frameIntervalMs(ActionPickup)
+	interval := c.frameIntervalMs(c.OnceAction)
 	c.FrameTime += deltaMs
 	for c.FrameTime >= interval {
 		c.FrameTime -= interval

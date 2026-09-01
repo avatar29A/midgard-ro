@@ -421,15 +421,24 @@ func TestUpdateUnitsUsesFrameCounts(t *testing.T) {
 
 	updateUnits(m, 16, frames)
 
-	// Idle and walk drive the loop; pick-up is asked for so a one-shot has a
-	// length to play to.
-	for _, action := range []int{entity.ActionIdle, entity.ActionWalk, entity.ActionPickup} {
+	// Idle and walk drive the loop and are always asked for.
+	for _, action := range []int{entity.ActionIdle, entity.ActionWalk} {
 		if !asked[action] {
 			t.Errorf("no frame count asked for action %d", action)
 		}
 	}
-	if len(asked) != 3 {
-		t.Errorf("asked for %d actions, want 3", len(asked))
+	if len(asked) != 2 {
+		t.Errorf("asked for %d actions, want 2 while nothing else is playing", len(asked))
+	}
+
+	// A one-shot is asked about only while it runs. Asking for every action
+	// every frame would bake a whole sheet the moment anything walked into
+	// view — a poring's attack alone is twenty-eight frames a direction.
+	e.Body.PlayAttack()
+	updateUnits(m, 16, frames)
+
+	if !asked[entity.ActionAttack] {
+		t.Error("no frame count asked for the attack that is playing")
 	}
 }
 

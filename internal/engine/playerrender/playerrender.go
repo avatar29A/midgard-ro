@@ -171,7 +171,7 @@ func (r *Renderer) LoadCharacter(load charsprite.Loader, spec charsprite.Spec) e
 		return err
 	}
 
-	baked := newSheet(assets)
+	baked := newSheet(assets, spec.Kind)
 	if baked == nil {
 		return fmt.Errorf("sprite sheet for %q produced no frames", assets.BodyPath)
 	}
@@ -263,10 +263,16 @@ func (r *Renderer) UnitFrameInterval(spec charsprite.Spec, action int) float32 {
 		return 0
 	}
 	sh := r.units[spec]
-	if sh == nil || action < 0 || action >= len(sh.intervals) {
+	if sh == nil {
 		return 0
 	}
-	return sh.intervals[action]
+
+	index := sh.actIndex(action)
+	if index < 0 || index >= len(sh.intervals) {
+		return 0
+	}
+
+	return sh.intervals[index]
 }
 
 // UnitQuadSize reports the world size of an appearance's billboard, or zeroes
@@ -308,7 +314,7 @@ func (r *Renderer) unitSheet(load charsprite.Loader, spec charsprite.Spec) *shee
 	var baked *sheet
 	assets, err := charsprite.Load(load, spec)
 	if err == nil {
-		baked = newSheet(assets)
+		baked = newSheet(assets, spec.Kind)
 	}
 	r.units[spec] = baked
 
@@ -470,7 +476,13 @@ func (r *Renderer) selectFrame(char *entity.Character, camPosX, camPosZ float32,
 	visualDir, camSector := character.CalculateVisualDirection(camAngle, char.Direction, char.LastCameraSector)
 	char.LastCameraSector = camSector
 
-	frames := sh.frames[char.CurrentAction*charsprite.Directions+visualDir]
+	// CurrentAction is logical; this sheet is keyed by its family's own index.
+	action := sh.actIndex(char.CurrentAction)
+	if action < 0 {
+		action = sh.actIndex(charsprite.ActionIdle)
+	}
+
+	frames := sh.frames[action*charsprite.Directions+visualDir]
 	if len(frames) == 0 {
 		// Fall back to idle for this facing rather than dropping the draw.
 		frames = sh.frames[visualDir]
@@ -510,6 +522,10 @@ type sheet struct {
 	path      string
 	intervals [charsprite.LoadedActions]float32
 
+	// kind is the sprite family, which decides how a logical action maps onto
+	// an ACT index: a monster's attack is set 2 and a player's is set 5.
+	kind charsprite.Kind
+
 	// dropped is how many animation frames the bake left out, from
 	// charsprite.MaxAnimationFrames.
 	dropped int
@@ -519,7 +535,7 @@ type sheet struct {
 // was nothing to upload.
 //
 // Must be called on the GL thread.
-func newSheet(assets *charsprite.Assets) *sheet {
+func newSheet(assets *charsprite.Assets, kind charsprite.Kind) *sheet {
 	if assets == nil || len(assets.Sheet.Frames) == 0 {
 		return nil
 	}
@@ -531,6 +547,7 @@ func newSheet(assets *charsprite.Assets) *sheet {
 		path:      assets.BodyPath,
 		dropped:   assets.Sheet.Dropped,
 		intervals: assets.Sheet.IntervalMs,
+		kind:      kind,
 	}
 	for key, frames := range assets.Sheet.Frames {
 		textures := make([]uint32, len(frames))
@@ -546,13 +563,32 @@ func newSheet(assets *charsprite.Assets) *sheet {
 	return sh
 }
 
+// actIndex turns a logical action into the ACT index this sheet is keyed by,
+// or -1 when the family has no animation for it.
+func (sh *sheet) actIndex(logical int) int {
+	if sh == nil {
+		return -1
+	}
+
+	return charsprite.ActionIndex(sh.kind, logical)
+}
+
 // frameCount is nil-safe so callers can ask about an appearance that has not
 // been baked, which parks the animation on frame 0 rather than failing.
+//
+// The action is logical: what the game wants played, not where this family
+// keeps it.
 func (sh *sheet) frameCount(action, direction int) int {
 	if sh == nil {
 		return 0
 	}
-	return len(sh.frames[action*charsprite.Directions+direction])
+
+	index := sh.actIndex(action)
+	if index < 0 {
+		return 0
+	}
+
+	return len(sh.frames[index*charsprite.Directions+direction])
 }
 
 // cost reports how many frames the sheet holds and roughly how much GPU memory

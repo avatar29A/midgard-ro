@@ -19,14 +19,19 @@ const (
 
 // Action constants for character animations.
 const (
+	// Logical actions, mirroring charsprite's. These say what to play, not
+	// where a sprite keeps it: a monster's attack is set 2 of its ACT and a
+	// player's is set 5, and charsprite.ActionIndex is what knows that.
 	ActionIdle   = 0
 	ActionWalk   = 1
-	ActionSit    = 2
-	ActionPickup = 3
+	ActionPickup = 2
+	ActionAttack = 3
+	ActionHurt   = 4
+	ActionDie    = 5
 
-	// LoadedActions bounds the per-action tables here, matching the sprite
-	// sheet's own bound so an action index is valid in both.
-	LoadedActions = 4
+	// LoadedActions bounds the per-action tables here, matching charsprite's
+	// count of logical actions so an index is valid in both.
+	LoadedActions = 6
 )
 
 // Character represents a game character with position, movement, and animation state.
@@ -67,6 +72,12 @@ type Character struct {
 	// running. It outranks the movement state until it finishes or the
 	// character starts moving.
 	playingOnce bool
+
+	// OnceAction is which action the one-shot is playing.
+	OnceAction int
+
+	// Dead holds the character on its death animation until it is revived.
+	Dead bool
 
 	// Server-authoritative cell path and progress along the current step.
 	path        [][2]int

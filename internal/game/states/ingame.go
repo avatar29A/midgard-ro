@@ -702,13 +702,16 @@ func (s *InGameState) Update(dt float64) error {
 
 		// Advance the sprite animation. Frame counts come from the loaded
 		// sheet; with no sprites this parks on frame 0 harmlessly.
-		idleFrames, walkFrames, pickupFrames := 0, 0, 0
+		idleFrames, walkFrames, onceFrames := 0, 0, 0
 		if s.playerRender != nil {
 			idleFrames = s.playerRender.FrameCount(entity.ActionIdle, s.player.Direction)
 			walkFrames = s.playerRender.FrameCount(entity.ActionWalk, s.player.Direction)
-			pickupFrames = s.playerRender.FrameCount(entity.ActionPickup, s.player.Direction)
+
+			if playing := s.player.PlayingAction(); playing >= 0 {
+				onceFrames = s.playerRender.FrameCount(playing, s.player.Direction)
+			}
 		}
-		s.player.AdvanceAnimation(deltaMs, idleFrames, walkFrames, pickupFrames)
+		s.player.AdvanceAnimation(deltaMs, idleFrames, walkFrames, onceFrames)
 
 		// Update cell position
 		s.TileX, s.TileY = s.player.CurrentCell()
@@ -1454,9 +1457,26 @@ func (s *InGameState) handleEntityVanish(data []byte) error {
 	if aid == s.selfAID() {
 		// The server reports our own death and teleports through this packet
 		// too. Removing ourselves would delete the character being played, so
-		// only note it.
+		// only note it — and, when it was death, lie down.
 		trace.Emit(trace.Net, "vanish-self", zap.Uint8("reason", reason))
+
+		if reason == packets.VanishDied && s.player != nil {
+			s.player.Die()
+			s.forgetAttack()
+			s.forgetPendingPickup()
+		}
+
 		return nil
+	}
+
+	// A unit that died falls over where it stands, and is taken off the map
+	// when the fade finishes rather than blinking out mid-blow. Every other
+	// reason is a unit leaving our view, which has nothing to watch.
+	if reason == packets.VanishDied {
+		if e := s.entityManager.Get(aid); e != nil && e.Body != nil {
+			e.IsDead = true
+			e.Body.Die()
+		}
 	}
 
 	removeUnit(s.entityManager, aid)
