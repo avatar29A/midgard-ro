@@ -403,7 +403,12 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 	// action. A player's idle indexes the body by head direction too, because
 	// the body's neck anchor moves with the head pose.
 	frameIndices := func(action, available int) [][2]int {
-		if action == actions[ActionIdle] && kind == KindPlayer {
+		// Only the bare idle is a single baked pose. A player stands there on
+		// one frame per head direction, which is why it is not animated — but
+		// the combat stance an armed character stands in is a six-frame loop,
+		// and baking one frame of it left the character apparently frozen
+		// mid-swing.
+		if action == 0 && kind == KindPlayer {
 			return [][2]int{{headDir, headDir}}
 		}
 		if available > MaxAnimationFrames {

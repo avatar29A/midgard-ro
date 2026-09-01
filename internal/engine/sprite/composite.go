@@ -195,13 +195,20 @@ func CompositeWithWeapon(
 		}
 	}
 
-	// Weapon anchor, aligned onto the body's exactly as the head is.
+	// Weapon alignment.
+	//
+	// A weapon that carries anchors is aligned onto the body's exactly as the
+	// head is. One that does not — which is the usual case, and is true of
+	// every dagger and sword checked — is already drawn in the body's own
+	// coordinates and wants no offset at all.
+	//
+	// Offsetting it by the body's anchor regardless is what sent the knife
+	// floating fifty-six pixels above the character's head: that anchor is
+	// the neck, and it is a correction, not a position.
 	var weaponOffsetX, weaponOffsetY int
 	if hasWeapon && len(weaponFrameData.AnchorPoints) > 0 {
 		weaponOffsetX = bodyAnchorX - int(weaponFrameData.AnchorPoints[0].X)
 		weaponOffsetY = bodyAnchorY - int(weaponFrameData.AnchorPoints[0].Y)
-	} else {
-		weaponOffsetX, weaponOffsetY = bodyAnchorX, bodyAnchorY
 	}
 
 	weaponMinX, weaponMinY := 10000, 10000
