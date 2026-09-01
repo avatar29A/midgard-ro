@@ -103,10 +103,6 @@ func (b *UI2DBackend) drawItemsWindow(state InGameUIState, screenW, screenH floa
 	b.drawItemsFooter(state, x, y)
 	b.finishItemDrag(ui2d.Rect{X: x, Y: y, W: itemsW, H: itemsH})
 	b.ctx.EndWindow()
-
-	// After EndWindow, so the icon rides over the window it came from rather
-	// than under it.
-	b.drawDraggedItem()
 }
 
 // drawItemTabs draws the three tabs down the left edge.
@@ -251,12 +247,21 @@ func (b *UI2DBackend) drawItemCell(cell ui2d.Rect, shown []packets.InventoryItem
 
 // drawDraggedItem draws the icon under the pointer while a drag is in
 // progress, so there is something to aim with.
+//
+// Drawn last in the frame rather than from the window it started in: a
+// shortcut dragged off the quick panel has no window behind it, and one
+// dragged out of the inventory should ride over that window rather than under
+// it.
 func (b *UI2DBackend) drawDraggedItem() {
+	itemID := b.itemDrag.itemID
 	if !b.itemDrag.active {
-		return
+		if !b.hotkeyDrag.active {
+			return
+		}
+		itemID = b.hotkeyDrag.itemID
 	}
 
-	info, ok := items.Lookup(b.itemDrag.itemID)
+	info, ok := items.Lookup(itemID)
 	if !ok || info.Resource == "" {
 		return
 	}
@@ -274,9 +279,13 @@ func (b *UI2DBackend) drawDraggedItem() {
 
 // finishItemDrag decides what a released drag meant.
 //
-// Released outside the window, it is a drop; released inside it, it is
-// nothing. That is the whole gesture: there is no rearranging within the grid
-// to confuse it with, because the server decides what slot an item sits in.
+// A quick-panel cell takes it as a shortcut, which is not a drop: nothing
+// leaves the bag and nothing is asked about an amount, because the cell holds
+// the item's identity rather than any of the item. Released anywhere else
+// outside the window it is a drop; released inside the window it is nothing.
+//
+// There is no rearranging within the grid to confuse the last case with,
+// because the server decides which slot an item sits in.
 func (b *UI2DBackend) finishItemDrag(window ui2d.Rect) {
 	if !b.itemDrag.active {
 		return
@@ -287,17 +296,28 @@ func (b *UI2DBackend) finishItemDrag(window ui2d.Rect) {
 		return
 	}
 
-	if !window.Contains(in.MouseX, in.MouseY) {
-		// A stack asks how many; a single item just goes. Asking about a
-		// stack of one would be a dialog with one answer.
-		if b.itemDrag.count > 1 {
-			b.beginDropPrompt(b.itemDrag.index, b.itemDrag.itemID, b.itemDrag.count)
-		} else {
-			b.dropAction = DropAction{Index: b.itemDrag.index, Amount: 1}
-		}
+	dragged := b.itemDrag
+	b.itemDrag = itemDrag{}
+
+	if row, col, ok := b.hotkeyCellAt(in.MouseX, in.MouseY); ok {
+		b.AssignHotkey(row, col, dragged.itemID)
+
+		return
 	}
 
-	b.itemDrag = itemDrag{}
+	if window.Contains(in.MouseX, in.MouseY) {
+		return
+	}
+
+	// A stack asks how many; a single item just goes. Asking about a stack of
+	// one would be a dialog with one answer.
+	if dragged.count > 1 {
+		b.beginDropPrompt(dragged.index, dragged.itemID, dragged.count)
+
+		return
+	}
+
+	b.dropAction = DropAction{Index: dragged.index, Amount: 1}
 }
 
 // itemDrag is an inventory drag in progress.
