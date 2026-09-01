@@ -56,26 +56,32 @@ const (
 
 	// The hair style grid on the right. Cells and thumbnails are both 36x37.
 	//
-	// The label sits a clear 14px above its content. At the first spacing the
-	// gap was 3px and the heading read as part of the panel rather than as a
-	// heading for it.
+	// The label sits a clear 20px above its content; it was 3px, which read
+	// as part of the panel rather than as a heading for it.
+	//
+	// The room comes from the rows, not from moving anything down. The swatch
+	// box below is painted into the frame at y 299..358 and cannot move, so
+	// six rows have to fit above it: at pitch 37 the grid ends at 291 and
+	// clears the box by 8px. Measured off bg_makebg.bmp, not guessed.
 	charCreateHairCellW  = float32(36)
 	charCreateHairCellH  = float32(37)
 	charCreateHairCols   = 4
 	charCreateHairPitchX = float32(40)
-	charCreateHairPitchY = float32(39)
+	charCreateHairPitchY = float32(37)
 	charCreateHairX      = float32(606)
 	charCreateHairY      = float32(69)
-	charCreateHairLabelY = float32(44)
+	charCreateHairLabelY = float32(38)
 
-	// The hair color swatches, 16x16, five to a row under the grid.
+	// The hair color swatches, 16x16, five to a row inside the box the frame
+	// paints at y 299..358. These sit where they do because that box is fixed
+	// — moving them down pushes them out through its bottom edge.
 	charCreateColW      = float32(16)
 	charCreateColH      = float32(16)
 	charCreateColCols   = 5
 	charCreateColPitch  = float32(20)
 	charCreateColX      = float32(615)
-	charCreateColY      = float32(330)
-	charCreateColLabelY = float32(306)
+	charCreateColY      = float32(310)
+	charCreateColLabelY = float32(296)
 
 	// HairColorCount is how many palettes exist per style and sex.
 	charCreateColorCount = 9
