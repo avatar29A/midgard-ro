@@ -121,7 +121,7 @@ func TestBuildSheetPadsFramesToUniformSize(t *testing.T) {
 		})
 	}
 
-	sheet := BuildSheet(bodySPR, act, nil, nil, HeadStraight, KindPlayer)
+	sheet := BuildSheet(bodySPR, act, nil, nil, nil, nil, HeadStraight, KindPlayer)
 	if sheet == nil {
 		t.Fatal("BuildSheet returned nil")
 	}
@@ -151,7 +151,7 @@ func TestBuildSheetCoversAllDirections(t *testing.T) {
 		})
 	}
 
-	sheet := BuildSheet(bodySPR, act, nil, nil, HeadStraight, KindPlayer)
+	sheet := BuildSheet(bodySPR, act, nil, nil, nil, nil, HeadStraight, KindPlayer)
 	if sheet == nil {
 		t.Fatal("BuildSheet returned nil")
 	}
@@ -169,7 +169,7 @@ func TestBuildSheetCoversAllDirections(t *testing.T) {
 }
 
 func TestBuildSheetNilBody(t *testing.T) {
-	if got := BuildSheet(nil, nil, nil, nil, HeadStraight, KindPlayer); got != nil {
+	if got := BuildSheet(nil, nil, nil, nil, nil, nil, HeadStraight, KindPlayer); got != nil {
 		t.Error("BuildSheet with no body should return nil")
 	}
 }
@@ -295,7 +295,7 @@ func TestIdleIsAnimatedForNonPlayers(t *testing.T) {
 	}
 	bodySPR := &formats.SPR{Images: []formats.SPRImage{makeImage(8, 8)}}
 
-	player := BuildSheet(bodySPR, act, nil, nil, HeadStraight, KindPlayer)
+	player := BuildSheet(bodySPR, act, nil, nil, nil, nil, HeadStraight, KindPlayer)
 	if player == nil {
 		t.Fatal("player sheet is nil")
 	}
@@ -305,7 +305,7 @@ func TestIdleIsAnimatedForNonPlayers(t *testing.T) {
 	}
 
 	for _, kind := range []Kind{KindMonster, KindNPC} {
-		sheet := BuildSheet(bodySPR, act, nil, nil, HeadStraight, kind)
+		sheet := BuildSheet(bodySPR, act, nil, nil, nil, nil, HeadStraight, kind)
 		if sheet == nil {
 			t.Fatalf("kind %d sheet is nil", kind)
 		}
@@ -337,7 +337,7 @@ func TestAnimationIsCappedAndReported(t *testing.T) {
 	}
 	bodySPR := &formats.SPR{Images: []formats.SPRImage{makeImage(8, 8)}}
 
-	sheet := BuildSheet(bodySPR, act, nil, nil, HeadStraight, KindNPC)
+	sheet := BuildSheet(bodySPR, act, nil, nil, nil, nil, HeadStraight, KindNPC)
 	if sheet == nil {
 		t.Fatal("BuildSheet returned nil")
 	}
@@ -378,7 +378,7 @@ func TestPlayerHeadPosesAreNotCountedAsDropped(t *testing.T) {
 	}
 	bodySPR := &formats.SPR{Images: []formats.SPRImage{makeImage(8, 8)}}
 
-	sheet := BuildSheet(bodySPR, act, nil, nil, HeadStraight, KindPlayer)
+	sheet := BuildSheet(bodySPR, act, nil, nil, nil, nil, HeadStraight, KindPlayer)
 	if sheet == nil {
 		t.Fatal("BuildSheet returned nil")
 	}

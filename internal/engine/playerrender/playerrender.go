@@ -198,6 +198,16 @@ func (r *Renderer) HasSprites() bool {
 }
 
 // SpritePath returns the archive path the loaded body sprite came from.
+// WeaponPath is the archive path the player's weapon loaded from, empty when
+// bare-handed or when the archive had no art for what is held.
+func (r *Renderer) WeaponPath() string {
+	if r == nil || r.player == nil {
+		return ""
+	}
+
+	return r.player.weaponPath
+}
+
 func (r *Renderer) SpritePath() string {
 	if r == nil || r.player == nil {
 		return ""
@@ -516,15 +526,19 @@ func uploadRGBA(pixels []byte, w, h int) uint32 {
 // already on the GPU. Several units can share one.
 type sheet struct {
 	// frames is keyed by action*Directions+direction, as charsprite bakes it.
-	frames    map[int][]uint32
-	width     int
-	height    int
-	path      string
-	intervals [charsprite.LoadedActions]float32
+	frames     map[int][]uint32
+	width      int
+	height     int
+	path       string
+	weaponPath string
+	intervals  [charsprite.LoadedActions]float32
 
-	// kind is the sprite family, which decides how a logical action maps onto
-	// an ACT index: a monster's attack is set 2 and a player's is set 5.
-	kind charsprite.Kind
+	// actions is which ACT index each logical action resolves to for this
+	// appearance. Per appearance rather than per family because a weapon
+	// moves two of them — a dagger swings from set 10 and a sword from 11,
+	// and an armed character stands in the combat pose rather than the bare
+	// idle, which is the only stance a weapon is drawn in.
+	actions charsprite.ActionMap
 
 	// dropped is how many animation frames the bake left out, from
 	// charsprite.MaxAnimationFrames.
@@ -541,13 +555,14 @@ func newSheet(assets *charsprite.Assets, kind charsprite.Kind) *sheet {
 	}
 
 	sh := &sheet{
-		frames:    make(map[int][]uint32, len(assets.Sheet.Frames)),
-		width:     assets.Sheet.Width,
-		height:    assets.Sheet.Height,
-		path:      assets.BodyPath,
-		dropped:   assets.Sheet.Dropped,
-		intervals: assets.Sheet.IntervalMs,
-		kind:      kind,
+		frames:     make(map[int][]uint32, len(assets.Sheet.Frames)),
+		width:      assets.Sheet.Width,
+		height:     assets.Sheet.Height,
+		path:       assets.BodyPath,
+		weaponPath: assets.WeaponPath,
+		dropped:    assets.Sheet.Dropped,
+		intervals:  assets.Sheet.IntervalMs,
+		actions:    assets.Sheet.Actions,
 	}
 	for key, frames := range assets.Sheet.Frames {
 		textures := make([]uint32, len(frames))
@@ -566,11 +581,11 @@ func newSheet(assets *charsprite.Assets, kind charsprite.Kind) *sheet {
 // actIndex turns a logical action into the ACT index this sheet is keyed by,
 // or -1 when the family has no animation for it.
 func (sh *sheet) actIndex(logical int) int {
-	if sh == nil {
+	if sh == nil || logical < 0 || logical >= charsprite.LogicalActions {
 		return -1
 	}
 
-	return charsprite.ActionIndex(sh.kind, logical)
+	return sh.actions[logical]
 }
 
 // frameCount is nil-safe so callers can ask about an appearance that has not

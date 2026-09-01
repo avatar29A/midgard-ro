@@ -71,6 +71,7 @@ func (s *Session) SpriteSpec() charsprite.Spec {
 		Job:       int(s.Char.Class),
 		Female:    s.Char.Sex == 0,
 		HairStyle: int(s.Char.HairStyle),
+		Weapon:    int(s.Char.Weapon),
 	}
 }
 
