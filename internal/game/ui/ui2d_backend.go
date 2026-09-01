@@ -153,6 +153,10 @@ type UI2DBackend struct {
 	loginUsername string
 	loginPassword string
 	charSelectIdx int
+
+	// charSelectPage is which run of three slots the screen is showing.
+	// Slots on screen are charSelectPage*charSelSlotCount + position.
+	charSelectPage int
 }
 
 // NewUI2DBackend creates a new ui2d UI backend.
@@ -414,6 +418,9 @@ func (b *UI2DBackend) DrawSceneTexture(x, y, w, h float32, textureID uint32) {
 const (
 	uiTexBasePath    = `data\texture\유저인터페이스\`
 	loginTexBasePath = uiTexBasePath + `login_interface\`
+	// makeCharTexBasePath holds the creation screen's art. Character select
+	// borrows its paging arrows from here — see charselect_native.go.
+	makeCharTexBasePath = uiTexBasePath + `make_character\`
 
 	// The login screen backdrop. Verified present in data.grf — the previous
 	// login_bg.bmp / login_logo.bmp were not in the archive at all, which is

@@ -195,6 +195,12 @@ func (s *CharSelectState) RequestCreate(slot int) {
 	logger.Info("character creation requested", zap.Int("slot", slot))
 }
 
+// CreatableSlotCount is how many slots this account may use, for the screen
+// that pages over them.
+func (s *CharSelectState) CreatableSlotCount() int {
+	return s.creatableSlots()
+}
+
 // PendingCreateSlot returns the slot creation was asked for, or -1.
 func (s *CharSelectState) PendingCreateSlot() int {
 	return s.CreateSlot
