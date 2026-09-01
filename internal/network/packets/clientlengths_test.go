@@ -212,6 +212,7 @@ func TestEncodersReachTheRightHandler(t *testing.T) {
 		{"CZ_REQ_WEAR_EQUIP", CZ_REQ_WEAR_EQUIP, "clif_parse_EquipItem"},
 		{"CZ_ITEM_THROW", CZ_ITEM_THROW, "clif_parse_DropItem"},
 		{"CZ_ITEM_PICKUP", CZ_ITEM_PICKUP, "clif_parse_TakeItem"},
+		{"CZ_REQUEST_ACT", CZ_REQUEST_ACT, "clif_parse_ActionRequest"},
 		{"CZ_REQUEST_CHAT", CZ_REQUEST_CHAT, "clif_parse_GlobalMessage"},
 		{"CZ_WHISPER", CZ_WHISPER, "clif_parse_WisMessage"},
 		{"CZ_CONTACTNPC", CZ_CONTACTNPC, "clif_parse_NpcClicked"},

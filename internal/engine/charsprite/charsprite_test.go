@@ -121,7 +121,7 @@ func TestBuildSheetPadsFramesToUniformSize(t *testing.T) {
 		})
 	}
 
-	sheet := BuildSheet(bodySPR, act, nil, nil, HeadStraight, KindPlayer)
+	sheet := BuildSheet(bodySPR, act, nil, nil, nil, nil, HeadStraight, KindPlayer)
 	if sheet == nil {
 		t.Fatal("BuildSheet returned nil")
 	}
@@ -151,7 +151,7 @@ func TestBuildSheetCoversAllDirections(t *testing.T) {
 		})
 	}
 
-	sheet := BuildSheet(bodySPR, act, nil, nil, HeadStraight, KindPlayer)
+	sheet := BuildSheet(bodySPR, act, nil, nil, nil, nil, HeadStraight, KindPlayer)
 	if sheet == nil {
 		t.Fatal("BuildSheet returned nil")
 	}
@@ -169,7 +169,7 @@ func TestBuildSheetCoversAllDirections(t *testing.T) {
 }
 
 func TestBuildSheetNilBody(t *testing.T) {
-	if got := BuildSheet(nil, nil, nil, nil, HeadStraight, KindPlayer); got != nil {
+	if got := BuildSheet(nil, nil, nil, nil, nil, nil, HeadStraight, KindPlayer); got != nil {
 		t.Error("BuildSheet with no body should return nil")
 	}
 }
@@ -295,7 +295,7 @@ func TestIdleIsAnimatedForNonPlayers(t *testing.T) {
 	}
 	bodySPR := &formats.SPR{Images: []formats.SPRImage{makeImage(8, 8)}}
 
-	player := BuildSheet(bodySPR, act, nil, nil, HeadStraight, KindPlayer)
+	player := BuildSheet(bodySPR, act, nil, nil, nil, nil, HeadStraight, KindPlayer)
 	if player == nil {
 		t.Fatal("player sheet is nil")
 	}
@@ -305,7 +305,7 @@ func TestIdleIsAnimatedForNonPlayers(t *testing.T) {
 	}
 
 	for _, kind := range []Kind{KindMonster, KindNPC} {
-		sheet := BuildSheet(bodySPR, act, nil, nil, HeadStraight, kind)
+		sheet := BuildSheet(bodySPR, act, nil, nil, nil, nil, HeadStraight, kind)
 		if sheet == nil {
 			t.Fatalf("kind %d sheet is nil", kind)
 		}
@@ -337,7 +337,7 @@ func TestAnimationIsCappedAndReported(t *testing.T) {
 	}
 	bodySPR := &formats.SPR{Images: []formats.SPRImage{makeImage(8, 8)}}
 
-	sheet := BuildSheet(bodySPR, act, nil, nil, HeadStraight, KindNPC)
+	sheet := BuildSheet(bodySPR, act, nil, nil, nil, nil, HeadStraight, KindNPC)
 	if sheet == nil {
 		t.Fatal("BuildSheet returned nil")
 	}
@@ -350,7 +350,7 @@ func TestAnimationIsCappedAndReported(t *testing.T) {
 	// — contribute nothing, because nothing of theirs was dropped.
 	baked := 0
 	for action := 0; action < LoadedActions; action++ {
-		if bakedAction(action) {
+		if bakedAction(KindNPC, action) {
 			baked++
 		}
 	}
@@ -378,11 +378,48 @@ func TestPlayerHeadPosesAreNotCountedAsDropped(t *testing.T) {
 	}
 	bodySPR := &formats.SPR{Images: []formats.SPRImage{makeImage(8, 8)}}
 
-	sheet := BuildSheet(bodySPR, act, nil, nil, HeadStraight, KindPlayer)
+	sheet := BuildSheet(bodySPR, act, nil, nil, nil, nil, HeadStraight, KindPlayer)
 	if sheet == nil {
 		t.Fatal("BuildSheet returned nil")
 	}
 	if sheet.Dropped != 0 {
 		t.Errorf("Dropped = %d, want 0; the unbaked idle entries are head poses", sheet.Dropped)
+	}
+}
+
+// TestLoadedActionsReachesTheWeaponAttacks: a weapon chooses which set it
+// swings from, and a sword's is 11. Bounding the bake below that left the
+// attack with no frames at all, which showed up as a swing that ended the
+// instant it began.
+func TestLoadedActionsReachesTheWeaponAttacks(t *testing.T) {
+	for _, set := range []int{actStandby, actUnarmedAttack, actWeaponAttacks0, actWeaponAttacks1, actWeaponAttacks2} {
+		if set >= LoadedActions {
+			t.Errorf("set %d is outside the bake range of %d, so nothing would be baked for it",
+				set, LoadedActions)
+		}
+	}
+}
+
+// TestActionMapBakesOnlyWhatItUses: the bake range reaches thirteen sets, but
+// an appearance uses a handful. Baking the rest would be eight directions of
+// frames nobody looks at — and a poring's attack alone is twenty-eight frames
+// a direction.
+func TestActionMapBakesOnlyWhatItUses(t *testing.T) {
+	m := DefaultActionMap(KindMonster)
+
+	baked := 0
+	for action := 0; action < LoadedActions; action++ {
+		if m.bakes(action) {
+			baked++
+		}
+	}
+
+	// Idle, walk, attack, hurt, die — and nothing else.
+	if baked != 5 {
+		t.Errorf("a monster bakes %d sets, want the 5 it maps something onto", baked)
+	}
+
+	if m.bakes(actWeaponAttacks0) {
+		t.Error("a monster bakes a player's weapon attack set")
 	}
 }

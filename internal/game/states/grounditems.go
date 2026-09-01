@@ -426,14 +426,47 @@ func (s *InGameState) SetHoverEntity(e *entity.Entity) {
 	s.hoverEntity = e
 }
 
-// HoverItemLabel is the name to show for a ground item under the pointer.
+// WorldLabels are the names to draw over the world this frame: whatever the
+// pointer is on, and the target being fought.
 //
-// Only ground items get one. Units carry their names above their heads all the
-// time, which is a different thing drawn from a different place; an item is
-// unlabelled until you point at it, the way the original does it.
-func (s *InGameState) HoverItemLabel(viewportW, viewportH float32) (HoverLabel, bool) {
-	e := s.hoverEntity
-	if e == nil || e.Type != entity.TypeItem || e.Body == nil || e.Name == "" {
+// The target keeps its name whether or not the pointer is still on it, which
+// is what makes it read as chosen rather than merely pointed at. When the two
+// are the same thing only one label is returned, or it would be drawn twice
+// into the same pixels and come out heavier than the rest.
+func (s *InGameState) WorldLabels(viewportW, viewportH float32) []HoverLabel {
+	var labels []HoverLabel
+
+	hovered := s.hoverEntity
+	if label, ok := s.labelFor(hovered, viewportW, viewportH); ok {
+		labels = append(labels, label)
+	}
+
+	if s.targetID == 0 || (hovered != nil && hovered.ID == s.targetID) {
+		return labels
+	}
+
+	if s.entityManager != nil {
+		if label, ok := s.labelFor(s.entityManager.Get(s.targetID), viewportW, viewportH); ok {
+			labels = append(labels, label)
+		}
+	}
+
+	return labels
+}
+
+// labelFor is the name to show for one unit.
+//
+// Items and monsters get one: an item is unlabelled until you point at it, and
+// a monster's name appears with the pointer on it, both the way the original
+// does. NPCs are left out because theirs sit above their heads permanently,
+// which is a different thing drawn from a different place — and not yet drawn
+// at all.
+func (s *InGameState) labelFor(e *entity.Entity, viewportW, viewportH float32) (HoverLabel, bool) {
+	if e == nil || e.Body == nil || e.Name == "" {
+		return HoverLabel{}, false
+	}
+
+	if e.Type != entity.TypeItem && e.Type != entity.TypeMonster {
 		return HoverLabel{}, false
 	}
 
@@ -444,7 +477,7 @@ func (s *InGameState) HoverItemLabel(viewportW, viewportH float32) (HoverLabel, 
 	}
 
 	text := e.Name
-	if e.Amount > 1 {
+	if e.Type == entity.TypeItem && e.Amount > 1 {
 		text = fmt.Sprintf("%s %d ea.", e.Name, e.Amount)
 	}
 

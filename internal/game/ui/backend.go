@@ -167,9 +167,17 @@ type InGameUIState struct {
 	// into viewport pixels.
 	EntityBars []states.EntityBar
 
-	// ItemLabel is the name of the ground item under the pointer, already
-	// projected, or nil when the pointer is not on one.
-	ItemLabel *states.HoverLabel
+	// WorldLabels are the names drawn over the world — what the pointer is
+	// on, and the target being fought — already projected.
+	WorldLabels []states.HoverLabel
+
+	// TargetMarker is the mark over the unit being fought, already projected,
+	// or nil when nothing is being fought.
+	TargetMarker *states.TargetMarker
+
+	// DamageNumbers are the figures floating up from recent blows, already
+	// projected.
+	DamageNumbers []states.DamageNumber
 
 	// Player position
 	PlayerX, PlayerY, PlayerZ float32

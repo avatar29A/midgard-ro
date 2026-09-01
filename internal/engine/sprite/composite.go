@@ -41,6 +41,27 @@ func CompositeSprites(
 	headSPR *formats.SPR, headACT *formats.ACT,
 	action, direction, bodyFrame, headFrame int,
 ) CompositeResult {
+	return CompositeWithWeapon(bodySPR, bodyACT, headSPR, headACT, nil, nil,
+		action, direction, bodyFrame, headFrame)
+}
+
+// CompositeWithWeapon is CompositeSprites with a weapon held in the character's
+// hand.
+//
+// The weapon is a third sprite aligned the same way the head is — its own
+// anchor onto the body's — and it runs on the body's frame rather than a pose
+// of its own, because a swing is one motion the two halves share. Passing a
+// nil weapon is the bare-handed case and costs nothing.
+//
+// Drawn last, over the body and the head. RO's weapon art is drawn per
+// facing, so the sprite for a character turned away already looks like a
+// weapon seen from behind; there is nothing to reorder per direction.
+func CompositeWithWeapon(
+	bodySPR *formats.SPR, bodyACT *formats.ACT,
+	headSPR *formats.SPR, headACT *formats.ACT,
+	weaponSPR *formats.SPR, weaponACT *formats.ACT,
+	action, direction, bodyFrame, headFrame int,
+) CompositeResult {
 	if bodySPR == nil || bodyACT == nil || len(bodyACT.Actions) == 0 {
 		return CompositeResult{}
 	}
@@ -71,6 +92,23 @@ func CompositeSprites(
 			hasHead = false
 		} else {
 			headFrameData = &headAction.Frames[headFrame%len(headAction.Frames)]
+		}
+	}
+
+	// The weapon runs on the body's own frame: a swing is one motion shared
+	// between the two, so it has no pose of its own to choose.
+	hasWeapon := weaponSPR != nil && weaponACT != nil && len(weaponACT.Actions) > 0
+	var weaponFrameData *formats.Frame
+	if hasWeapon {
+		weaponActionIdx := action*8 + direction
+		if weaponActionIdx >= len(weaponACT.Actions) {
+			weaponActionIdx = direction % len(weaponACT.Actions)
+		}
+		weaponAction := &weaponACT.Actions[weaponActionIdx]
+		if len(weaponAction.Frames) == 0 {
+			hasWeapon = false
+		} else {
+			weaponFrameData = &weaponAction.Frames[bodyFrame%len(weaponAction.Frames)]
 		}
 	}
 
@@ -157,6 +195,48 @@ func CompositeSprites(
 		}
 	}
 
+	// Weapon alignment.
+	//
+	// A weapon that carries anchors is aligned onto the body's exactly as the
+	// head is. One that does not — which is the usual case, and is true of
+	// every dagger and sword checked — is already drawn in the body's own
+	// coordinates and wants no offset at all.
+	//
+	// Offsetting it by the body's anchor regardless is what sent the knife
+	// floating fifty-six pixels above the character's head: that anchor is
+	// the neck, and it is a correction, not a position.
+	var weaponOffsetX, weaponOffsetY int
+	if hasWeapon && len(weaponFrameData.AnchorPoints) > 0 {
+		weaponOffsetX = bodyAnchorX - int(weaponFrameData.AnchorPoints[0].X)
+		weaponOffsetY = bodyAnchorY - int(weaponFrameData.AnchorPoints[0].Y)
+	}
+
+	weaponMinX, weaponMinY := 10000, 10000
+	weaponMaxX, weaponMaxY := -10000, -10000
+
+	for _, layer := range attachmentLayers(hasWeapon, weaponFrameData) {
+		if layer.SpriteID < 0 || int(layer.SpriteID) >= len(weaponSPR.Images) {
+			continue
+		}
+		img := &weaponSPR.Images[layer.SpriteID]
+		x, y := int(layer.X)+weaponOffsetX, int(layer.Y)+weaponOffsetY
+		w, h := int(img.Width), int(img.Height)
+
+		left, top := x-w/2, y-h/2
+		if left < weaponMinX {
+			weaponMinX = left
+		}
+		if top < weaponMinY {
+			weaponMinY = top
+		}
+		if left+w > weaponMaxX {
+			weaponMaxX = left + w
+		}
+		if top+h > weaponMaxY {
+			weaponMaxY = top + h
+		}
+	}
+
 	// Combine bounds
 	minX := bodyMinX
 	if headMinX < minX {
@@ -173,6 +253,23 @@ func CompositeSprites(
 	maxY := bodyMaxY
 	if headMaxY > maxY {
 		maxY = headMaxY
+	}
+
+	// A weapon reaches well outside the body — a spear more than doubles the
+	// width — so the canvas has to grow to hold it or the point is clipped.
+	if hasWeapon && weaponMinX < weaponMaxX {
+		if weaponMinX < minX {
+			minX = weaponMinX
+		}
+		if weaponMinY < minY {
+			minY = weaponMinY
+		}
+		if weaponMaxX > maxX {
+			maxX = weaponMaxX
+		}
+		if weaponMaxY > maxY {
+			maxY = weaponMaxY
+		}
 	}
 
 	// Handle empty sprites
@@ -266,6 +363,13 @@ func CompositeSprites(
 		}
 	}
 
+	// The weapon last, in front of both.
+	for _, layer := range attachmentLayers(hasWeapon, weaponFrameData) {
+		if layer.SpriteID >= 0 {
+			blitLayer(weaponSPR, &layer, weaponOffsetX, weaponOffsetY)
+		}
+	}
+
 	return CompositeResult{
 		Pixels:  pixels,
 		Width:   width,
@@ -273,6 +377,16 @@ func CompositeSprites(
 		OffsetX: minX,
 		OffsetY: minY,
 	}
+}
+
+// attachmentLayers returns a frame's layers, or nothing when the sprite it
+// belongs to is absent.
+func attachmentLayers(has bool, frame *formats.Frame) []formats.Layer {
+	if !has || frame == nil {
+		return nil
+	}
+
+	return frame.Layers
 }
 
 // headLayers returns the head frame's layers, or nothing when the sprite has
