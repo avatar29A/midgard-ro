@@ -173,10 +173,7 @@ func (b *UI2DBackend) drawItemTabs(x, bodyY float32) {
 			r.DrawRect(box.X+box.W-1, box.Y, 1, box.H, itemsTabBorder)
 		}
 
-		// Stacked down the tab, a letter to a line: the strip is 18px wide,
-		// the labels do not fit across it, and cutting them to one letter
-		// gave two tabs both reading "e".
-		b.drawStackedLabel(box, tab.label)
+		b.drawTabLabel(box, tab.label)
 
 		if b.ctx.InvisibleButtonAt("hud_item_tab_"+tab.label, box.X, box.Y, box.W, box.H) {
 			b.itemTab = i
@@ -185,21 +182,24 @@ func (b *UI2DBackend) drawItemTabs(x, bodyY float32) {
 	}
 }
 
-// drawStackedLabel writes a label down a narrow tab, one letter to a line.
-func (b *UI2DBackend) drawStackedLabel(box ui2d.Rect, label string) {
+// drawTabLabel writes a label down a narrow tab, turned on its side.
+//
+// Turned rather than stacked a letter to a line, which is what this did
+// before. The archive's own tab strips carry their words a quarter turn round
+// — tab_cmd_03 reads WIN, EXE and ON/OFF that way up the side of the window —
+// and a column of upright letters reads as letters rather than as a word.
+//
+// The measured width and height swap round once the line is turned, so
+// centering it in the tab is the ordinary arithmetic with the two exchanged.
+func (b *UI2DBackend) drawTabLabel(box ui2d.Rect, label string) {
 	r := b.ctx.Renderer()
 
-	letters := []rune(label)
+	width, height := r.MeasureText(label, itemsTabScale)
 
-	_, lineH := r.MeasureText(label, itemsTabScale)
-	top := box.Y + (box.H-lineH*float32(len(letters)))/2
-
-	for i, letter := range letters {
-		text := string(letter)
-
-		capW, _ := r.MeasureText(text, itemsTabScale)
-		r.DrawText(box.X+(box.W-capW)/2, top+float32(i)*lineH, text, itemsTabScale, ui2d.ColorText)
-	}
+	r.DrawTextVertical(
+		box.X+(box.W-height)/2,
+		box.Y+(box.H+width)/2,
+		label, itemsTabScale, ui2d.ColorText)
 }
 
 // drawItemGrid draws the cells and whatever is in them.
