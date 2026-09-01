@@ -301,6 +301,16 @@ type Sheet struct {
 	// appearance, after the weapon has had its say.
 	Actions ActionMap
 
+	// OriginX and OriginY are where the sprite's own origin sits inside the
+	// frame, in pixels from its top left.
+	//
+	// Every pose is placed by that origin, so it is the one point every frame
+	// shares — and it is what a billboard has to stand on. Standing the quad
+	// on the frame's bottom edge instead lifts the character by however much
+	// empty room the tallest pose in the sheet needed: a knife or a hat grows
+	// the frame, and the character rises off the ground with it.
+	OriginX, OriginY int
+
 	// Where the standing frame's own art sits inside the padded frame.
 	//
 	// Every frame is padded onto a canvas as big as the widest and tallest
@@ -516,8 +526,16 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 		}
 	}
 
-	// First pass: the largest frame decides the sheet size.
-	maxW, maxH := 0, 0
+	// First pass: the frame is the box every pose needs, measured from the
+	// sprite's own origin rather than from each pose's own edges.
+	//
+	// From the origin because that is the one point every pose shares. Sized
+	// and placed by their edges instead, a pose that happens to be a few
+	// pixels shorter than its neighbor sits a few pixels higher in the frame
+	// — and since the frame is what the billboard stands on, the character
+	// hops as it turns. The idle alone varies by six pixels between facings.
+	left, top := 1<<30, 1<<30
+	right, bottom := -(1 << 30), -(1 << 30)
 	for action := 0; action < LoadedActions; action++ {
 		if !actions.bakes(action) {
 			continue
@@ -530,16 +548,27 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 			for _, fp := range frameIndices(action, len(bodyACT.Actions[idx].Frames)) {
 				r := sprite.CompositeWithGear(bodySPR, bodyACT, headSPR, headACT,
 					weaponSPR, weaponACT, gear, action, dir, fp[0], fp[1])
-				if r.Width > maxW {
-					maxW = r.Width
+				if r.Width == 0 || r.Height == 0 {
+					continue
 				}
-				if r.Height > maxH {
-					maxH = r.Height
+
+				if r.OffsetX < left {
+					left = r.OffsetX
+				}
+				if r.OffsetY < top {
+					top = r.OffsetY
+				}
+				if r.OffsetX+r.Width > right {
+					right = r.OffsetX + r.Width
+				}
+				if r.OffsetY+r.Height > bottom {
+					bottom = r.OffsetY + r.Height
 				}
 			}
 		}
 	}
-	if maxW == 0 || maxH == 0 {
+	maxW, maxH := right-left, bottom-top
+	if maxW <= 0 || maxH <= 0 {
 		return nil
 	}
 
@@ -548,6 +577,8 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 		Actions: actions,
 		Width:   maxW,
 		Height:  maxH,
+		OriginX: -left,
+		OriginY: -top,
 		Frames:  make(map[int][]Frame, LoadedActions*Directions),
 		Dropped: dropped,
 	}
@@ -585,13 +616,13 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 					frames[i] = Frame{Pixels: make([]byte, maxW*maxH*4)}
 					continue
 				}
-				frames[i] = Frame{Pixels: pad(r, maxW, maxH)}
+				frames[i] = Frame{Pixels: place(r, left, top, maxW, maxH)}
 
 				// The standing frame facing the viewer is the one anything
 				// drawing the character flat will ask for.
 				if action == actions[ActionIdle] && dir == 0 && i == 0 {
-					sheet.PortraitX = (maxW - r.Width) / 2
-					sheet.PortraitY = maxH - r.Height
+					sheet.PortraitX = r.OffsetX - left
+					sheet.PortraitY = r.OffsetY - top
 					sheet.PortraitW = r.Width
 					sheet.PortraitH = r.Height
 				}
@@ -606,12 +637,16 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 	return sheet
 }
 
-// pad centers a composite horizontally on a maxW x maxH canvas and aligns it
-// to the bottom edge.
-func pad(r sprite.CompositeResult, maxW, maxH int) []byte {
+// place copies a composite onto the sheet's common canvas, at the position its
+// own origin puts it.
+//
+// left and top are where the canvas begins in the sprite's coordinates, so
+// every pose lands with its origin on the same pixel — which is what stops a
+// character shifting as it turns from one facing to the next.
+func place(r sprite.CompositeResult, left, top, maxW, maxH int) []byte {
 	out := make([]byte, maxW*maxH*4)
-	offsetX := (maxW - r.Width) / 2
-	offsetY := maxH - r.Height
+	offsetX := r.OffsetX - left
+	offsetY := r.OffsetY - top
 
 	for py := 0; py < r.Height; py++ {
 		dstY := offsetY + py
