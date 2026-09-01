@@ -142,7 +142,7 @@ var clientPacketLengths = map[uint16]int{
 	0x01F7: 14,  // clif_parse_Adopt_reply
 	0x01F9: 6,   // clif_parse_Adopt_request
 	0x01FD: 25,  // clif_parse_RepairItem
-	0x0202: 5,   // clif_parse_ChangeDir
+	0x0202: 26,  // clif_parse_FriendsListAdd
 	0x0203: 10,  // clif_parse_FriendsListRemove
 	0x0208: 14,  // clif_parse_FriendsListReply
 	0x020F: 10,  // clif_parse_PVPInfo
@@ -150,12 +150,12 @@ var clientPacketLengths = map[uint16]int{
 	0x0213: 26,  // clif_parse_Check
 	0x021D: 6,   // clif_parse_LessEffect
 	0x0222: 6,   // clif_parse_WeaponRefine
-	0x022D: 19,  // clif_parse_WantToConnection
+	0x022D: 5,   // clif_parse_HomMenu
 	0x0231: 26,  // clif_parse_ChangeHomunculusName
 	0x0232: 9,   // clif_parse_HomMoveTo
 	0x0233: 11,  // clif_parse_HomAttack
 	0x0234: 6,   // clif_parse_HomMoveToMaster
-	0x023B: 26,  // clif_parse_FriendsListAdd
+	0x023B: 36,  // clif_parse_StoragePassword
 	0x023F: 2,   // clif_parse_Mail_refreshinbox
 	0x0241: 6,   // clif_parse_Mail_read
 	0x0243: 6,   // clif_parse_Mail_delete
@@ -180,7 +180,7 @@ var clientPacketLengths = map[uint16]int{
 	0x029F: 3,   // clif_parse_mercenary_action
 	0x02B6: 7,   // clif_parse_questStateAck
 	0x02BA: 11,  // clif_parse_Hotkey
-	0x02C4: 6,   // clif_parse_DropItem
+	0x02C4: 26,  // clif_parse_PartyInvite2
 	0x02C7: 7,   // clif_parse_ReplyPartyInvite2
 	0x02C8: 3,   // clif_parse_PartyTick
 	0x02CF: 6,   // clif_parse_MemorialDungeonCommand
@@ -188,42 +188,42 @@ var clientPacketLengths = map[uint16]int{
 	0x02D8: 10,  // clif_parse_configuration
 	0x02DB: -1,  // clif_parse_BattleChat
 	0x02F1: 2,   // clif_parse_progressbar
-	0x035F: 6,   // clif_parse_ReqClickBuyingStore
-	0x0360: 6,   // clif_parse_ReqClickBuyingStore
-	0x0361: 5,   // clif_parse_HomMenu
-	0x0362: 6,   // clif_parse_DropItem
-	0x0363: 6,   // clif_parse_TickSend
-	0x0364: 6,   // clif_parse_TickSend
-	0x0365: 14,  // clif_parse_SearchStoreInfoListItemClick
-	0x0366: 90,  // clif_parse_UseSkillToPosMoreInfo
-	0x0367: 90,  // clif_parse_UseSkillToPosMoreInfo
-	0x0368: 6,   // clif_parse_SolveCharName
-	0x0369: 7,   // clif_parse_ActionRequest
-	0x0436: 26,  // clif_parse_FriendsListAdd
-	0x0437: 5,   // clif_parse_WalkToXY
-	0x0438: 6,   // clif_parse_DropItem
+	0x035F: 5,   // clif_parse_WalkToXY
+	0x0360: 6,   // clif_parse_TickSend
+	0x0361: 5,   // clif_parse_ChangeDir
+	0x0362: 6,   // clif_parse_TakeItem
+	0x0363: 6,   // clif_parse_DropItem
+	0x0364: 8,   // clif_parse_MoveToKafra
+	0x0365: 8,   // clif_parse_MoveFromKafra
+	0x0366: 10,  // clif_parse_UseSkillToPos
+	0x0367: 31,  // clif_parse_UseSkillToPosMoreInfo
+	0x0368: 6,   // clif_parse_GetCharNameRequest
+	0x0369: 6,   // clif_parse_SolveCharName
+	0x0436: 23,  // clif_parse_WantToConnection
+	0x0437: 7,   // clif_parse_ActionRequest
+	0x0438: 10,  // clif_parse_UseSkillToId
 	0x0439: 8,   // clif_parse_UseItem
 	0x0443: 8,   // clif_parse_SkillSelectMenu
 	0x0447: 2,   // clif_parse_blocking_playcancel
 	0x044A: 6,   // clif_parse_client_version
 	0x07D7: 8,   // clif_parse_PartyChangeOption
 	0x07DA: 6,   // clif_parse_PartyChangeLeader
-	0x07E4: 6,   // clif_parse_TakeItem
+	0x07E4: -1,  // clif_parse_ItemListWindowSelected
 	0x07EC: 8,   // clif_parse_MoveToKafra
 	0x07F5: 6,   // clif_parse_GMFullStrip
 	0x0801: -1,  // clif_parse_PurchaseReq2
-	0x0802: 26,  // clif_parse_PartyInvite2
+	0x0802: 18,  // clif_parse_PartyBookingRegisterReq
 	0x0804: 14,  // clif_parse_PartyBookingSearchReq
 	0x0806: 2,   // clif_parse_PartyBookingDeleteReq
 	0x0808: 14,  // clif_parse_PartyBookingUpdateReq
-	0x0811: -1,  // clif_parse_ReqTradeBuyingStore
-	0x0815: -1,  // clif_parse_ReqOpenBuyingStore
-	0x0817: 2,   // clif_parse_ReqCloseBuyingStore
-	0x0819: -1,  // clif_parse_SearchStoreInfo
-	0x0835: 2,   // clif_parse_SearchStoreInfoNextPage
-	0x0838: 14,  // clif_parse_SearchStoreInfoListItemClick
+	0x0811: -1,  // clif_parse_ReqOpenBuyingStore
+	0x0815: 2,   // clif_parse_ReqCloseBuyingStore
+	0x0817: 6,   // clif_parse_ReqClickBuyingStore
+	0x0819: -1,  // clif_parse_ReqTradeBuyingStore
+	0x0835: -1,  // clif_parse_SearchStoreInfo
+	0x0838: 2,   // clif_parse_SearchStoreInfoNextPage
 	0x083B: 2,   // clif_parse_CloseSearchStoreInfo
-	0x083C: 10,  // clif_parse_UseSkillToId
+	0x083C: 14,  // clif_parse_SearchStoreInfoListItemClick
 	0x0842: 6,   // clif_parse_GMRecall2
 	0x0843: 6,   // clif_parse_GMRemove2
 	0x0844: 2,   // clif_parse_cashshop_open_request
@@ -420,6 +420,422 @@ var clientPacketLengths = map[uint16]int{
 	0x0B9E: 12,  // clif_parse_enchantwindow_reset
 	0x0BA0: 2,   // clif_parse_enchantwindow_close
 	0x0BAD: 2,   // clif_parse_unequipall
+}
+
+// clientPacketHandlers is which server function will parse each id.
+//
+// The length alone does not identify a packet: several ids that mean
+// quite different things are six bytes long, so an encoder can carry the
+// wrong id and still match. 0x0362 is clif_parse_TakeItem here and was
+// briefly used for dropping, which is six bytes either way.
+var clientPacketHandlers = map[uint16]string{
+	0x0072: "clif_parse_UseSkillToId",
+	0x007D: "clif_parse_LoadEndAck",
+	0x007E: "clif_parse_UseSkillToPosMoreInfo",
+	0x0085: "clif_parse_ChangeDir",
+	0x0089: "clif_parse_TickSend",
+	0x008C: "clif_parse_GetCharNameRequest",
+	0x0090: "clif_parse_NpcClicked",
+	0x0094: "clif_parse_MoveToKafra",
+	0x0096: "clif_parse_WisMessage",
+	0x0099: "clif_parse_Broadcast",
+	0x009B: "clif_parse_WantToConnection",
+	0x009F: "clif_parse_UseItem",
+	0x00A2: "clif_parse_SolveCharName",
+	0x00A7: "clif_parse_WalkToXY",
+	0x00AB: "clif_parse_UnequipItem",
+	0x00B2: "clif_parse_Restart",
+	0x00B8: "clif_parse_NpcSelectMenu",
+	0x00B9: "clif_parse_NpcNextClicked",
+	0x00BB: "clif_parse_StatusUp",
+	0x00BF: "clif_parse_Emotion",
+	0x00C1: "clif_parse_HowManyConnections",
+	0x00C5: "clif_parse_NpcBuySellSelected",
+	0x00C8: "clif_parse_NpcBuyListSend",
+	0x00C9: "clif_parse_NpcSellListSend",
+	0x00CC: "clif_parse_GMKick",
+	0x00CE: "clif_parse_GMKickAll",
+	0x00CF: "clif_parse_PMIgnore",
+	0x00D0: "clif_parse_PMIgnoreAll",
+	0x00D3: "clif_parse_PMIgnoreList",
+	0x00D5: "clif_parse_CreateChatRoom",
+	0x00D9: "clif_parse_ChatAddMember",
+	0x00DE: "clif_parse_ChatRoomStatusChange",
+	0x00E0: "clif_parse_ChangeChatOwner",
+	0x00E2: "clif_parse_KickFromChat",
+	0x00E3: "clif_parse_ChatLeave",
+	0x00E4: "clif_parse_TradeRequest",
+	0x00E6: "clif_parse_TradeAck",
+	0x00E8: "clif_parse_TradeAddItem",
+	0x00EB: "clif_parse_TradeOk",
+	0x00ED: "clif_parse_TradeCancel",
+	0x00EF: "clif_parse_TradeCommit",
+	0x00F3: "clif_parse_GlobalMessage",
+	0x00F5: "clif_parse_TakeItem",
+	0x00F7: "clif_parse_MoveFromKafra",
+	0x00F9: "clif_parse_CreateParty",
+	0x00FC: "clif_parse_PartyInvite",
+	0x00FF: "clif_parse_ReplyPartyInvite",
+	0x0100: "clif_parse_LeaveParty",
+	0x0102: "clif_parse_PartyChangeOption",
+	0x0103: "clif_parse_RemovePartyMember",
+	0x0108: "clif_parse_PartyMessage",
+	0x0112: "clif_parse_SkillUp",
+	0x0113: "clif_parse_UseSkillToPos",
+	0x0116: "clif_parse_DropItem",
+	0x0118: "clif_parse_StopAttack",
+	0x011B: "clif_parse_UseSkillMap",
+	0x011D: "clif_parse_RequestMemo",
+	0x0126: "clif_parse_PutItemToCart",
+	0x0127: "clif_parse_GetItemFromCart",
+	0x0128: "clif_parse_MoveFromKafraToCart",
+	0x0129: "clif_parse_MoveToKafraFromCart",
+	0x012A: "clif_parse_RemoveOption",
+	0x012E: "clif_parse_CloseVending",
+	0x012F: "clif_parse_OpenVending",
+	0x0130: "clif_parse_VendingListReq",
+	0x0134: "clif_parse_PurchaseReq",
+	0x013F: "clif_parse_GM_Item_Monster",
+	0x0140: "clif_parse_MapMove",
+	0x0143: "clif_parse_NpcAmountInput",
+	0x0146: "clif_parse_NpcCloseClicked",
+	0x0149: "clif_parse_GMReqNoChat",
+	0x014D: "clif_parse_GuildCheckMaster",
+	0x014F: "clif_parse_GuildRequestInfo",
+	0x0151: "clif_parse_GuildRequestEmblem",
+	0x0153: "clif_parse_GuildChangeEmblem",
+	0x0155: "clif_parse_GuildChangeMemberPosition",
+	0x0159: "clif_parse_GuildLeave",
+	0x015B: "clif_parse_GuildExpulsion",
+	0x015D: "clif_parse_GuildBreak",
+	0x0161: "clif_parse_GuildChangePositionInfo",
+	0x0165: "clif_parse_CreateGuild",
+	0x0168: "clif_parse_GuildInvite",
+	0x016B: "clif_parse_GuildReplyInvite",
+	0x016E: "clif_parse_GuildChangeNotice",
+	0x0170: "clif_parse_GuildRequestAlliance",
+	0x0172: "clif_parse_GuildReplyAlliance",
+	0x0178: "clif_parse_ItemIdentify",
+	0x017A: "clif_parse_UseCard",
+	0x017C: "clif_parse_InsertCard",
+	0x017E: "clif_parse_GuildMessage",
+	0x0180: "clif_parse_GuildOpposition",
+	0x0183: "clif_parse_GuildDelAlliance",
+	0x018A: "clif_parse_QuitGame",
+	0x018E: "clif_parse_ProduceMix",
+	0x0190: "clif_parse_ActionRequest",
+	0x0193: "clif_parse_CloseKafra",
+	0x0197: "clif_parse_ResetChar",
+	0x0198: "clif_parse_GMChangeMapType",
+	0x019C: "clif_parse_LocalBroadcast",
+	0x019D: "clif_parse_GMHide",
+	0x019F: "clif_parse_CatchPet",
+	0x01A1: "clif_parse_PetMenu",
+	0x01A5: "clif_parse_ChangePetName",
+	0x01A7: "clif_parse_SelectEgg",
+	0x01A9: "clif_parse_SendEmotion",
+	0x01AE: "clif_parse_SelectArrow",
+	0x01AF: "clif_parse_ChangeCart",
+	0x01B2: "clif_parse_OpenVending",
+	0x01BA: "clif_parse_GMShift",
+	0x01BB: "clif_parse_GMShift",
+	0x01BC: "clif_parse_GMRecall",
+	0x01BD: "clif_parse_GMRecall",
+	0x01CE: "clif_parse_AutoSpell",
+	0x01D5: "clif_parse_NpcStringInput",
+	0x01DF: "clif_parse_GMReqAccountName",
+	0x01E7: "clif_parse_NoviceDoriDori",
+	0x01E8: "clif_parse_CreateParty2",
+	0x01ED: "clif_parse_NoviceExplosionSpirits",
+	0x01F7: "clif_parse_Adopt_reply",
+	0x01F9: "clif_parse_Adopt_request",
+	0x01FD: "clif_parse_RepairItem",
+	0x0202: "clif_parse_FriendsListAdd",
+	0x0203: "clif_parse_FriendsListRemove",
+	0x0208: "clif_parse_FriendsListReply",
+	0x020F: "clif_parse_PVPInfo",
+	0x0212: "clif_parse_GMRc",
+	0x0213: "clif_parse_Check",
+	0x021D: "clif_parse_LessEffect",
+	0x0222: "clif_parse_WeaponRefine",
+	0x022D: "clif_parse_HomMenu",
+	0x0231: "clif_parse_ChangeHomunculusName",
+	0x0232: "clif_parse_HomMoveTo",
+	0x0233: "clif_parse_HomAttack",
+	0x0234: "clif_parse_HomMoveToMaster",
+	0x023B: "clif_parse_StoragePassword",
+	0x023F: "clif_parse_Mail_refreshinbox",
+	0x0241: "clif_parse_Mail_read",
+	0x0243: "clif_parse_Mail_delete",
+	0x0244: "clif_parse_Mail_getattach",
+	0x0246: "clif_parse_Mail_winopen",
+	0x0247: "clif_parse_Mail_setattach",
+	0x0248: "clif_parse_Mail_send",
+	0x024B: "clif_parse_Auction_cancelreg",
+	0x024C: "clif_parse_Auction_setitem",
+	0x024D: "clif_parse_Auction_register",
+	0x024E: "clif_parse_Auction_cancel",
+	0x024F: "clif_parse_Auction_bid",
+	0x0251: "clif_parse_Auction_search",
+	0x0254: "clif_parse_FeelSaveOk",
+	0x025B: "clif_parse_Cooking",
+	0x025C: "clif_parse_Auction_buysell",
+	0x025D: "clif_parse_Auction_close",
+	0x0273: "clif_parse_Mail_return",
+	0x0281: "clif_parse_ItemListWindowSelected",
+	0x0288: "clif_parse_npccashshop_buy",
+	0x0292: "clif_parse_AutoRevive",
+	0x029F: "clif_parse_mercenary_action",
+	0x02B6: "clif_parse_questStateAck",
+	0x02BA: "clif_parse_Hotkey",
+	0x02C4: "clif_parse_PartyInvite2",
+	0x02C7: "clif_parse_ReplyPartyInvite2",
+	0x02C8: "clif_parse_PartyTick",
+	0x02CF: "clif_parse_MemorialDungeonCommand",
+	0x02D6: "clif_parse_ViewPlayerEquip",
+	0x02D8: "clif_parse_configuration",
+	0x02DB: "clif_parse_BattleChat",
+	0x02F1: "clif_parse_progressbar",
+	0x035F: "clif_parse_WalkToXY",
+	0x0360: "clif_parse_TickSend",
+	0x0361: "clif_parse_ChangeDir",
+	0x0362: "clif_parse_TakeItem",
+	0x0363: "clif_parse_DropItem",
+	0x0364: "clif_parse_MoveToKafra",
+	0x0365: "clif_parse_MoveFromKafra",
+	0x0366: "clif_parse_UseSkillToPos",
+	0x0367: "clif_parse_UseSkillToPosMoreInfo",
+	0x0368: "clif_parse_GetCharNameRequest",
+	0x0369: "clif_parse_SolveCharName",
+	0x0436: "clif_parse_WantToConnection",
+	0x0437: "clif_parse_ActionRequest",
+	0x0438: "clif_parse_UseSkillToId",
+	0x0439: "clif_parse_UseItem",
+	0x0443: "clif_parse_SkillSelectMenu",
+	0x0447: "clif_parse_blocking_playcancel",
+	0x044A: "clif_parse_client_version",
+	0x07D7: "clif_parse_PartyChangeOption",
+	0x07DA: "clif_parse_PartyChangeLeader",
+	0x07E4: "clif_parse_ItemListWindowSelected",
+	0x07EC: "clif_parse_MoveToKafra",
+	0x07F5: "clif_parse_GMFullStrip",
+	0x0801: "clif_parse_PurchaseReq2",
+	0x0802: "clif_parse_PartyBookingRegisterReq",
+	0x0804: "clif_parse_PartyBookingSearchReq",
+	0x0806: "clif_parse_PartyBookingDeleteReq",
+	0x0808: "clif_parse_PartyBookingUpdateReq",
+	0x0811: "clif_parse_ReqOpenBuyingStore",
+	0x0815: "clif_parse_ReqCloseBuyingStore",
+	0x0817: "clif_parse_ReqClickBuyingStore",
+	0x0819: "clif_parse_ReqTradeBuyingStore",
+	0x0835: "clif_parse_SearchStoreInfo",
+	0x0838: "clif_parse_SearchStoreInfoNextPage",
+	0x083B: "clif_parse_CloseSearchStoreInfo",
+	0x083C: "clif_parse_SearchStoreInfoListItemClick",
+	0x0842: "clif_parse_GMRecall2",
+	0x0843: "clif_parse_GMRemove2",
+	0x0844: "clif_parse_cashshop_open_request",
+	0x0846: "clif_parse_CashShopReqTab",
+	0x0848: "clif_parse_cashshop_buy",
+	0x084A: "clif_parse_cashshop_close",
+	0x085A: "clif_parse_UseSkillToPosMoreInfo",
+	0x085D: "clif_parse_PartyBookingRegisterReq",
+	0x0861: "clif_parse_MoveFromKafra",
+	0x0862: "clif_parse_UseSkillToId",
+	0x0863: "clif_parse_UseSkillToPos",
+	0x0865: "clif_parse_TakeItem",
+	0x0868: "clif_parse_ItemListWindowSelected",
+	0x086A: "clif_parse_WantToConnection",
+	0x086C: "clif_parse_MoveToKafra",
+	0x086D: "clif_parse_PartyInvite2",
+	0x086F: "clif_parse_FriendsListAdd",
+	0x0870: "clif_parse_ItemListWindowSelected",
+	0x0871: "clif_parse_ChangeDir",
+	0x0874: "clif_parse_MoveFromKafra",
+	0x0879: "clif_parse_PartyBookingRegisterReq",
+	0x0881: "clif_parse_WalkToXY",
+	0x0884: "clif_parse_SolveCharName",
+	0x0885: "clif_parse_HomMenu",
+	0x0886: "clif_parse_ReqCloseBuyingStore",
+	0x0887: "clif_parse_TickSend",
+	0x0888: "clif_parse_WantToConnection",
+	0x0889: "clif_parse_UseSkillToPosMoreInfo",
+	0x088A: "clif_parse_GetCharNameRequest",
+	0x088B: "clif_parse_SearchStoreInfoNextPage",
+	0x088D: "clif_parse_PartyInvite2",
+	0x088E: "clif_parse_ActionRequest",
+	0x0890: "clif_parse_ChangeDir",
+	0x0891: "clif_parse_DropItem",
+	0x0893: "clif_parse_MoveToKafra",
+	0x0897: "clif_parse_ChangeDir",
+	0x0898: "clif_parse_GetCharNameRequest",
+	0x089B: "clif_parse_UseSkillToId",
+	0x089C: "clif_parse_FriendsListAdd",
+	0x089E: "clif_parse_DropItem",
+	0x089F: "clif_parse_TakeItem",
+	0x08A0: "clif_parse_MoveToKafra",
+	0x08A1: "clif_parse_ReqClickBuyingStore",
+	0x08A2: "clif_parse_SearchStoreInfoListItemClick",
+	0x08A5: "clif_parse_PartyBookingRegisterReq",
+	0x08A6: "clif_parse_MoveFromKafra",
+	0x08A8: "clif_parse_StoragePassword",
+	0x08AA: "clif_parse_ActionRequest",
+	0x08AB: "clif_parse_SearchStoreInfo",
+	0x08AC: "clif_parse_MoveToKafra",
+	0x08AD: "clif_parse_UseSkillToPosMoreInfo",
+	0x08C9: "clif_parse_cashshop_list_request",
+	0x08D7: "clif_parse_bg_queue_apply_request",
+	0x08DA: "clif_parse_bg_queue_cancel_request",
+	0x08DD: "clif_parse_dull",
+	0x08E0: "clif_parse_bg_queue_lobby_reply",
+	0x08E5: "clif_parse_PartyBookingRegisterReq",
+	0x08E7: "clif_parse_PartyBookingSearchReq",
+	0x08E9: "clif_parse_PartyBookingDeleteReq",
+	0x08EB: "clif_parse_PartyBookingUpdateReq",
+	0x0907: "clif_parse_MoveItem",
+	0x090A: "clif_parse_bg_queue_request_queue_number",
+	0x0916: "clif_parse_GuildInvite2",
+	0x091C: "clif_parse_PartyInvite2",
+	0x091D: "clif_parse_PartyBookingRegisterReq",
+	0x0922: "clif_parse_ReqTradeBuyingStore",
+	0x0929: "clif_parse_PartyInvite2",
+	0x0933: "clif_parse_TakeItem",
+	0x0938: "clif_parse_ReqOpenBuyingStore",
+	0x093B: "clif_parse_MoveToKafra",
+	0x093F: "clif_parse_HomMenu",
+	0x0945: "clif_parse_ItemListWindowSelected",
+	0x0947: "clif_parse_StoragePassword",
+	0x094A: "clif_parse_GetCharNameRequest",
+	0x094B: "clif_parse_WantToConnection",
+	0x094C: "clif_parse_SolveCharName",
+	0x094E: "clif_parse_SearchStoreInfo",
+	0x0953: "clif_parse_WalkToXY",
+	0x0959: "clif_parse_UseSkillToPos",
+	0x0960: "clif_parse_ChangeDir",
+	0x0961: "clif_parse_StoragePassword",
+	0x0963: "clif_parse_MoveFromKafra",
+	0x096A: "clif_parse_GetCharNameRequest",
+	0x096E: "clif_parse_merge_item_req",
+	0x0974: "clif_parse_merge_item_cancel",
+	0x0978: "clif_parse_reqworldinfo",
+	0x097C: "clif_parse_ranklist",
+	0x0980: "clif_parse_SelectCart",
+	0x098D: "clif_parse_clan_chat",
+	0x0998: "clif_parse_EquipItem",
+	0x09A7: "clif_parse_BankDeposit",
+	0x09A9: "clif_parse_BankWithdraw",
+	0x09AB: "clif_parse_BankCheck",
+	0x09AC: "clif_parse_sale_search",
+	0x09AE: "clif_parse_sale_add",
+	0x09B0: "clif_parse_sale_remove",
+	0x09B4: "clif_parse_sale_open",
+	0x09B6: "clif_parse_BankOpen",
+	0x09B8: "clif_parse_BankClose",
+	0x09BC: "clif_parse_sale_close",
+	0x09C3: "clif_parse_sale_refresh",
+	0x09CE: "clif_parse_GM_Item_Monster",
+	0x09D4: "clif_parse_NPCShopClosed",
+	0x09D6: "clif_parse_NPCMarketPurchase",
+	0x09D8: "clif_parse_NPCMarketClosed",
+	0x09E8: "clif_parse_Mail_refreshinbox",
+	0x09E9: "clif_parse_dull",
+	0x09EA: "clif_parse_Mail_read",
+	0x09EC: "clif_parse_Mail_send",
+	0x09EE: "clif_parse_Mail_refreshinbox",
+	0x09EF: "clif_parse_Mail_refreshinbox",
+	0x09F1: "clif_parse_Mail_getattach",
+	0x09F3: "clif_parse_Mail_getattach",
+	0x09F5: "clif_parse_Mail_delete",
+	0x09FB: "clif_parse_pet_evolution",
+	0x0A01: "clif_parse_HotkeyRowShift",
+	0x0A03: "clif_parse_Mail_cancelwrite",
+	0x0A04: "clif_parse_Mail_setattach",
+	0x0A06: "clif_parse_Mail_winopen",
+	0x0A08: "clif_parse_Mail_beginwrite",
+	0x0A13: "clif_parse_Mail_Receiver_Check",
+	0x0A19: "clif_parse_roulette_open",
+	0x0A1B: "clif_parse_roulette_info",
+	0x0A1D: "clif_parse_roulette_close",
+	0x0A1F: "clif_parse_roulette_generate",
+	0x0A21: "clif_parse_roulette_item",
+	0x0A25: "clif_parse_AchievementCheckReward",
+	0x0A2E: "clif_parse_change_title",
+	0x0A35: "clif_parse_Oneclick_Itemidentify",
+	0x0A3D: "clif_parse_sale_add",
+	0x0A46: "clif_parse_stylist_buy",
+	0x0A48: "clif_parse_stylist_close",
+	0x0A49: "clif_parse_private_airship_request",
+	0x0A4F: "clif_parse_laphine_synthesis",
+	0x0A52: "clif_parse_captcha_register",
+	0x0A54: "clif_parse_captcha_upload",
+	0x0A56: "clif_parse_macro_reporter_ack",
+	0x0A5A: "clif_parse_macro_detector_download_ack",
+	0x0A5C: "clif_parse_macro_detector_answer",
+	0x0A68: "clif_parse_open_ui",
+	0x0A69: "clif_parse_captcha_preview_request",
+	0x0A6C: "clif_parse_macro_reporter_select",
+	0x0A6E: "clif_parse_Mail_send",
+	0x0A70: "clif_parse_laphine_synthesis_close",
+	0x0A77: "clif_parse_camerainfo",
+	0x0A88: "clif_parse_gm_resetcooltime",
+	0x0A97: "clif_parse_equipswitch_add",
+	0x0A99: "clif_parse_equipswitch_remove",
+	0x0A9C: "clif_parse_equipswitch_request",
+	0x0AA3: "clif_parse_refineui_refine",
+	0x0AA4: "clif_parse_refineui_close",
+	0x0AB5: "clif_parse_laphine_upgrade_close",
+	0x0AB6: "clif_parse_laphine_upgrade",
+	0x0AC0: "clif_parse_Mail_refreshinbox",
+	0x0AC1: "clif_parse_Mail_refreshinbox",
+	0x0ACE: "clif_parse_equipswitch_request_single",
+	0x0AE6: "clif_parse_partybooking_join",
+	0x0AE8: "clif_parse_changedress",
+	0x0AEF: "clif_parse_attendance_request",
+	0x0AF4: "clif_parse_UseSkillToPos",
+	0x0AF8: "clif_parse_partybooking_reply",
+	0x0AFC: "clif_parse_stylist_buy",
+	0x0B0F: "clif_parse_barter_buy",
+	0x0B10: "clif_parse_StartUseSkillToId",
+	0x0B11: "clif_parse_StopUseSkillToId",
+	0x0B12: "clif_parse_barter_close",
+	0x0B14: "clif_parse_inventory_expansion_request",
+	0x0B16: "clif_parse_inventory_expansion_confirm",
+	0x0B19: "clif_parse_inventory_expansion_reject",
+	0x0B1C: "clif_parse_dull",
+	0x0B21: "clif_parse_Hotkey",
+	0x0B22: "clif_parse_HotkeyRowShift",
+	0x0B24: "clif_parse_traitstatus_up",
+	0x0B28: "clif_parse_guild_castle_teleport_request",
+	0x0B2C: "clif_parse_guild_castle_info_request",
+	0x0B35: "clif_parse_RemoveOption",
+	0x0B46: "clif_parse_GuildChangeEmblem2",
+	0x0B4C: "clif_parse_dull",
+	0x0B57: "clif_parse_barter_extended_buy",
+	0x0B58: "clif_parse_barter_extended_close",
+	0x0B59: "clif_parse_enchantgrade_add",
+	0x0B5B: "clif_parse_enchantgrade_start",
+	0x0B5C: "clif_parse_enchantgrade_close",
+	0x0B66: "clif_parse_RepairItem",
+	0x0B6D: "clif_parse_cashshop_open_request",
+	0x0B90: "clif_parse_item_reform_close",
+	0x0B91: "clif_parse_item_reform_start",
+	0x0B93: "clif_parse_dull",
+	0x0B97: "clif_parse_Mail_Receiver_Check",
+	0x0B98: "clif_parse_Mail_return",
+	0x0B9B: "clif_parse_enchantwindow_general",
+	0x0B9C: "clif_parse_enchantwindow_perfect",
+	0x0B9D: "clif_parse_enchantwindow_upgrade",
+	0x0B9E: "clif_parse_enchantwindow_reset",
+	0x0BA0: "clif_parse_enchantwindow_close",
+	0x0BAD: "clif_parse_unequipall",
+}
+
+// ClientPacketHandler is the server function that will parse a packet we
+// send, and whether the id is parsed at all at this packetver.
+func ClientPacketHandler(id uint16) (string, bool) {
+	handler, ok := clientPacketHandlers[id]
+
+	return handler, ok
 }
 
 // ClientPacketLength is the length the server expects for a packet we

@@ -146,7 +146,7 @@ func (b *UI2DBackend) drawEscMenu(screenW, screenH float32) {
 		box := ui2d.Rect{X: btnX, Y: btnY, W: escBtnW, H: escBtnH}
 		btnY += escBtnH + escBtnG
 
-		b.drawEscButton(box, item.label, item.disabled)
+		b.drawFlatButton(box, item.label, item.disabled)
 
 		if item.disabled {
 			continue
@@ -176,10 +176,15 @@ func (b *UI2DBackend) drawEscMenu(screenW, screenH float32) {
 	b.ctx.EndWindow()
 }
 
-// drawEscButton draws one entry in the original's style: a pale face inside a
+// drawFlatButton draws a button in the original's style: a pale face inside a
 // thin grey border, washed blue under the pointer, with its label centered in
 // near-black.
-func (b *UI2DBackend) drawEscButton(box ui2d.Rect, label string, disabled bool) {
+//
+// Used wherever a button needs an English label. The archive's own button
+// bitmaps carry their text baked in, and all of them say 확인 — fine in a
+// Korean client, wrong in this one, and not something a label drawn on top can
+// cover. This is the shape of those buttons without the glyph.
+func (b *UI2DBackend) drawFlatButton(box ui2d.Rect, label string, disabled bool) {
 	r := b.ctx.Renderer()
 
 	face, text := escFace, escLabel

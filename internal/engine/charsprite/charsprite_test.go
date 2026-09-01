@@ -345,8 +345,17 @@ func TestAnimationIsCappedAndReported(t *testing.T) {
 		t.Errorf("baked %d idle frames, want the cap of %d", got, MaxAnimationFrames)
 	}
 
-	// Every action and direction over the cap contributes its excess.
-	want := 17 * LoadedActions * Directions
+	// Every baked action and direction over the cap contributes its excess.
+	// Actions inside LoadedActions that we deliberately do not bake — sitting
+	// — contribute nothing, because nothing of theirs was dropped.
+	baked := 0
+	for action := 0; action < LoadedActions; action++ {
+		if bakedAction(action) {
+			baked++
+		}
+	}
+
+	want := 17 * baked * Directions
 	if sheet.Dropped != want {
 		t.Errorf("Dropped = %d, want %d", sheet.Dropped, want)
 	}

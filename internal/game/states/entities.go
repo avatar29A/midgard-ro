@@ -3,6 +3,7 @@ package states
 import (
 	"github.com/Faultbox/midgard-ro/internal/engine/charsprite"
 	"github.com/Faultbox/midgard-ro/internal/game/entity"
+	"github.com/Faultbox/midgard-ro/internal/game/items"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
 )
 
@@ -156,6 +157,10 @@ func unitSpec(e *entity.Entity) charsprite.Spec {
 		return charsprite.Spec{Kind: charsprite.KindMonster, Job: e.Job}
 	case entity.TypeNPC, entity.TypeWarp:
 		return charsprite.Spec{Kind: charsprite.KindNPC, Job: e.Job}
+	case entity.TypeItem:
+		info, _ := items.Lookup(e.ItemID)
+
+		return charsprite.Spec{Kind: charsprite.KindItem, Name: info.Resource}
 	default:
 		return charsprite.Spec{
 			Job:       e.Job,
@@ -172,9 +177,10 @@ func unitSpec(e *entity.Entity) charsprite.Spec {
 // unknown job would otherwise fall through to the player path and put a
 // person on screen wherever a Poring stands.
 //
-// Dropped items are excluded outright. They are named by a different table
-// under a different directory, so a job id that happens to match a monster
-// would draw the wrong thing rather than nothing.
+// A dropped item is drawn only when the item table names a resource for it.
+// It is filed under its own directory by name rather than by job id, so
+// without that name there is nothing to look up — and falling back to the job
+// table would draw whichever monster happens to share the number.
 //
 // A warp is drawn as the portal effect, never as a sprite — the table names
 // one for class 45, and the original ignores it. The hidden class is not
@@ -191,6 +197,10 @@ func unitIsDrawable(e *entity.Entity) bool {
 		return known
 	case entity.TypeWarp:
 		return e.Job == packets.JobWarpPortal
+	case entity.TypeItem:
+		info, known := items.Lookup(e.ItemID)
+
+		return known && info.Resource != ""
 	default:
 		return false
 	}
@@ -242,13 +252,18 @@ func updateUnits(m *entity.Manager, deltaMs float32, anim UnitAnimFunc) {
 		e.Body.Update(deltaMs)
 		e.Body.UpdateRenderPosition(deltaMs)
 
-		idle, walk := 0, 0
+		idle, walk, pickup := 0, 0, 0
 		if anim != nil {
-			var idleMs, walkMs float32
+			var idleMs, walkMs, pickupMs float32
 			idle, idleMs = anim(e, entity.ActionIdle, e.Body.Direction)
 			walk, walkMs = anim(e, entity.ActionWalk, e.Body.Direction)
-			e.Body.AnimIntervalMs = [2]float32{idleMs, walkMs}
+			pickup, pickupMs = anim(e, entity.ActionPickup, e.Body.Direction)
+			e.Body.AnimIntervalMs = [entity.LoadedActions]float32{
+				entity.ActionIdle:   idleMs,
+				entity.ActionWalk:   walkMs,
+				entity.ActionPickup: pickupMs,
+			}
 		}
-		e.Body.AdvanceAnimation(deltaMs, idle, walk)
+		e.Body.AdvanceAnimation(deltaMs, idle, walk, pickup)
 	}
 }

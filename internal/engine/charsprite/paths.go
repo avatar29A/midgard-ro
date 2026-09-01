@@ -22,6 +22,13 @@ const (
 	monsterDir = `data\sprite\몬스터\`
 	npcDir     = `data\sprite\npc\`
 
+	// Items lying on the ground are named by the archive's own item table
+	// rather than by a job id, so they are the one family identified by a
+	// name instead of a number.
+	//
+	//	아이템  "item"
+	itemDir = `data\sprite\아이템\`
+
 	male   = `남`
 	female = `여`
 )
@@ -37,6 +44,7 @@ const (
 	KindPlayer Kind = iota
 	KindMonster
 	KindNPC
+	KindItem
 )
 
 // SpriteName returns the sprite basename for a monster or NPC job id, and
@@ -126,6 +134,19 @@ func (s Spec) BodyPathCandidates() [][2]string {
 		job, _ := JobSpriteName(s.Job)
 		sex := s.sexSuffix()
 		base := fmt.Sprintf(`%s%s\%s_%s`, bodyDir, sex, job, sex)
+		return [][2]string{{base + ".spr", base + ".act"}}
+	}
+
+	// A ground item is named, not numbered: the item table gives a resource
+	// name and that is the whole of its identity. Without one there is
+	// nothing to draw, and falling through to the job table below would name
+	// a monster sprite for an item id that happens to collide with one.
+	if s.Kind == KindItem {
+		if s.Name == "" {
+			return nil
+		}
+		base := itemDir + s.Name
+
 		return [][2]string{{base + ".spr", base + ".act"}}
 	}
 

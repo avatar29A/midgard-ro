@@ -128,6 +128,9 @@ type UI2DBackend struct {
 	mapPlaced    bool
 	mapSaved     ui2d.Rect
 	itemAction   ItemAction
+	itemDrag     itemDrag
+	dropAction   DropAction
+	dropPrompt   dropPrompt
 
 	escOpen   bool
 	escAction EscAction
@@ -966,6 +969,11 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 		b.drawEntityBars(bar)
 	}
 
+	// Over the bars, still under the panels: the label belongs to the item it
+	// names, and a window drawn later covers it like anything else in the
+	// world.
+	b.drawItemLabel(state.ItemLabel)
+
 	b.drawMinimap(state, width)
 	b.drawChat(state, height)
 	b.drawHotkeys(width, height)
@@ -976,6 +984,10 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 	b.drawSkillsWindow(state, width, height)
 	b.drawItemsWindow(state, width, height)
 	b.drawMapWindow(state, width, height)
+
+	// After the inventory, which is what it belongs to: drawn before it, the
+	// window it was dragged out of covered it.
+	b.drawDropQuantity(width, height)
 
 	// After the windows, so it sees whichever grip the pointer ended on. RO
 	// has no resize pointer of its own, so this is the hand it shows for

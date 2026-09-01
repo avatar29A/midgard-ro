@@ -51,6 +51,12 @@ const (
 // which holds fifteen files and none of them these.
 const itemIconPath = skinBasePath + `item\`
 
+// itemsDragIconH is the size of the icon that follows the pointer during a
+// drag, and itemsDragTint fades it so what is underneath still reads.
+const itemsDragIconH = float32(24)
+
+var itemsDragTint = ui2d.Color{R: 1, G: 1, B: 1, A: 0.75}
+
 // itemTabs are the three the original has, in its order.
 var itemTabs = []struct {
 	label    string
@@ -95,7 +101,12 @@ func (b *UI2DBackend) drawItemsWindow(state InGameUIState, screenW, screenH floa
 	b.drawItemTabs(x, bodyY)
 	b.drawItemGrid(state, x, bodyY)
 	b.drawItemsFooter(state, x, y)
+	b.finishItemDrag(ui2d.Rect{X: x, Y: y, W: itemsW, H: itemsH})
 	b.ctx.EndWindow()
+
+	// After EndWindow, so the icon rides over the window it came from rather
+	// than under it.
+	b.drawDraggedItem()
 }
 
 // drawItemTabs draws the three tabs down the left edge.
@@ -223,6 +234,99 @@ func (b *UI2DBackend) drawItemCell(cell ui2d.Rect, shown []packets.InventoryItem
 	if b.ctx.DoubleClickedIn("hud_item_cell_"+strconv.Itoa(index), cell) {
 		b.itemAction = ItemAction{Index: item.Index, Equip: itemTabs[b.itemTab].category == items.CategoryEquip}
 	}
+
+	// Pressing on a cell begins a drag. Whether it becomes a drop is decided
+	// on release, in drawItemsWindow, by where the pointer ended up — a press
+	// that goes nowhere is also how a double click starts.
+	if in := b.ctx.Input(); in.MouseLeftPressed && !b.itemDrag.active &&
+		cell.Contains(in.MouseX, in.MouseY) {
+		b.itemDrag = itemDrag{
+			active: true,
+			index:  item.Index,
+			itemID: item.ID,
+			count:  item.Count,
+		}
+	}
+}
+
+// drawDraggedItem draws the icon under the pointer while a drag is in
+// progress, so there is something to aim with.
+func (b *UI2DBackend) drawDraggedItem() {
+	if !b.itemDrag.active {
+		return
+	}
+
+	info, ok := items.Lookup(b.itemDrag.itemID)
+	if !ok || info.Resource == "" {
+		return
+	}
+
+	tex, err := b.texCache.Load(itemIconPath + info.Resource + ".bmp")
+	if err != nil {
+		return
+	}
+
+	in := b.ctx.Input()
+	b.ctx.Renderer().DrawImage(tex.ID,
+		in.MouseX-itemsDragIconH/2, in.MouseY-itemsDragIconH/2,
+		itemsDragIconH, itemsDragIconH, itemsDragTint)
+}
+
+// finishItemDrag decides what a released drag meant.
+//
+// Released outside the window, it is a drop; released inside it, it is
+// nothing. That is the whole gesture: there is no rearranging within the grid
+// to confuse it with, because the server decides what slot an item sits in.
+func (b *UI2DBackend) finishItemDrag(window ui2d.Rect) {
+	if !b.itemDrag.active {
+		return
+	}
+
+	in := b.ctx.Input()
+	if in.MouseLeftDown {
+		return
+	}
+
+	if !window.Contains(in.MouseX, in.MouseY) {
+		// A stack asks how many; a single item just goes. Asking about a
+		// stack of one would be a dialog with one answer.
+		if b.itemDrag.count > 1 {
+			b.beginDropPrompt(b.itemDrag.index, b.itemDrag.itemID, b.itemDrag.count)
+		} else {
+			b.dropAction = DropAction{Index: b.itemDrag.index, Amount: 1}
+		}
+	}
+
+	b.itemDrag = itemDrag{}
+}
+
+// itemDrag is an inventory drag in progress.
+type itemDrag struct {
+	active bool
+	index  int
+	itemID uint32
+	count  int
+}
+
+// DropAction is an item dragged out of the window, waiting to be sent.
+type DropAction struct {
+	// Index is the inventory slot, as the server names it.
+	Index int
+
+	// Amount is how many to drop.
+	Amount int
+}
+
+// TakeDropAction returns a completed drag-out and clears it.
+func (b *UI2DBackend) TakeDropAction() (DropAction, bool) {
+	action := b.dropAction
+	if action.Amount == 0 {
+		return DropAction{}, false
+	}
+
+	b.dropAction = DropAction{}
+
+	return action, true
 }
 
 // itemsOnTab is the inventory filtered to the open tab.
