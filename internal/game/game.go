@@ -787,12 +787,13 @@ func (g *Game) renderUI() {
 
 	case *states.CharSelectState:
 		g.uiBackend.RenderCharSelectUI(ui.CharSelectUIState{
-			Characters:    state.GetCharacters(),
-			SelectedIndex: -1, // Managed by the backend
-			StatusMessage: state.GetStatusMessage(),
-			ErrorMessage:  state.GetErrorMessage(),
-			IsLoading:     state.IsLoadingState(),
-			IsReady:       state.IsCharListReady(),
+			Characters:     state.GetCharacters(),
+			SelectedIndex:  -1, // Managed by the backend
+			StatusMessage:  state.GetStatusMessage(),
+			ErrorMessage:   state.GetErrorMessage(),
+			IsLoading:      state.IsLoadingState(),
+			IsReady:        state.IsCharListReady(),
+			CreatableSlots: state.CreatableSlotCount(),
 			OnSelect: func(index int) {
 				g.pendingAction = func() {
 					_ = state.SelectCharacter(index)

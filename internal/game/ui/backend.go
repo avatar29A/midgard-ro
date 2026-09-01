@@ -123,6 +123,10 @@ type CharSelectUIState struct {
 	IsLoading     bool
 	IsReady       bool
 
+	// CreatableSlots is how many slots this account may use, which is what
+	// the screen pages over. Not MAX_CHARS: see states.CharSelectState.
+	CreatableSlots int
+
 	// Callbacks
 	OnSelect      func(index int)
 	OnSelectIndex func(index int)

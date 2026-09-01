@@ -70,6 +70,21 @@ const (
 	charSelCancelRig = float32(4)
 )
 
+// charSelSlotCount is how many slots the screen shows at once. The original
+// pages through an account's slots in threes and so do we.
+const charSelSlotCount = 3
+
+// Paging arrows, drawn either side of the slot row. The art is the matched
+// left/right pair from the creation screen — 38x20, three states — because
+// character select's own directory has only a `next`, and one arrow cannot
+// say "back".
+const (
+	charSelArrowW   = float32(38)
+	charSelArrowH   = float32(20)
+	charSelArrowGap = float32(6)
+	charSelArrowY   = charSelSlotY + (charSelSlotH-charSelArrowH)/2
+)
+
 // charSelSlotX are the three slots' left edges.
 var charSelSlotX = [3]float32{60, 224, 386}
 
@@ -79,6 +94,11 @@ type charSelectSkin struct {
 	box    *TextureInfo
 
 	ok, make, cancel *TextureInfo
+
+	// prev and next page the slot row. Optional: they are loaded separately
+	// from the rest, because a miss here should cost the paging arrows and
+	// not the whole screen.
+	prev, next *TextureInfo
 }
 
 // loadCharSelectSkin loads the character select art. A miss leaves the skin
@@ -119,7 +139,28 @@ func (b *UI2DBackend) loadCharSelectSkin() *charSelectSkin {
 		cancel: loaded[4],
 	}
 
+	// Optional, and deliberately not in the loop above: without these the
+	// screen still works, it just cannot page. Losing character select
+	// entirely over a missing arrow would be the worse trade.
+	b.charSelSkin.prev = b.optionalTexture(makeCharTexBasePath + `arrow_box_l_out.bmp`)
+	b.charSelSkin.next = b.optionalTexture(makeCharTexBasePath + `arrow_box_r_out.bmp`)
+
 	return b.charSelSkin
+}
+
+// optionalTexture loads art the screen can do without, reporting a miss at
+// warn rather than failing. A swallowed miss is what once left the login
+// screen black with nothing in the log to say why.
+func (b *UI2DBackend) optionalTexture(path string) *TextureInfo {
+	tex, err := b.texCache.Load(path)
+	if err != nil {
+		logger.Warn("optional character select art unavailable",
+			zap.String("path", path), zap.Error(err))
+
+		return nil
+	}
+
+	return tex
 }
 
 // renderNativeCharSelect draws the original character select and reports
@@ -156,6 +197,7 @@ func (b *UI2DBackend) renderNativeCharSelect(state CharSelectUIState, width, hei
 	}
 
 	b.drawCharSelectSlots(skin, state, x, y)
+	b.drawCharSelectPaging(skin, state, x, y)
 	b.drawCharSelectInfo(state, x, y)
 	b.drawCharSelectButtons(skin, state, x, y)
 
@@ -209,7 +251,15 @@ func charSelectMessage(state CharSelectUIState) string {
 // Selecting an empty slot is what puts Make under the pointer, which is how
 // the original says a slot is free.
 func (b *UI2DBackend) drawCharSelectSlots(skin *charSelectSkin, state CharSelectUIState, x, y float32) {
-	for slot, slotX := range charSelSlotX {
+	for pos, slotX := range charSelSlotX {
+		// The slot on screen is a position within the page, not the slot
+		// itself. charSelectIdx is always the real slot number, so that
+		// paging cannot silently point selection at a different character.
+		slot := b.charSelectPage*charSelSlotCount + pos
+		if slot >= b.charSelectSlotCount(state) {
+			continue
+		}
+
 		left := x + slotX
 		top := y + charSelSlotY
 		hasChar := slot < len(state.Characters)
@@ -247,6 +297,71 @@ func (b *UI2DBackend) drawCharSelectSlots(skin *charSelectSkin, state CharSelect
 			if hasChar && state.OnSelectIndex != nil {
 				state.OnSelectIndex(slot)
 			}
+		}
+	}
+}
+
+// charSelectSlotCount is how many slots the screen may page over.
+//
+// Falls back to what is on screen at once when the account's own count has
+// not arrived, so a missing HC_ACCEPT_ENTER2 shows three slots rather than
+// none.
+func (b *UI2DBackend) charSelectSlotCount(state CharSelectUIState) int {
+	if state.CreatableSlots > 0 {
+		return state.CreatableSlots
+	}
+
+	return charSelSlotCount
+}
+
+// charSelectPageCount is how many pages the slots divide into.
+func (b *UI2DBackend) charSelectPageCount(state CharSelectUIState) int {
+	slots := b.charSelectSlotCount(state)
+
+	return (slots + charSelSlotCount - 1) / charSelSlotCount
+}
+
+// drawCharSelectPaging draws the arrows either side of the slot row and moves
+// between pages.
+//
+// Drawn only when there is more than one page and only when the art loaded:
+// an account with three slots has nothing to page through, and an arrow that
+// cannot be drawn must not still be clickable.
+func (b *UI2DBackend) drawCharSelectPaging(skin *charSelectSkin, state CharSelectUIState, x, y float32) {
+	pages := b.charSelectPageCount(state)
+	if pages <= 1 || skin.prev == nil || skin.next == nil {
+		return
+	}
+
+	// Clamp first: the account's slot count arrives after the screen has
+	// already drawn once, and it can only shrink the range.
+	if b.charSelectPage >= pages {
+		b.charSelectPage = pages - 1
+	}
+	if b.charSelectPage < 0 {
+		b.charSelectPage = 0
+	}
+
+	r := b.ctx.Renderer()
+	arrowY := y + charSelArrowY
+	prevX := x + charSelSlotX[0] - charSelArrowW - charSelArrowGap
+	nextX := x + charSelSlotX[len(charSelSlotX)-1] + charSelSlotW + charSelArrowGap
+
+	if b.charSelectPage > 0 {
+		r.DrawImage(skin.prev.ID, prevX, arrowY, charSelArrowW, charSelArrowH, ui2d.ColorWhite)
+
+		if b.ctx.InvisibleButtonAt("charselect_prev", prevX, arrowY, charSelArrowW, charSelArrowH) {
+			b.charSelectPage--
+			trace.Emit(trace.Char, "page", zap.Int("page", b.charSelectPage))
+		}
+	}
+
+	if b.charSelectPage < pages-1 {
+		r.DrawImage(skin.next.ID, nextX, arrowY, charSelArrowW, charSelArrowH, ui2d.ColorWhite)
+
+		if b.ctx.InvisibleButtonAt("charselect_next", nextX, arrowY, charSelArrowW, charSelArrowH) {
+			b.charSelectPage++
+			trace.Emit(trace.Char, "page", zap.Int("page", b.charSelectPage))
 		}
 	}
 }
