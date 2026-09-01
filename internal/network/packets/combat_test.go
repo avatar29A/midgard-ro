@@ -90,3 +90,31 @@ func TestDecodeDamageShort(t *testing.T) {
 		t.Error("a 33-byte blow decoded, but the packet is 34")
 	}
 }
+
+// TestDamageAnimationSpeed follows what rAthena documents the original client
+// doing with sdelay: it carries the attacker's attack motion, and the client
+// reads it as an inverted animation speed with 432 standing for the sprite's
+// own rate.
+func TestDamageAnimationSpeed(t *testing.T) {
+	tests := []struct {
+		name  string
+		speed int
+		want  float32
+	}{
+		{"the sprite's own rate", 432, 1},
+		{"twice as fast", 216, 0.5},
+		{"four times as fast", 108, 0.25},
+		{"slower than the base is ignored", 800, 1},
+		{"zero is not a speed", 0, 1},
+		{"negative is not a speed", -5, 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			blow := Damage{SourceSpeed: tt.speed}
+			if got := blow.AnimationSpeed(); got != tt.want {
+				t.Errorf("AnimationSpeed() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

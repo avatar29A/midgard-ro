@@ -121,6 +121,28 @@ type Damage struct {
 	IsSPDamage bool
 }
 
+// AnimationSpeed is the attack motion in ms, expressed as the fraction of the
+// sprite's own rate the swing should run at.
+//
+// rAthena documents what the original client does with this field, and it is
+// not what the name suggests: sdelay carries the attacker's attack motion,
+// and the client reads it as an inverted animation speed with 432 standing
+// for the sprite's own rate. Half of that plays the swing twice as fast, and
+// anything above it is ignored — which is why the server clamps it to 432
+// before sending.
+//
+// So a character that attacks quickly swings quickly, and the number to
+// divide by is the server's own DEFAULT_ANIMATION_SPEED.
+func (d Damage) AnimationSpeed() float32 {
+	const defaultAnimationSpeed = 432
+
+	if d.SourceSpeed <= 0 || d.SourceSpeed >= defaultAnimationSpeed {
+		return 1
+	}
+
+	return float32(d.SourceSpeed) / defaultAnimationSpeed
+}
+
 // Missed reports whether the blow did nothing, which the original draws as a
 // miss rather than as a zero.
 func (d Damage) Missed() bool {

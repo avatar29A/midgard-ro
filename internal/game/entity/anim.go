@@ -145,8 +145,22 @@ func (c *Character) AdvanceAnimation(deltaMs float32, idleFrames, walkFrames, on
 // consequences are confirmed: it is feedback, and a motion nobody will
 // mistake for an outcome costs nothing when the server disagrees.
 func (c *Character) PlayOnce(action int) {
+	c.PlayOnceAt(action, 1)
+}
+
+// PlayOnceAt starts a one-shot at a fraction of the sprite's own rate.
+//
+// A scale of one is the rate the ACT asks for; a half runs it twice as fast.
+// This is how an attack follows the character's attack speed rather than
+// taking the same time however quickly it can swing.
+func (c *Character) PlayOnceAt(action int, speed float32) {
+	if speed <= 0 {
+		speed = 1
+	}
+
 	c.playingOnce = true
 	c.OnceAction = action
+	c.OnceSpeed = speed
 	c.CurrentAction = action
 	c.CurrentFrame = 0
 	c.FrameTime = 0
@@ -157,6 +171,9 @@ func (c *Character) PlayPickup() { c.PlayOnce(ActionPickup) }
 
 // PlayAttack starts a swing.
 func (c *Character) PlayAttack() { c.PlayOnce(ActionAttack) }
+
+// PlayAttackAt starts a swing scaled to the attacker's attack speed.
+func (c *Character) PlayAttackAt(speed float32) { c.PlayOnceAt(ActionAttack, speed) }
 
 // PlayHurt starts a flinch.
 func (c *Character) PlayHurt() { c.PlayOnce(ActionHurt) }
@@ -238,6 +255,9 @@ func (c *Character) advanceOnce(deltaMs float32, frames int) bool {
 	c.CurrentAction = c.OnceAction
 
 	interval := c.frameIntervalMs(c.OnceAction)
+	if c.OnceSpeed > 0 {
+		interval *= c.OnceSpeed
+	}
 	c.FrameTime += deltaMs
 	for c.FrameTime >= interval {
 		c.FrameTime -= interval
