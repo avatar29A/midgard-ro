@@ -80,14 +80,23 @@ const (
 	charCreateColH     = float32(16)
 	charCreateColCols  = 5
 	charCreateColPitch = float32(18)
-	charCreateColX     = float32(615)
+	charCreateColX     = charCreateColBoxLeft + charCreateColPadX
 
 	// The box the frame paints for the swatches, measured off bg_makebg.bmp:
-	// border at 299 and 358, interior between. Everything here is placed
-	// against those two numbers, because they are the only fixed thing —
-	// the heading's height is not known until the font is rasterized.
+	// borders at y 299 and 358, x 609 and 761. Everything here is placed
+	// against those numbers, because they are the only fixed thing — the
+	// heading's height is not known until the font is rasterized.
+	//
+	// bg_makebg.bmp stores its rows top-down: its BMP height field is
+	// negative, so a scan that flips them reads the frame upside down and
+	// reports these borders at 421 minus their real y.
 	charCreateColBoxTop    = float32(300)
 	charCreateColBoxBottom = float32(357)
+	charCreateColBoxLeft   = float32(609)
+
+	// charCreateColPadX keeps the heading and the swatches off that left
+	// border rather than sitting on it.
+	charCreateColPadX = float32(8)
 
 	// charCreateColLabelY is the heading, inside the box. There is no room
 	// above it: the style grid ends at 291 and the box begins at 299.
@@ -315,7 +324,7 @@ func (b *UI2DBackend) drawCharCreateColors(state CharCreateUIState, x, y float32
 	// is taller than that, and a constant cannot be right for a height only
 	// known once the font is rasterized.
 	labelY := y + charCreateColLabelY
-	r.DrawText(x+charCreateHairX, labelY, "Hair Color", loginTextScale, charCreateCardInk)
+	r.DrawText(x+charCreateColX, labelY, "Hair Color", loginTextScale, charCreateCardInk)
 
 	swatchTop := labelY + r.FontLineHeight(loginTextScale) + charCreateColGap
 
