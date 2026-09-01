@@ -2199,6 +2199,23 @@ func (s *InGameState) CaptureScene() ([]byte, int32, int32) {
 	return s.scene.CaptureImage()
 }
 
+// barWorthShowing reports whether a unit's health is worth the screen space.
+//
+// Monsters earn a bar by being the target or by being pointed at. Everything
+// else that carries one — other players, once they are modelled — keeps it
+// unconditionally, because theirs is not a fight the pointer is choosing.
+func (s *InGameState) barWorthShowing(e *entity.Entity) bool {
+	if e.Type != entity.TypeMonster {
+		return true
+	}
+
+	if e.ID == s.targetID {
+		return true
+	}
+
+	return s.hoverEntity != nil && s.hoverEntity.ID == e.ID
+}
+
 // msSinceStart is the elapsed time since t in milliseconds, for traces.
 func msSinceStart(t time.Time) float64 {
 	return float64(time.Since(t).Microseconds()) / 1000
@@ -2211,10 +2228,13 @@ func msSinceStart(t time.Time) float64 {
 // finished positions and needs nothing from the scene.
 //
 // The player is always included: their own bars are what the request was for,
-// and their HP and SP are the only ones the server keeps current. Other units
-// are included when their kind says so — Entity.ShowHP, which NewEntity
-// already sets per type — and their HP is whatever the spawn packet said until
-// Track F starts calling Manager.SetVitals.
+// and their HP and SP are the only ones the server keeps current.
+//
+// A monster's bar is shown only while it is the target or under the pointer.
+// The server keeps sending a damaged monster's health for as long as it is in
+// view, so drawing every one that has ever been hit left bars standing over
+// half the map long after the fight — and the bar was asked for as part of
+// what "selected" looks like, alongside the name and the mark.
 func (s *InGameState) EntityBars(viewportW, viewportH float32) []EntityBar {
 	if s.scene == nil || !s.SceneReady {
 		return nil
@@ -2240,6 +2260,10 @@ func (s *InGameState) EntityBars(viewportW, viewportH float32) []EntityBar {
 
 	for _, e := range s.entityManager.All() {
 		if e.Body == nil || !e.ShowHP || e.MaxHP <= 0 || e.ID == s.selfAID() {
+			continue
+		}
+
+		if !s.barWorthShowing(e) {
 			continue
 		}
 
