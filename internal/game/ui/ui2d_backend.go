@@ -10,7 +10,6 @@ import (
 	"github.com/go-gl/gl/v4.1-core/gl"
 	"go.uber.org/zap"
 
-	"github.com/Faultbox/midgard-ro/internal/engine/charsprite"
 	"github.com/Faultbox/midgard-ro/internal/engine/cursor"
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
 	"github.com/Faultbox/midgard-ro/internal/logger"
@@ -51,7 +50,7 @@ type UI2DBackend struct {
 	assetLoader func(string) ([]byte, error)
 
 	// Character portraits for the select screen, keyed by sprite spec.
-	charSelPortraits map[charsprite.Spec]*charSelectPortrait
+	charSelPortraits map[portraitKey]*charSelectPortrait
 
 	// Character select art, and where its window has been dragged to.
 	charSelSkin        *charSelectSkin

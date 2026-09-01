@@ -34,6 +34,18 @@ type CharCreateState struct {
 	// point when the toggle has not been touched.
 	Sex uint8
 
+	// Job is what the character starts as — Novice, or Summoner for a Doram.
+	// Both are creatable on our server (allowed_job_flag 3).
+	Job int
+
+	// HairStyle is the head sprite number. Style 0 is not a file; every sex
+	// has a style 1, which is where the screen starts.
+	HairStyle int
+
+	// Facing is which way the preview is turned, 0..7. Not sent anywhere —
+	// the server has no field for it — it only decides which frame is drawn.
+	Facing int
+
 	// StatusMsg and ErrorMsg are what the screen says about itself.
 	StatusMsg string
 	ErrorMsg  string
@@ -52,12 +64,60 @@ func NewCharCreateState(slot int, client *network.Client, manager *Manager, back
 	}
 
 	return &CharCreateState{
-		client:  client,
-		manager: manager,
-		slot:    slot,
-		back:    back,
-		Sex:     sex,
+		client:    client,
+		manager:   manager,
+		slot:      slot,
+		back:      back,
+		Sex:       sex,
+		Job:       JobNovice,
+		HairStyle: 1,
 	}
+}
+
+// The two jobs our server allows at creation. Anything else is refused with
+// "Invalid job" (char/char.cpp:1489).
+const (
+	// JobNovice is a Human.
+	JobNovice = 0
+	// JobSummoner is a Doram.
+	JobSummoner = 4218
+)
+
+// SetSex chooses the character's sex. At our packet version this is the
+// client's to decide and is sent in CH_MAKE_CHAR; the server accepts only
+// male or female.
+func (s *CharCreateState) SetSex(sex uint8) {
+	if s.Sex == sex {
+		return
+	}
+
+	s.Sex = sex
+	trace.Emit(trace.Char, "set-sex", zap.Uint8("sex", sex))
+}
+
+// SetJob chooses Human or Doram.
+func (s *CharCreateState) SetJob(job int) {
+	if job != JobNovice && job != JobSummoner {
+		logger.Warn("asked for a job the server does not allow at creation",
+			zap.Int("job", job))
+
+		return
+	}
+
+	if s.Job == job {
+		return
+	}
+
+	s.Job = job
+	trace.Emit(trace.Char, "set-job", zap.Int("job", job))
+}
+
+// Turn rotates the preview by one step, wrapping in both directions.
+func (s *CharCreateState) Turn(delta int) {
+	const directions = 8
+
+	s.Facing = ((s.Facing+delta)%directions + directions) % directions
+	trace.Emit(trace.Char, "turn", zap.Int("facing", s.Facing))
 }
 
 // Slot is where the character being built will go.

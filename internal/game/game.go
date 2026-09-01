@@ -810,6 +810,9 @@ func (g *Game) renderUI() {
 		g.uiBackend.RenderCharCreateUI(ui.CharCreateUIState{
 			Slot:          state.Slot(),
 			Sex:           state.Sex,
+			Job:           state.Job,
+			HairStyle:     state.HairStyle,
+			Facing:        state.Facing,
 			StatusMessage: state.GetStatusMessage(),
 			ErrorMessage:  state.GetErrorMessage(),
 			OnCancel: func() {
@@ -817,6 +820,8 @@ func (g *Game) renderUI() {
 					state.Cancel()
 				}
 			},
+			OnSetSex: func(sex uint8) { state.SetSex(sex) },
+			OnTurn:   func(delta int) { state.Turn(delta) },
 		}, viewportWidth, viewportHeight)
 
 	case *states.LoadingState:

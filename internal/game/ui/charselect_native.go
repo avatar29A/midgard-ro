@@ -442,23 +442,31 @@ type charSelectPortrait struct {
 // A character whose sprite will not load simply has an empty slot; the screen
 // stays usable, which matters more than the picture.
 func (b *UI2DBackend) portraitFor(char *packets.CharInfo) *charSelectPortrait {
-	spec := charsprite.Spec{
+	return b.portraitForSpec(charsprite.Spec{
 		Job:       int(char.Class),
 		Female:    char.Sex == 0,
 		HairStyle: int(char.HairStyle),
-	}
+	}, charSelFacing)
+}
 
+// portraitForSpec bakes one look's frame into a texture, once per look and
+// facing.
+//
+// Split from portraitFor so a look that has no character behind it yet can be
+// drawn too — which is the whole of the creation screen's preview.
+func (b *UI2DBackend) portraitForSpec(spec charsprite.Spec, facing int) *charSelectPortrait {
 	if b.charSelPortraits == nil {
-		b.charSelPortraits = make(map[charsprite.Spec]*charSelectPortrait)
+		b.charSelPortraits = make(map[portraitKey]*charSelectPortrait)
 	}
 
-	if portrait, ok := b.charSelPortraits[spec]; ok {
+	key := portraitKey{spec: spec, facing: facing}
+	if portrait, ok := b.charSelPortraits[key]; ok {
 		return portrait
 	}
 
 	// Remember the failure too, so a missing sprite is looked up once rather
 	// than every frame.
-	b.charSelPortraits[spec] = nil
+	b.charSelPortraits[key] = nil
 
 	if b.assetLoader == nil {
 		return nil
@@ -473,7 +481,7 @@ func (b *UI2DBackend) portraitFor(char *packets.CharInfo) *charSelectPortrait {
 	}
 
 	// The idle frame facing the viewer is the pose the original shows.
-	frames := assets.Sheet.Frames[charsprite.ActionIdle*charsprite.Directions+charSelFacing]
+	frames := assets.Sheet.Frames[charsprite.ActionIdle*charsprite.Directions+facing]
 	if len(frames) == 0 {
 		logger.Warn("character sprite has no idle frame",
 			zap.Int("job", spec.Job), zap.String("path", assets.BodyPath))
@@ -488,9 +496,17 @@ func (b *UI2DBackend) portraitFor(char *packets.CharInfo) *charSelectPortrait {
 		height: float32(assets.Sheet.Height),
 	}
 
-	b.charSelPortraits[spec] = portrait
+	b.charSelPortraits[key] = portrait
 
 	return portrait
+}
+
+// portraitKey is what a baked portrait is cached under. Facing is part of it
+// because the creation screen turns the preview, and each direction is a
+// different frame.
+type portraitKey struct {
+	spec   charsprite.Spec
+	facing int
 }
 
 // drawCharSelectPortrait stands a character on the shadow painted in its slot.

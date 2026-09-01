@@ -5,6 +5,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/Faultbox/midgard-ro/internal/engine/charsprite"
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
 	"github.com/Faultbox/midgard-ro/internal/logger"
 	"github.com/Faultbox/midgard-ro/internal/trace"
@@ -28,11 +29,42 @@ const (
 	charCreateBtnH    = float32(25)
 	charCreateBtnPadX = float32(18)
 	charCreateBtnY    = charCreateWinH - 41
+
+	// The sex toggle, two 63x25 pills above the preview.
+	charCreateSexW    = float32(63)
+	charCreateSexH    = float32(25)
+	charCreateSexMinX = float32(434)
+	charCreateSexY    = float32(60)
+
+	// Where the preview stands: the middle of the podium painted into the
+	// frame, and the ground line its feet rest on.
+	charCreatePodiumX = float32(500)
+	charCreatePodiumY = float32(242)
+
+	// How tall and wide the preview may be before it is scaled to fit, so a
+	// tall sprite cannot climb out of the panel.
+	charCreatePreviewMaxH = float32(150)
+	charCreatePreviewMaxW = float32(110)
+
+	// The turn arrows either side of the preview, 22x23.
+	charCreateTurnW = float32(22)
+	charCreateTurnH = float32(23)
+	charCreateTurnY = float32(182)
+	charCreateTurnL = float32(428)
+	charCreateTurnR = float32(552)
 )
 
 // charCreateSkin is the creation screen's art.
+//
+// Only the window is required. Everything else is optional in the same sense
+// character select's paging arrows are: without them the screen loses a
+// control, which beats losing the screen.
 type charCreateSkin struct {
 	window *TextureInfo
+
+	maleOff, maleOn     *TextureInfo
+	femaleOff, femaleOn *TextureInfo
+	turnLeft, turnRight *TextureInfo
 }
 
 // loadCharCreateSkin loads the creation frame. A miss leaves the skin nil and
@@ -57,7 +89,16 @@ func (b *UI2DBackend) loadCharCreateSkin() *charCreateSkin {
 		return nil
 	}
 
-	b.charCreateSkin = &charCreateSkin{window: tex}
+	skin := &charCreateSkin{window: tex}
+
+	skin.maleOff = b.optionalTexture(makeCharVer2TexBasePath + `bt_male_off.bmp`)
+	skin.maleOn = b.optionalTexture(makeCharVer2TexBasePath + `bt_male_on.bmp`)
+	skin.femaleOff = b.optionalTexture(makeCharVer2TexBasePath + `bt_female_off.bmp`)
+	skin.femaleOn = b.optionalTexture(makeCharVer2TexBasePath + `bt_female_on.bmp`)
+	skin.turnLeft = b.optionalTexture(makeCharVer2TexBasePath + `bt_leftturn_normal.bmp`)
+	skin.turnRight = b.optionalTexture(makeCharVer2TexBasePath + `bt_rightturn_normal.bmp`)
+
+	b.charCreateSkin = skin
 
 	return b.charCreateSkin
 }
@@ -90,10 +131,101 @@ func (b *UI2DBackend) renderNativeCharCreate(state CharCreateUIState, width, hei
 
 	b.ctx.Renderer().DrawImage(skin.window.ID, x, y, charCreateWinW, charCreateWinH, ui2d.ColorWhite)
 
+	b.drawCharCreateSex(skin, state, x, y)
+	b.drawCharCreatePreview(state, x, y)
+	b.drawCharCreateTurn(skin, state, x, y)
 	b.drawCharCreateButtons(state, x, y)
 	b.drawCharCreateMessages(state, x, y)
 
 	return true
+}
+
+// drawCharCreateSex draws the male/female toggle.
+//
+// At our packet version sex is the client's to choose and travels in
+// CH_MAKE_CHAR, so this is a real control rather than a report of the
+// account's own sex — which is only where it starts.
+func (b *UI2DBackend) drawCharCreateSex(skin *charCreateSkin, state CharCreateUIState, x, y float32) {
+	if skin.maleOff == nil || skin.maleOn == nil || skin.femaleOff == nil || skin.femaleOn == nil {
+		return
+	}
+
+	r := b.ctx.Renderer()
+	top := y + charCreateSexY
+	maleX := x + charCreateSexMinX
+	femaleX := maleX + charCreateSexW
+
+	male, female := skin.maleOff, skin.femaleOff
+	if state.Sex == SexMale {
+		male = skin.maleOn
+	} else {
+		female = skin.femaleOn
+	}
+
+	r.DrawImage(male.ID, maleX, top, charCreateSexW, charCreateSexH, ui2d.ColorWhite)
+	r.DrawImage(female.ID, femaleX, top, charCreateSexW, charCreateSexH, ui2d.ColorWhite)
+
+	if b.ctx.InvisibleButtonAt("charcreate_male", maleX, top, charCreateSexW, charCreateSexH) &&
+		state.OnSetSex != nil {
+		state.OnSetSex(SexMale)
+	}
+
+	if b.ctx.InvisibleButtonAt("charcreate_female", femaleX, top, charCreateSexW, charCreateSexH) &&
+		state.OnSetSex != nil {
+		state.OnSetSex(SexFemale)
+	}
+}
+
+// drawCharCreatePreview draws the character as it is being built, standing on
+// the podium painted into the frame.
+func (b *UI2DBackend) drawCharCreatePreview(state CharCreateUIState, x, y float32) {
+	portrait := b.portraitForSpec(charsprite.Spec{
+		Job:       state.Job,
+		Female:    state.Sex == SexFemale,
+		HairStyle: state.HairStyle,
+	}, state.Facing)
+	if portrait == nil {
+		return
+	}
+
+	w, h := portrait.width, portrait.height
+
+	if h > charCreatePreviewMaxH {
+		w *= charCreatePreviewMaxH / h
+		h = charCreatePreviewMaxH
+	}
+	if w > charCreatePreviewMaxW {
+		h *= charCreatePreviewMaxW / w
+		w = charCreatePreviewMaxW
+	}
+
+	b.ctx.Renderer().DrawImage(portrait.texture,
+		x+charCreatePodiumX-w/2, y+charCreatePodiumY-h, w, h, ui2d.ColorWhite)
+}
+
+// drawCharCreateTurn draws the arrows that rotate the preview.
+func (b *UI2DBackend) drawCharCreateTurn(skin *charCreateSkin, state CharCreateUIState, x, y float32) {
+	if skin.turnLeft == nil || skin.turnRight == nil {
+		return
+	}
+
+	r := b.ctx.Renderer()
+	top := y + charCreateTurnY
+	leftX := x + charCreateTurnL
+	rightX := x + charCreateTurnR
+
+	r.DrawImage(skin.turnLeft.ID, leftX, top, charCreateTurnW, charCreateTurnH, ui2d.ColorWhite)
+	r.DrawImage(skin.turnRight.ID, rightX, top, charCreateTurnW, charCreateTurnH, ui2d.ColorWhite)
+
+	if b.ctx.InvisibleButtonAt("charcreate_turn_l", leftX, top, charCreateTurnW, charCreateTurnH) &&
+		state.OnTurn != nil {
+		state.OnTurn(-1)
+	}
+
+	if b.ctx.InvisibleButtonAt("charcreate_turn_r", rightX, top, charCreateTurnW, charCreateTurnH) &&
+		state.OnTurn != nil {
+		state.OnTurn(1)
+	}
 }
 
 // drawCharCreateButtons draws Go back and Create along the bottom.
