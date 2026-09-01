@@ -377,3 +377,69 @@ func TestPlayerHeadPosesAreNotCountedAsDropped(t *testing.T) {
 		t.Errorf("Dropped = %d, want 0; the unbaked idle entries are head poses", sheet.Dropped)
 	}
 }
+
+// TestDoramUsesItsOwnSpriteTree: Doram characters are a second race with the
+// same tree beneath it. Job is the only thing that says which one to read —
+// there is no race field anywhere — so a wrong answer here silently draws a
+// human for a Doram, or fails to find a sprite at all.
+func TestDoramUsesItsOwnSpriteTree(t *testing.T) {
+	tests := []struct {
+		name     string
+		spec     Spec
+		wantBody string
+		wantHead string
+	}{
+		{
+			name:     "a male Doram",
+			spec:     Spec{Job: JobSummoner, HairStyle: 1},
+			wantBody: `data\sprite\도람족\몸통\남\summoner_남.spr`,
+			wantHead: `data\sprite\도람족\머리통\남\1_남.spr`,
+		},
+		{
+			name:     "a female Doram",
+			spec:     Spec{Job: JobSummoner, Female: true, HairStyle: 2},
+			wantBody: `data\sprite\도람족\몸통\여\summoner_여.spr`,
+			wantHead: `data\sprite\도람족\머리통\여\2_여.spr`,
+		},
+		{
+			name:     "a male Novice is still human",
+			spec:     Spec{Job: 0, HairStyle: 1},
+			wantBody: `data\sprite\인간족\몸통\남\초보자_남.spr`,
+			wantHead: `data\sprite\인간족\머리통\남\1_남.spr`,
+		},
+		{
+			name:     "a female Swordman is still human",
+			spec:     Spec{Job: 1, Female: true, HairStyle: 3},
+			wantBody: `data\sprite\인간족\몸통\여\검사_여.spr`,
+			wantHead: `data\sprite\인간족\머리통\여\3_여.spr`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bodySPR, _ := tt.spec.BodyPaths()
+			if bodySPR != tt.wantBody {
+				t.Errorf("body = %q, want %q", bodySPR, tt.wantBody)
+			}
+
+			headSPR, _ := tt.spec.HeadPaths()
+			if headSPR != tt.wantHead {
+				t.Errorf("head = %q, want %q", headSPR, tt.wantHead)
+			}
+		})
+	}
+}
+
+// TestOnlySummonerIsDoram: every other job reads from the human tree, and a
+// job we have no name for must not silently become a Doram.
+func TestOnlySummonerIsDoram(t *testing.T) {
+	for _, job := range []int{0, 1, 2, 23, 25, 4217, 4219} {
+		if (Spec{Job: job}).isDoram() {
+			t.Errorf("job %d reads as Doram", job)
+		}
+	}
+
+	if !(Spec{Job: JobSummoner}).isDoram() {
+		t.Errorf("job %d does not read as Doram", JobSummoner)
+	}
+}

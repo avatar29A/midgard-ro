@@ -3,6 +3,7 @@ package states
 import (
 	"go.uber.org/zap"
 
+	"github.com/Faultbox/midgard-ro/internal/engine/charsprite"
 	"github.com/Faultbox/midgard-ro/internal/logger"
 	"github.com/Faultbox/midgard-ro/internal/network"
 	"github.com/Faultbox/midgard-ro/internal/trace"
@@ -69,19 +70,10 @@ func NewCharCreateState(slot int, client *network.Client, manager *Manager, back
 		slot:      slot,
 		back:      back,
 		Sex:       sex,
-		Job:       JobNovice,
+		Job:       charsprite.JobNovice,
 		HairStyle: 1,
 	}
 }
-
-// The two jobs our server allows at creation. Anything else is refused with
-// "Invalid job" (char/char.cpp:1489).
-const (
-	// JobNovice is a Human.
-	JobNovice = 0
-	// JobSummoner is a Doram.
-	JobSummoner = 4218
-)
 
 // SetSex chooses the character's sex. At our packet version this is the
 // client's to decide and is sent in CH_MAKE_CHAR; the server accepts only
@@ -97,7 +89,7 @@ func (s *CharCreateState) SetSex(sex uint8) {
 
 // SetJob chooses Human or Doram.
 func (s *CharCreateState) SetJob(job int) {
-	if job != JobNovice && job != JobSummoner {
+	if job != charsprite.JobNovice && job != charsprite.JobSummoner {
 		logger.Warn("asked for a job the server does not allow at creation",
 			zap.Int("job", job))
 

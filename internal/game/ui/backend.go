@@ -168,8 +168,9 @@ type CharCreateUIState struct {
 	// OnCancel abandons creation and returns to character select.
 	OnCancel func()
 
-	// OnSetSex and OnTurn change the look being previewed.
+	// OnSetSex, OnSetJob and OnTurn change the look being previewed.
 	OnSetSex func(sex uint8)
+	OnSetJob func(job int)
 	OnTurn   func(delta int)
 }
 
