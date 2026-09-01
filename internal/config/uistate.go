@@ -46,6 +46,12 @@ type UIState struct {
 	// what is already saved.
 	HotkeyItems map[string]uint32 `json:"hotkey_items,omitempty"`
 
+	// HotkeySkills is the same for cells holding a skill, keyed the same way.
+	// A second map rather than a tag on the first: an id alone cannot say
+	// which it is — item 1 and skill 1 are both real — and a config written
+	// before skills could go on the bar still loads its items unchanged.
+	HotkeySkills map[string]uint32 `json:"hotkey_skills,omitempty"`
+
 	// Where the Map window was left and how big. Zero width means unset, and
 	// it opens centered at its default size.
 	MapX float32 `json:"map_x,omitempty"`

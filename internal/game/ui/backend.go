@@ -27,6 +27,24 @@ type UIBackend interface {
 	// TakeDropAction returns an item dragged out of the inventory window.
 	TakeDropAction() (DropAction, bool)
 
+	// TakeStatAction returns a stat the player asked to raise.
+	TakeStatAction() (StatAction, bool)
+
+	// TakeSkillAction returns a skill the player asked to raise.
+	TakeSkillAction() (SkillAction, bool)
+
+	// TakeSkillCast returns a skill the player asked to use.
+	TakeSkillCast() (SkillCast, bool)
+
+	// TakeShowEquipAction returns a click on the equipment switch.
+	TakeShowEquipAction() (bool, bool)
+
+	// TakeLevelUpAction returns a level-up button the player pressed.
+	TakeLevelUpAction() (LevelUpAction, bool)
+
+	// OpenWindow opens one of the HUD windows.
+	OpenWindow(window HUDWindow)
+
 	// PressHotkey asks for the item in a quick-panel cell to be used.
 	PressHotkey(row, col int)
 
@@ -171,6 +189,10 @@ type InGameUIState struct {
 	// on, and the target being fought — already projected.
 	WorldLabels []states.HoverLabel
 
+	// WorldEffects are the STR effect quads playing over the map, already
+	// projected into the viewport.
+	WorldEffects []states.EffectQuad
+
 	// TargetMarker is the mark over the unit being fought, already projected,
 	// or nil when nothing is being fought.
 	TargetMarker *states.TargetMarker
@@ -178,6 +200,9 @@ type InGameUIState struct {
 	// DamageNumbers are the figures floating up from recent blows, already
 	// projected.
 	DamageNumbers []states.DamageNumber
+
+	// LevelUpButtons says which corners have a level waiting to be spent.
+	LevelUpButtons LevelUpButtons
 
 	// Player position
 	PlayerX, PlayerY, PlayerZ float32
@@ -228,6 +253,23 @@ type InGameUIState struct {
 	// Inventory what it is carrying.
 	Skills    []packets.Skill
 	Inventory []packets.InventoryItem
+
+	// Equipment is what is worn, keyed by the place on the body it is worn
+	// in, which is the question the equipment window's ten slots ask.
+	Equipment map[uint32]packets.InventoryItem
+
+	// Portrait is the character's own sprite, for the equipment window to
+	// show what it is dressing: the texture, the size of the character's own
+	// art within it, and the coordinates that cut that art out of the padded
+	// frame it was baked into.
+	Portrait               uint32
+	PortraitW, PortraitH   float32
+	PortraitU0, PortraitV0 float32
+	PortraitU1, PortraitV1 float32
+
+	// ShowEquipment is the server's word on whether other players may look
+	// at what this character is wearing.
+	ShowEquipment bool
 
 	// The numbers derived from those six, down the right of the window.
 	Atk, AtkBonus    int

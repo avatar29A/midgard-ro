@@ -99,6 +99,11 @@ type Game struct {
 	mouseAtX, mouseAtY int
 	mouseAtPending     bool
 
+	// Which HUD windows to open once the map is up, from --open-window, and
+	// which inventory slots to wear, from --equip.
+	openWindows []string
+	equipSlots  []int
+
 	// toggleBasicInfo is set for the frame Ctrl+V was pressed.
 	toggleBasicInfo bool
 
@@ -322,6 +327,25 @@ func (g *Game) playUIClick() {
 	}
 }
 
+// playWorldSound plays a sound effect the world asked for.
+//
+// Missing sound is a nicety lost, not a failure: the flash still plays, and a
+// game that stopped because a wav was absent would be worse than a quiet one.
+func (g *Game) playWorldSound(path string) {
+	if g.audioManager == nil {
+		return
+	}
+
+	data, err := g.assetManager.Load(path)
+	if err == nil {
+		err = g.audioManager.PlaySFX(data)
+	}
+
+	if err != nil {
+		logger.Warn("could not play a world sound", zap.String("path", path), zap.Error(err))
+	}
+}
+
 // initAudio brings up audio playback and the location background music.
 // Sound is a nicety: when the device or the music is unavailable the game runs
 // on in silence.
@@ -483,6 +507,7 @@ func (g *Game) frame() {
 	g.checkTimedScreenshot()
 
 	g.checkHotkeys()
+	g.checkSit()
 
 	// F3 toggles the in-game debug overlay (player/camera/scene/network).
 	if imgui.IsKeyPressedBoolV(imgui.KeyF3, false) {
@@ -520,6 +545,8 @@ func (g *Game) frame() {
 
 	g.runWalkTo()
 	g.runMouseAt()
+	g.runOpenWindows()
+	g.runEquip()
 	g.runSay()
 
 	// Render 3D scene (if applicable)
@@ -557,6 +584,71 @@ func (g *Game) SetWalkTo(x, y int) {
 func (g *Game) SetMouseAt(x, y int) {
 	g.mouseAtX, g.mouseAtY = x, y
 	g.mouseAtPending = true
+}
+
+// SetOpenWindows records the windows --open-window asked for.
+func (g *Game) SetOpenWindows(names []string) {
+	g.openWindows = names
+}
+
+// runOpenWindows opens the windows --open-window named, once the map is up.
+//
+// Straight to the backend rather than through a synthetic click on the menu
+// strip: where those buttons are depends on the panel's art and on where the
+// panel has been dragged to, and a capture that has to aim at a button is a
+// capture that breaks when the panel moves.
+func (g *Game) runOpenWindows() {
+	if len(g.openWindows) == 0 || g.uiBackend == nil {
+		return
+	}
+
+	state, ok := g.stateManager.Current().(*states.InGameState)
+	if !ok || !state.MapReady() {
+		return
+	}
+
+	for _, name := range g.openWindows {
+		window, opens := ui.OpensWindow(name)
+		if !opens {
+			logger.Warn("--open-window names no window", zap.String("window", name))
+
+			continue
+		}
+
+		g.uiBackend.OpenWindow(window)
+		logger.Info("window opened from the command line", zap.String("window", name))
+	}
+
+	g.openWindows = nil
+}
+
+// SetEquipSlots records the inventory slots --equip asked to be worn.
+func (g *Game) SetEquipSlots(slots []int) {
+	g.equipSlots = slots
+}
+
+// runEquip wears what --equip named, once the inventory has arrived.
+//
+// Waits for the bag rather than for the map: the slots are the server's own
+// numbering, and asking before the item list has come back would name slots
+// the client has never heard of.
+func (g *Game) runEquip() {
+	if len(g.equipSlots) == 0 {
+		return
+	}
+
+	state, ok := g.stateManager.Current().(*states.InGameState)
+	if !ok || !state.MapReady() || len(state.Inventory()) == 0 {
+		return
+	}
+
+	for _, slot := range g.equipSlots {
+		if err := state.EquipItemAt(slot, 0); err != nil {
+			logger.Warn("--equip request failed", zap.Int("slot", slot), zap.Error(err))
+		}
+	}
+
+	g.equipSlots = nil
 }
 
 // runMouseAt moves the pointer for --mouse-at once the map is up. It goes
@@ -839,6 +931,9 @@ func (g *Game) renderUI() {
 		stats := state.Stats()
 		dialog := state.Dialog()
 
+		baseUp, jobUp := state.LevelUpPending()
+		levelUpButtons := ui.LevelUpButtons{Base: baseUp, Job: jobUp}
+
 		var targetMarker *states.TargetMarker
 		if marker, ok := state.TargetMarker(viewportWidth, viewportHeight); ok {
 			targetMarker = &marker
@@ -856,8 +951,10 @@ func (g *Game) renderUI() {
 			ChatLines:       state.ChatLines(),
 			EntityBars:      state.EntityBars(viewportWidth, viewportHeight),
 			WorldLabels:     state.WorldLabels(viewportWidth, viewportHeight),
+			WorldEffects:    state.EffectQuads(viewportWidth, viewportHeight),
 			TargetMarker:    targetMarker,
 			DamageNumbers:   state.DamageNumbers(viewportWidth, viewportHeight),
+			LevelUpButtons:  levelUpButtons,
 			PlayerX:         playerX,
 			PlayerY:         playerY,
 			PlayerZ:         playerZ,
@@ -909,8 +1006,10 @@ func (g *Game) renderUI() {
 
 			MapMarkers: state.MapMarkers(),
 
-			Skills:    state.Skills(),
-			Inventory: state.Inventory(),
+			Skills:        state.Skills(),
+			Inventory:     state.Inventory(),
+			Equipment:     state.Equipment(),
+			ShowEquipment: state.ShowEquipmentOn(),
 
 			PrimaryStats: stats.Primary,
 			PrimaryBonus: stats.PrimaryBonus,
@@ -925,22 +1024,78 @@ func (g *Game) renderUI() {
 			Flee: stats.Flee, FleeBonus: stats.FleeBonus,
 			Hit: stats.Hit, Critical: stats.Critical, Aspd: stats.Aspd,
 		}
+		uiState.Portrait, uiState.PortraitW, uiState.PortraitH,
+			uiState.PortraitU0, uiState.PortraitV0,
+			uiState.PortraitU1, uiState.PortraitV1 = state.Portrait()
+
 		populateDebugFields(&uiState, state, g.client)
 		g.uiBackend.RenderInGameUI(uiState, g.dt, viewportWidth, viewportHeight)
 
 		g.applySoundSettings()
 
-		// A double click in the inventory goes out here, for the same reason
-		// the chat line does: the interface has no connection of its own.
+		// A sound the world asked for — the level-up flash and its chime go
+		// together. The state has no audio device, so it names the file and
+		// this plays it.
+		if path, ok := state.TakeSoundRequest(); ok {
+			g.playWorldSound(path)
+		}
+
+		// A double click in the inventory, or an item dragged onto or off the
+		// body, goes out here for the same reason the chat line does: the
+		// interface has no connection of its own.
 		if action, ok := g.uiBackend.TakeItemAction(); ok {
 			var err error
-			if action.Equip {
-				err = state.EquipItem(action.Index)
-			} else {
+
+			switch {
+			case action.Unequip:
+				err = state.UnequipItem(action.Index)
+			case action.Equip:
+				err = state.EquipItemAt(action.Index, action.Mask)
+			default:
 				err = state.UseItem(action.Index)
 			}
+
 			if err != nil {
 				logger.Warn("could not act on item", zap.Error(err))
+			}
+		}
+
+		// A level-up button pressed. The window it points at is opened by the
+		// interface; this is only the acknowledgement that takes the button
+		// away.
+		if levelUp, ok := g.uiBackend.TakeLevelUpAction(); ok {
+			state.AcknowledgeLevelUp(levelUp.Base)
+		}
+
+		// A status point spent on a stat. The server decides whether it can
+		// be afforded and answers with the new value.
+		if stat, ok := g.uiBackend.TakeStatAction(); ok {
+			if err := state.RaiseStat(stat.Stat); err != nil {
+				logger.Warn("could not raise that stat", zap.Error(err))
+			}
+		}
+
+		// A skill point spent on a skill, answered the same way: the server
+		// sends the skill back at its new level.
+		if skill, ok := g.uiBackend.TakeSkillAction(); ok {
+			if err := state.RaiseSkill(skill.Skill); err != nil {
+				logger.Warn("could not raise that skill", zap.Error(err))
+			}
+		}
+
+		// A skill pressed on the quick panel. What it is cast at depends on
+		// what it targets, which is the state's question rather than the
+		// interface's.
+		if cast, ok := g.uiBackend.TakeSkillCast(); ok {
+			if err := state.UseSkill(cast.Skill, 0); err != nil {
+				logger.Warn("could not use that skill", zap.Error(err))
+			}
+		}
+
+		// The equipment window's switch, which is the server's to keep.
+		if want, ok := g.uiBackend.TakeShowEquipAction(); ok {
+			if err := state.ShowEquipment(want); err != nil {
+				logger.Warn("could not set equipment visibility", zap.Error(err))
 			}
 		}
 
@@ -1526,6 +1681,31 @@ var hotkeyRows = []hotkeyRowKeys{
 	{row: 1},
 	{row: 2, ctrl: true},
 	{row: 3, alt: true},
+}
+
+// checkSit sits the character down and stands it back up, on Insert.
+//
+// One key for both, as the original has it. Nothing fires while a field has
+// focus: Insert in a chat line is a text key, and sitting down in the middle
+// of writing a message would be the interface acting on something that was
+// never meant for it.
+func (g *Game) checkSit() {
+	if g.uiBackend != nil && g.uiBackend.TextEntryFocused() {
+		return
+	}
+
+	if !imgui.IsKeyPressedBoolV(imgui.KeyInsert, false) {
+		return
+	}
+
+	state, ok := g.stateManager.Current().(*states.InGameState)
+	if !ok {
+		return
+	}
+
+	if err := state.ToggleSit(); err != nil {
+		logger.Warn("could not sit down", zap.Error(err))
+	}
 }
 
 // checkHotkeys uses the quick panel from the keyboard.

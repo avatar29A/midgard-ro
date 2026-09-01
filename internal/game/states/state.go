@@ -72,6 +72,13 @@ func (s *Session) SpriteSpec() charsprite.Spec {
 		Female:    s.Char.Sex == 0,
 		HairStyle: int(s.Char.HairStyle),
 		Weapon:    int(s.Char.Weapon),
+
+		// What is worn on the head, as the character list reported it. These
+		// are accessory ids rather than item ids: the server sends the look,
+		// and the client's own table says which sprite that is.
+		HeadTop: int(s.Char.HeadTop),
+		HeadMid: int(s.Char.HeadMid),
+		HeadLow: int(s.Char.HeadBottom),
 	}
 }
 

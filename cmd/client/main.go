@@ -65,6 +65,12 @@ func main() {
 	if lines := config.Say(); len(lines) > 0 {
 		g.SetSay(lines)
 	}
+	if windows := config.OpenWindows(); len(windows) > 0 {
+		g.SetOpenWindows(windows)
+	}
+	if slots := config.EquipSlots(); len(slots) > 0 {
+		g.SetEquipSlots(slots)
+	}
 
 	// Run the game loop
 	if err := g.Run(); err != nil {

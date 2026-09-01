@@ -36,6 +36,10 @@ const (
 	// holding it the rest of the time reads as a character stuck mid-fight.
 	ActionStandby
 
+	// ActionSit is the seated pose, which a player holds until they get up
+	// again. Only a player has one — nothing else in the game sits down.
+	ActionSit
+
 	// LogicalActions is how many of the above there are.
 	LogicalActions
 )
@@ -95,6 +99,14 @@ type Spec struct {
 	// either a weapon class or an item id. Zero is bare-handed. Players only.
 	Weapon int
 
+	// The three head gear views the server sent, as accessory ids rather than
+	// item ids. Zero is nothing worn in that place. Players only.
+	//
+	// Kept in the spec because they are part of what the character looks like:
+	// a sheet is cached by appearance, and two characters differing only in
+	// their hats are two appearances.
+	HeadTop, HeadMid, HeadLow int
+
 	// Name identifies a KindItem sprite, which the archive files by the item
 	// table's resource name rather than by any id. Ignored for every other
 	// kind. Spec is used as a cache key, so this stays a plain string.
@@ -108,6 +120,11 @@ type Spec struct {
 // ACT indices that are not logical actions but are needed to reason about
 // them.
 const (
+	// actSit is the seated pose, ACT set 2 for a player. It sits between the
+	// walk and the pick-up in the body's own order, which is why the pick-up
+	// is 3 rather than 2.
+	actSit = 2
+
 	// actStandby is the armed stance, ACT set 4 for a player. A weapon is
 	// drawn in this pose and in the attack, and in nothing else — which is
 	// why an armed character stands in it rather than in the bare idle.
@@ -137,13 +154,13 @@ const (
 // nothing on the ground picks anything up but the player.
 var actionIndices = map[Kind][LogicalActions]int{
 	KindPlayer: {ActionIdle: 0, ActionWalk: 1, ActionPickup: 3, ActionAttack: actUnarmedAttack,
-		ActionHurt: 6, ActionDie: 7, ActionStandby: actStandby},
+		ActionHurt: 6, ActionDie: 7, ActionStandby: actStandby, ActionSit: actSit},
 	KindMonster: {ActionIdle: 0, ActionWalk: 1, ActionPickup: -1, ActionAttack: 2,
-		ActionHurt: 3, ActionDie: 4, ActionStandby: -1},
+		ActionHurt: 3, ActionDie: 4, ActionStandby: -1, ActionSit: -1},
 	KindNPC: {ActionIdle: 0, ActionWalk: 1, ActionPickup: -1, ActionAttack: -1,
-		ActionHurt: -1, ActionDie: -1, ActionStandby: -1},
+		ActionHurt: -1, ActionDie: -1, ActionStandby: -1, ActionSit: -1},
 	KindItem: {ActionIdle: 0, ActionWalk: -1, ActionPickup: -1, ActionAttack: -1,
-		ActionHurt: -1, ActionDie: -1, ActionStandby: -1},
+		ActionHurt: -1, ActionDie: -1, ActionStandby: -1, ActionSit: -1},
 }
 
 // ActionMap is which ACT index each logical action resolves to for one
@@ -176,7 +193,7 @@ func DefaultActionMap(kind Kind) ActionMap {
 	}
 
 	return ActionMap{ActionIdle: 0, ActionWalk: -1, ActionPickup: -1,
-		ActionAttack: -1, ActionHurt: -1, ActionDie: -1, ActionStandby: -1}
+		ActionAttack: -1, ActionHurt: -1, ActionDie: -1, ActionStandby: -1, ActionSit: -1}
 }
 
 // withWeapon moves the actions a weapon changes.
@@ -228,10 +245,9 @@ func actHasArt(act *formats.ACT, set int) bool {
 
 // bakes reports whether an ACT index is one this appearance actually uses.
 //
-// Only the indices the map names: a player never sits in this client, and a
-// monster has nothing at 5 or above, so baking either would be eight
-// directions of frames nobody looks at — and a poring's attack alone is
-// twenty-eight frames a direction.
+// Only the indices the map names: a monster has nothing at 5 or above, so
+// baking those would be eight directions of frames nobody looks at — and a
+// poring's attack alone is twenty-eight frames a direction.
 func (m ActionMap) bakes(action int) bool {
 	for _, index := range m {
 		if index == action {
@@ -244,10 +260,10 @@ func (m ActionMap) bakes(action int) bool {
 
 // bakedAction reports whether an ACT index is worth compositing for a family.
 //
-// Only the indices that family maps a logical action onto: a player never
-// sits or stands ready in this client, and a monster has nothing at 5 or
-// above, so baking either would be eight directions of frames nobody looks
-// at — and a poring's attack alone is twenty-eight frames a direction.
+// Only the indices that family maps a logical action onto: a monster has
+// nothing at 5 or above, so baking those would be eight directions of frames
+// nobody looks at — and a poring's attack alone is twenty-eight frames a
+// direction.
 func bakedAction(kind Kind, action int) bool {
 	set, ok := actionIndices[kind]
 	if !ok {
@@ -284,6 +300,16 @@ type Sheet struct {
 	// Actions is which ACT index each logical action resolves to for this
 	// appearance, after the weapon has had its say.
 	Actions ActionMap
+
+	// Where the standing frame's own art sits inside the padded frame.
+	//
+	// Every frame is padded onto a canvas as big as the widest and tallest
+	// the sheet holds — a swing with a spear in it, or a hat that reaches
+	// above the head — so a standing character occupies a fraction of it and
+	// the rest is empty. Anything drawing the character flat, rather than as
+	// a billboard the camera is looking at, wants that fraction and not the
+	// canvas.
+	PortraitX, PortraitY, PortraitW, PortraitH int
 }
 
 // Frame is one baked animation frame: RGBA pixels at the sheet's dimensions.
@@ -298,6 +324,10 @@ type Assets struct {
 	HeadSPR *formats.SPR
 	HeadACT *formats.ACT
 	Sheet   *Sheet
+
+	// Gear is what the character wears on its head, lowest first. Empty for
+	// a bare head, which is most of them.
+	Gear []sprite.Gear
 
 	// WeaponSPR and WeaponACT are the weapon in the character's hand, nil when
 	// bare-handed or when the archive has no art for what is held.
@@ -375,13 +405,47 @@ func Load(load Loader, spec Spec) (*Assets, error) {
 		}
 	}
 
+	// What is worn on the head, lowest first so a hat is drawn over a mask.
+	// A piece that will not load costs that piece and nothing else.
+	for _, view := range [3]int{spec.HeadLow, spec.HeadMid, spec.HeadTop} {
+		sprPath, actPath := spec.GearPaths(view)
+		if sprPath == "" {
+			continue
+		}
+
+		gearSPR, gearACT, gearErr := loadPair(load, sprPath, actPath)
+		if gearErr != nil {
+			// Losing a hat costs a hat, not a character, so it is passed over
+			// as quietly as a missing weapon is.
+			continue
+		}
+
+		a.Gear = append(a.Gear, sprite.Gear{SPR: gearSPR, ACT: gearACT})
+	}
+
 	a.Sheet = BuildSheet(a.BodySPR, a.BodyACT, a.HeadSPR, a.HeadACT,
-		a.WeaponSPR, a.WeaponACT, spec.HeadDirection, spec.Kind)
+		a.WeaponSPR, a.WeaponACT, a.Gear, spec.HeadDirection, spec.Kind)
 	if a.Sheet == nil {
 		return nil, fmt.Errorf("body sprite %q produced no frames", bodySPRPath)
 	}
 
 	return a, nil
+}
+
+// posedSet reports whether an ACT set holds head poses rather than an
+// animation.
+//
+// A player's idle and seated sets each carry three "frames" that are the same
+// body art with the head turned three ways. Cycling them animates nothing —
+// it swivels the head forever, which is what a seated character was doing
+// before this covered the sit as well as the idle.
+//
+// Only players, and only these two: the combat stance is a six-frame loop, and
+// baking one frame of that left the character apparently frozen mid-swing. A
+// monster or NPC has no head to pose and its idle is a real animation — a
+// Kafra has 99 idle frames of standing and shifting.
+func posedSet(kind Kind, action int) bool {
+	return kind == KindPlayer && (action == 0 || action == actSit)
 }
 
 // BuildSheet composites every frame of every loaded action/direction and pads
@@ -404,7 +468,7 @@ func Load(load Loader, spec Spec) (*Assets, error) {
 // only the first leaves every one of them frozen, which is what treating them
 // like players did.
 func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR, headACT *formats.ACT,
-	weaponSPR *formats.SPR, weaponACT *formats.ACT, headDir int, kind Kind) *Sheet {
+	weaponSPR *formats.SPR, weaponACT *formats.ACT, gear []sprite.Gear, headDir int, kind Kind) *Sheet {
 	actions := DefaultActionMap(kind).withWeapon(weaponACT)
 	if bodySPR == nil || bodyACT == nil || len(bodyACT.Actions) == 0 {
 		return nil
@@ -414,15 +478,10 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 	}
 
 	// frameIndices returns the (bodyFrame, headFrame) pairs to bake for an
-	// action. A player's idle indexes the body by head direction too, because
-	// the body's neck anchor moves with the head pose.
+	// action. A player's posed sets index the body by head direction too,
+	// because the body's neck anchor moves with the head pose.
 	frameIndices := func(action, available int) [][2]int {
-		// Only the bare idle is a single baked pose. A player stands there on
-		// one frame per head direction, which is why it is not animated — but
-		// the combat stance an armed character stands in is a six-frame loop,
-		// and baking one frame of it left the character apparently frozen
-		// mid-swing.
-		if action == 0 && kind == KindPlayer {
+		if posedSet(kind, action) {
 			return [][2]int{{headDir, headDir}}
 		}
 		if available > MaxAnimationFrames {
@@ -443,7 +502,7 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 		if !actions.bakes(action) {
 			continue
 		}
-		if action == actions[ActionIdle] && kind == KindPlayer {
+		if posedSet(kind, action) {
 			continue
 		}
 		for dir := 0; dir < Directions; dir++ {
@@ -469,8 +528,8 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 				continue
 			}
 			for _, fp := range frameIndices(action, len(bodyACT.Actions[idx].Frames)) {
-				r := sprite.CompositeWithWeapon(bodySPR, bodyACT, headSPR, headACT,
-					weaponSPR, weaponACT, action, dir, fp[0], fp[1])
+				r := sprite.CompositeWithGear(bodySPR, bodyACT, headSPR, headACT,
+					weaponSPR, weaponACT, gear, action, dir, fp[0], fp[1])
 				if r.Width > maxW {
 					maxW = r.Width
 				}
@@ -519,14 +578,23 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 			pairs := frameIndices(action, available)
 			frames := make([]Frame, len(pairs))
 			for i, fp := range pairs {
-				r := sprite.CompositeWithWeapon(bodySPR, bodyACT, headSPR, headACT,
-					weaponSPR, weaponACT, action, dir, fp[0], fp[1])
+				r := sprite.CompositeWithGear(bodySPR, bodyACT, headSPR, headACT,
+					weaponSPR, weaponACT, gear, action, dir, fp[0], fp[1])
 				if r.Pixels == nil || r.Width == 0 || r.Height == 0 {
 					// Keep the slot so frame indices stay contiguous.
 					frames[i] = Frame{Pixels: make([]byte, maxW*maxH*4)}
 					continue
 				}
 				frames[i] = Frame{Pixels: pad(r, maxW, maxH)}
+
+				// The standing frame facing the viewer is the one anything
+				// drawing the character flat will ask for.
+				if action == actions[ActionIdle] && dir == 0 && i == 0 {
+					sheet.PortraitX = (maxW - r.Width) / 2
+					sheet.PortraitY = maxH - r.Height
+					sheet.PortraitW = r.Width
+					sheet.PortraitH = r.Height
+				}
 			}
 			sheet.Frames[idx] = frames
 		}

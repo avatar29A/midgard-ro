@@ -62,6 +62,30 @@ func CompositeWithWeapon(
 	weaponSPR *formats.SPR, weaponACT *formats.ACT,
 	action, direction, bodyFrame, headFrame int,
 ) CompositeResult {
+	return CompositeWithGear(bodySPR, bodyACT, headSPR, headACT,
+		weaponSPR, weaponACT, nil, action, direction, bodyFrame, headFrame)
+}
+
+// Gear is something worn on the head — a hat, a mask, a pair of glasses.
+//
+// It rides on the head: it takes the head's pose and aligns onto the body's
+// anchor exactly as the head does, because both attach at the same point.
+type Gear struct {
+	SPR *formats.SPR
+	ACT *formats.ACT
+}
+
+// CompositeWithGear is CompositeWithWeapon with head gear as well.
+//
+// The gear is drawn over the head and under the weapon, in the order given —
+// which for a character is lower, middle, upper, so a hat sits over a mask.
+func CompositeWithGear(
+	bodySPR *formats.SPR, bodyACT *formats.ACT,
+	headSPR *formats.SPR, headACT *formats.ACT,
+	weaponSPR *formats.SPR, weaponACT *formats.ACT,
+	gear []Gear,
+	action, direction, bodyFrame, headFrame int,
+) CompositeResult {
 	if bodySPR == nil || bodyACT == nil || len(bodyACT.Actions) == 0 {
 		return CompositeResult{}
 	}
@@ -111,6 +135,9 @@ func CompositeWithWeapon(
 			weaponFrameData = &weaponAction.Frames[bodyFrame%len(weaponAction.Frames)]
 		}
 	}
+
+	// The gear runs on the head's pose, since that is what it is worn on.
+	worn := resolveGear(gear, action, direction, headFrame)
 
 	// Find body layer bounds
 	var bodyMinX, bodyMinY, bodyMaxX, bodyMaxY int
@@ -162,6 +189,12 @@ func CompositeWithWeapon(
 	// Calculate head offset: head anchor aligns with body anchor
 	headOffsetX := bodyAnchorX - headAnchorX
 	headOffsetY := bodyAnchorY - headAnchorY
+
+	// The gear aligns the same way, onto the same point.
+	for i := range worn {
+		worn[i].offsetX = bodyAnchorX - worn[i].anchorX
+		worn[i].offsetY = bodyAnchorY - worn[i].anchorY
+	}
 
 	// Find head layer bounds (relative to head origin + offset)
 	var headMinX, headMinY, headMaxX, headMaxY int
@@ -237,6 +270,10 @@ func CompositeWithWeapon(
 		}
 	}
 
+	// A hat reaches above the head and a wide one past its sides, so the gear
+	// grows the canvas the way the weapon does.
+	gearMinX, gearMinY, gearMaxX, gearMaxY := gearBounds(worn)
+
 	// Combine bounds
 	minX := bodyMinX
 	if headMinX < minX {
@@ -253,6 +290,21 @@ func CompositeWithWeapon(
 	maxY := bodyMaxY
 	if headMaxY > maxY {
 		maxY = headMaxY
+	}
+
+	if gearMinX < gearMaxX {
+		if gearMinX < minX {
+			minX = gearMinX
+		}
+		if gearMinY < minY {
+			minY = gearMinY
+		}
+		if gearMaxX > maxX {
+			maxX = gearMaxX
+		}
+		if gearMaxY > maxY {
+			maxY = gearMaxY
+		}
 	}
 
 	// A weapon reaches well outside the body — a spear more than doubles the
@@ -363,7 +415,16 @@ func CompositeWithWeapon(
 		}
 	}
 
-	// The weapon last, in front of both.
+	// The gear over the head, in the order it was given.
+	for _, part := range worn {
+		for _, layer := range part.frame.Layers {
+			if layer.SpriteID >= 0 {
+				blitLayer(part.spr, &layer, part.offsetX, part.offsetY)
+			}
+		}
+	}
+
+	// The weapon last, in front of them all.
 	for _, layer := range attachmentLayers(hasWeapon, weaponFrameData) {
 		if layer.SpriteID >= 0 {
 			blitLayer(weaponSPR, &layer, weaponOffsetX, weaponOffsetY)
@@ -377,6 +438,88 @@ func CompositeWithWeapon(
 		OffsetX: minX,
 		OffsetY: minY,
 	}
+}
+
+// wornPart is one piece of head gear resolved to the frame it draws this
+// pose, with where that frame has to move to sit on the head.
+type wornPart struct {
+	spr   *formats.SPR
+	frame *formats.Frame
+
+	anchorX, anchorY int
+	offsetX, offsetY int
+}
+
+// resolveGear picks each piece's frame for a pose, dropping the ones that
+// have nothing to draw in it.
+func resolveGear(gear []Gear, action, direction, headFrame int) []wornPart {
+	if len(gear) == 0 {
+		return nil
+	}
+
+	worn := make([]wornPart, 0, len(gear))
+
+	for _, part := range gear {
+		if part.SPR == nil || part.ACT == nil || len(part.ACT.Actions) == 0 {
+			continue
+		}
+
+		idx := action*8 + direction
+		if idx >= len(part.ACT.Actions) {
+			idx = direction % len(part.ACT.Actions)
+		}
+
+		frames := part.ACT.Actions[idx].Frames
+		if len(frames) == 0 {
+			continue
+		}
+
+		frame := &frames[headFrame%len(frames)]
+
+		resolved := wornPart{spr: part.SPR, frame: frame}
+		if len(frame.AnchorPoints) > 0 {
+			resolved.anchorX = int(frame.AnchorPoints[0].X)
+			resolved.anchorY = int(frame.AnchorPoints[0].Y)
+		}
+
+		worn = append(worn, resolved)
+	}
+
+	return worn
+}
+
+// gearBounds is the box every worn piece covers, once they have been offset.
+func gearBounds(worn []wornPart) (minX, minY, maxX, maxY int) {
+	minX, minY = 10000, 10000
+	maxX, maxY = -10000, -10000
+
+	for _, part := range worn {
+		for _, layer := range part.frame.Layers {
+			if layer.SpriteID < 0 || int(layer.SpriteID) >= len(part.spr.Images) {
+				continue
+			}
+
+			img := &part.spr.Images[layer.SpriteID]
+			x, y := int(layer.X)+part.offsetX, int(layer.Y)+part.offsetY
+			w, h := int(img.Width), int(img.Height)
+
+			left, top := x-w/2, y-h/2
+			if left < minX {
+				minX = left
+			}
+			if top < minY {
+				minY = top
+			}
+			if left+w > maxX {
+				maxX = left + w
+			}
+			if top+h > maxY {
+				maxY = top + h
+			}
+		}
+	}
+
+	return minX, minY, maxX, maxY
 }
 
 // attachmentLayers returns a frame's layers, or nothing when the sprite it
