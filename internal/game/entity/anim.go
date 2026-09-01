@@ -49,6 +49,8 @@ func AnimIntervalMs(action int) float32 {
 		return PickupAnimIntervalMs
 	case ActionAttack, ActionHurt, ActionDie:
 		return ActionAnimIntervalMs
+	case ActionStandby:
+		return IdleAnimIntervalMs
 	default:
 		return IdleAnimIntervalMs
 	}
@@ -78,7 +80,7 @@ func (c *Character) frameIntervalMs(action int) float32 {
 // exactly during the gap this is here to smooth over. Counts come from
 // whatever holds the loaded sprite sheet; zero (no sprites yet) parks the
 // animation on frame 0.
-func (c *Character) AdvanceAnimation(deltaMs float32, idleFrames, walkFrames, onceFrames int) {
+func (c *Character) AdvanceAnimation(deltaMs float32, idleFrames, walkFrames, onceFrames, standbyFrames int) {
 	// Death outranks everything and does not end: a corpse is not idle, and
 	// nothing it might otherwise be doing matters any more.
 	if c.Dead {
@@ -102,8 +104,11 @@ func (c *Character) AdvanceAnimation(deltaMs float32, idleFrames, walkFrames, on
 	}
 
 	action := ActionIdle
-	if c.IsMoving || c.sinceWalkMs < WalkHoldMs {
+	switch {
+	case c.IsMoving || c.sinceWalkMs < WalkHoldMs:
 		action = ActionWalk
+	case c.Ready:
+		action = ActionStandby
 	}
 
 	if action != c.CurrentAction {
@@ -113,8 +118,11 @@ func (c *Character) AdvanceAnimation(deltaMs float32, idleFrames, walkFrames, on
 	}
 
 	frameCount := idleFrames
-	if c.CurrentAction == ActionWalk {
+	switch c.CurrentAction {
+	case ActionWalk:
 		frameCount = walkFrames
+	case ActionStandby:
+		frameCount = standbyFrames
 	}
 	if frameCount <= 0 {
 		c.CurrentFrame = 0
