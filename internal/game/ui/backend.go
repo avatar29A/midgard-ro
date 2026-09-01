@@ -126,6 +126,11 @@ type CharSelectUIState struct {
 	// Callbacks
 	OnSelect      func(index int)
 	OnSelectIndex func(index int)
+
+	// OnCreateSlot asks to create a character in an empty slot. Fired by a
+	// double click on the slot and by the Make button, which the original
+	// shows in the place Ok occupies for a filled one.
+	OnCreateSlot func(slot int)
 }
 
 // LoadingUIState contains the data needed to render the loading UI.

@@ -9,6 +9,7 @@ import (
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
 	"github.com/Faultbox/midgard-ro/internal/logger"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
+	"github.com/Faultbox/midgard-ro/internal/trace"
 )
 
 // The original character select is a single 576x342 texture with the slot
@@ -200,29 +201,50 @@ func charSelectMessage(state CharSelectUIState) string {
 }
 
 // drawCharSelectSlots highlights the selected slot and makes all three
-// clickable.
+// clickable, whether or not they hold a character.
+//
+// An empty slot answers too. It used to be skipped outright, which left it
+// with no rect and nothing drawn — the screen showed only the shadow ellipse
+// painted into the background, and there was no way to say "I want this one".
+// Selecting an empty slot is what puts Make under the pointer, which is how
+// the original says a slot is free.
 func (b *UI2DBackend) drawCharSelectSlots(skin *charSelectSkin, state CharSelectUIState, x, y float32) {
 	for slot, slotX := range charSelSlotX {
 		left := x + slotX
 		top := y + charSelSlotY
+		hasChar := slot < len(state.Characters)
 
 		if slot == b.charSelectIdx {
 			b.ctx.Renderer().DrawImage(skin.box.ID,
 				left-charSelSlotShiftX, top, charSelSlotW, charSelSlotH, ui2d.ColorWhite)
 		}
 
-		// Only slots with a character in them respond.
-		if slot >= len(state.Characters) {
-			continue
+		if hasChar {
+			b.drawCharSelectPortrait(state.Characters[slot], left, top)
 		}
 
-		b.drawCharSelectPortrait(state.Characters[slot], left, top)
+		// Double click first: it must be seen whether or not the press also
+		// counts as a select, and on an empty slot it is the shortcut
+		// straight into creation.
+		rect := ui2d.Rect{X: left, Y: top, W: charSelSlotW, H: charSelSlotH}
+		if b.ctx.DoubleClickedIn(fmt.Sprintf("charselect_slot_dbl_%d", slot), rect) {
+			trace.Emit(trace.Char, "slot-doubleclick",
+				zap.Int("slot", slot), zap.Bool("empty", !hasChar))
+
+			if !hasChar && state.OnCreateSlot != nil {
+				state.OnCreateSlot(slot)
+			}
+		}
 
 		if b.ctx.InvisibleButtonAt(fmt.Sprintf("charselect_slot_%d", slot),
 			left, top, charSelSlotW, charSelSlotH) {
 			b.charSelectIdx = slot
 
-			if state.OnSelectIndex != nil {
+			trace.Emit(trace.Char, "slot-click",
+				zap.Int("slot", slot), zap.Bool("empty", !hasChar))
+
+			// Only a slot holding a character has one to report.
+			if hasChar && state.OnSelectIndex != nil {
 				state.OnSelectIndex(slot)
 			}
 		}
@@ -283,7 +305,13 @@ func (b *UI2DBackend) drawCharSelectButtons(skin *charSelectSkin, state CharSele
 	} else {
 		// Character creation is not implemented yet; the button is drawn
 		// because the slot is empty and the original offers it there.
-		b.skinButton("charselect_make", actionX, btnY, skin.make, skin.make, skin.make, "Make")
+		if b.skinButton("charselect_make", actionX, btnY, skin.make, skin.make, skin.make, "Make") {
+			trace.Emit(trace.Char, "make-click", zap.Int("slot", b.charSelectIdx))
+
+			if b.charSelectIdx >= 0 && state.OnCreateSlot != nil {
+				state.OnCreateSlot(b.charSelectIdx)
+			}
+		}
 	}
 
 	b.skinButton("charselect_cancel", cancelX, btnY, skin.cancel, skin.cancel, skin.cancel, "Cancel")

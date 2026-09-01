@@ -798,6 +798,11 @@ func (g *Game) renderUI() {
 					_ = state.SelectCharacter(index)
 				}
 			},
+			OnCreateSlot: func(slot int) {
+				g.pendingAction = func() {
+					state.RequestCreate(slot)
+				}
+			},
 		}, viewportWidth, viewportHeight)
 
 	case *states.LoadingState:

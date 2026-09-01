@@ -214,6 +214,15 @@ No layer boundary is crossed, so **no ADR**.
 - **Proved by:** `--stop-at charselect --screenshot-after 6s`; UC-219
 
 ### Step 1b — All nine slots are reachable
+
+> **Found while building Step 1:** the account's real slot count arrives on
+> `HC_ACCEPT_ENTER2` `0x082D`, which we were not handling at all. `0x006B`,
+> which carries the characters, does **not** carry it — its three bytes are
+> `total`, `premium_start` and `premium_end`, and we were reading the second
+> as an available-slot count. So the client believed the account had **15**
+> slots (`MAX_CHARS`) when it has **9**, and would have offered six the server
+> refuses. Decoded and corrected in Step 1; `char.slot-counts` now reports
+> `producible: 9`, matching `character_slots` in the database.
 - **Changes:** `internal/game/ui/charselect_native.go`, `internal/game/states/charselect.go`
 - **Done when:** the select screen pages through the account's slots in threes, so a character can be created into any of the nine the account allows. Paging is disabled when the account has three or fewer.
 - **Proved by:** a screenshot per page with `--stop-at charselect`; UC-219
