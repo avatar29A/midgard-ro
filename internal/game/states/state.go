@@ -106,6 +106,11 @@ type Manager struct {
 	// meaningful together with AutoPlay, which is what gets us past login.
 	StopAtCharSelect bool
 
+	// StopAtCharCreate opens character creation on the first free slot and
+	// holds there, so that screen can be captured without a person to
+	// double-click one.
+	StopAtCharCreate bool
+
 	// BGM is nil when audio is unavailable, which the PlayBGM helpers below
 	// tolerate so states never have to check.
 	BGM BGMController
