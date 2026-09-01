@@ -260,7 +260,7 @@ No layer boundary is crossed, so **no ADR**.
 - **Proved by:** packet round-trip tests; `--make-char`; `--trace=char,net`; UC-221
 - **Reference:** ref-01 ⑥⑨
 
-### Step 6 — Docs
+### Step 6 — Docs  ✅
 - `docs/ENGINE_FEATURES.md` — the creation screen, the palette reader, the packetver constraint
 - `docs/research/` — the three `CH_MAKE_CHAR` variants and what our server accepts, so nobody re-derives them
 - Session log
@@ -311,6 +311,9 @@ All three answered by Boris on 2026-09-01 and folded into the steps above.
 
 ## Revision log
 
+- 2026-09-01 — **All six steps implemented.** Proved end to end by creating a
+  character against the running server: stats all 1 and 48 status points,
+  neither of which the client sends — the plan's central claim, confirmed.
 - 2026-09-01 — Created against `win_make.bmp` (classic hexagon layout).
 - 2026-09-01 — **ref-01 corrected** from `bg_back2.tga` to `bg_makebg.bmp`; the first was the modern character select, not creation.
 - 2026-09-01 — Open questions answered: Doram in, nine slots with paging (new Step 1b), preview rotation in.
