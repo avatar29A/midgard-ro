@@ -186,6 +186,10 @@ type InGameUIState struct {
 	// on, and the target being fought — already projected.
 	WorldLabels []states.HoverLabel
 
+	// WorldEffects are the STR effect quads playing over the map, already
+	// projected into the viewport.
+	WorldEffects []states.EffectQuad
+
 	// TargetMarker is the mark over the unit being fought, already projected,
 	// or nil when nothing is being fought.
 	TargetMarker *states.TargetMarker

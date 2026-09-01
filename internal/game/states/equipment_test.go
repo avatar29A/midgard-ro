@@ -6,6 +6,7 @@ import (
 
 	"github.com/Faultbox/midgard-ro/internal/game/entity"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
+	"github.com/Faultbox/midgard-ro/pkg/formats"
 )
 
 // wearAckPacket and takeoffAckPacket build what the server sends back.
@@ -179,5 +180,63 @@ func TestSittingBlocksWalking(t *testing.T) {
 	}
 	if s.player.Direction == before {
 		t.Error("a seated character did not turn toward the click")
+	}
+}
+
+// TestLevelUpCelebrationsPlayOneAtATime: reaching a base and a job level at
+// the same moment is ordinary, and the two arrive as two packets in the same
+// instant. Played together they are one louder flash; queued, they read as two
+// things happening, which is what they are.
+func TestLevelUpCelebrationsPlayOneAtATime(t *testing.T) {
+	s := &InGameState{}
+	s.player = &entity.Character{}
+
+	// No archive here, so the effect cannot load and its length is zero —
+	// which is exactly the case that must not collapse the queue into one
+	// frame. A gap is forced so the sequencing itself is what is tested.
+	s.effectCache = map[string]*formats.STR{
+		levelUpEffect: {FPS: 60, MaxKey: 60},
+	}
+
+	s.queueLevelUpCelebration()
+	s.queueLevelUpCelebration()
+
+	s.updateCelebrations(16)
+
+	if _, ok := s.TakeSoundRequest(); !ok {
+		t.Fatal("the first celebration made no sound")
+	}
+	if len(s.effects) != 1 {
+		t.Fatalf("%d effects playing after the first, want 1", len(s.effects))
+	}
+
+	// Still inside the first one: the second must wait.
+	s.updateCelebrations(100)
+
+	if _, ok := s.TakeSoundRequest(); ok {
+		t.Error("the second celebration started on top of the first")
+	}
+	if len(s.effects) != 1 {
+		t.Errorf("%d effects playing, want the first one alone", len(s.effects))
+	}
+
+	// Past the first one's length, the second goes.
+	s.updateCelebrations(1000)
+
+	if _, ok := s.TakeSoundRequest(); !ok {
+		t.Error("the second celebration never played")
+	}
+}
+
+// TestSoundRequestIsTakenOnce: the game plays what it is handed, and a request
+// left set would play the same sound every frame.
+func TestSoundRequestIsTakenOnce(t *testing.T) {
+	s := &InGameState{soundRequest: "x.wav"}
+
+	if path, ok := s.TakeSoundRequest(); !ok || path != "x.wav" {
+		t.Fatalf("TakeSoundRequest = %q, %v", path, ok)
+	}
+	if _, ok := s.TakeSoundRequest(); ok {
+		t.Error("the same sound was handed out twice")
 	}
 }
