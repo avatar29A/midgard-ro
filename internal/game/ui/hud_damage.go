@@ -29,14 +29,25 @@ const (
 	// smaller; everything else about them is measured from the art.
 	damageScale = float32(2)
 
-	// damageRise is how far a figure climbs over its life, in pixels, in
-	// proportion to how tall it is drawn.
-	damageRise = float32(34) * damageScale
+	// The arc a figure travels: thrown up out of whatever was hit, then
+	// falling back under its own weight.
+	//
+	// The original does not simply raise the number. It launches it, and the
+	// figure slows, turns and drops — vanishing on the way down rather than
+	// landing. So the height is launch*p - gravity*p², which peaks a little
+	// under halfway through its life and finishes below where it started.
+	//
+	// Both are in proportion to how tall the figure is drawn, so the arc does
+	// not flatten when the digits are made smaller.
+	damageLaunch  = float32(180) * damageScale
+	damageGravity = float32(200) * damageScale
 
 	// damageFadeFrom is the point in a figure's life where it starts to fade.
-	// It holds full strength for most of it and then goes quickly, which
-	// reads as a number being read rather than one dissolving throughout.
-	damageFadeFrom = float32(0.6)
+	//
+	// A little past the top of the arc, so the figure is solid on the way up
+	// and through the turn, and goes as it falls — which is what makes it
+	// vanish in the air rather than appear to land.
+	damageFadeFrom = float32(0.5)
 
 	// damageMissNativeHeight is the height of the word in the archive, which
 	// the drawn size is derived from.
@@ -187,8 +198,11 @@ func (b *UI2DBackend) drawDamageNumber(n states.DamageNumber) {
 
 	tint := ui2d.Color{R: 1, G: 1, B: 1, A: alpha}
 
+	// Up is negative on screen, so the arc is subtracted.
+	arc := damageLaunch*n.Progress - damageGravity*n.Progress*n.Progress
+
 	x := n.ScreenX - width/2
-	y := n.ScreenY - height - n.Progress*damageRise
+	y := n.ScreenY - height - arc
 
 	r := b.ctx.Renderer()
 	for _, g := range glyphs {
