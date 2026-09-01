@@ -104,6 +104,17 @@ func (s *CharCreateState) SetJob(job int) {
 	trace.Emit(trace.Char, "set-job", zap.Int("job", job))
 }
 
+// SetHairStyle picks a hair style. Style numbers start at 1: there is no
+// file for style 0.
+func (s *CharCreateState) SetHairStyle(style int) {
+	if style < 1 || s.HairStyle == style {
+		return
+	}
+
+	s.HairStyle = style
+	trace.Emit(trace.Char, "set-hair", zap.Int("style", style))
+}
+
 // Turn rotates the preview by one step, wrapping in both directions.
 func (s *CharCreateState) Turn(delta int) {
 	const directions = 8

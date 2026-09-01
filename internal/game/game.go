@@ -820,9 +820,10 @@ func (g *Game) renderUI() {
 					state.Cancel()
 				}
 			},
-			OnSetSex: func(sex uint8) { state.SetSex(sex) },
-			OnSetJob: func(job int) { state.SetJob(job) },
-			OnTurn:   func(delta int) { state.Turn(delta) },
+			OnSetSex:  func(sex uint8) { state.SetSex(sex) },
+			OnSetJob:  func(job int) { state.SetJob(job) },
+			OnSetHair: func(style int) { state.SetHairStyle(style) },
+			OnTurn:    func(delta int) { state.Turn(delta) },
 		}, viewportWidth, viewportHeight)
 
 	case *states.LoadingState:

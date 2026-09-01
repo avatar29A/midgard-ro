@@ -171,7 +171,10 @@ type CharCreateUIState struct {
 	// OnSetSex, OnSetJob and OnTurn change the look being previewed.
 	OnSetSex func(sex uint8)
 	OnSetJob func(job int)
-	OnTurn   func(delta int)
+
+	// OnSetHair picks a hair style.
+	OnSetHair func(style int)
+	OnTurn    func(delta int)
 }
 
 // LoadingUIState contains the data needed to render the loading UI.
