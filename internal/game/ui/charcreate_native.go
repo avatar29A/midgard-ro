@@ -25,11 +25,12 @@ const (
 	charCreateWinW = float32(794)
 	charCreateWinH = float32(422)
 
-	// The bottom row. Neither button is painted into the frame.
-	charCreateBtnW    = float32(160)
-	charCreateBtnH    = float32(25)
+	// The bottom row. Neither button is painted into the frame, so both use
+	// the client's own button art at its own size — the same skin and the
+	// same helper character select's Ok and Cancel use, so the two screens
+	// do not look like they came from different clients.
 	charCreateBtnPadX = float32(18)
-	charCreateBtnY    = charCreateWinH - 41
+	charCreateBtnY    = charCreateWinH - 16 - loginBtnH
 
 	// The sex toggle, two 63x25 pills above the preview.
 	charCreateSexW    = float32(63)
@@ -75,13 +76,27 @@ const (
 	// The hair color swatches, 16x16, five to a row inside the box the frame
 	// paints at y 299..358. These sit where they do because that box is fixed
 	// — moving them down pushes them out through its bottom edge.
-	charCreateColW      = float32(16)
-	charCreateColH      = float32(16)
-	charCreateColCols   = 5
-	charCreateColPitch  = float32(20)
-	charCreateColX      = float32(615)
-	charCreateColY      = float32(310)
-	charCreateColLabelY = float32(296)
+	charCreateColW     = float32(16)
+	charCreateColH     = float32(16)
+	charCreateColCols  = 5
+	charCreateColPitch = float32(18)
+	charCreateColX     = float32(615)
+
+	// The box the frame paints for the swatches, measured off bg_makebg.bmp:
+	// border at 299 and 358, interior between. Everything here is placed
+	// against those two numbers, because they are the only fixed thing —
+	// the heading's height is not known until the font is rasterized.
+	charCreateColBoxTop    = float32(300)
+	charCreateColBoxBottom = float32(357)
+
+	// charCreateColLabelY is the heading, inside the box. There is no room
+	// above it: the style grid ends at 291 and the box begins at 299.
+	charCreateColLabelY = float32(302)
+
+	// charCreateColGap is the clear space under the heading, and the pitch is
+	// tightened from 20 so the heading, the gap and two rows all fit the 58px
+	// the box actually has.
+	charCreateColGap = float32(4)
 
 	// HairColorCount is how many palettes exist per style and sex.
 	charCreateColorCount = 9
@@ -128,6 +143,10 @@ type charCreateSkin struct {
 
 	// hairCell and hairCellSel frame one grid cell, unselected and selected.
 	hairCell, hairCellSel *TextureInfo
+
+	// back and ok are the bottom row, borrowed from the client's own button
+	// art rather than drawn.
+	back, ok *TextureInfo
 }
 
 // loadCharCreateSkin loads the creation frame. A miss leaves the skin nil and
@@ -162,6 +181,8 @@ func (b *UI2DBackend) loadCharCreateSkin() *charCreateSkin {
 	skin.turnRight = b.optionalTexture(makeCharVer2TexBasePath + `bt_rightturn_normal.bmp`)
 	skin.hairCell = b.optionalTexture(makeCharVer2TexBasePath + `bt_hairstyle_normal.bmp`)
 	skin.hairCellSel = b.optionalTexture(makeCharVer2TexBasePath + `bt_hairstyle_select.bmp`)
+	skin.back = b.optionalTexture(loginTexBasePath + `btn_cancel.bmp`)
+	skin.ok = b.optionalTexture(loginTexBasePath + `btn_ok.bmp`)
 
 	b.charCreateSkin = skin
 
@@ -289,15 +310,30 @@ func (b *UI2DBackend) drawCharCreateHair(skin *charCreateSkin, state CharCreateU
 func (b *UI2DBackend) drawCharCreateColors(state CharCreateUIState, x, y float32) {
 	r := b.ctx.Renderer()
 
-	r.DrawText(x+charCreateHairX, y+charCreateColLabelY, "Hair Color",
-		loginTextScale, charCreateCardInk)
+	// Placed off the font's own line height rather than a guessed one: the
+	// heading overlapped the swatches because 11px was assumed for text that
+	// is taller than that, and a constant cannot be right for a height only
+	// known once the font is rasterized.
+	labelY := y + charCreateColLabelY
+	r.DrawText(x+charCreateHairX, labelY, "Hair Color", loginTextScale, charCreateCardInk)
+
+	swatchTop := labelY + r.FontLineHeight(loginTextScale) + charCreateColGap
+
+	// Whatever the font does, the swatches stay in the box the frame paints
+	// for them. Without this a tall font pushes the bottom row out through
+	// its lower border, which is the same class of mistake as the heading
+	// overlapping them.
+	rows := float32((charCreateColorCount + charCreateColCols - 1) / charCreateColCols)
+	if lowest := y + charCreateColBoxBottom - rows*charCreateColPitch; swatchTop > lowest {
+		swatchTop = lowest
+	}
 
 	for color := 0; color < charCreateColorCount; color++ {
 		col := color % charCreateColCols
 		row := color / charCreateColCols
 
 		cellX := x + charCreateColX + float32(col)*charCreateColPitch
-		cellY := y + charCreateColY + float32(row)*charCreateColPitch
+		cellY := swatchTop + float32(row)*charCreateColPitch
 
 		name := fmt.Sprintf(`color%02d_off.bmp`, color)
 		if color == state.HairColor {
@@ -445,9 +481,11 @@ func (b *UI2DBackend) drawCharCreateTurn(skin *charCreateSkin, state CharCreateU
 // so this only collects what was typed. What can be judged locally is judged
 // before a packet is spent; the rest comes back as a refusal.
 func (b *UI2DBackend) drawCharCreateName(state CharCreateUIState, x, y float32) {
-	value, changed, submitted := b.ctx.TextInputAt("charcreate_name",
+	// Bare: the frame paints the well this sits in, so drawing the toolkit's
+	// own field chrome on top of it puts two boxes where the art has one.
+	value, changed, submitted := b.ctx.TextInputBareAt("charcreate_name",
 		x+charCreateNameX, y+charCreateNameY,
-		charCreateNameW, charCreateNameH, state.Name)
+		charCreateNameW, charCreateNameH, loginTextScale, state.Name)
 
 	if changed && state.OnSetName != nil {
 		state.OnSetName(value)
@@ -465,11 +503,16 @@ func (b *UI2DBackend) drawCharCreateName(state CharCreateUIState, x, y float32) 
 // nothing yet — the packet is step 5 — but it is drawn now because a screen
 // with only a way out reads as broken.
 func (b *UI2DBackend) drawCharCreateButtons(state CharCreateUIState, x, y float32) {
+	skin := b.loadCharCreateSkin()
+	if skin == nil || skin.back == nil || skin.ok == nil {
+		return
+	}
+
 	backX := x + charCreateBtnPadX
-	createX := x + charCreateWinW - charCreateBtnPadX - charCreateBtnW
+	okX := x + charCreateWinW - charCreateBtnPadX - loginBtnW
 	btnY := y + charCreateBtnY
 
-	if b.ctx.ButtonAt("charcreate_back", backX, btnY, charCreateBtnW, charCreateBtnH, "Go back") {
+	if b.skinButton("charcreate_back", backX, btnY, skin.back, skin.back, skin.back, "Back") {
 		trace.Emit(trace.Char, "create-cancel-click", zap.Int("slot", state.Slot))
 
 		if state.OnCancel != nil {
@@ -477,7 +520,7 @@ func (b *UI2DBackend) drawCharCreateButtons(state CharCreateUIState, x, y float3
 		}
 	}
 
-	if b.ctx.ButtonAt("charcreate_create", createX, btnY, charCreateBtnW, charCreateBtnH, "Create") {
+	if b.skinButton("charcreate_ok", okX, btnY, skin.ok, skin.ok, skin.ok, "Ok") {
 		trace.Emit(trace.Char, "create-click", zap.Int("slot", state.Slot))
 
 		if state.OnCreate != nil {
@@ -527,7 +570,7 @@ func (b *UI2DBackend) renderFallbackCharCreate(state CharCreateUIState, width, h
 	}
 
 	b.ctx.Row(28)
-	if b.ctx.Button("charcreate_back_fallback", 120, "Go back") && state.OnCancel != nil {
+	if b.ctx.Button("charcreate_back_fallback", 120, "Back") && state.OnCancel != nil {
 		state.OnCancel()
 	}
 
