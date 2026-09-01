@@ -212,8 +212,8 @@ func (c *Character) Revive() {
 	c.FrameTime = 0
 }
 
-// OnceAction is the action a one-shot is playing, which the caller needs in
-// order to look up how many frames it has.
+// PlayingAction is the action a one-shot is playing, which the caller needs
+// in order to look up how many frames it has. Negative when nothing is.
 func (c *Character) PlayingAction() int {
 	if c.Dead {
 		return ActionDie

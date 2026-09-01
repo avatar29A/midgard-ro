@@ -224,7 +224,6 @@ func (c *Cursor) Update(dt time.Duration) {
 	}
 }
 
-// Frame returns what to draw, and whether there is anything to draw.
 // FrameOf is the current frame of a state other than the one the pointer is
 // showing.
 //
@@ -245,6 +244,7 @@ func (c *Cursor) FrameOf(s State) (Frame, bool) {
 	return a.frames[c.frame%len(a.frames)], true
 }
 
+// Frame returns what to draw, and whether there is anything to draw.
 func (c *Cursor) Frame() (Frame, bool) {
 	if c == nil {
 		return Frame{}, false

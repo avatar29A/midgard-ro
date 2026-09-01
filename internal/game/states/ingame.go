@@ -2245,7 +2245,7 @@ func (s *InGameState) CaptureScene() ([]byte, int32, int32) {
 // barWorthShowing reports whether a unit's health is worth the screen space.
 //
 // Monsters earn a bar by being the target or by being pointed at. Everything
-// else that carries one — other players, once they are modelled — keeps it
+// else that carries one — other players, once they are modeled — keeps it
 // unconditionally, because theirs is not a fight the pointer is choosing.
 func (s *InGameState) barWorthShowing(e *entity.Entity) bool {
 	if e.Type != entity.TypeMonster {
