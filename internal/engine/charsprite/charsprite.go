@@ -19,19 +19,26 @@ import (
 // EUC-KR encoding of the Korean paths below.
 type Loader func(path string) ([]byte, error)
 
-// Action indices within an ACT file. Each action occupies 8 consecutive
-// entries, one per direction: actionIndex = action*8 + direction.
+// Logical actions. These are not ACT indices: players and monsters lay their
+// animations out differently, and ActionIndex maps one of these onto the
+// index that family actually uses.
 const (
-	ActionIdle   = 0
-	ActionWalk   = 1
-	ActionSit    = 2
-	ActionPickup = 3
+	ActionIdle = iota
+	ActionWalk
+	ActionPickup
+	ActionAttack
+	ActionHurt
+	ActionDie
 
-	// LoadedActions bounds the actions we bake composites for. Sitting falls
-	// inside that bound and is skipped by bakedAction: the index has to be
-	// reachable for pick-up at 3, but nothing drives a sit yet, and baking one
-	// would be eight directions of frames nobody looks at.
-	LoadedActions = 4
+	// LogicalActions is how many of the above there are.
+	LogicalActions
+)
+
+const (
+	// LoadedActions bounds the ACT indices we bake composites for. Eight
+	// covers a player's die at 7, which is the highest index anything asks
+	// for; bakedAction keeps each family to the ones it actually uses.
+	LoadedActions = 8
 
 	// Directions is the number of facings every action provides.
 	Directions = 8
@@ -81,10 +88,58 @@ type Spec struct {
 	HeadDirection int
 }
 
-// bakedAction reports whether an action is worth compositing. Actions inside
-// LoadedActions that nothing drives are skipped rather than baked.
-func bakedAction(action int) bool {
-	return action != ActionSit
+// Which ACT index each family uses for each logical action.
+//
+// The two layouts are genuinely different, and the difference is not
+// guesswork: a monster's ACT names its own sets through the sound events on
+// their frames — poring's set 1 carries poring_move.wav, set 2
+// poring_attack.wav, set 3 poring_damage.wav and set 4 poring_die.wav. A
+// player's body has thirteen sets against a monster's nine, and follows the
+// order the original client's own enum uses.
+//
+// -1 means the family has no animation for that action, which is not an error:
+// nothing on the ground picks anything up but the player.
+var actionIndices = map[Kind][LogicalActions]int{
+	KindPlayer:  {ActionIdle: 0, ActionWalk: 1, ActionPickup: 3, ActionAttack: 5, ActionHurt: 6, ActionDie: 7},
+	KindMonster: {ActionIdle: 0, ActionWalk: 1, ActionPickup: -1, ActionAttack: 2, ActionHurt: 3, ActionDie: 4},
+	KindNPC:     {ActionIdle: 0, ActionWalk: 1, ActionPickup: -1, ActionAttack: -1, ActionHurt: -1, ActionDie: -1},
+	KindItem:    {ActionIdle: 0, ActionWalk: -1, ActionPickup: -1, ActionAttack: -1, ActionHurt: -1, ActionDie: -1},
+}
+
+// ActionIndex is the ACT index a family uses for a logical action, or -1 when
+// it has none.
+func ActionIndex(kind Kind, logical int) int {
+	if logical < 0 || logical >= LogicalActions {
+		return -1
+	}
+
+	set, ok := actionIndices[kind]
+	if !ok {
+		return -1
+	}
+
+	return set[logical]
+}
+
+// bakedAction reports whether an ACT index is worth compositing for a family.
+//
+// Only the indices that family maps a logical action onto: a player never
+// sits or stands ready in this client, and a monster has nothing at 5 or
+// above, so baking either would be eight directions of frames nobody looks
+// at — and a poring's attack alone is twenty-eight frames a direction.
+func bakedAction(kind Kind, action int) bool {
+	set, ok := actionIndices[kind]
+	if !ok {
+		return action == ActionIdle
+	}
+
+	for _, index := range set {
+		if index == action {
+			return true
+		}
+	}
+
+	return false
 }
 
 // Sheet is a complete set of pre-composited frames for one character, keyed
@@ -214,7 +269,7 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 	// action. A player's idle indexes the body by head direction too, because
 	// the body's neck anchor moves with the head pose.
 	frameIndices := func(action, available int) [][2]int {
-		if action == ActionIdle && kind == KindPlayer {
+		if action == 0 && kind == KindPlayer {
 			return [][2]int{{headDir, headDir}}
 		}
 		if available > MaxAnimationFrames {
@@ -232,10 +287,10 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 	// left alone, not animation that went missing.
 	dropped := 0
 	for action := 0; action < LoadedActions; action++ {
-		if !bakedAction(action) {
+		if !bakedAction(kind, action) {
 			continue
 		}
-		if action == ActionIdle && kind == KindPlayer {
+		if action == 0 && kind == KindPlayer {
 			continue
 		}
 		for dir := 0; dir < Directions; dir++ {
@@ -252,7 +307,7 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 	// First pass: the largest frame decides the sheet size.
 	maxW, maxH := 0, 0
 	for action := 0; action < LoadedActions; action++ {
-		if !bakedAction(action) {
+		if !bakedAction(kind, action) {
 			continue
 		}
 		for dir := 0; dir < Directions; dir++ {
@@ -293,7 +348,7 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 	}
 
 	for action := 0; action < LoadedActions; action++ {
-		if !bakedAction(action) {
+		if !bakedAction(kind, action) {
 			continue
 		}
 		for dir := 0; dir < Directions; dir++ {

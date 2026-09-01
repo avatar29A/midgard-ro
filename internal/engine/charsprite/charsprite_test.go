@@ -350,7 +350,7 @@ func TestAnimationIsCappedAndReported(t *testing.T) {
 	// — contribute nothing, because nothing of theirs was dropped.
 	baked := 0
 	for action := 0; action < LoadedActions; action++ {
-		if bakedAction(action) {
+		if bakedAction(KindNPC, action) {
 			baked++
 		}
 	}

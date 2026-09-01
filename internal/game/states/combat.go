@@ -208,7 +208,68 @@ func (s *InGameState) handleDamage(data []byte) error {
 		zap.Int("amount", blow.Amount), zap.Int("hits", blow.Hits),
 		zap.Bool("miss", blow.Missed()), zap.Bool("critical", blow.Critical()))
 
+	// The swing plays whether or not it connected — a miss is still a swing —
+	// while the flinch is only for a blow that landed.
+	s.playAnimation(blow.SourceID, entity.ActionAttack)
+	if !blow.Missed() {
+		s.faceTowards(blow.TargetID, blow.SourceID)
+		s.playAnimation(blow.TargetID, entity.ActionHurt)
+	}
+
 	return nil
+}
+
+// playAnimation starts a one-shot on whichever unit the id names, including
+// the player.
+//
+// The player is not in the entity manager as something to animate — their
+// body is held separately — so both are tried. A blow between two units we
+// cannot see names neither, and nothing happens, which is correct: there is
+// nothing on screen to animate.
+func (s *InGameState) playAnimation(id uint32, action int) {
+	if body := s.bodyOf(id); body != nil {
+		body.PlayOnce(action)
+	}
+}
+
+// bodyOf is the drawable body behind a unit id, ours or anyone's.
+func (s *InGameState) bodyOf(id uint32) *entity.Character {
+	if id == 0 {
+		return nil
+	}
+
+	if id == s.selfAID() {
+		return s.player
+	}
+
+	if s.entityManager == nil {
+		return nil
+	}
+
+	if e := s.entityManager.Get(id); e != nil {
+		return e.Body
+	}
+
+	return nil
+}
+
+// faceTowards turns a unit to look at whatever just hit it.
+//
+// The server does not say which way a unit is facing when it is struck, and a
+// monster that walked past you and then took a blow to the back of the head
+// reads as a bug rather than as a monster that has not turned round yet.
+func (s *InGameState) faceTowards(id, towards uint32) {
+	body, at := s.bodyOf(id), s.bodyOf(towards)
+	if body == nil || at == nil {
+		return
+	}
+
+	fromX, fromY := body.CurrentCell()
+	toX, toY := at.CurrentCell()
+
+	if dir := entity.DirectionFromCellDelta(toX-fromX, toY-fromY); dir >= 0 {
+		body.Direction = dir
+	}
 }
 
 // handleMonsterHP takes the server's own figure for a monster's health, which

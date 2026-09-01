@@ -252,18 +252,26 @@ func updateUnits(m *entity.Manager, deltaMs float32, anim UnitAnimFunc) {
 		e.Body.Update(deltaMs)
 		e.Body.UpdateRenderPosition(deltaMs)
 
-		idle, walk, pickup := 0, 0, 0
+		idle, walk, once := 0, 0, 0
 		if anim != nil {
-			var idleMs, walkMs, pickupMs float32
+			var idleMs, walkMs float32
 			idle, idleMs = anim(e, entity.ActionIdle, e.Body.Direction)
 			walk, walkMs = anim(e, entity.ActionWalk, e.Body.Direction)
-			pickup, pickupMs = anim(e, entity.ActionPickup, e.Body.Direction)
+
 			e.Body.AnimIntervalMs = [entity.LoadedActions]float32{
-				entity.ActionIdle:   idleMs,
-				entity.ActionWalk:   walkMs,
-				entity.ActionPickup: pickupMs,
+				entity.ActionIdle: idleMs,
+				entity.ActionWalk: walkMs,
+			}
+
+			// Only the one-shot that is actually playing is asked about.
+			// Asking for every action every frame would bake a sheet's worth
+			// of animations the first time anything walked into view.
+			if playing := e.Body.PlayingAction(); playing >= 0 {
+				var onceMs float32
+				once, onceMs = anim(e, playing, e.Body.Direction)
+				e.Body.AnimIntervalMs[playing] = onceMs
 			}
 		}
-		e.Body.AdvanceAnimation(deltaMs, idle, walk, pickup)
+		e.Body.AdvanceAnimation(deltaMs, idle, walk, once)
 	}
 }
