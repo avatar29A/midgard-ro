@@ -31,14 +31,26 @@ const (
 	itemsSlotInset float32 = 4
 	itemsSlotH     float32 = 14
 
-	// itemsTabW is the strip of tabs down the left, and itemsTabH one tab.
-	//
-	// A tab has to be tall enough for its label stacked a letter to a line,
-	// and "equip" is five of them: at the body scale they overran the tab and
-	// ran into the one below, so the labels have a smaller scale of their own.
-	itemsTabW     float32 = 18
+	// The strip of tabs down the left, measured off tab_itm_01.bmp — the art
+	// the archive ships for this very window. Twenty wide, so its borders
+	// land on whole pixels the way they do there.
+	itemsTabW     float32 = 20
 	itemsTabH     float32 = 62
 	itemsTabScale float32 = 0.45
+
+	// Where the edges fall inside those twenty. The open tab reaches two
+	// pixels further left than the shut ones and has no right edge at all, so
+	// it runs into the grid — which is how the strip says which one is open.
+	itemsTabOpenX float32 = 3
+	itemsTabShutX float32 = 5
+	itemsTabShutR float32 = 18
+
+	// itemsTabSlant is the shape the tabs actually have. The boundary between
+	// two of them is not a straight line but a shallow stair: in the art it
+	// steps from the left edge to the right over five rows, about three and a
+	// half pixels a row. Drawn square instead — which is what this did before
+	// — the strip reads as three stacked boxes rather than as tabs.
+	itemsTabSlant = 5
 
 	itemsFooterH float32 = 24
 
@@ -146,39 +158,121 @@ func (b *UI2DBackend) drawItemHover(screenW, screenH float32) {
 }
 
 // drawItemTabs draws the three tabs down the left edge.
+//
+// The strip is drawn rather than blitted because the art the archive ships for
+// it, tab_itm_01 to 03, has its labels baked in and in Korean. What is taken
+// from that art is its shape, which is all flat colors and one-pixel edges:
+// the open tab's face is the window body, the shut ones are a shade of grey,
+// and every boundary between them is a stepped diagonal.
 func (b *UI2DBackend) drawItemTabs(x, bodyY float32) {
-	r := b.ctx.Renderer()
+	top := bodyY + itemsPad
 
+	// Faces first, each tab whole. The boundaries are drawn over them
+	// afterwards and repair the rows the stair cuts through, which saves
+	// every fill from having to know about its neighbors.
 	for i, tab := range itemTabs {
-		box := ui2d.Rect{X: x + 1, Y: bodyY + itemsPad + float32(i)*itemsTabH, W: itemsTabW, H: itemsTabH}
+		box := b.itemTabBox(x, top, i)
 
-		face := itemsTabIdle
-		if i == b.itemTab {
-			face = ui2d.ColorWindowBody
-		}
+		b.drawItemTabFace(x, box, i == b.itemTab)
+		b.drawTabLabel(box, tab.label, i == b.itemTab)
+	}
 
-		r.DrawRect(box.X, box.Y, box.W, box.H, face)
+	for i := 0; i < len(itemTabs)-1; i++ {
+		b.drawItemTabSlant(x, top+float32(i+1)*itemsTabH, i, i+1)
+	}
 
-		// Edged rather than boxed, and in a grey of its own: the panel border
-		// is a dark blue-grey meant for a window's outline, and a full box of
-		// it around every tab read as three black rectangles.
-		//
-		// The open tab keeps no right edge, so it runs into the grid beside
-		// it — which is how a tab says it is the open one.
-		r.DrawRect(box.X, box.Y, box.W, 1, itemsTabBorder)
-		r.DrawRect(box.X, box.Y+box.H-1, box.W, 1, itemsTabBorder)
-		r.DrawRect(box.X, box.Y, 1, box.H, itemsTabBorder)
+	// The strip closes with a stair of its own below the last tab, as the art
+	// does: without it the run of tabs stops on a square edge and the last one
+	// reads as a box again.
+	b.drawItemTabSlant(x, top+float32(len(itemTabs))*itemsTabH, len(itemTabs)-1, -1)
 
-		if i != b.itemTab {
-			r.DrawRect(box.X+box.W-1, box.Y, 1, box.H, itemsTabBorder)
-		}
-
-		b.drawTabLabel(box, tab.label)
+	// The presses go last so a tab is not claimed by the strip it sits in.
+	for i, tab := range itemTabs {
+		box := b.itemTabBox(x, top, i)
 
 		if b.ctx.InvisibleButtonAt("hud_item_tab_"+tab.label, box.X, box.Y, box.W, box.H) {
 			b.itemTab = i
 			b.itemScroll = 0
 		}
+	}
+}
+
+// itemTabBox is one tab's cell in the strip.
+func (b *UI2DBackend) itemTabBox(x, top float32, i int) ui2d.Rect {
+	return ui2d.Rect{X: x, Y: top + float32(i)*itemsTabH, W: itemsTabW, H: itemsTabH}
+}
+
+// drawItemTabFace fills one tab and draws its edges.
+func (b *UI2DBackend) drawItemTabFace(x float32, box ui2d.Rect, open bool) {
+	r := b.ctx.Renderer()
+
+	left, face := itemsTabShutX, itemsTabIdle
+	if open {
+		left, face = itemsTabOpenX, ui2d.ColorWindowBody
+	}
+
+	// The hatched band down the outside, which the art has for the strip's
+	// whole height: rows of the body color and of the shut grey in turn.
+	b.drawTabHatch(x, box.Y, left, box.H)
+
+	r.DrawRect(x+left, box.Y, itemsTabW-left, box.H, face)
+	r.DrawRect(x+left, box.Y, 1, box.H, itemsTabBorder)
+
+	// A shut tab stops short of the grid; the open one does not, which is the
+	// whole of how the strip marks it.
+	if !open {
+		r.DrawRect(x+itemsTabShutR, box.Y, 1, box.H, itemsTabBorder)
+		r.DrawRect(x+itemsTabShutR+1, box.Y, itemsTabW-itemsTabShutR-1, box.H, ui2d.ColorWindowBody)
+	}
+}
+
+// drawTabHatch draws the band down the outside of the strip.
+func (b *UI2DBackend) drawTabHatch(x, y, w, h float32) {
+	r := b.ctx.Renderer()
+
+	for row := float32(0); row < h; row++ {
+		shade := ui2d.ColorWindowBody
+		if int(row)%2 == 0 {
+			shade = itemsTabIdle
+		}
+
+		r.DrawRect(x, y+row, w, 1, shade)
+	}
+}
+
+// drawItemTabSlant draws the stepped boundary between two tabs.
+//
+// Left of the step is the tab below and right of it the tab above, which is
+// what gives the open tab its wedge: the boundary leaves its edge low and
+// meets the grid high.
+func (b *UI2DBackend) drawItemTabSlant(x, y float32, above, below int) {
+	r := b.ctx.Renderer()
+
+	// Below the last tab there is no tab at all, only the window, which is
+	// what closes the strip off.
+	faceOf := func(i int) ui2d.Color {
+		if i < 0 || i == b.itemTab {
+			return ui2d.ColorWindowBody
+		}
+
+		return itemsTabIdle
+	}
+
+	// Between the leftmost edge either tab has and the grid.
+	left := itemsTabShutX
+	if above == b.itemTab || below == b.itemTab {
+		left = itemsTabOpenX
+	}
+
+	step := (itemsTabShutR - left) / itemsTabSlant
+
+	for i := 0; i < itemsTabSlant; i++ {
+		rowY := y + float32(i)
+		edge := left + float32(i)*step
+
+		r.DrawRect(x+left, rowY, edge-left, 1, faceOf(below))
+		r.DrawRect(x+edge, rowY, step, 1, itemsTabBorder)
+		r.DrawRect(x+edge+step, rowY, itemsTabShutR-edge-step, 1, faceOf(above))
 	}
 }
 
@@ -191,15 +285,21 @@ func (b *UI2DBackend) drawItemTabs(x, bodyY float32) {
 //
 // The measured width and height swap round once the line is turned, so
 // centering it in the tab is the ordinary arithmetic with the two exchanged.
-func (b *UI2DBackend) drawTabLabel(box ui2d.Rect, label string) {
+func (b *UI2DBackend) drawTabLabel(box ui2d.Rect, label string, open bool) {
 	r := b.ctx.Renderer()
 
 	width, height := r.MeasureText(label, itemsTabScale)
 
+	// Darker on the open tab than on the shut ones, as the art has it.
+	color := itemsTabTextShut
+	if open {
+		color = itemsTabTextOpen
+	}
+
 	r.DrawTextVertical(
 		box.X+(box.W-height)/2,
 		box.Y+(box.H+width)/2,
-		label, itemsTabScale, ui2d.ColorText)
+		label, itemsTabScale, color)
 }
 
 // drawItemGrid draws the cells and whatever is in them.
@@ -557,8 +657,13 @@ var (
 	// The slot mark: a blue-grey, not the neutral grey the rest of the panel
 	// uses. It has to read as blue against a white body or the grid looks
 	// like smudges rather than slots.
-	itemsCellBg    = ui2d.Color{R: 0.88, G: 0.91, B: 0.97, A: 1}
-	itemsTabIdle   = ui2d.Color{R: 0.82, G: 0.83, B: 0.86, A: 1}
-	itemsTabBorder = ui2d.Color{R: 0.62, G: 0.63, B: 0.68, A: 1}
-	itemsCountText = ui2d.Color{R: 0.1, G: 0.1, B: 0.15, A: 1}
+	itemsCellBg = ui2d.Color{R: 0.88, G: 0.91, B: 0.97, A: 1}
+	// The strip's own greys, taken from tab_itm_01.bmp: f2f2f2 for a shut
+	// tab's face, c0c0c0 for every edge, and 404040 and 767676 for the label
+	// on the open tab and on a shut one.
+	itemsTabIdle     = ui2d.Color{R: 0.949, G: 0.949, B: 0.949, A: 1}
+	itemsTabBorder   = ui2d.Color{R: 0.753, G: 0.753, B: 0.753, A: 1}
+	itemsTabTextOpen = ui2d.Color{R: 0.251, G: 0.251, B: 0.251, A: 1}
+	itemsTabTextShut = ui2d.Color{R: 0.463, G: 0.463, B: 0.463, A: 1}
+	itemsCountText   = ui2d.Color{R: 0.1, G: 0.1, B: 0.15, A: 1}
 )
