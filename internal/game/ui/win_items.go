@@ -5,6 +5,7 @@ import (
 
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
 	"github.com/Faultbox/midgard-ro/internal/game/items"
+	"github.com/Faultbox/midgard-ro/internal/game/skills"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
 )
 
@@ -306,20 +307,12 @@ func (b *UI2DBackend) drawItemCell(cell ui2d.Rect, shown []packets.InventoryItem
 // dragged out of the inventory should ride over that window rather than under
 // it.
 func (b *UI2DBackend) drawDraggedItem() {
-	itemID := b.itemDrag.itemID
-	if !b.itemDrag.active {
-		if !b.hotkeyDrag.active {
-			return
-		}
-		itemID = b.hotkeyDrag.itemID
-	}
-
-	info, ok := items.Lookup(itemID)
-	if !ok || info.Resource == "" {
+	path, dragging := b.draggedIconPath()
+	if !dragging {
 		return
 	}
 
-	tex, err := b.texCache.Load(itemIconPath + info.Resource + ".bmp")
+	tex, err := b.texCache.Load(path)
 	if err != nil {
 		return
 	}
@@ -328,6 +321,50 @@ func (b *UI2DBackend) drawDraggedItem() {
 	b.ctx.Renderer().DrawImage(tex.ID,
 		in.MouseX-itemsDragIconH/2, in.MouseY-itemsDragIconH/2,
 		itemsDragIconH, itemsDragIconH, itemsDragTint)
+}
+
+// draggedIconPath is the art for whatever is under the pointer, if anything
+// is being dragged.
+//
+// One place for all three kinds of drag — an item out of the bag or off the
+// body, a cell moved along the bar, a skill out of its window — because the
+// icon that follows the pointer is the same affordance in each case and the
+// only difference is which table the art comes from.
+func (b *UI2DBackend) draggedIconPath() (string, bool) {
+	switch {
+	case b.itemDrag.active:
+		return itemIconFor(b.itemDrag.itemID)
+	case b.skillDrag.active:
+		return skillIconFor(b.skillDrag.skill)
+	case b.hotkeyDrag.active:
+		if b.hotkeyDrag.cell.skill {
+			return skillIconFor(uint16(b.hotkeyDrag.cell.id))
+		}
+
+		return itemIconFor(b.hotkeyDrag.cell.id)
+	}
+
+	return "", false
+}
+
+// itemIconFor and skillIconFor are where each kind of art lives, empty when
+// the archive has none — which is most of what has been added recently.
+func itemIconFor(itemID uint32) (string, bool) {
+	info, ok := items.Lookup(itemID)
+	if !ok || info.Resource == "" {
+		return "", false
+	}
+
+	return itemIconPath + info.Resource + ".bmp", true
+}
+
+func skillIconFor(skillID uint16) (string, bool) {
+	sprite := skills.Sprite(skillID)
+	if sprite == "" {
+		return "", false
+	}
+
+	return skillIconPath + sprite + ".bmp", true
 }
 
 // finishItemDrag decides what a released drag meant.
@@ -375,7 +412,7 @@ func (b *UI2DBackend) finishItemDrag() {
 	}
 
 	if row, col, ok := b.hotkeyCellAt(in.MouseX, in.MouseY); ok {
-		b.AssignHotkey(row, col, dragged.itemID)
+		b.AssignHotkey(row, col, hotkeyCell{id: dragged.itemID})
 
 		return
 	}

@@ -100,3 +100,68 @@ func (s *InGameState) AcknowledgeLevelUp(base bool) {
 
 	s.pendingJobLevelUp = false
 }
+
+// UseSkill casts a skill, at the current target or at the caster.
+//
+// Which of those depends on what the skill targets, and the server told us:
+// the skill list carries an Inf, and a self-cast skill names the caster while
+// an attack skill names whatever is being fought. Sending the wrong one is
+// refused rather than misdirected — rAthena checks the target against the
+// skill — so this is about the cast working at all, not about safety.
+//
+// Ground-placed skills are not cast from here. They need a cell rather than a
+// unit, which means a second packet and a placement cursor; a Novice has none,
+// and pretending otherwise would put a shortcut on the bar that never fires.
+func (s *InGameState) UseSkill(skillID uint16, level int) error {
+	if s.client == nil {
+		return nil
+	}
+
+	skill, known := s.findSkill(skillID)
+	if !known {
+		return nil
+	}
+
+	if skill.Inf == 0 {
+		s.chat.AddLocal(ChatError, "That skill is passive.")
+
+		return nil
+	}
+
+	if skill.Inf&packets.InfGround != 0 && skill.Inf&(packets.InfAttack|packets.InfSelf|packets.InfSupport) == 0 {
+		s.chat.AddLocal(ChatError, "That skill has to be placed, which is not supported yet.")
+
+		return nil
+	}
+
+	target := s.selfAID()
+	if skill.Inf&packets.InfAttack != 0 {
+		if s.targetID == 0 {
+			s.chat.AddLocal(ChatError, "Choose a target first.")
+
+			return nil
+		}
+
+		target = s.targetID
+	}
+
+	if level <= 0 {
+		level = skill.Level
+	}
+
+	trace.Emit(trace.HUD, "use-skill",
+		zap.Uint16("skill", skillID), zap.Int("level", level), zap.Uint32("target", target))
+
+	return s.client.Send(packets.EncodeUseSkill(skillID, level, target))
+}
+
+// findSkill looks one up in what the server listed.
+func (s *InGameState) findSkill(skillID uint16) (packets.Skill, bool) {
+	for _, skill := range s.skills {
+		if skill.ID == skillID {
+			return skill, true
+		}
+	}
+
+	return packets.Skill{}, false
+}

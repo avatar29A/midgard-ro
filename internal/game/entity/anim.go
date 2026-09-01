@@ -58,7 +58,7 @@ func AnimIntervalMs(action int) float32 {
 		return PickupAnimIntervalMs
 	case ActionAttack, ActionHurt, ActionDie:
 		return ActionAnimIntervalMs
-	case ActionStandby:
+	case ActionStandby, ActionSit:
 		return IdleAnimIntervalMs
 	default:
 		return IdleAnimIntervalMs
@@ -89,7 +89,7 @@ func (c *Character) frameIntervalMs(action int) float32 {
 // exactly during the gap this is here to smooth over. Counts come from
 // whatever holds the loaded sprite sheet; zero (no sprites yet) parks the
 // animation on frame 0.
-func (c *Character) AdvanceAnimation(deltaMs float32, idleFrames, walkFrames, onceFrames, standbyFrames int) {
+func (c *Character) AdvanceAnimation(deltaMs float32, idleFrames, walkFrames, onceFrames, standbyFrames, sitFrames int) {
 	// Death outranks everything and does not end: a corpse is not idle, and
 	// nothing it might otherwise be doing matters any more.
 	if c.Dead {
@@ -114,6 +114,12 @@ func (c *Character) AdvanceAnimation(deltaMs float32, idleFrames, walkFrames, on
 
 	action := ActionIdle
 	switch {
+	// Sitting outranks the rest because it is a state rather than a motion:
+	// a seated character cannot walk, and the server makes it stand before it
+	// moves. Checked before the walk hold so the last step's tail does not
+	// keep a character that has just sat down on its feet.
+	case c.Sitting:
+		action = ActionSit
 	case c.IsMoving || c.sinceWalkMs < WalkHoldMs:
 		action = ActionWalk
 	case c.Ready:
@@ -132,6 +138,8 @@ func (c *Character) AdvanceAnimation(deltaMs float32, idleFrames, walkFrames, on
 		frameCount = walkFrames
 	case ActionStandby:
 		frameCount = standbyFrames
+	case ActionSit:
+		frameCount = sitFrames
 	}
 	if frameCount <= 0 {
 		c.CurrentFrame = 0

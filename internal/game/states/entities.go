@@ -279,6 +279,9 @@ func updateUnits(m *entity.Manager, deltaMs float32, anim UnitAnimFunc) {
 				e.Body.AnimIntervalMs[playing] = onceMs
 			}
 		}
-		e.Body.AdvanceAnimation(deltaMs, idle, walk, once, standby)
+		// Nothing but a player sits, so no unit here needs a seated frame
+		// count. Other players will, once ZC_NOTIFY_ACT's sit is applied to
+		// them too rather than only to us.
+		e.Body.AdvanceAnimation(deltaMs, idle, walk, once, standby, 0)
 	}
 }

@@ -121,7 +121,7 @@ type UI2DBackend struct {
 
 	// hotkeyItems is what each quick-panel cell holds, by row and column: an
 	// item id, or zero for an empty cell.
-	hotkeyItems [hotkeyMaxRows][hotkeySlots]uint32
+	hotkeyItems [hotkeyMaxRows][hotkeySlots]hotkeyCell
 	hotkeyDrag  hotkeyDrag
 	hotkeyPress hotkeyPress
 
@@ -141,6 +141,8 @@ type UI2DBackend struct {
 	damageArt     damageArt
 	statAction    StatAction
 	skillAction   SkillAction
+	skillCast     SkillCast
+	skillDrag     skillDrag
 	levelUpAction LevelUpAction
 
 	escOpen   bool
