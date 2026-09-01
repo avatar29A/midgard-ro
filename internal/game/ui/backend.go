@@ -36,6 +36,9 @@ type UIBackend interface {
 	// TakeSkillCast returns a skill the player asked to use.
 	TakeSkillCast() (SkillCast, bool)
 
+	// TakeShowEquipAction returns a click on the equipment switch.
+	TakeShowEquipAction() (bool, bool)
+
 	// TakeLevelUpAction returns a level-up button the player pressed.
 	TakeLevelUpAction() (LevelUpAction, bool)
 
@@ -254,6 +257,15 @@ type InGameUIState struct {
 	// Equipment is what is worn, keyed by the place on the body it is worn
 	// in, which is the question the equipment window's ten slots ask.
 	Equipment map[uint32]packets.InventoryItem
+
+	// Portrait is the character's own sprite, for the equipment window to
+	// show what it is dressing, with the size of the baked frame.
+	Portrait             uint32
+	PortraitW, PortraitH float32
+
+	// ShowEquipment is the server's word on whether other players may look
+	// at what this character is wearing.
+	ShowEquipment bool
 
 	// The numbers derived from those six, down the right of the window.
 	Atk, AtkBonus    int

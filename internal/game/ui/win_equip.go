@@ -8,23 +8,33 @@ import (
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
 )
 
-// The Equipment window, which is one bitmap with ten places painted into it.
+// The Equipment window, which in the modern client is also the Status window.
 //
-// equipwin_bg.bmp carries the whole layout — two columns of labeled slots
-// around a middle strip meant for a view of the character — so nothing here
-// draws chrome. What it does is put icons on the right ovals, and the oval
-// positions were measured off the bitmap rather than guessed: they are
-// 26x13, at x 4 and 249, on rows 11, 36, 62, 88 and 114.
+// One window, stacked out of the archive's own pieces: a row of tabs, the ten
+// slots around a view of the character, the strip that carries the equipment
+// switch, and the status block underneath. They are all 280 wide, which is
+// what says they were meant to sit on top of one another.
+//
+// Both menu buttons open it, because both of the things it shows are in it.
 const (
 	equipWindowID = "hud_win_equip"
 
-	equipBgFile = "equipwin_bg.bmp"
+	equipBgFile      = "equipwin_bg2.bmp"
+	equipSpecialFile = "equipwin_special.bmp"
+	equipDividerFile = "equipwin_bg3.bmp"
 
-	equipW     float32 = 280
-	equipBodyH float32 = 130
+	equipW float32 = 280
+
+	// The pieces, top to bottom. equipPageH is the taller of the two pages,
+	// so the window does not change height when the tab is switched.
+	equipTabsH    float32 = 21
+	equipPageH    float32 = 157
+	equipSpecialH float32 = 133
+	equipDividerH float32 = 20
 
 	// equipSlotW and equipSlotH are the painted oval, and equipSlotLeftX and
-	// equipSlotRightX where the two columns sit.
+	// equipSlotRightX where the two columns sit. The same in equipwin_bg2 as
+	// in the shorter equipwin_bg: 26 by 13, at x 4 and 249.
 	equipSlotW      float32 = 26
 	equipSlotH      float32 = 13
 	equipSlotLeftX  float32 = 4
@@ -44,15 +54,36 @@ const (
 	// stay inside — and at 24 that push is enough to put it on top of the row
 	// above. The limit works out at 23.5, so 22 leaves the rows a little air.
 	equipIcon float32 = 22
+
+	equipTextScale float32 = 0.7
 )
+
+// equipHeight is the whole window, title bar included.
+func equipHeight() float32 {
+	return ui2d.FrameTitleH + equipTabsH + equipPageH + equipDividerH + statsH
+}
+
+// equipPages are the two tabs across the top.
+//
+// Special Equipment is drawn from its own art and stands empty: costume and
+// shadow gear are their own slots on the server and nothing here wears them
+// yet. Drawn rather than left out, because the tab is what says the gear
+// exists and that this client does not dress it.
+var equipPages = []struct {
+	label string
+	art   string
+}{
+	{"General", equipBgFile},
+	{"Special Equipment", equipSpecialFile},
+}
 
 // equipLayout is the ten slots, in the order the bitmap paints them.
 //
 // Left column first, then right, each top to bottom. The pairing of label to
-// position is the bitmap's: it reads head/head/R-hand/robe/accessary down the
-// left and head/body/L-hand/shoes/accessary down the right, so the two heads
-// on the left are the upper and middle ones and the single head on the right
-// is the lower.
+// position is the bitmap's: it reads head/head/R-hand/robe/acc.1 down the left
+// and head/body/L-hand/shoes/acc.2 down the right, so the two heads on the
+// left are the upper and middle ones and the single head on the right is the
+// lower.
 var equipLayout = []struct {
 	slot  uint32
 	right bool
@@ -71,22 +102,22 @@ var equipLayout = []struct {
 	{packets.EQP_ACC_L, true, 4},
 }
 
-// drawEquipWindow draws what the character is wearing.
+// drawEquipWindow draws what the character is wearing, and what it is worth.
 func (b *UI2DBackend) drawEquipWindow(state InGameUIState, screenW, screenH float32) {
 	if !b.IsWindowOpen(WindowEquip) {
 		return
 	}
 
-	height := equipBodyH + ui2d.FrameTitleH
+	height := equipHeight()
 
 	openX := (screenW - equipW) / 2
 	openY := (screenH - height) / 2
 
-	// The frame must not paint the body: the background bitmap goes there,
-	// and a solid over it would hide the slots it paints.
+	// The frame must not paint the body: the background bitmaps go there, and
+	// a solid over them would hide the slots they paint.
 	opts := ui2d.DefaultWindowOptions()
 
-	if !b.ctx.BeginWindowEx(equipWindowID, openX, openY, equipW, height, "Equipment", opts) {
+	if !b.ctx.BeginWindowEx(equipWindowID, openX, openY, equipW, height, "Equip", opts) {
 		if b.ctx.WindowClosed(equipWindowID) {
 			b.ToggleWindow(WindowEquip)
 		}
@@ -101,24 +132,226 @@ func (b *UI2DBackend) drawEquipWindow(state InGameUIState, screenW, screenH floa
 
 	b.ctx.CaptureMouse(ui2d.Rect{X: x, Y: y, W: equipW, H: height})
 
-	bodyY := y + ui2d.FrameTitleH
-
-	if tex, err := b.texCache.Load(basicInterfacePath + equipBgFile); err == nil {
-		b.ctx.Renderer().DrawImage(tex.ID, x, bodyY, equipW, equipBodyH, ui2d.ColorWhite)
-	} else {
-		// Without the bitmap there is no window at all, only floating icons.
-		// A plain body is enough to keep them readable.
-		b.ctx.Renderer().DrawRect(x, bodyY, equipW, equipBodyH, ui2d.ColorWindowBody)
-	}
-
 	b.itemHover = itemHover{}
 
-	for _, place := range equipLayout {
-		b.drawEquipSlot(state, place.slot, equipSlotRect(x, bodyY, place.right, place.row))
-	}
+	body := y + ui2d.FrameTitleH
+
+	b.drawEquipTabs(x, body)
+
+	pageY := body + equipTabsH
+	b.drawEquipPage(state, x, pageY)
+
+	dividerY := pageY + equipPageH
+	b.drawEquipDivider(state, x, dividerY)
+
+	b.drawEquipStats(state, x, dividerY+equipDividerH)
 
 	b.drawItemHover(screenW, screenH)
 	b.ctx.EndWindow()
+}
+
+// drawEquipTabs draws the row across the top and switches pages.
+func (b *UI2DBackend) drawEquipTabs(x, y float32) {
+	r := b.ctx.Renderer()
+
+	at := x
+
+	for i, page := range equipPages {
+		width, _ := r.MeasureText(page.label, equipTextScale)
+		w := width + 2*equipTabPad
+
+		box := ui2d.Rect{X: at, Y: y, W: w, H: equipTabsH}
+
+		b.drawEquipTabFrame(box, i == b.equipPage)
+
+		_, capH := r.MeasureText(page.label, equipTextScale)
+		r.DrawText(at+equipTabPad, y+(equipTabsH-capH)/2, page.label, equipTextScale, ui2d.ColorText)
+
+		if b.ctx.InvisibleButtonAt("hud_equip_tab_"+page.label, box.X, box.Y, box.W, box.H) {
+			b.equipPage = i
+		}
+
+		at += w
+	}
+
+	// The rest of the row is the shut tab's own art, so the strip runs the
+	// width of the window rather than stopping where the labels do.
+	if at < x+equipW {
+		b.drawEquipTabFrame(ui2d.Rect{X: at, Y: y, W: x + equipW - at, H: equipTabsH}, false)
+	}
+}
+
+// equipTabPad is the air either side of a tab's label.
+const equipTabPad float32 = 12
+
+// drawEquipTabFrame draws one tab from its three slices.
+//
+// tab_a_* is the open one and tab_* a shut one, each four pixels of cap and a
+// single column of middle to stretch between them.
+func (b *UI2DBackend) drawEquipTabFrame(box ui2d.Rect, open bool) {
+	left, mid, right := "tab_l.bmp", "tab_m.bmp", "tab_r.bmp"
+	if open {
+		left, mid, right = "tab_a_l.bmp", "tab_a_m.bmp", "tab_a_r.bmp"
+	}
+
+	const cap = float32(4)
+
+	r := b.ctx.Renderer()
+
+	if tex, err := b.texCache.Load(basicInterfacePath + left); err == nil {
+		r.DrawImage(tex.ID, box.X, box.Y, cap, box.H, ui2d.ColorWhite)
+	}
+
+	if tex, err := b.texCache.Load(basicInterfacePath + mid); err == nil {
+		r.DrawImage(tex.ID, box.X+cap, box.Y, box.W-2*cap, box.H, ui2d.ColorWhite)
+	}
+
+	if tex, err := b.texCache.Load(basicInterfacePath + right); err == nil {
+		r.DrawImage(tex.ID, box.X+box.W-cap, box.Y, cap, box.H, ui2d.ColorWhite)
+	}
+}
+
+// drawEquipPage draws whichever tab is open.
+func (b *UI2DBackend) drawEquipPage(state InGameUIState, x, y float32) {
+	r := b.ctx.Renderer()
+
+	page := equipPages[b.equipPage]
+
+	// The body first, so a page shorter than the window's own page area does
+	// not leave the map showing through below it.
+	r.DrawRect(x, y, equipW, equipPageH, ui2d.ColorWindowBody)
+
+	if tex, err := b.texCache.Load(basicInterfacePath + page.art); err == nil {
+		h := equipPageH
+		if b.equipPage != 0 {
+			h = equipSpecialH
+		}
+
+		r.DrawImage(tex.ID, x, y, equipW, h, ui2d.ColorWhite)
+	}
+
+	if b.equipPage != 0 {
+		return
+	}
+
+	b.drawEquipPortrait(state, x, y)
+
+	for _, place := range equipLayout {
+		b.drawEquipSlot(state, place.slot, equipSlotRect(x, y, place.right, place.row))
+	}
+}
+
+// drawEquipPortrait draws the character between the two columns of slots.
+//
+// Fitted by height alone, and centered on the window rather than on the strip
+// the art paints. A baked frame is padded to the widest thing the sheet holds
+// — a swing with a weapon in it — so most of its width is empty, and bounding
+// it by that width leaves the character a third the size of the space it has.
+// The original lets it overlap the labels either side too.
+func (b *UI2DBackend) drawEquipPortrait(state InGameUIState, x, y float32) {
+	if state.Portrait == 0 || state.PortraitH <= 0 {
+		return
+	}
+
+	// Down to the last row of slots, where the art paints the shadow the
+	// character stands on.
+	const stand = equipRow0Y + 4*equipRowPitch
+
+	scale := stand / state.PortraitH
+	w, h := state.PortraitW*scale, state.PortraitH*scale
+
+	b.ctx.Renderer().DrawImage(state.Portrait,
+		x+(equipW-w)/2, y+stand-h, w, h, ui2d.ColorWhite)
+}
+
+// drawEquipDivider draws the strip between the slots and the status block,
+// which carries the equipment switch.
+func (b *UI2DBackend) drawEquipDivider(state InGameUIState, x, y float32) {
+	r := b.ctx.Renderer()
+
+	if tex, err := b.texCache.Load(basicInterfacePath + equipDividerFile); err == nil {
+		r.DrawImage(tex.ID, x, y, equipW, equipDividerH, ui2d.ColorWhite)
+	} else {
+		r.DrawRect(x, y, equipW, equipDividerH, ui2d.ColorWindowBody)
+	}
+
+	_, capH := r.MeasureText("Status", equipTextScale)
+	textY := y + (equipDividerH-capH)/2
+
+	r.DrawText(x+equipTabPad, textY, "Status", equipTextScale, ui2d.ColorText)
+
+	b.drawShowEquipment(state, x, y, textY)
+}
+
+// drawShowEquipment draws the checkbox that lets other players look at what
+// this character is wearing.
+//
+// The state shown is the server's, not one remembered here: it is part of the
+// character, and a box that answered to the click rather than to the server
+// would go out of step the first time the server refused.
+func (b *UI2DBackend) drawShowEquipment(state InGameUIState, x, y, textY float32) {
+	r := b.ctx.Renderer()
+
+	const label = "Show Equipment"
+
+	width, _ := r.MeasureText(label, equipTextScale)
+
+	box := ui2d.Rect{
+		X: x + equipW - equipTabPad - equipCheckW,
+		Y: y + (equipDividerH-equipCheckW)/2,
+		W: equipCheckW,
+		H: equipCheckW,
+	}
+
+	art := equipCheckOff
+	if state.ShowEquipment {
+		art = equipCheckOn
+	}
+
+	if tex, err := b.texCache.Load(art); err == nil {
+		r.DrawImage(tex.ID, box.X, box.Y, box.W, box.H, ui2d.ColorWhite)
+	}
+
+	r.DrawText(box.X-equipCheckGap-width, textY, label, equipTextScale, ui2d.ColorText)
+
+	if b.ctx.InvisibleButtonAt("hud_equip_show", box.X, box.Y, box.W, box.H) {
+		want := !state.ShowEquipment
+		b.showEquip = &want
+	}
+}
+
+// TakeShowEquipAction returns a click on the equipment switch and clears it.
+func (b *UI2DBackend) TakeShowEquipAction() (bool, bool) {
+	if b.showEquip == nil {
+		return false, false
+	}
+
+	want := *b.showEquip
+	b.showEquip = nil
+
+	return want, true
+}
+
+// The checkbox art and its spacing.
+const (
+	equipCheckOff = basicInterfacePath + `rodexsystem\renewal\checkbox_off.bmp`
+	equipCheckOn  = basicInterfacePath + `rodexsystem\renewal\checkbox_on.bmp`
+
+	equipCheckW   float32 = 13
+	equipCheckGap float32 = 5
+)
+
+// drawEquipStats draws the status block at the foot of the window.
+func (b *UI2DBackend) drawEquipStats(state InGameUIState, x, y float32) {
+	r := b.ctx.Renderer()
+
+	if tex, err := b.texCache.Load(statsTexture); err == nil {
+		r.DrawImage(tex.ID, x, y, statsW, statsH, ui2d.ColorWhite)
+	} else {
+		r.DrawRect(x, y, statsW, statsH, ui2d.ColorWindowBody)
+	}
+
+	b.drawStatValues(state, x, y)
 }
 
 // equipSlotRect is where one slot's icon goes, in screen coordinates.
@@ -127,13 +360,13 @@ func (b *UI2DBackend) drawEquipWindow(state InGameUIState, screenW, screenH floa
 // row is nudged up so the last icon stays inside the window: the oval there
 // sits 3 pixels from the bitmap's edge and a 24-pixel icon centered on it
 // would hang over.
-func equipSlotRect(x, bodyY float32, right bool, row int) ui2d.Rect {
+func equipSlotRect(x, pageY float32, right bool, row int) ui2d.Rect {
 	left := x + equipSlotLeftX
 	if right {
 		left = x + equipSlotRightX
 	}
 
-	top := bodyY + equipRow0Y + float32(row)*equipRowPitch
+	top := pageY + equipRow0Y + float32(row)*equipRowPitch
 
 	icon := ui2d.Rect{
 		X: left + (equipSlotW-equipIcon)/2,
@@ -142,11 +375,11 @@ func equipSlotRect(x, bodyY float32, right bool, row int) ui2d.Rect {
 		H: equipIcon,
 	}
 
-	if over := icon.Y + icon.H - (bodyY + equipBodyH); over > 0 {
+	if over := icon.Y + icon.H - (pageY + equipPageH); over > 0 {
 		icon.Y -= over
 	}
 
-	if under := bodyY - icon.Y; under > 0 {
+	if under := pageY - icon.Y; under > 0 {
 		icon.Y += under
 	}
 
@@ -210,10 +443,15 @@ func (b *UI2DBackend) equipSlotAt(px, py float32) (uint32, bool) {
 		return 0, false
 	}
 
-	bodyY := rect.Y + ui2d.FrameTitleH
+	// The slots are on the first page only, below the title bar and the tabs.
+	if b.equipPage != 0 {
+		return 0, false
+	}
+
+	pageY := rect.Y + ui2d.FrameTitleH + equipTabsH
 
 	for _, place := range equipLayout {
-		if equipSlotRect(rect.X, bodyY, place.right, place.row).Contains(px, py) {
+		if equipSlotRect(rect.X, pageY, place.right, place.row).Contains(px, py) {
 			return place.slot, true
 		}
 	}

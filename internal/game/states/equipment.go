@@ -3,6 +3,7 @@ package states
 import (
 	"go.uber.org/zap"
 
+	"github.com/Faultbox/midgard-ro/internal/game/entity"
 	"github.com/Faultbox/midgard-ro/internal/logger"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
 	"github.com/Faultbox/midgard-ro/internal/trace"
@@ -149,3 +150,60 @@ func (s *InGameState) Equipment() map[uint32]packets.InventoryItem {
 
 	return worn
 }
+
+// Portrait is the character's own sprite, for the equipment window to show
+// what it is dressing.
+//
+// The idle facing the viewer, not whatever pose the character is in on the
+// map: a character caught mid-swing in a window that is not about the fight
+// reads as a fault. The size is the baked frame's own, so the interface can
+// fit it without guessing the sprite's proportions.
+func (s *InGameState) Portrait() (texture uint32, w, h float32) {
+	if s.playerRender == nil {
+		return 0, 0, 0
+	}
+
+	return s.playerRender.PortraitFrame(entity.ActionIdle, portraitFacing, 0)
+}
+
+// portraitFacing is which of the eight facings the portrait uses.
+//
+// Four is the one drawn from the front — the direction a character faces when
+// it is walking toward the camera — which is how the original stands them in
+// the window.
+const portraitFacing = 4
+
+// ShowEquipment tells the server whether other players may look at what this
+// character is wearing, which is the checkbox on the equipment window.
+//
+// Nothing is remembered here. The server owns the setting — it is part of the
+// character — and it answers with ZC_CONFIG, which is what moves the box.
+func (s *InGameState) ShowEquipment(on bool) error {
+	if s.client == nil {
+		return nil
+	}
+
+	trace.Emit(trace.HUD, "show-equipment", zap.Bool("on", on))
+
+	return s.client.Send(packets.EncodeConfig(packets.ConfigShowEquipment, on))
+}
+
+// handleConfigNotify takes the server's word on the equipment switch.
+func (s *InGameState) handleConfigNotify(data []byte) error {
+	on, ok := packets.DecodeConfigNotify(data)
+	if !ok {
+		logger.Warn("short config notify", zap.Int("len", len(data)))
+
+		return nil
+	}
+
+	s.showEquipment = on
+
+	trace.Emit(trace.HUD, "show-equipment-is", zap.Bool("on", on))
+
+	return nil
+}
+
+// ShowEquipmentOn reports whether other players may look at what this
+// character is wearing.
+func (s *InGameState) ShowEquipmentOn() bool { return s.showEquipment }

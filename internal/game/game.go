@@ -974,9 +974,10 @@ func (g *Game) renderUI() {
 
 			MapMarkers: state.MapMarkers(),
 
-			Skills:    state.Skills(),
-			Inventory: state.Inventory(),
-			Equipment: state.Equipment(),
+			Skills:        state.Skills(),
+			Inventory:     state.Inventory(),
+			Equipment:     state.Equipment(),
+			ShowEquipment: state.ShowEquipmentOn(),
 
 			PrimaryStats: stats.Primary,
 			PrimaryBonus: stats.PrimaryBonus,
@@ -991,6 +992,8 @@ func (g *Game) renderUI() {
 			Flee: stats.Flee, FleeBonus: stats.FleeBonus,
 			Hit: stats.Hit, Critical: stats.Critical, Aspd: stats.Aspd,
 		}
+		uiState.Portrait, uiState.PortraitW, uiState.PortraitH = state.Portrait()
+
 		populateDebugFields(&uiState, state, g.client)
 		g.uiBackend.RenderInGameUI(uiState, g.dt, viewportWidth, viewportHeight)
 
@@ -1052,6 +1055,13 @@ func (g *Game) renderUI() {
 		if cast, ok := g.uiBackend.TakeSkillCast(); ok {
 			if err := state.UseSkill(cast.Skill, 0); err != nil {
 				logger.Warn("could not use that skill", zap.Error(err))
+			}
+		}
+
+		// The equipment window's switch, which is the server's to keep.
+		if want, ok := g.uiBackend.TakeShowEquipAction(); ok {
+			if err := state.ShowEquipment(want); err != nil {
+				logger.Warn("could not set equipment visibility", zap.Error(err))
 			}
 		}
 

@@ -707,3 +707,31 @@ func (r *Renderer) Destroy() {
 		r.program = 0
 	}
 }
+
+// PortraitFrame is one frame of the player's own sheet, for drawing flat in
+// the interface — the equipment window shows the character it is dressing.
+//
+// The size returned is the baked frame's, in pixels, so the caller can fit it
+// to whatever space it has without guessing the sprite's proportions. Zero
+// texture means the sheet is not baked yet, which is the ordinary state for
+// the first frames after entering a map.
+func (r *Renderer) PortraitFrame(action, direction, frame int) (texture uint32, w, h float32) {
+	if r == nil || r.player == nil {
+		return 0, 0, 0
+	}
+
+	index := r.player.actIndex(action)
+	if index < 0 {
+		return 0, 0, 0
+	}
+
+	frames := r.player.frames[index*charsprite.Directions+direction]
+	if len(frames) == 0 {
+		frames = r.player.frames[index*charsprite.Directions]
+	}
+	if len(frames) == 0 {
+		return 0, 0, 0
+	}
+
+	return frames[frame%len(frames)], float32(r.player.width), float32(r.player.height)
+}
