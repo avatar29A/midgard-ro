@@ -140,6 +140,14 @@ type CharSelectUIState struct {
 	OnCreateSlot func(slot int)
 }
 
+// The sex values the wire uses, and the server's only two accepted ones.
+const (
+	// SexFemale is 0 on the wire.
+	SexFemale uint8 = 0
+	// SexMale is 1.
+	SexMale uint8 = 1
+)
+
 // CharCreateUIState contains the data needed to render character creation.
 type CharCreateUIState struct {
 	// Slot is where the character will go, decided before this screen opened.
@@ -149,11 +157,20 @@ type CharCreateUIState struct {
 	// and sends it, so this is a choice rather than a report.
 	Sex uint8
 
+	// Job, HairStyle and Facing are the rest of the look being built.
+	Job       int
+	HairStyle int
+	Facing    int
+
 	StatusMessage string
 	ErrorMessage  string
 
 	// OnCancel abandons creation and returns to character select.
 	OnCancel func()
+
+	// OnSetSex and OnTurn change the look being previewed.
+	OnSetSex func(sex uint8)
+	OnTurn   func(delta int)
 }
 
 // LoadingUIState contains the data needed to render the loading UI.
