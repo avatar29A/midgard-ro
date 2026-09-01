@@ -91,7 +91,19 @@ func (b *UI2DBackend) loadDamageArt() {
 		}
 
 		for i, img := range spr.Images {
-			tex := b.ctx.Renderer().CreateTextureNearest(int(img.Width), int(img.Height), img.Pixels)
+			// Smoothed rather than hard-edged, which is the opposite of what
+			// the rest of the interface wants.
+			//
+			// The interface's art is drawn about 1:1 and nearest keeps its
+			// one-pixel bevels crisp. These are the one thing magnified
+			// several times over — eleven pixels of digit standing in for a
+			// figure meant to be read at a glance — and at that magnification
+			// nearest gives squares rather than numerals.
+			//
+			// The bleed linear pulls out of the transparent pixels is black,
+			// and these digits already carry a dark outline, so it lands on
+			// the outline rather than haloing the glyph.
+			tex := b.ctx.Renderer().CreateTexture(int(img.Width), int(img.Height), img.Pixels)
 			into(i, damageGlyph{
 				texture: tex,
 				width:   float32(img.Width) * damageScale,
