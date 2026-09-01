@@ -109,3 +109,36 @@ func TestWithThousands(t *testing.T) {
 		}
 	}
 }
+
+// TestMenuWordWidthCountsTheGaps: the word is centered on this, so a width
+// that forgot the gaps would sit the letters left of where the row puts its
+// own labels.
+func TestMenuWordWidthCountsTheGaps(t *testing.T) {
+	// "equip" is 5+5+4+1+5 of letter and four gaps of two.
+	if got := menuWordWidth(hudMenuButtonWords["equip"]); got != 28 {
+		t.Errorf("menuWordWidth = %v, want 28", got)
+	}
+
+	if got := menuWordWidth(nil); got != 0 {
+		t.Errorf("an empty word is %v wide", got)
+	}
+}
+
+// TestEveryComposedWordHasItsLabels: a glyph naming a label nothing loads
+// would leave a hole in the middle of a word.
+func TestEveryComposedWordHasItsLabels(t *testing.T) {
+	for name, word := range hudMenuButtonWords {
+		if len(word) == 0 {
+			t.Errorf("%q is composed but spells nothing", name)
+		}
+
+		for _, glyph := range word {
+			if glyph.w <= 0 {
+				t.Errorf("%q has a letter with no width: %+v", name, glyph)
+			}
+			if glyph.x < 0 || glyph.x+glyph.w > hudBtnW {
+				t.Errorf("%q takes a letter from outside %s: %+v", name, glyph.from, glyph)
+			}
+		}
+	}
+}
