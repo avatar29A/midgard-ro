@@ -254,13 +254,17 @@ func (c *ThirdPersonCamera) ViewMatrix(targetX, targetY, targetZ float32) math.M
 	// Look at target position (slightly above for character center)
 	target := math.Vec3{
 		X: targetX,
-		Y: targetY + 30, // Look at character center, not feet
+		Y: targetY + LookTargetLift, // Look at character center, not feet
 		Z: targetZ,
 	}
 
 	up := math.Vec3{X: 0, Y: 1, Z: 0}
 	return math.LookAt(pos, target, up)
 }
+
+// LookTargetLift is how far above a target's feet the camera actually looks,
+// so a character sits in the middle of the view rather than at its bottom.
+const LookTargetLift = 30
 
 // HandleYaw rotates camera horizontally around target, unless the map
 // forbids it.

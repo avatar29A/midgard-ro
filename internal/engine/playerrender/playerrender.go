@@ -69,6 +69,15 @@ const (
 	shadowLift = 0.1
 )
 
+// spriteDepthLift is how far toward the camera a unit is depth-tested, in
+// world units.
+//
+// Small: it only has to break the tie with the ground the unit is standing
+// on, which is at exactly its depth. Half a world unit is a twentieth of a
+// cell, far too little to let a unit show through a wall it is behind, and
+// enough that it never loses to the floor.
+const spriteDepthLift = 0.5
+
 // Renderer owns the GL state for drawing the local player as a billboard.
 type Renderer struct {
 	// The shadow the character stands on: its own texture and flat quad.
@@ -86,6 +95,7 @@ type Renderer struct {
 	locCamUp      int32
 	locTexture    int32
 	locTint       int32
+	locDepthLift  int32
 
 	// Billboard quad — 4 verts, drawn as TRIANGLE_STRIP.
 	vao uint32
@@ -127,6 +137,7 @@ func New() (*Renderer, error) {
 	r.locSpriteSize = shader.GetUniform(prog, "uSpriteSize")
 	r.locCamRight = shader.GetUniform(prog, "uCamRight")
 	r.locCamUp = shader.GetUniform(prog, "uCamUp")
+	r.locDepthLift = shader.GetUniform(prog, "uDepthLift")
 	r.locTexture = shader.GetUniform(prog, "uTexture")
 	r.locTint = shader.GetUniform(prog, "uTint")
 
@@ -243,8 +254,10 @@ func (r *Renderer) FrameInterval(action int) float32 {
 // Render draws the player billboard at the character's render position.
 // camPosX/Z are the camera world XZ — used both to orient the billboard and to
 // choose which of the 8 sprite facings to show.
-func (r *Renderer) Render(viewProj math.Mat4, char *entity.Character, camPosX, camPosZ float32) {
-	r.draw(viewProj, char, camPosX, camPosZ, r.player, 1)
+func (r *Renderer) Render(viewProj math.Mat4, char *entity.Character, camPosX, camPosZ float32,
+	right, up [3]float32,
+) {
+	r.draw(viewProj, char, camPosX, camPosZ, right, up, r.player, 1)
 }
 
 // RenderUnit draws another unit on the map, baking and caching the sheet for
@@ -256,7 +269,7 @@ func (r *Renderer) Render(viewProj math.Mat4, char *entity.Character, camPosX, c
 // appearance walks into view; every unit that looks the same after that is
 // free.
 func (r *Renderer) RenderUnit(viewProj math.Mat4, char *entity.Character, camPosX, camPosZ float32,
-	load charsprite.Loader, spec charsprite.Spec, alpha float32) {
+	right, up [3]float32, load charsprite.Loader, spec charsprite.Spec, alpha float32) {
 
 	if r == nil || char == nil || alpha <= 0 {
 		return
@@ -269,7 +282,7 @@ func (r *Renderer) RenderUnit(viewProj math.Mat4, char *entity.Character, camPos
 	if sh == nil {
 		return
 	}
-	r.draw(viewProj, char, camPosX, camPosZ, sh, alpha)
+	r.draw(viewProj, char, camPosX, camPosZ, right, up, sh, alpha)
 }
 
 // UnitFrameCount reports the animation length for an appearance, or zero when
@@ -372,13 +385,15 @@ func (r *Renderer) unitSheet(load charsprite.Loader, spec charsprite.Spec) *shee
 
 // draw puts one character on screen using the given sheet, falling back to the
 // procedural marker when there is none.
-func (r *Renderer) draw(viewProj math.Mat4, char *entity.Character, camPosX, camPosZ float32, sh *sheet, alpha float32) {
+func (r *Renderer) draw(viewProj math.Mat4, char *entity.Character, camPosX, camPosZ float32,
+	right, up [3]float32, sh *sheet, alpha float32) {
 	if r == nil || char == nil || r.program == 0 || r.vao == 0 {
 		return
 	}
 
-	// The quad turns to face the camera so the sprite is never seen edge-on.
-	right, up := character.BillboardVectors(camPosX, camPosZ, char.RenderX, char.RenderZ)
+	// The axes come from the camera and are the same for every sprite in the
+	// frame: they are the screen's own, so a sprite is drawn square to it
+	// wherever it stands.
 
 	texture, spriteW, spriteH := r.selectFrame(char, camPosX, camPosZ, sh)
 	if texture == 0 {
@@ -397,6 +412,7 @@ func (r *Renderer) draw(viewProj math.Mat4, char *entity.Character, camPosX, cam
 	gl.Uniform4f(r.locTint, 1.0, 1.0, 1.0, alpha)
 	gl.Uniform3f(r.locCamRight, right[0], right[1], right[2])
 	gl.Uniform3f(r.locCamUp, up[0], up[1], up[2])
+	gl.Uniform1f(r.locDepthLift, spriteDepthLift)
 
 	gl.ActiveTexture(gl.TEXTURE0)
 	gl.BindTexture(gl.TEXTURE_2D, texture)
@@ -467,6 +483,11 @@ func (r *Renderer) renderShadow(viewProj math.Mat4, char *entity.Character, spri
 
 	gl.UseProgram(r.program)
 	gl.UniformMatrix4fv(r.locViewProj, 1, false, &viewProj[0])
+
+	// The shadow lies on the ground rather than standing on it, so it keeps
+	// its own depth per corner; taking the middle's would let it fall across
+	// whatever is in front of it.
+	gl.Uniform1f(r.locDepthLift, 0)
 	gl.Uniform3f(r.locWorldPos, char.RenderX, char.RenderY+shadowLift, char.RenderZ)
 	gl.Uniform2f(r.locSpriteSize, size, size)
 	// Fades with the unit above it: a shadow that stayed solid while its owner

@@ -10,6 +10,7 @@ import (
 
 	"github.com/Faultbox/midgard-ro/internal/config"
 	"github.com/Faultbox/midgard-ro/internal/engine/camera"
+	"github.com/Faultbox/midgard-ro/internal/engine/character"
 	"github.com/Faultbox/midgard-ro/internal/engine/charsprite"
 	"github.com/Faultbox/midgard-ro/internal/engine/picking"
 	"github.com/Faultbox/midgard-ro/internal/engine/playerrender"
@@ -103,6 +104,9 @@ type InGameState struct {
 	// celebrations are level-ups waiting to be shown, and celebrationWaitMs
 	// how long before the next may start. soundRequest is a sound the world
 	// wants played, which the game plays because the state has no audio.
+	// groundTraceMs counts frames for the ground trace's throttle.
+	groundTraceMs int
+
 	// showEquipment is the server's word on whether other players may look at
 	// what this character is wearing.
 	showEquipment bool
@@ -764,6 +768,8 @@ func (s *InGameState) Update(dt float64) error {
 
 		// Update cell position
 		s.TileX, s.TileY = s.player.CurrentCell()
+
+		s.traceGround()
 	}
 
 	// The click flourish runs down on its own; nothing else clears it.
@@ -817,15 +823,34 @@ func (s *InGameState) Render() error {
 		if s.playerRender == nil {
 			return
 		}
-		s.playerRender.Render(viewProj, s.player, s.camera.PosX, s.camera.PosZ)
-		s.renderUnits(viewProj)
+
+		// The screen's own axes, worked out once from where the camera is and
+		// what it is looking at. Every sprite in the frame is drawn on them,
+		// which is what keeps them all upright and square to the view — a
+		// quad turned toward the camera one sprite at a time tips over for
+		// anything near it, and RO never leans a sprite at all.
+		//
+		// The position is asked for rather than read off the camera's cached
+		// PosX/PosY/PosZ. Those are filled in by whoever last called Position
+		// and are not guaranteed to be this frame's or this target's: taken
+		// as the camera's whereabouts they gave a basis that was not the
+		// screen's at all, and the sprites rose and fell as the camera turned
+		// about a character standing still.
+		eye := s.camera.Position(x, y, z)
+
+		right, up := character.BillboardVectors(
+			eye.X, eye.Y, eye.Z,
+			x, y+camera.LookTargetLift, z)
+
+		s.playerRender.Render(viewProj, s.player, s.camera.PosX, s.camera.PosZ, right, up)
+		s.renderUnits(viewProj, right, up)
 	})
 	return nil
 }
 
 // renderUnits draws the other units on the map, sharing the player's billboard
 // renderer and its sheet cache.
-func (s *InGameState) renderUnits(viewProj math.Mat4) {
+func (s *InGameState) renderUnits(viewProj math.Mat4, right, up [3]float32) {
 	if s.entityManager == nil || s.manager == nil {
 		return
 	}
@@ -848,7 +873,8 @@ func (s *InGameState) renderUnits(viewProj math.Mat4) {
 			}
 			continue
 		}
-		s.playerRender.RenderUnit(viewProj, e.Body, s.camera.PosX, s.camera.PosZ, load, unitSpec(e), e.Alpha())
+		s.playerRender.RenderUnit(viewProj, e.Body, s.camera.PosX, s.camera.PosZ,
+			right, up, load, unitSpec(e), e.Alpha())
 	}
 
 	s.drawGroundMarker(viewProj)
@@ -1776,6 +1802,43 @@ func (s *InGameState) selfAID() uint32 {
 	accountID, _, _, _ := s.client.Session()
 	return accountID
 }
+
+// traceGround reports what the ground under the player is doing, for telling
+// a wrong height apart from a wrong sprite.
+//
+// Only while walking and only every so often: standing still it says the same
+// thing forever, and every frame of a walk would bury everything else in the
+// log.
+func (s *InGameState) traceGround() {
+	if !trace.On(trace.Move) || s.scene == nil || !s.MapLoaded || s.player == nil {
+		return
+	}
+
+	if !s.player.IsMoving {
+		s.groundTraceMs = 0
+
+		return
+	}
+
+	s.groundTraceMs++
+	if s.groundTraceMs%groundTraceEvery != 0 {
+		return
+	}
+
+	tileX, tileZ, u, v, corners := s.scene.TerrainProbe(s.player.RenderX, s.player.RenderZ)
+
+	trace.Emit(trace.Move, "ground",
+		zap.Float32("renderY", s.player.RenderY),
+		zap.Float32("groundY", s.scene.GetTerrainHeight(s.player.RenderX, s.player.RenderZ)),
+		zap.Int("tileX", tileX), zap.Int("tileZ", tileZ),
+		zap.Float32("u", u), zap.Float32("v", v),
+		zap.Float32("sw", corners[0]), zap.Float32("se", corners[1]),
+		zap.Float32("nw", corners[2]), zap.Float32("ne", corners[3]))
+}
+
+// groundTraceEvery is how many frames apart the ground trace speaks, so a
+// walk leaves a readable trail rather than a frame-by-frame flood.
+const groundTraceEvery = 10
 
 // terrainHeight returns the ground altitude at a world position, so units
 // follow the terrain as they walk rather than sinking through hills. Returns
