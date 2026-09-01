@@ -306,13 +306,17 @@ func (s *CharCreateState) Create() {
 	s.StatusMsg = "Creating..."
 }
 
-// handleCreated returns to character select once the server has made the
-// character.
+// handleCreated enters the game as the character the server has just made.
 //
-// The list is re-requested on the way in rather than patched here: the server
-// has just changed it, and asking is both simpler and more truthful than
-// assuming what it now contains.
-func (s *CharCreateState) handleCreated(_ []byte) error {
+// The accept carries the whole character record, so nothing has to be asked
+// for: it is added to the list character select already holds and then
+// selected, which is what a player wants after naming someone — they made it
+// to play it, not to look at a list.
+//
+// The list is patched rather than re-requested because it cannot be
+// re-requested: CH_ENTER is how a session connects, not how it refreshes, and
+// the char server does not answer a second one.
+func (s *CharCreateState) handleCreated(data []byte) error {
 	trace.Emit(trace.Char, "create-ok", zap.Int("slot", s.slot))
 	logger.Info("character created", zap.Int("slot", s.slot), zap.String("name", s.Name))
 
@@ -321,7 +325,30 @@ func (s *CharCreateState) handleCreated(_ []byte) error {
 	}
 
 	s.back.ClearPendingCreate()
-	s.manager.Change(s.back)
+
+	// type, then one CHARACTER_INFO.
+	char := packets.DecodeCharInfo(data[2:])
+	if char == nil {
+		// The character exists — the server said so — but we cannot read it
+		// back. Returning to the list is the honest fallback, and it will be
+		// missing this one until the next login.
+		logger.Warn("could not read the character the server just made",
+			zap.Int("bytes", len(data)))
+		s.manager.Change(s.back)
+
+		return nil
+	}
+
+	index := s.back.AddCharacter(char)
+
+	trace.Emit(trace.Char, "create-enter",
+		zap.Int("slot", s.slot), zap.String("name", char.GetName()))
+
+	if err := s.back.SelectCharacter(index); err != nil {
+		logger.Warn("could not enter the game as the new character",
+			zap.Error(err))
+		s.manager.Change(s.back)
+	}
 
 	return nil
 }
