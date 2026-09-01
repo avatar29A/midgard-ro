@@ -130,15 +130,16 @@ type UI2DBackend struct {
 	itemTab     int
 
 	// mapWorldView switches the Map window between this map and the world.
-	mapWorldView bool
-	mapPlaced    bool
-	mapSaved     ui2d.Rect
-	itemAction   ItemAction
-	itemDrag     itemDrag
-	dropAction   DropAction
-	dropPrompt   dropPrompt
-	damageArt    damageArt
-	statAction   StatAction
+	mapWorldView  bool
+	mapPlaced     bool
+	mapSaved      ui2d.Rect
+	itemAction    ItemAction
+	itemDrag      itemDrag
+	dropAction    DropAction
+	dropPrompt    dropPrompt
+	damageArt     damageArt
+	statAction    StatAction
+	levelUpAction LevelUpAction
 
 	escOpen   bool
 	escAction EscAction
@@ -990,6 +991,7 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 	b.drawMinimap(state, width)
 	b.drawChat(state, height)
 	b.drawHotkeys(state, width, height)
+	b.drawLevelUpButtons(state.LevelUpButtons, width, height)
 
 	b.drawEscMenu(width, height)
 	b.drawSoundConfig(width, height)

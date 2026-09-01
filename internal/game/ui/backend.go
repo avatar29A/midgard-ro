@@ -30,6 +30,12 @@ type UIBackend interface {
 	// TakeStatAction returns a stat the player asked to raise.
 	TakeStatAction() (StatAction, bool)
 
+	// TakeLevelUpAction returns a level-up button the player pressed.
+	TakeLevelUpAction() (LevelUpAction, bool)
+
+	// OpenWindow opens one of the HUD windows.
+	OpenWindow(window HUDWindow)
+
 	// PressHotkey asks for the item in a quick-panel cell to be used.
 	PressHotkey(row, col int)
 
@@ -181,6 +187,9 @@ type InGameUIState struct {
 	// DamageNumbers are the figures floating up from recent blows, already
 	// projected.
 	DamageNumbers []states.DamageNumber
+
+	// LevelUpButtons says which corners have a level waiting to be spent.
+	LevelUpButtons LevelUpButtons
 
 	// Player position
 	PlayerX, PlayerY, PlayerZ float32

@@ -60,6 +60,19 @@ func (b *UI2DBackend) IsWindowOpen(w HUDWindow) bool {
 	return b.hudOpen[w]
 }
 
+// OpenWindow opens a menu window, leaving an already open one alone.
+//
+// Distinct from ToggleWindow because the caller sometimes means "show me
+// this" rather than "swap it": a level-up button pointing at the status
+// window should open it, not close a window the player already had up.
+func (b *UI2DBackend) OpenWindow(w HUDWindow) {
+	if b.IsWindowOpen(w) {
+		return
+	}
+
+	b.ToggleWindow(w)
+}
+
 // ToggleWindow opens a closed menu window or closes an open one, and reports
 // the state it left it in.
 func (b *UI2DBackend) ToggleWindow(w HUDWindow) bool {
