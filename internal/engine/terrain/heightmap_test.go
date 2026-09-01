@@ -1,6 +1,10 @@
 package terrain
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/Faultbox/midgard-ro/pkg/formats"
+)
 
 // slope is a one-tile heightmap rising from west to east, with the corners in
 // the order the mesh lays them out: south-west, south-east, north-west,
@@ -116,5 +120,64 @@ func TestHeightAtCornerOrderMatchesTheMesh(t *testing.T) {
 	}
 	if got := h.HeightAt(0, 9.9); got != 0 {
 		t.Errorf("the west end of the north edge reads %v, want it flat", got)
+	}
+}
+
+// gatSlope is a one-cell collision map rising west to east, with the corners
+// in the order the format stores them: south-west, south-east, north-west,
+// north-east.
+func gatSlope(sw, se, nw, ne float32) *formats.GAT {
+	return &formats.GAT{
+		Width:  2,
+		Height: 2,
+		Cells: []formats.GATCell{
+			{Heights: [4]float32{sw, se, nw, ne}, Type: formats.GATWalkable},
+			{Heights: [4]float32{sw, se, nw, ne}, Type: formats.GATWalkable},
+			{Heights: [4]float32{sw, se, nw, ne}, Type: formats.GATWalkable},
+			{Heights: [4]float32{sw, se, nw, ne}, Type: formats.GATWalkable},
+		},
+	}
+}
+
+// TestGatHeightRisesAcrossACell: the collision map is what a character stands
+// on, and where it disagrees with the ground mesh it is the one to believe —
+// a town's steps are models on flat ground, so the mesh is level and the climb
+// is here. Read as one height per cell it would be a staircase of its own.
+func TestGatHeightRisesAcrossACell(t *testing.T) {
+	// Cells are five world units across.
+	gat := gatSlope(-10, -20, -10, -20)
+
+	last := GetInterpolatedHeight(gat, 0, 2)
+	for x := float32(1); x < 5; x++ {
+		got := GetInterpolatedHeight(gat, x, 2)
+		if got <= last {
+			t.Fatalf("height at x=%v is %v, no higher than %v a step back", x, got, last)
+		}
+
+		last = got
+	}
+}
+
+// TestGatHeightIsNegatedLikeTheMesh: both surfaces store altitude the same way
+// round, and a query that forgot the sign for one of them would put a
+// character under the map the moment it stepped off the other.
+func TestGatHeightIsNegatedLikeTheMesh(t *testing.T) {
+	gat := gatSlope(-25, -25, -25, -25)
+
+	if got := GetInterpolatedHeight(gat, 2, 2); got != 25 {
+		t.Errorf("GetInterpolatedHeight = %v, want 25", got)
+	}
+
+	mesh := slope(-25, -25, -25, -25)
+	if got := mesh.HeightAt(2, 2); got != 25 {
+		t.Errorf("the mesh gives %v for the same altitude", got)
+	}
+}
+
+// TestGatHeightWithoutACollisionMap: a map with none answers rather than
+// crashing; the mesh is the only surface there.
+func TestGatHeightWithoutACollisionMap(t *testing.T) {
+	if got := GetInterpolatedHeight(nil, 5, 5); got != 0 {
+		t.Errorf("a nil collision map gave %v", got)
 	}
 }

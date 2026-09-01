@@ -4,6 +4,7 @@ package states
 import (
 	"fmt"
 	gomath "math"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -104,8 +105,10 @@ type InGameState struct {
 	// celebrations are level-ups waiting to be shown, and celebrationWaitMs
 	// how long before the next may start. soundRequest is a sound the world
 	// wants played, which the game plays because the state has no audio.
-	// groundTraceMs counts frames for the ground trace's throttle.
+	// groundTraceMs counts frames for the ground trace's throttle, and
+	// gridTraced marks the one-off height grid as already printed.
 	groundTraceMs int
+	gridTraced    bool
 
 	// showEquipment is the server's word on whether other players may look at
 	// what this character is wearing.
@@ -770,6 +773,7 @@ func (s *InGameState) Update(dt float64) error {
 		s.TileX, s.TileY = s.player.CurrentCell()
 
 		s.traceGround()
+		s.traceHeightGrid()
 	}
 
 	// The click flourish runs down on its own; nothing else clears it.
@@ -1838,13 +1842,68 @@ func (s *InGameState) traceGround() {
 // walk leaves a readable trail rather than a frame-by-frame flood.
 const groundTraceEvery = 10
 
-// terrainHeight returns the ground altitude at a world position, so units
-// follow the terrain as they walk rather than sinking through hills. Returns
-// zero before the map is loaded, which is what a flat map would give.
+// traceHeightGrid prints the ground around the player as a grid, once.
+//
+// Two grids, side by side: what the mesh says the ground is and what the
+// collision map says you walk at. They are not the same map — a town's raised
+// plaza can be built out of models standing on flat ground — and reading the
+// wrong one puts a character inside the steps rather than on them. Seeing them
+// together is the only way to tell which is which.
+func (s *InGameState) traceHeightGrid() {
+	if s.gridTraced || !trace.On(trace.Map) || s.scene == nil || !s.MapLoaded || s.player == nil {
+		return
+	}
+
+	s.gridTraced = true
+
+	cellX, cellY := s.player.CurrentCell()
+
+	var mesh, walk strings.Builder
+
+	for dy := heightGridSpan; dy >= -heightGridSpan; dy-- {
+		for dx := -heightGridSpan; dx <= heightGridSpan; dx++ {
+			x, z := entity.CellToWorld(cellX+dx, cellY+dy)
+
+			fmt.Fprintf(&mesh, "%5.0f", s.scene.GetTerrainHeight(x, z))
+			fmt.Fprintf(&walk, "%5.0f", s.scene.GatHeight(x, z))
+		}
+
+		mesh.WriteByte('\n')
+		walk.WriteByte('\n')
+	}
+
+	trace.Emit(trace.Map, "height-grid",
+		zap.Int("cellX", cellX), zap.Int("cellY", cellY),
+		zap.String("mesh", "\n"+mesh.String()),
+		zap.String("walkable", "\n"+walk.String()))
+}
+
+// heightGridSpan is how many cells either side of the player the grid covers.
+const heightGridSpan = 8
+
+// terrainHeight returns the height a unit stands at, so it follows the ground
+// as it walks rather than sinking through it. Returns zero before the map is
+// loaded, which is what a flat map would give.
+//
+// From the collision map rather than the ground mesh. The two are not the same
+// surface and where they differ the collision map is the one to believe: a
+// town's steps are built out of map models standing on flat ground, so the
+// mesh reports one height for the whole flight while the collision map carries
+// the climb. Geffen's ramp is flat in the mesh and rises from -39 to -12 in
+// the collision map, which is the difference between walking up the steps and
+// walking through them with your head out of the top.
+//
+// The mesh is the fallback for a map with no collision data, where it is the
+// only surface there is.
 func (s *InGameState) terrainHeight(worldX, worldZ float32) float32 {
 	if s.scene == nil || !s.MapLoaded {
 		return 0
 	}
+
+	if s.scene.HasGAT() {
+		return s.scene.GatHeight(worldX, worldZ)
+	}
+
 	return s.scene.GetTerrainHeight(worldX, worldZ)
 }
 

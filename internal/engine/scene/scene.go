@@ -570,6 +570,9 @@ func (s *Scene) GetTerrainHeight(worldX, worldZ float32) float32 {
 	return s.terrainHeightmap.HeightAt(worldX, worldZ)
 }
 
+// HasGAT reports whether the map came with collision data.
+func (s *Scene) HasGAT() bool { return s.GAT != nil }
+
 // GatHeight is the walkable surface's height at a position, as the collision
 // map gives it.
 //
