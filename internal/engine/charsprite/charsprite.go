@@ -99,6 +99,14 @@ type Spec struct {
 	// either a weapon class or an item id. Zero is bare-handed. Players only.
 	Weapon int
 
+	// The three head gear views the server sent, as accessory ids rather than
+	// item ids. Zero is nothing worn in that place. Players only.
+	//
+	// Kept in the spec because they are part of what the character looks like:
+	// a sheet is cached by appearance, and two characters differing only in
+	// their hats are two appearances.
+	HeadTop, HeadMid, HeadLow int
+
 	// Name identifies a KindItem sprite, which the archive files by the item
 	// table's resource name rather than by any id. Ignored for every other
 	// kind. Spec is used as a cache key, so this stays a plain string.
@@ -307,6 +315,10 @@ type Assets struct {
 	HeadACT *formats.ACT
 	Sheet   *Sheet
 
+	// Gear is what the character wears on its head, lowest first. Empty for
+	// a bare head, which is most of them.
+	Gear []sprite.Gear
+
 	// WeaponSPR and WeaponACT are the weapon in the character's hand, nil when
 	// bare-handed or when the archive has no art for what is held.
 	WeaponSPR *formats.SPR
@@ -383,8 +395,26 @@ func Load(load Loader, spec Spec) (*Assets, error) {
 		}
 	}
 
+	// What is worn on the head, lowest first so a hat is drawn over a mask.
+	// A piece that will not load costs that piece and nothing else.
+	for _, view := range [3]int{spec.HeadLow, spec.HeadMid, spec.HeadTop} {
+		sprPath, actPath := spec.GearPaths(view)
+		if sprPath == "" {
+			continue
+		}
+
+		gearSPR, gearACT, gearErr := loadPair(load, sprPath, actPath)
+		if gearErr != nil {
+			// Losing a hat costs a hat, not a character, so it is passed over
+			// as quietly as a missing weapon is.
+			continue
+		}
+
+		a.Gear = append(a.Gear, sprite.Gear{SPR: gearSPR, ACT: gearACT})
+	}
+
 	a.Sheet = BuildSheet(a.BodySPR, a.BodyACT, a.HeadSPR, a.HeadACT,
-		a.WeaponSPR, a.WeaponACT, spec.HeadDirection, spec.Kind)
+		a.WeaponSPR, a.WeaponACT, a.Gear, spec.HeadDirection, spec.Kind)
 	if a.Sheet == nil {
 		return nil, fmt.Errorf("body sprite %q produced no frames", bodySPRPath)
 	}
@@ -428,7 +458,7 @@ func posedSet(kind Kind, action int) bool {
 // only the first leaves every one of them frozen, which is what treating them
 // like players did.
 func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR, headACT *formats.ACT,
-	weaponSPR *formats.SPR, weaponACT *formats.ACT, headDir int, kind Kind) *Sheet {
+	weaponSPR *formats.SPR, weaponACT *formats.ACT, gear []sprite.Gear, headDir int, kind Kind) *Sheet {
 	actions := DefaultActionMap(kind).withWeapon(weaponACT)
 	if bodySPR == nil || bodyACT == nil || len(bodyACT.Actions) == 0 {
 		return nil
@@ -488,8 +518,8 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 				continue
 			}
 			for _, fp := range frameIndices(action, len(bodyACT.Actions[idx].Frames)) {
-				r := sprite.CompositeWithWeapon(bodySPR, bodyACT, headSPR, headACT,
-					weaponSPR, weaponACT, action, dir, fp[0], fp[1])
+				r := sprite.CompositeWithGear(bodySPR, bodyACT, headSPR, headACT,
+					weaponSPR, weaponACT, gear, action, dir, fp[0], fp[1])
 				if r.Width > maxW {
 					maxW = r.Width
 				}
@@ -538,8 +568,8 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 			pairs := frameIndices(action, available)
 			frames := make([]Frame, len(pairs))
 			for i, fp := range pairs {
-				r := sprite.CompositeWithWeapon(bodySPR, bodyACT, headSPR, headACT,
-					weaponSPR, weaponACT, action, dir, fp[0], fp[1])
+				r := sprite.CompositeWithGear(bodySPR, bodyACT, headSPR, headACT,
+					weaponSPR, weaponACT, gear, action, dir, fp[0], fp[1])
 				if r.Pixels == nil || r.Width == 0 || r.Height == 0 {
 					// Keep the slot so frame indices stay contiguous.
 					frames[i] = Frame{Pixels: make([]byte, maxW*maxH*4)}

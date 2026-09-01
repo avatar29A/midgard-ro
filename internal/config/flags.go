@@ -3,6 +3,7 @@ package config
 import (
 	"flag"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -26,6 +27,7 @@ var (
 	flagWalkTo     = flag.String("walk-to", "", "Once in game, walk to this cell, e.g. 156,22 (QA aid)")
 	flagMouseAt    = flag.String("mouse-at", "", "Once in game, put the pointer at this window position, e.g. 640,360 (QA aid)")
 	flagOpenWindow = flag.String("open-window", "", "Once in game, open these HUD windows, e.g. equip,item (QA aid)")
+	flagEquip      = flag.String("equip", "", "Once in game, wear the items in these inventory slots, e.g. 7,8 (QA aid)")
 
 	flagSay sayLines
 )
@@ -82,6 +84,27 @@ func OpenWindows() []string {
 	}
 
 	return names
+}
+
+// EquipSlots returns the inventory slots --equip asked to be worn.
+//
+// By slot rather than by item id because that is what the wear packet takes,
+// and because a capture that has to search the bag first is a capture that
+// breaks when the bag changes.
+func EquipSlots() []int {
+	if *flagEquip == "" {
+		return nil
+	}
+
+	var slots []int
+
+	for _, field := range strings.Split(*flagEquip, ",") {
+		if index, err := strconv.Atoi(strings.TrimSpace(field)); err == nil {
+			slots = append(slots, index)
+		}
+	}
+
+	return slots
 }
 
 // TraceSpec returns the --trace channel list, empty when tracing is off.

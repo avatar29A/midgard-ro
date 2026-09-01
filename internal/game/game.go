@@ -99,8 +99,10 @@ type Game struct {
 	mouseAtX, mouseAtY int
 	mouseAtPending     bool
 
-	// Which HUD windows to open once the map is up, from --open-window.
+	// Which HUD windows to open once the map is up, from --open-window, and
+	// which inventory slots to wear, from --equip.
 	openWindows []string
+	equipSlots  []int
 
 	// toggleBasicInfo is set for the frame Ctrl+V was pressed.
 	toggleBasicInfo bool
@@ -544,6 +546,7 @@ func (g *Game) frame() {
 	g.runWalkTo()
 	g.runMouseAt()
 	g.runOpenWindows()
+	g.runEquip()
 	g.runSay()
 
 	// Render 3D scene (if applicable)
@@ -617,6 +620,35 @@ func (g *Game) runOpenWindows() {
 	}
 
 	g.openWindows = nil
+}
+
+// SetEquipSlots records the inventory slots --equip asked to be worn.
+func (g *Game) SetEquipSlots(slots []int) {
+	g.equipSlots = slots
+}
+
+// runEquip wears what --equip named, once the inventory has arrived.
+//
+// Waits for the bag rather than for the map: the slots are the server's own
+// numbering, and asking before the item list has come back would name slots
+// the client has never heard of.
+func (g *Game) runEquip() {
+	if len(g.equipSlots) == 0 {
+		return
+	}
+
+	state, ok := g.stateManager.Current().(*states.InGameState)
+	if !ok || !state.MapReady() || len(state.Inventory()) == 0 {
+		return
+	}
+
+	for _, slot := range g.equipSlots {
+		if err := state.EquipItemAt(slot, 0); err != nil {
+			logger.Warn("--equip request failed", zap.Int("slot", slot), zap.Error(err))
+		}
+	}
+
+	g.equipSlots = nil
 }
 
 // runMouseAt moves the pointer for --mouse-at once the map is up. It goes

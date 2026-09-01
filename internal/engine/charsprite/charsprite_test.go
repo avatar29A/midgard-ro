@@ -121,7 +121,7 @@ func TestBuildSheetPadsFramesToUniformSize(t *testing.T) {
 		})
 	}
 
-	sheet := BuildSheet(bodySPR, act, nil, nil, nil, nil, HeadStraight, KindPlayer)
+	sheet := BuildSheet(bodySPR, act, nil, nil, nil, nil, nil, HeadStraight, KindPlayer)
 	if sheet == nil {
 		t.Fatal("BuildSheet returned nil")
 	}
@@ -151,7 +151,7 @@ func TestBuildSheetCoversAllDirections(t *testing.T) {
 		})
 	}
 
-	sheet := BuildSheet(bodySPR, act, nil, nil, nil, nil, HeadStraight, KindPlayer)
+	sheet := BuildSheet(bodySPR, act, nil, nil, nil, nil, nil, HeadStraight, KindPlayer)
 	if sheet == nil {
 		t.Fatal("BuildSheet returned nil")
 	}
@@ -169,7 +169,7 @@ func TestBuildSheetCoversAllDirections(t *testing.T) {
 }
 
 func TestBuildSheetNilBody(t *testing.T) {
-	if got := BuildSheet(nil, nil, nil, nil, nil, nil, HeadStraight, KindPlayer); got != nil {
+	if got := BuildSheet(nil, nil, nil, nil, nil, nil, nil, HeadStraight, KindPlayer); got != nil {
 		t.Error("BuildSheet with no body should return nil")
 	}
 }
@@ -295,7 +295,7 @@ func TestIdleIsAnimatedForNonPlayers(t *testing.T) {
 	}
 	bodySPR := &formats.SPR{Images: []formats.SPRImage{makeImage(8, 8)}}
 
-	player := BuildSheet(bodySPR, act, nil, nil, nil, nil, HeadStraight, KindPlayer)
+	player := BuildSheet(bodySPR, act, nil, nil, nil, nil, nil, HeadStraight, KindPlayer)
 	if player == nil {
 		t.Fatal("player sheet is nil")
 	}
@@ -305,7 +305,7 @@ func TestIdleIsAnimatedForNonPlayers(t *testing.T) {
 	}
 
 	for _, kind := range []Kind{KindMonster, KindNPC} {
-		sheet := BuildSheet(bodySPR, act, nil, nil, nil, nil, HeadStraight, kind)
+		sheet := BuildSheet(bodySPR, act, nil, nil, nil, nil, nil, HeadStraight, kind)
 		if sheet == nil {
 			t.Fatalf("kind %d sheet is nil", kind)
 		}
@@ -337,7 +337,7 @@ func TestAnimationIsCappedAndReported(t *testing.T) {
 	}
 	bodySPR := &formats.SPR{Images: []formats.SPRImage{makeImage(8, 8)}}
 
-	sheet := BuildSheet(bodySPR, act, nil, nil, nil, nil, HeadStraight, KindNPC)
+	sheet := BuildSheet(bodySPR, act, nil, nil, nil, nil, nil, HeadStraight, KindNPC)
 	if sheet == nil {
 		t.Fatal("BuildSheet returned nil")
 	}
@@ -378,7 +378,7 @@ func TestPlayerHeadPosesAreNotCountedAsDropped(t *testing.T) {
 	}
 	bodySPR := &formats.SPR{Images: []formats.SPRImage{makeImage(8, 8)}}
 
-	sheet := BuildSheet(bodySPR, act, nil, nil, nil, nil, HeadStraight, KindPlayer)
+	sheet := BuildSheet(bodySPR, act, nil, nil, nil, nil, nil, HeadStraight, KindPlayer)
 	if sheet == nil {
 		t.Fatal("BuildSheet returned nil")
 	}
@@ -445,5 +445,65 @@ func TestPosedSetsAreTheIdleAndTheSit(t *testing.T) {
 		if got := posedSet(tc.kind, tc.action); got != tc.want {
 			t.Errorf("posedSet(%v, %d) = %v, want %v", tc.kind, tc.action, got, tc.want)
 		}
+	}
+}
+
+// TestGearPaths: head gear is filed by sex under its own folder, named by the
+// client's own table — and the names in that table already begin with the
+// underscore, so the file is the sex marker with the name appended straight
+// on.
+func TestGearPaths(t *testing.T) {
+	spec := Spec{Job: 0, HairStyle: 1}
+
+	spr, act := spec.GearPaths(1)
+	if spr != `data\sprite\악세사리\남\남_고글.spr` {
+		t.Errorf("male goggles spr = %q", spr)
+	}
+	if act != `data\sprite\악세사리\남\남_고글.act` {
+		t.Errorf("male goggles act = %q", act)
+	}
+
+	female := Spec{Job: 0, HairStyle: 1, Female: true}
+	if spr, _ := female.GearPaths(1); spr != `data\sprite\악세사리\여\여_고글.spr` {
+		t.Errorf("female goggles spr = %q", spr)
+	}
+}
+
+// TestGearPathsForNothingWorn: zero is a bare head, and a view the table does
+// not know is gear newer than the table. Both draw the character without it
+// rather than failing to draw the character.
+func TestGearPathsForNothingWorn(t *testing.T) {
+	spec := Spec{Job: 0, HairStyle: 1}
+
+	for _, view := range []int{0, -1, 999999} {
+		if spr, act := spec.GearPaths(view); spr != "" || act != "" {
+			t.Errorf("view %d gave %q / %q, want nothing", view, spr, act)
+		}
+	}
+
+	// Nothing but a player wears gear.
+	monster := Spec{Kind: KindMonster, Job: 1002}
+	if spr, _ := monster.GearPaths(1); spr != "" {
+		t.Errorf("a monster was given head gear: %q", spr)
+	}
+}
+
+// TestAccessoryTableHasTheOnesTheClientShips: the table is generated, so this
+// is a check that it was generated at all and joined onto real names rather
+// than left empty.
+func TestAccessoryTableHasTheOnesTheClientShips(t *testing.T) {
+	if len(accessoryNames) < 500 {
+		t.Errorf("the accessory table holds %d entries, which is too few to be the client's",
+			len(accessoryNames))
+	}
+
+	for _, view := range []int{1, 3} {
+		if name, ok := AccessoryName(view); !ok || name == "" {
+			t.Errorf("view %d is missing from the table", view)
+		}
+	}
+
+	if _, ok := AccessoryName(0); ok {
+		t.Error("zero is nothing worn and should not name a sprite")
 	}
 }

@@ -38,6 +38,17 @@ const (
 	//	아이템  "item"
 	itemDir = `data\sprite\아이템\`
 
+	// Head gear — hats, masks, glasses — is filed by sex under its own
+	// folder, named by the table the client itself ships:
+	//
+	//	data\sprite\악세사리\남\남_고글.spr
+	//
+	//	악세사리  "accessory"
+	//
+	// The names in that table already begin with the underscore, so the file
+	// is the sex marker with the name appended straight on.
+	gearDir = `data\sprite\악세사리\`
+
 	male   = `남`
 	female = `여`
 )
@@ -251,6 +262,35 @@ func (s Spec) WeaponPathCandidates() [][2]string {
 	}
 
 	return candidates
+}
+
+// AccessoryName is the sprite basename for a head gear view id, from the
+// client's own table.
+func AccessoryName(view int) (string, bool) {
+	name, ok := accessoryNames[view]
+
+	return name, ok
+}
+
+// GearPaths returns the archive paths of one piece of head gear.
+//
+// A view id of zero is nothing worn, and one the table does not know is gear
+// newer than the table — both give no paths, which draws the character
+// without it rather than failing to draw the character.
+func (s Spec) GearPaths(view int) (sprPath, actPath string) {
+	if s.Kind != KindPlayer || view <= 0 {
+		return "", ""
+	}
+
+	name, ok := AccessoryName(view)
+	if !ok {
+		return "", ""
+	}
+
+	sex := s.sexSuffix()
+	base := fmt.Sprintf(`%s%s\%s%s`, gearDir, sex, sex, name)
+
+	return base + ".spr", base + ".act"
 }
 
 // HeadPaths returns the archive paths of the head SPR and ACT for the
