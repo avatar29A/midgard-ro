@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"testing"
 
+	"github.com/Faultbox/midgard-ro/internal/game/entity"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
 )
 
@@ -155,5 +156,28 @@ func TestTwoHandedWeaponFillsBothHands(t *testing.T) {
 	}
 	if worn[packets.EQP_HAND_R].Index != 3 || worn[packets.EQP_HAND_L].Index != 3 {
 		t.Error("the two hands do not both hold the weapon")
+	}
+}
+
+// TestSittingBlocksWalking: unit_can_move is false while a player sits, so a
+// walk request would never be acknowledged — and the client, left waiting for
+// one, slid a seated character across the ground. Turning is all a click can
+// mean here.
+func TestSittingBlocksWalking(t *testing.T) {
+	s := &InGameState{}
+	s.player = &entity.Character{Sitting: true}
+	s.player.WorldX, s.player.WorldZ = entity.CellToWorld(100, 100)
+
+	before := s.player.Direction
+
+	if err := s.RequestMove(100, 105); err != nil {
+		t.Fatalf("RequestMove while seated returned %v", err)
+	}
+
+	if s.hasDest {
+		t.Error("a seated character was given somewhere to walk to")
+	}
+	if s.player.Direction == before {
+		t.Error("a seated character did not turn toward the click")
 	}
 }
