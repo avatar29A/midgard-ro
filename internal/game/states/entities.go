@@ -253,7 +253,7 @@ func updateUnits(m *entity.Manager, deltaMs float32, anim UnitAnimFunc) {
 		e.Body.Update(deltaMs)
 		e.Body.UpdateRenderPosition(deltaMs)
 
-		idle, walk, once := 0, 0, 0
+		idle, walk, once, standby := 0, 0, 0, 0
 		if anim != nil {
 			var idleMs, walkMs float32
 			idle, idleMs = anim(e, entity.ActionIdle, e.Body.Direction)
@@ -262,6 +262,12 @@ func updateUnits(m *entity.Manager, deltaMs float32, anim UnitAnimFunc) {
 			e.Body.AnimIntervalMs = [entity.LoadedActions]float32{
 				entity.ActionIdle: idleMs,
 				entity.ActionWalk: walkMs,
+			}
+
+			if e.Body.Ready {
+				var standbyMs float32
+				standby, standbyMs = anim(e, entity.ActionStandby, e.Body.Direction)
+				e.Body.AnimIntervalMs[entity.ActionStandby] = standbyMs
 			}
 
 			// Only the one-shot that is actually playing is asked about.
@@ -273,6 +279,6 @@ func updateUnits(m *entity.Manager, deltaMs float32, anim UnitAnimFunc) {
 				e.Body.AnimIntervalMs[playing] = onceMs
 			}
 		}
-		e.Body.AdvanceAnimation(deltaMs, idle, walk, once)
+		e.Body.AdvanceAnimation(deltaMs, idle, walk, once, standby)
 	}
 }

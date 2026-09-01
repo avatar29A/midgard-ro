@@ -14,27 +14,27 @@ func TestSpriteOwnIntervalDrivesAnimation(t *testing.T) {
 
 	// Settle into idle first: a character that has never walked still holds
 	// the walk cycle for WalkHoldMs, and the switch resets the frame.
-	c.AdvanceAnimation(WalkHoldMs, 4, 4, 0)
+	c.AdvanceAnimation(WalkHoldMs, 4, 4, 0, 0)
 	if c.CurrentAction != ActionIdle {
 		t.Fatalf("action = %d, want idle after the walk hold elapsed", c.CurrentAction)
 	}
 	c.CurrentFrame, c.FrameTime = 0, 0
 
 	// Four idle frames at the sprite's own rate: one step per interval.
-	c.AdvanceAnimation(ownInterval, 4, 4, 0)
+	c.AdvanceAnimation(ownInterval, 4, 4, 0, 0)
 	if c.CurrentFrame != 1 {
 		t.Errorf("frame = %d after one interval, want 1", c.CurrentFrame)
 	}
-	c.AdvanceAnimation(ownInterval*2, 4, 4, 0)
+	c.AdvanceAnimation(ownInterval*2, 4, 4, 0, 0)
 	if c.CurrentFrame != 3 {
 		t.Errorf("frame = %d after three intervals, want 3", c.CurrentFrame)
 	}
 
 	// The default rate would have advanced barely one frame in that time.
 	slow := NewCharacter(0, 0, 0)
-	slow.AdvanceAnimation(WalkHoldMs, 4, 4, 0)
+	slow.AdvanceAnimation(WalkHoldMs, 4, 4, 0, 0)
 	slow.CurrentFrame, slow.FrameTime = 0, 0
-	slow.AdvanceAnimation(ownInterval*3, 4, 4, 0)
+	slow.AdvanceAnimation(ownInterval*3, 4, 4, 0, 0)
 	if slow.CurrentFrame != 1 {
 		t.Errorf("default-rate frame = %d, want 1; the fixed idle rate is %vms "+
 			"a frame, which is what made long animations crawl",
@@ -78,7 +78,7 @@ func TestPickupPlaysOnceThenReturns(t *testing.T) {
 	// Three frames at the default rate, then one more tick to run off the end.
 	const frames = 3
 	for i := 0; i < frames; i++ {
-		c.AdvanceAnimation(AnimIntervalMs(ActionPickup), 1, 8, frames)
+		c.AdvanceAnimation(AnimIntervalMs(ActionPickup), 1, 8, frames, 0)
 	}
 
 	if c.CurrentAction == ActionPickup {
@@ -96,7 +96,7 @@ func TestPickupYieldsToWalking(t *testing.T) {
 	c.PlayPickup()
 	c.IsMoving = true
 
-	c.AdvanceAnimation(16, 1, 8, 6)
+	c.AdvanceAnimation(16, 1, 8, 6, 0)
 
 	if c.CurrentAction != ActionWalk {
 		t.Errorf("CurrentAction = %d, want ActionWalk while moving", c.CurrentAction)
@@ -109,9 +109,52 @@ func TestPickupWithNoFramesDoesNotStick(t *testing.T) {
 	c := NewCharacter(0, 0, 0)
 	c.PlayPickup()
 
-	c.AdvanceAnimation(16, 1, 8, 0)
+	c.AdvanceAnimation(16, 1, 8, 0, 0)
 
 	if c.CurrentAction == ActionPickup {
 		t.Error("stuck in a pick-up the sprite has no frames for")
+	}
+}
+
+// TestStandbyOnlyWhileReady: the armed stance is worn while there is
+// something to stand ready against and dropped the moment there is not.
+// Holding it the rest of the time reads as a character stuck mid-fight, which
+// is exactly how it was reported.
+func TestStandbyOnlyWhileReady(t *testing.T) {
+	c := NewCharacter(0, 0, 0)
+
+	// Past the walk hold, which bridges the gap between acknowledged paths
+	// and keeps a character that has just stopped on the walk for a moment.
+	c.AdvanceAnimation(WalkHoldMs, 1, 8, 0, 6)
+
+	c.AdvanceAnimation(16, 1, 8, 0, 6)
+	if c.CurrentAction != ActionIdle {
+		t.Errorf("CurrentAction = %d, want the plain idle when not fighting", c.CurrentAction)
+	}
+
+	c.Ready = true
+	c.AdvanceAnimation(16, 1, 8, 0, 6)
+	if c.CurrentAction != ActionStandby {
+		t.Errorf("CurrentAction = %d, want the armed stance while fighting", c.CurrentAction)
+	}
+
+	c.Ready = false
+	c.AdvanceAnimation(16, 1, 8, 0, 6)
+	if c.CurrentAction != ActionIdle {
+		t.Errorf("CurrentAction = %d, want the plain idle once the fight is over", c.CurrentAction)
+	}
+}
+
+// TestWalkingOutranksTheStance: a character running to a target is drawn
+// running, not standing ready.
+func TestWalkingOutranksTheStance(t *testing.T) {
+	c := NewCharacter(0, 0, 0)
+	c.Ready = true
+	c.IsMoving = true
+
+	c.AdvanceAnimation(16, 1, 8, 0, 6)
+
+	if c.CurrentAction != ActionWalk {
+		t.Errorf("CurrentAction = %d, want the walk while moving", c.CurrentAction)
 	}
 }

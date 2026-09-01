@@ -30,6 +30,12 @@ const (
 	ActionHurt
 	ActionDie
 
+	// ActionStandby is the armed stance: weapon up, feet apart. It is the
+	// only idle a weapon is drawn in, so it is what an armed character stands
+	// in — but only while there is something to stand ready against, since
+	// holding it the rest of the time reads as a character stuck mid-fight.
+	ActionStandby
+
 	// LogicalActions is how many of the above there are.
 	LogicalActions
 )
@@ -123,10 +129,14 @@ const (
 // -1 means the family has no animation for that action, which is not an error:
 // nothing on the ground picks anything up but the player.
 var actionIndices = map[Kind][LogicalActions]int{
-	KindPlayer:  {ActionIdle: 0, ActionWalk: 1, ActionPickup: 3, ActionAttack: 5, ActionHurt: 6, ActionDie: 7},
-	KindMonster: {ActionIdle: 0, ActionWalk: 1, ActionPickup: -1, ActionAttack: 2, ActionHurt: 3, ActionDie: 4},
-	KindNPC:     {ActionIdle: 0, ActionWalk: 1, ActionPickup: -1, ActionAttack: -1, ActionHurt: -1, ActionDie: -1},
-	KindItem:    {ActionIdle: 0, ActionWalk: -1, ActionPickup: -1, ActionAttack: -1, ActionHurt: -1, ActionDie: -1},
+	KindPlayer: {ActionIdle: 0, ActionWalk: 1, ActionPickup: 3, ActionAttack: actUnarmedAttack,
+		ActionHurt: 6, ActionDie: 7, ActionStandby: actStandby},
+	KindMonster: {ActionIdle: 0, ActionWalk: 1, ActionPickup: -1, ActionAttack: 2,
+		ActionHurt: 3, ActionDie: 4, ActionStandby: -1},
+	KindNPC: {ActionIdle: 0, ActionWalk: 1, ActionPickup: -1, ActionAttack: -1,
+		ActionHurt: -1, ActionDie: -1, ActionStandby: -1},
+	KindItem: {ActionIdle: 0, ActionWalk: -1, ActionPickup: -1, ActionAttack: -1,
+		ActionHurt: -1, ActionDie: -1, ActionStandby: -1},
 }
 
 // ActionMap is which ACT index each logical action resolves to for one
@@ -159,22 +169,19 @@ func DefaultActionMap(kind Kind) ActionMap {
 	}
 
 	return ActionMap{ActionIdle: 0, ActionWalk: -1, ActionPickup: -1,
-		ActionAttack: -1, ActionHurt: -1, ActionDie: -1}
+		ActionAttack: -1, ActionHurt: -1, ActionDie: -1, ActionStandby: -1}
 }
 
 // withWeapon moves the actions a weapon changes.
 //
-// The weapon sprite is asked which sets it has art in, which settles two
-// things no table could: which of the attack sets this weapon swings from,
-// and that an armed character stands in the combat pose — the only idle a
-// weapon is drawn in.
+// Which of the attack sets a weapon swings from is the weapon's business, not
+// the job's — a dagger's is 10 and a sword's is 11 — so the sprite is asked
+// rather than told. The stance is left alone: it is set 4 for every player,
+// armed or not, and whether to stand in it is the fight's decision rather
+// than the sprite's.
 func (m ActionMap) withWeapon(weapon *formats.ACT) ActionMap {
 	if weapon == nil {
 		return m
-	}
-
-	if actHasArt(weapon, actStandby) {
-		m[ActionIdle] = actStandby
 	}
 
 	for _, set := range []int{actWeaponAttacks0, actWeaponAttacks1, actWeaponAttacks2} {

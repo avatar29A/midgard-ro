@@ -708,7 +708,11 @@ func (s *InGameState) Update(dt float64) error {
 
 		// Advance the sprite animation. Frame counts come from the loaded
 		// sheet; with no sprites this parks on frame 0 harmlessly.
-		idleFrames, walkFrames, onceFrames := 0, 0, 0
+		// The armed stance is worn while there is something to stand ready
+		// against, and dropped the moment the fight is over.
+		s.player.Ready = s.targetID != 0
+
+		idleFrames, walkFrames, onceFrames, standbyFrames := 0, 0, 0, 0
 		if s.playerRender != nil {
 			idleFrames = s.playerRender.FrameCount(entity.ActionIdle, s.player.Direction)
 			walkFrames = s.playerRender.FrameCount(entity.ActionWalk, s.player.Direction)
@@ -716,8 +720,11 @@ func (s *InGameState) Update(dt float64) error {
 			if playing := s.player.PlayingAction(); playing >= 0 {
 				onceFrames = s.playerRender.FrameCount(playing, s.player.Direction)
 			}
+			if s.player.Ready {
+				standbyFrames = s.playerRender.FrameCount(entity.ActionStandby, s.player.Direction)
+			}
 		}
-		s.player.AdvanceAnimation(deltaMs, idleFrames, walkFrames, onceFrames)
+		s.player.AdvanceAnimation(deltaMs, idleFrames, walkFrames, onceFrames, standbyFrames)
 
 		// Update cell position
 		s.TileX, s.TileY = s.player.CurrentCell()
