@@ -95,6 +95,18 @@ type InGameState struct {
 	// damageNumbers are the figures floating up from recent blows.
 	damageNumbers []floatingDamage
 
+	// effects are the STR animations playing over the world, and effectCache
+	// the files they were parsed from.
+	effects     []*activeEffect
+	effectCache map[string]*formats.STR
+
+	// celebrations are level-ups waiting to be shown, and celebrationWaitMs
+	// how long before the next may start. soundRequest is a sound the world
+	// wants played, which the game plays because the state has no audio.
+	celebrations      int
+	celebrationWaitMs float32
+	soundRequest      string
+
 	// pendingLevelUp and pendingJobLevelUp are levels reached and not yet
 	// acknowledged, which the buttons at the foot of the screen offer.
 	pendingLevelUp    bool
@@ -714,6 +726,8 @@ func (s *InGameState) Update(dt float64) error {
 		s.updatePendingPickup(deltaMs, walking)
 		s.updateCombat(deltaMs, walking)
 		s.updateDamageNumbers(deltaMs)
+		s.updateEffects(deltaMs)
+		s.updateCelebrations(deltaMs)
 
 		// Advance the sprite animation. Frame counts come from the loaded
 		// sheet; with no sprites this parks on frame 0 harmlessly.

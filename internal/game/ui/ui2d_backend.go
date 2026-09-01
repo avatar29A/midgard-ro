@@ -992,6 +992,8 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 		b.drawWorldLabel(label)
 	}
 
+	b.drawWorldEffects(state.WorldEffects)
+
 	b.drawMinimap(state, width)
 	b.drawChat(state, height)
 	b.drawHotkeys(state, width, height)

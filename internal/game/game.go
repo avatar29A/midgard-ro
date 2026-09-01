@@ -325,6 +325,25 @@ func (g *Game) playUIClick() {
 	}
 }
 
+// playWorldSound plays a sound effect the world asked for.
+//
+// Missing sound is a nicety lost, not a failure: the flash still plays, and a
+// game that stopped because a wav was absent would be worse than a quiet one.
+func (g *Game) playWorldSound(path string) {
+	if g.audioManager == nil {
+		return
+	}
+
+	data, err := g.assetManager.Load(path)
+	if err == nil {
+		err = g.audioManager.PlaySFX(data)
+	}
+
+	if err != nil {
+		logger.Warn("could not play a world sound", zap.String("path", path), zap.Error(err))
+	}
+}
+
 // initAudio brings up audio playback and the location background music.
 // Sound is a nicety: when the device or the music is unavailable the game runs
 // on in silence.
@@ -900,6 +919,7 @@ func (g *Game) renderUI() {
 			ChatLines:       state.ChatLines(),
 			EntityBars:      state.EntityBars(viewportWidth, viewportHeight),
 			WorldLabels:     state.WorldLabels(viewportWidth, viewportHeight),
+			WorldEffects:    state.EffectQuads(viewportWidth, viewportHeight),
 			TargetMarker:    targetMarker,
 			DamageNumbers:   state.DamageNumbers(viewportWidth, viewportHeight),
 			LevelUpButtons:  levelUpButtons,
@@ -975,6 +995,13 @@ func (g *Game) renderUI() {
 		g.uiBackend.RenderInGameUI(uiState, g.dt, viewportWidth, viewportHeight)
 
 		g.applySoundSettings()
+
+		// A sound the world asked for — the level-up flash and its chime go
+		// together. The state has no audio device, so it names the file and
+		// this plays it.
+		if path, ok := state.TakeSoundRequest(); ok {
+			g.playWorldSound(path)
+		}
 
 		// A double click in the inventory, or an item dragged onto or off the
 		// body, goes out here for the same reason the chat line does: the

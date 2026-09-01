@@ -73,10 +73,12 @@ func (s *InGameState) handleLevelUpEffect(data []byte) error {
 	case packets.EffectBaseLevelUp:
 		trace.Emit(trace.HUD, "level-up", zap.String("which", "base"))
 		s.pendingLevelUp = true
+		s.queueLevelUpCelebration()
 
 	case packets.EffectJobLevelUp:
 		trace.Emit(trace.HUD, "level-up", zap.String("which", "job"))
 		s.pendingJobLevelUp = true
+		s.queueLevelUpCelebration()
 	}
 
 	return nil

@@ -221,14 +221,28 @@ type drawCmd struct {
 	texture uint32
 	start   int
 	count   int
+
+	// additive draws the run by adding to what is behind it instead of
+	// covering it. RO's effects are drawn this way — a flash is light, not
+	// paint — and one drawn with ordinary alpha reads as a grey rectangle
+	// laid over the scene.
+	additive bool
 }
 
 // pushCmd records count vertices of a kind, extending the previous command
 // when it can rather than adding another.
 func (r *Renderer) pushCmd(kind drawKind, texture uint32, start, count int) {
+	r.pushBlendCmd(kind, texture, start, count, false)
+}
+
+// pushBlendCmd is pushCmd for a run that names its own blend mode. Runs merge
+// only when that matches too, or an additive quad would be drawn with the
+// blend of whatever happened to precede it.
+func (r *Renderer) pushBlendCmd(kind drawKind, texture uint32, start, count int, additive bool) {
 	if n := len(r.commands); n > 0 {
 		last := &r.commands[n-1]
-		if last.kind == kind && last.texture == texture && last.start+last.count == start {
+		if last.kind == kind && last.texture == texture &&
+			last.additive == additive && last.start+last.count == start {
 			last.count += count
 
 			return
@@ -236,7 +250,7 @@ func (r *Renderer) pushCmd(kind drawKind, texture uint32, start, count int) {
 	}
 
 	r.commands = append(r.commands, drawCmd{
-		kind: kind, texture: texture, start: start, count: count,
+		kind: kind, texture: texture, start: start, count: count, additive: additive,
 	})
 }
 
@@ -265,13 +279,33 @@ func (r *Renderer) drawQueuedBatches(proj [16]float32) {
 	var (
 		bound    drawKind = 255
 		boundTex uint32
+		additive bool
 	)
+
+	// Restored at the end so the rest of the frame is unaffected by an effect
+	// having been drawn: the blend state is global, and leaving it additive
+	// makes every window drawn afterwards glow.
+	defer func() {
+		if additive {
+			gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+		}
+	}()
 
 	for _, cmd := range r.commands {
 		if cmd.kind != bound {
 			r.bindKind(cmd.kind, proj)
 			bound = cmd.kind
 			boundTex = 0
+		}
+
+		if cmd.additive != additive {
+			if cmd.additive {
+				gl.BlendFunc(gl.SRC_ALPHA, gl.ONE)
+			} else {
+				gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+			}
+
+			additive = cmd.additive
 		}
 
 		// Text draws from one atlas, bound with its shader; images name
@@ -939,6 +973,60 @@ func (r *Renderer) DrawImageUV(texID uint32, x, y, w, h, u0, v0, u1, v1 float32,
 	// helper and is drawn on its own terms, above the command list entirely.
 	r.pushCmd(drawImage, texID, len(r.imageVertices)/9, 6)
 	appendImageQuad(&r.imageVertices, &r.imageDrawCalls, texID, x, y, w, h, u0, v0, u1, v1, tint)
+}
+
+// DrawImageQuad draws a textured quad from its four corners.
+//
+// Corners rather than a rect and an angle because that is how RO's effect
+// files store them: a quad that is rotated, sheared or squashed has its four
+// points written out, and rebuilding an angle from them only to turn it back
+// into points would lose the shear.
+//
+// Corners go clockwise from the top left, and uv matches them corner for
+// corner.
+func (r *Renderer) DrawImageQuad(texID uint32, corners [4][2]float32, uv [4][2]float32,
+	tint Color, additive bool,
+) {
+	if texID == 0 {
+		return
+	}
+
+	r.pushBlendCmd(drawImage, texID, len(r.imageVertices)/9, 6, additive)
+	appendImageQuadCorners(&r.imageVertices, &r.imageDrawCalls, texID, corners, uv, tint)
+}
+
+// appendImageQuadCorners adds a free-form quad as two triangles.
+func appendImageQuadCorners(vertices *[]float32, calls *[]imageDrawCall, texID uint32,
+	corners [4][2]float32, uv [4][2]float32, c Color,
+) {
+	if texID == 0 {
+		return
+	}
+
+	vertStart := len(*vertices) / 9
+
+	add := func(i int) {
+		*vertices = append(*vertices,
+			corners[i][0], corners[i][1], 0, uv[i][0], uv[i][1], c.R, c.G, c.B, c.A)
+	}
+
+	for _, i := range [6]int{0, 1, 2, 0, 2, 3} {
+		add(i)
+	}
+
+	if n := len(*calls); n > 0 {
+		if last := &(*calls)[n-1]; last.textureID == texID {
+			last.vertCount += 6
+
+			return
+		}
+	}
+
+	*calls = append(*calls, imageDrawCall{
+		textureID: texID,
+		vertStart: vertStart,
+		vertCount: 6,
+	})
 }
 
 // DrawImageTop draws a textured quad above everything else, text included.
