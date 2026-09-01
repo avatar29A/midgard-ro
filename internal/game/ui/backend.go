@@ -30,6 +30,9 @@ type UIBackend interface {
 	// TakeStatAction returns a stat the player asked to raise.
 	TakeStatAction() (StatAction, bool)
 
+	// TakeSkillAction returns a skill the player asked to raise.
+	TakeSkillAction() (SkillAction, bool)
+
 	// TakeLevelUpAction returns a level-up button the player pressed.
 	TakeLevelUpAction() (LevelUpAction, bool)
 
@@ -240,6 +243,10 @@ type InGameUIState struct {
 	// Inventory what it is carrying.
 	Skills    []packets.Skill
 	Inventory []packets.InventoryItem
+
+	// Equipment is what is worn, keyed by the place on the body it is worn
+	// in, which is the question the equipment window's ten slots ask.
+	Equipment map[uint32]packets.InventoryItem
 
 	// The numbers derived from those six, down the right of the window.
 	Atk, AtkBonus    int

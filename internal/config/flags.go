@@ -25,6 +25,7 @@ var (
 	flagNoBGM      = flag.Bool("no-bgm", false, "Run without background music, keeping sound effects")
 	flagWalkTo     = flag.String("walk-to", "", "Once in game, walk to this cell, e.g. 156,22 (QA aid)")
 	flagMouseAt    = flag.String("mouse-at", "", "Once in game, put the pointer at this window position, e.g. 640,360 (QA aid)")
+	flagOpenWindow = flag.String("open-window", "", "Once in game, open these HUD windows, e.g. equip,item (QA aid)")
 
 	flagSay sayLines
 )
@@ -59,6 +60,28 @@ func ParseFlags() {
 // than a shortcut past the interface.
 func Say() []string {
 	return flagSay
+}
+
+// OpenWindows returns the windows --open-window asked for, by their menu
+// button names.
+//
+// The windows are what most of the interface is, and an unattended capture has
+// no hand to press the buttons that open them. Names rather than an enum: the
+// flag is read before the interface exists, and the button names are what the
+// windows are called everywhere else anyway.
+func OpenWindows() []string {
+	if *flagOpenWindow == "" {
+		return nil
+	}
+
+	var names []string
+	for _, name := range strings.Split(*flagOpenWindow, ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			names = append(names, name)
+		}
+	}
+
+	return names
 }
 
 // TraceSpec returns the --trace channel list, empty when tracing is off.

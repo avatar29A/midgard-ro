@@ -99,6 +99,9 @@ type Game struct {
 	mouseAtX, mouseAtY int
 	mouseAtPending     bool
 
+	// Which HUD windows to open once the map is up, from --open-window.
+	openWindows []string
+
 	// toggleBasicInfo is set for the frame Ctrl+V was pressed.
 	toggleBasicInfo bool
 
@@ -520,6 +523,7 @@ func (g *Game) frame() {
 
 	g.runWalkTo()
 	g.runMouseAt()
+	g.runOpenWindows()
 	g.runSay()
 
 	// Render 3D scene (if applicable)
@@ -557,6 +561,42 @@ func (g *Game) SetWalkTo(x, y int) {
 func (g *Game) SetMouseAt(x, y int) {
 	g.mouseAtX, g.mouseAtY = x, y
 	g.mouseAtPending = true
+}
+
+// SetOpenWindows records the windows --open-window asked for.
+func (g *Game) SetOpenWindows(names []string) {
+	g.openWindows = names
+}
+
+// runOpenWindows opens the windows --open-window named, once the map is up.
+//
+// Straight to the backend rather than through a synthetic click on the menu
+// strip: where those buttons are depends on the panel's art and on where the
+// panel has been dragged to, and a capture that has to aim at a button is a
+// capture that breaks when the panel moves.
+func (g *Game) runOpenWindows() {
+	if len(g.openWindows) == 0 || g.uiBackend == nil {
+		return
+	}
+
+	state, ok := g.stateManager.Current().(*states.InGameState)
+	if !ok || !state.MapReady() {
+		return
+	}
+
+	for _, name := range g.openWindows {
+		window, opens := ui.OpensWindow(name)
+		if !opens {
+			logger.Warn("--open-window names no window", zap.String("window", name))
+
+			continue
+		}
+
+		g.uiBackend.OpenWindow(window)
+		logger.Info("window opened from the command line", zap.String("window", name))
+	}
+
+	g.openWindows = nil
 }
 
 // runMouseAt moves the pointer for --mouse-at once the map is up. It goes
@@ -915,6 +955,7 @@ func (g *Game) renderUI() {
 
 			Skills:    state.Skills(),
 			Inventory: state.Inventory(),
+			Equipment: state.Equipment(),
 
 			PrimaryStats: stats.Primary,
 			PrimaryBonus: stats.PrimaryBonus,
@@ -934,15 +975,21 @@ func (g *Game) renderUI() {
 
 		g.applySoundSettings()
 
-		// A double click in the inventory goes out here, for the same reason
-		// the chat line does: the interface has no connection of its own.
+		// A double click in the inventory, or an item dragged onto or off the
+		// body, goes out here for the same reason the chat line does: the
+		// interface has no connection of its own.
 		if action, ok := g.uiBackend.TakeItemAction(); ok {
 			var err error
-			if action.Equip {
-				err = state.EquipItem(action.Index)
-			} else {
+
+			switch {
+			case action.Unequip:
+				err = state.UnequipItem(action.Index)
+			case action.Equip:
+				err = state.EquipItemAt(action.Index, action.Mask)
+			default:
 				err = state.UseItem(action.Index)
 			}
+
 			if err != nil {
 				logger.Warn("could not act on item", zap.Error(err))
 			}
@@ -960,6 +1007,14 @@ func (g *Game) renderUI() {
 		if stat, ok := g.uiBackend.TakeStatAction(); ok {
 			if err := state.RaiseStat(stat.Stat); err != nil {
 				logger.Warn("could not raise that stat", zap.Error(err))
+			}
+		}
+
+		// A skill point spent on a skill, answered the same way: the server
+		// sends the skill back at its new level.
+		if skill, ok := g.uiBackend.TakeSkillAction(); ok {
+			if err := state.RaiseSkill(skill.Skill); err != nil {
+				logger.Warn("could not raise that skill", zap.Error(err))
 			}
 		}
 

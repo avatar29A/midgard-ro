@@ -1142,34 +1142,6 @@ func (s *InGameState) UseItem(index int) error {
 	return s.client.Send(packets.EncodeUseItem(index))
 }
 
-// EquipItem asks to wear the item in an inventory slot.
-//
-// The position is the item's own, as the equip list reported it: rAthena
-// passes it straight through rather than working one out, so it has to be the
-// value the server gave us. An item the server said nothing about — anything
-// not in the equip list — cannot be worn, and saying so here is better than
-// sending a zero the server will silently refuse.
-func (s *InGameState) EquipItem(index int) error {
-	for _, item := range s.inventory {
-		if item.Index != index {
-			continue
-		}
-
-		if item.EquipPositions == 0 {
-			logger.Info("that item cannot be worn", zap.Int("index", index))
-
-			return nil
-		}
-
-		trace.Emit(trace.HUD, "equip-item",
-			zap.Int("index", index), zap.Uint32("position", item.EquipPositions))
-
-		return s.client.Send(packets.EncodeEquipItem(index, item.EquipPositions))
-	}
-
-	return nil
-}
-
 // Inventory returns what the character is carrying, for the interface.
 func (s *InGameState) Inventory() []packets.InventoryItem {
 	return s.inventory
@@ -1324,6 +1296,8 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_INVENTORY_ITEMLIST_NORMAL, s.handleInventoryNormal)
 	s.client.RegisterHandler(packets.ZC_INVENTORY_ITEMLIST_EQUIP, s.handleInventoryEquip)
 	s.client.RegisterHandler(packets.ZC_USE_ITEM_ACK, s.handleUseItemAck)
+	s.client.RegisterHandler(packets.ZC_REQ_WEAR_EQUIP_ACK, s.handleEquipAck)
+	s.client.RegisterHandler(packets.ZC_REQ_TAKEOFF_EQUIP_ACK, s.handleUnequipAck)
 	s.client.RegisterHandler(packets.ZC_ITEM_ENTRY, s.handleGroundItemEntry)
 	s.client.RegisterHandler(packets.ZC_ITEM_FALL_ENTRY, s.handleGroundItemFall)
 	s.client.RegisterHandler(packets.ZC_ITEM_DISAPPEAR, s.handleGroundItemGone)
