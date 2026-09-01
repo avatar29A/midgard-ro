@@ -21,8 +21,17 @@ const (
 	damageDigitsPath = `data\sprite\이팩트\newnumber.spr`
 	damageMsgPath    = `data\sprite\이팩트\msg.spr`
 
-	// damageRise is how far a figure climbs over its life, in pixels.
-	damageRise = float32(34)
+	// damageScale enlarges the figures.
+	//
+	// The digits are eleven pixels by twelve in the archive, which is what
+	// the original drew on a much smaller screen and is close to invisible on
+	// this one. This is the one number to turn if they want to be bigger or
+	// smaller; everything else about them is measured from the art.
+	damageScale = float32(3)
+
+	// damageRise is how far a figure climbs over its life, in pixels, in
+	// proportion to how tall it is drawn.
+	damageRise = float32(34) * damageScale
 
 	// damageFadeFrom is the point in a figure's life where it starts to fade.
 	// It holds full strength for most of it and then goes quickly, which
@@ -30,8 +39,9 @@ const (
 	damageFadeFrom = float32(0.6)
 
 	// damageDigitOverlap tightens the spacing, since each digit's own image
-	// carries a little air on both sides.
-	damageDigitOverlap = float32(2)
+	// carries a little air on both sides. Scaled with the digits so the
+	// figures do not loosen as they grow.
+	damageDigitOverlap = float32(2) * damageScale
 )
 
 // damageArt is the digit and message sprites, uploaded once.
@@ -84,8 +94,8 @@ func (b *UI2DBackend) loadDamageArt() {
 			tex := b.ctx.Renderer().CreateTextureNearest(int(img.Width), int(img.Height), img.Pixels)
 			into(i, damageGlyph{
 				texture: tex,
-				width:   float32(img.Width),
-				height:  float32(img.Height),
+				width:   float32(img.Width) * damageScale,
+				height:  float32(img.Height) * damageScale,
 			})
 		}
 	}
