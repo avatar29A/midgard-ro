@@ -25,11 +25,13 @@ draw nothing and answer nothing.
 1. Double-click slot 1
 2. Verify `char.slot-click` appears in the trace with `slot=1` and `empty=true`
 3. Verify the creation screen opens
-4. Verify its background matches `login_interface/win_make.bmp` — hexagon
-   outline, stat table labels, "Make Your Characters" wordmark, `Name` well
+4. Verify its background matches `make_character_ver2/bg_back2.tga` — the
+   Human and Doram race cards, the sex toggle, the preview area with turn
+   arrows, the name field, the hair style grid and colour swatches, and the
+   Go back / Create buttons
 
 ### Cancel sends nothing
-1. Press cancel
+1. Press **Go back**
 2. Verify character select returns with slot 1 still empty
 3. Verify `--trace=net` shows **no** `0x0A39` was sent
 4. Verify the character count in the database is unchanged (`make server-shell-db`)

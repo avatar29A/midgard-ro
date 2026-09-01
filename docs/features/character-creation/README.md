@@ -1,310 +1,286 @@
-# Feature: Character creation — the "Make Your Characters" screen
+# Feature: Character creation — the "Create Character" screen
 
-**Branch:** `feature/character-creation` · **Issue:** #109 · **Parent:** #49 (MVP scope)
-**Status:** Planned · **Created:** 2026-09-01
+**Branch:** `feature/character-creation` · **Issue:** #109 · **Parent:** — (see Scope)
+**Status:** Planned · **Created:** 2026-09-01 · **Revised:** 2026-09-01
 
 ## Goal
 
-Double-click an empty slot on character select and build a character: pick a
-name the server will accept, cycle hair style and colour, see the sprite
-update as you do, press OK and land back on character select with the new
-character in the slot you chose.
+Double-click an empty slot on character select and build a character the way
+our server actually supports it: pick Human or Doram, a sex, one of 23 hair
+styles and one of 10 hair colours, type a name the server will accept, press
+Create, and land back on character select with the character in the slot you
+chose.
 
 Today there is no way to create one at all. Every character this project has
-ever tested with was inserted by SQL seed (`docker/rathena/seed/`), which is
-why three test accounts exist and why each has exactly one character.
+tested with was inserted by SQL seed (`docker/rathena/seed/`), which is why
+three test accounts exist and why each has exactly one character.
 
-## The finding that reshapes requirements 2 and 4
+**Scope: complete, matched to our server.** This is deliberately not cut down
+to the old MVP shape (Novice only). Whatever `docker/rathena` accepts at
+creation, the screen offers. The section below is that list, read off the
+server we build.
 
-**At our packet version the server does not accept starting stats, and it does
-accept a sex from the client.** Both of Boris's assumptions land the other way
-round from what the reference screenshot implies.
+## What our server actually accepts
 
-`CH_MAKE_CHAR` has three variants behind `PACKETVER` guards
-(`common/packets.hpp:122-157`). At `PACKETVER 20211103` we are in the first
-branch, `>= 20151001`:
+Read from our pinned rAthena, not assumed:
 
-| PACKETVER | id | Carries |
+| Thing | Value | Source |
 |---|---|---|
-| `>= 20151001` **← ours** | `0x0A39` | name[24], slot, hair_color, hair_style, **job**, **sex** |
-| `>= 20120307` | `0x0970` | name[24], slot, hair_color, hair_style |
-| older | `0x0067` | name[24], **str, agi, vit, int, dex, luk**, slot, hair_color, hair_style |
+| Creatable jobs | **Novice *and* Summoner (Doram)** | `char/char.cpp:2814-2818` — our build defines `RENEWAL` (`config/renewal.hpp:24`) and `PACKETVER_RE 20211103`, so `allowed_job_flag = 3`; the check at `:1489` admits both |
+| Sex | Male or female, **per character**, sent by the client; anything else refused | `char/char.cpp:1424-1434` |
+| Starting stats | **Not sent.** Server writes 1 to each | `char/char_clif.cpp:1278-1285` |
+| Starting status points | **48**, spent in game | `char/char.cpp:2800` |
+| Name length | 4 – 23 characters | `char_athena.conf:149`; `NAME_LENGTH 24` in `common/mmo.hpp:154` |
+| Name characters | Letters, digits and space only (allow-list mode) | `char_athena.conf:160,164` |
+| Name uniqueness | Enforced; only knowable by trying | `char/char.cpp:1386` |
 
-The six stat bytes exist **only in the oldest variant**. And the handler does
-not merely ignore them at our version — it assigns them
-(`char/char_clif.cpp:1272-1285`): under `PACKETVER >= 20151001` it reads `job`
-and `sex` from the packet and sets `str` through `luk` to a literal `1` each.
+So the full set of choices the wire can carry is: **name, slot, hair style,
+hair colour, job, sex.** That is exactly six things, and the screen below has
+a control for each.
 
-The screen in the reference is the pre-2012 one. Its own rule confirms it:
-below `PACKETVER 20120307` the server requires the six stats to total exactly
-30 with none below 1 (`char/char.cpp:1437-1446`) — and the reference shows six
-stats of 5, which is 30. That screen and that arithmetic belong to `0x0067`.
+## Reference
 
-**What replaces it.** A new character is created with `start_status_points`
-(`char/char.cpp:1458-1460`) and spends them **in game**, in the stat window —
-which is what PR #108 is building right now. So the capability Boris wants is
-not lost; it moves from creation to the status window.
+### ref-01 — the screen to build
 
-**Sex.** At `>= 20151001` sex comes from the packet, not the account, and the
-server accepts only male or female and refuses anything else
-(`char/char.cpp:1424-1434`). The account sex requirement 4 asks for is
-nonetheless already in our hands: `client.Session()` returns it and
-`CharSelectState.sendCharEnter` already puts it in `CH_ENTER`
-(`internal/game/states/charselect.go:126`, `internal/network/packets/packets.go:128`).
-So we can honour requirement 4 exactly — take the account's sex, show the
-matching sprite — and simply send that same value back in `0x0A39` rather than
-offering a chooser. roBrowser does the same (`CharCreate.js:95` `setAccountSex`).
+![grf-bg_back2](./grf-bg_back2.png)
 
-## Reference (original client)
+`data/texture/유저인터페이스/make_character_ver2/bg_back2.tga`, **997×626**,
+from our own `data.grf`. This is the background; the rest is drawn on top.
 
-### ref-01 — the classic layout, and it is in our archive
+1. **Title bar** "Create Character" with a close button at the right.
+2. **Race cards, left.** Human with its description and the job-tree icons
+   beneath it; Doram below. In the retail client Doram shows "COMING SOON" —
+   **on our server it is creatable**, so both cards are live for us.
+3. **Job-tree icons** on the Human card. Informational — the jobs a Human can
+   later become. Creation itself only ever sends Novice or Summoner, so these
+   are not buttons.
+4. **Sex toggle**, ♂ / ♀, above the preview.
+5. **Sprite preview** with turn arrows either side.
+6. **Name field** under the preview.
+7. **Hair Style grid**, right — 23 thumbnails per sex.
+8. **Hair Colour swatches**, below it — 10, the first being "default" (drawn
+   with a cross through it).
+9. **Go back / Create** along the bottom.
+
+### ref-02 — the classic screen, and why it is not this one
 
 ![grf-win_make](./grf-win_make.png)
 
-`data/texture/유저인터페이스/login_interface/win_make.bmp`, **576×342** — pixel
-for pixel the screen Boris referenced, extracted from our own `data.grf`.
+`login_interface/win_make.bmp`, 576×342 — the hexagon layout, also in our
+archive. It was the first proposal for this feature and it is the wrong one:
 
-1. **Title bar** — Korean "캐릭터 만들기" (Create Character), the same chrome as
-   every other window.
-2. **Hexagon outline** — painted into the texture. The *filled* polygon is the
-   client's to draw.
-3. **Stat table**, STR/AGI/VIT/INT/DEX/LUK with empty value cells — labels
-   painted in, numbers ours.
-4. **"Make Your Characters" wordmark** — painted in. Nothing to draw.
-5. **`Name` label and input well** — painted in; the text and caret are ours.
-6. **Shadow ellipse** where the sprite stands.
+- Its centre — the hexagon and the stat table — **has no wire representation**
+  at our packet version. The six stat bytes exist only in the pre-2012
+  `0x0067` variant of `CH_MAKE_CHAR`, whose own rule is that the six must
+  total exactly 30 (`char/char.cpp:1437-1446`) — visible in it as six fives.
+- It has **no control for job or sex**, the two fields our `0x0A39` added.
 
-Note **576×342 is exactly the character-select texture's size**
-(`internal/game/ui/charselect_native.go:14`). The two screens are siblings and
-want the same treatment: one background, everything else drawn on top.
+ref-01 has a control for every field the packet carries and none for anything
+it does not. That is the whole argument.
 
-### ref-02 — the layout that matches our packet version
-
-![grf-win_make2](./grf-win_make2.png)
-
-`login_interface/win_make2.bmp`, **150×240**. The compact form the original
-switches to once starting stats stopped being sent: name, and the arrows —
-no hexagon, no stat table, because there is nothing to allocate.
-
-### ref-03 — the modern set, for completeness
+### ref-03 — the third layout, recorded so nobody rediscovers it
 
 ![grf-bg_create_character](./grf-bg_create_character.png)
 
-`make_character/bg_create_character.bmp`, 576×358. A third, much later layout:
-job cards (Novice / Doram) and labelled NAME / GENDER / HAIR STYLE / HAIR
-COLOR fields. It matches `0x0A39`'s payload most literally — job and sex are
-exactly the two fields that variant added. Recorded so nobody rediscovers it
-and assumes it is the one to build; it is not what Boris asked for.
+`make_character/bg_create_character.bmp`, 576×358 — a fourth-era skeleton with
+NAME / GENDER / HAIR STYLE / HAIR COLOR labels. Same field set as ref-01, much
+plainer. Not used.
 
-**Current state:** none. There is no creation screen and no capture of ours to
-compare against.
+**Current state:** none. There is no creation screen to compare against.
+
+## Assets
+
+Counted with `grftool list`, not `search` — **`search` silently caps at 50
+results** (`search data.grf bmp` returns 50 against 46,583 BMPs). Any inventory
+taken with `search` is a floor, and reading it as a total is how an asset gets
+declared missing when it is present.
+
+| Asset | Count / size | Note |
+|---|---|---|
+| `make_character_ver2/bg_back2.tga` | 997×626 | The background |
+| `bt_male_*`, `bt_female_*` | 4 states each | Sex toggle |
+| `bt_leftturn_*`, `bt_rightturn_*` | 3 states each | Preview rotation |
+| `bt_make_*`, `bt_close_*`, `bt_hairstyle_*` | — | Create, close, grid cell |
+| `img_hairstyle01..23.bmp` | **23** | Male hair thumbnails |
+| `img_hairstyle_girl01..23.bmp` | **23** | Female hair thumbnails |
+| `img_hairstyle_doramboy/girl*` | 6 + 6 | Doram hair thumbnails |
+| `color00..09_{off,on,over,press}` | **10** swatches | Hair colour |
+| `img_doram_on.bmp`, `img_doram_comingsoon.bmp` | — | Doram card, both states |
+| **Head sprites** `머리통/<sex>/<n>_<sex>.spr` | **104** — 42 styles per sex | Every one of the 23 thumbnails has a sprite behind it |
+| **Doram sprites** | 50 | Doram is renderable |
+| **Hair palettes** `.pal` | 929; **9 colour ids (0–8) per sex** | Matches 10 swatches where the first is "no palette" |
+
+**The one real gap: the client cannot apply hair colour.** The engine handles
+only palettes *embedded in* SPR files (`pkg/formats/spr.go`); there is no
+external `.pal` loading anywhere in `internal/` or `pkg/`. The palettes are in
+the archive and the swatches are in the archive — the code to put them
+together is not. This is new work in the sprite pipeline, not a small
+addition, and it is why Step 4 exists.
 
 ## What exists today
 
 | Area | What exists | Status |
 |---|---|---|
-| `internal/game/states/charselect.go` (291 ln) | Char list request, selection, map-server handoff, `client.Session()` sex | ✅ extend |
-| `internal/game/ui/charselect_native.go` (382 ln) | The 576×342 screen; slot rects, portraits, stat table | ✅ extend |
-| `charselect_native.go:215` | **Only slots holding a character respond** — empty slots are skipped outright | 🟡 the seam requirement 1 needs |
-| `charselect_native.go:73` | `charSelSlotX` — **three** slot rects, but accounts have 9 slots | 🟡 see Open question 3 |
-| `internal/network/packets/packets.go:28` | `CH_MAKE_CHAR = 0x0067` — **already declared, unused, and wrong for our packetver** | ❌ replace with `0x0A39` |
-| `packets.go:128` `CharEnter.Sex` | Account sex already reaches the char server | ✅ reuse for requirement 4 |
-| `internal/engine/charsprite/` | Composite character sprite by job/sex/hair/palette | ✅ reuse for the preview |
-| Creation packets / handlers | Nothing. No `0x0A39`, no `0x0B6F`, no `0x006E` | ❌ build |
-| Holding the client on char select | **No way to do it** — auto-select fires the moment the list arrives (`charselect.go:106`) | ❌ Step 0b |
+| `internal/game/states/charselect.go` (291 ln) | Char list, selection, map handoff | ✅ extend |
+| `internal/game/ui/charselect_native.go` (382 ln) | The 576×342 select screen | ✅ extend |
+| `charselect_native.go:215` | **Only slots holding a character respond** — an empty slot has no rect | 🟡 the seam Step 1 needs |
+| `charselect_native.go:73` | `charSelSlotX` — **three** rects; accounts have 9 slots | 🟡 Open question 2 |
+| `packets.go:28` | `CH_MAKE_CHAR = 0x0067` — declared, unused, **wrong id for our packetver** | ❌ replace |
+| `packets.go:128` `CharEnter.Sex` | Account sex already reaches the char server | ✅ pattern to follow |
+| `internal/engine/charsprite/` | Composite sprite by job/sex/hair | ✅ reuse; ❌ no palette support |
+| Creation packets | None — no `0x0A39`, `0x0B6F` or `0x006E` | ❌ build |
+| Holding the client on char select | **Impossible today** (`charselect.go:106` auto-selects) | ❌ Step 0b |
 
-**In flight:** PR **#108** (`feat/basic-ui-mvp`) touches `internal/engine/charsprite/`,
-`internal/engine/sprite/composite.go`, `internal/engine/playerrender/` and adds
-the in-game stat-point spending this feature hands off to. It does **not**
-touch char select or creation — verified by diffing the branch. Land it first
-or expect conflicts in the sprite path.
+**In flight:** PR **#108** (`feat/basic-ui-mvp`) touches
+`internal/engine/charsprite/`, `internal/engine/sprite/composite.go` and
+`internal/engine/playerrender/`, and adds the in-game spending of the 48
+status points this screen hands off. It does **not** touch char select or
+creation. Land it first or expect conflicts in the sprite path.
 
 ## Reference implementations
 
 | Source | Where | Approach |
 |---|---|---|
-| **nostalro-client** | `lib/ui-component/src/account/char_create_window.rs` (719 ln) | The closest match by far, and it solves exactly our problem: a `with_stats: bool` chosen from the packet version picks **both** the behaviour and the skin — `win_make.bmp` hexagon layout when stats are sent, `win_make2.bmp` when not (`:10`, `:31`, `:176-178`). Its comment at `:82` describes the radar geometry: each spoke runs from the hexagon centre (0) to its arrow (10), so a stat of 5 sits at the spoke midpoint. If we build the hexagon, that is the geometry to copy. |
-| **roBrowser** | `src/UI/Components/CharCreate/` | Original UI logic transcribed. `setAccountSex` (`:95`) holds account sex and puts it in the creation request (`:108`); `:232` updates "the stats and polygon" together. Our measurement source for layout. |
-| **korangar** | `korangar/src/interface/windows/character_creation.rs` | Modern re-implementation; behaviour reference only, its UI is deliberately not the original look. |
-
-## Assets
-
-All confirmed present in `data.grf` by `cmd/grftool search`:
-
-| Path (under `data/texture/유저인터페이스/`) | Size | Use |
-|---|---|---|
-| `login_interface/win_make.bmp` | 576×342 | The classic screen (ref-01) |
-| `login_interface/win_make2.bmp` | 150×240 | The compact screen (ref-02) |
-| `make_character/bg_create_character.bmp` | 576×358 | Modern layout (ref-03), not used |
-| `make_character/chr_arrow_rotate_l_*.bmp`, `_r_*` | — | Hair-cycle arrows, three-state |
-| `make_character/btn_create_out.bmp` | — | Create button |
-
-Korean directory names are EUC-KR **inside the archive**: decoding the listing
-as UTF-8 with replacement characters produces a path `grftool extract` cannot
-find. Pass the raw bytes through. This cost a round trip during investigation
-and is worth knowing before the first extract.
+| **nostalro-client** | `lib/ui-component/src/account/char_create_window.rs` (719 ln) | Closest match. A `with_stats: bool` taken from the packet version picks both the behaviour and the skin (`:10`, `:31`, `:176-178`) — the same decision this plan makes, made the same way. |
+| **roBrowser** | `src/UI/Components/CharCreate/` | Original layout and logic transcribed; `:232` updates stats and polygon together. Layout measurement source. |
+| **korangar** | `korangar/src/interface/windows/character_creation.rs` | Behaviour reference; its UI is deliberately not the original look. |
 
 ## Protocol
 
-All three are **char-server** packets (`src/char/char_clif.cpp`), not map.
+Char-server packets (`src/char/char_clif.cpp`), not map.
 
-| Direction | Packet | Id | Layout | Source |
+| Dir | Packet | Id | Layout | Source |
 |---|---|---|---|---|
 | → | `CH_MAKE_CHAR` | **`0x0A39`** | 36B: type(2) name[24] slot(1) hair_color(2) hair_style(2) job(4) sex(1) | `common/packets.hpp:122-132` |
 | ← | `HC_ACCEPT_MAKECHAR` | **`0x0B6F`** | The new character's entry | `common/packets.hpp:259-264` |
 | ← | `HC_REFUSE_MAKECHAR` | `0x006E` | type(2) error(1) | `common/packets.hpp:273-277` |
 
-**`0x0B6F` is version-critical.** The guard is
-`PACKETVER_MAIN_NUM >= 20201007 || PACKETVER_RE_NUM >= 20211103` — our
-packetver is *exactly* the RE boundary. One version earlier and the reply is
-`0x006D` with a different body. Generate the length rather than trusting this
-table; `tools/packetlen/gen.py` is the authority.
+**`0x0B6F` is version-critical.** Its guard is
+`PACKETVER_MAIN_NUM >= 20201007 || PACKETVER_RE_NUM >= 20211103` — we are
+*exactly* on the RE boundary. One version earlier the reply is `0x006D` with a
+different body. Generate the length with `tools/packetlen/gen.py`; do not
+trust this table after a `make server-rebuild`.
 
-**Refusal codes** (`char_clif.cpp:1330-1352`, mapped from
-`char_make_new_char`'s negative returns):
-
-| Wire | Meaning | Server return |
-|---|---|---|
-| `0x00` | **Name already taken** — requirement 3 | `-1` |
-| `0xFF` | Creation denied (bad name, bad job, bad sex, slot in use, limit) | `-2` |
-| `0x01` | Underaged | `-3` |
-| `0x03` | Slot not eligible | `-4` |
-
-**Name rules.** `NAME_LENGTH` is 24 (`common/mmo.hpp:154`), so 23 usable
-characters. The server rejects empty names, names shorter than
-`char_name_min_length`, names containing control characters, and — depending on
-`char_name_option` — names outside a configured allow/deny character set
-(`char/char.cpp:1340-1386`). We validate what we cheaply can and let the server
-be the authority on the rest; **name uniqueness is only knowable server-side**,
-so requirement 3 is answered by sending and handling `0x00`, not by pre-checking.
+**Refusal codes** (`char_clif.cpp:1330-1352`): `0x00` name already taken,
+`0xFF` denied (bad name, bad job, bad sex, slot in use, account limit), `0x01`
+underaged, `0x03` slot not eligible.
 
 ## Step 0 — Prerequisites & tooling
 
-### 0a. Refactoring (only what this feature needs)
+### 0a. Refactoring
 
-1. **Empty slots must be hit-testable.** `charselect_native.go:204-219` skips
-   any slot without a character, so an empty one has no rect and cannot be
-   clicked. Give every slot a rect; keep "has a character" as a property of
-   the slot, not a reason to skip it.
-2. **`CH_MAKE_CHAR = 0x0067` in `packets.go:28` is wrong for our packetver**
-   and unused. Correcting a declared-but-unused constant is cheap now and a
-   confusing bug later.
-3. **Char select needs a "no character here" affordance.** The screen has
-   nowhere to express an empty slot today; the reference draws the slot frame
-   with nothing in it.
+1. **Empty slots must be hit-testable** — `charselect_native.go:204-219` skips
+   slots without a character, so an empty one has no rect to click.
+2. **Fix `CH_MAKE_CHAR` in `packets.go:28`** — wrong id, currently unused.
+3. **Char select needs a "slot is empty" affordance** — nothing expresses it today.
 
-Nothing here crosses a layer boundary, so **no ADR**.
+No layer boundary is crossed, so **no ADR**.
 
 ### 0b. Debug tooling & tests
 
-1. **`--stop-at charselect`.** There is currently no way to hold the client on
-   the character-select screen: `--autologin` drives straight through
-   (`charselect.go:106` auto-selects the instant the list arrives) and without
-   it the client sits at login. Every visual proof in this feature is on that
-   screen or one reached from it, so **no step below can be captured
-   unattended until this exists**. This is the single most important item in
-   Step 0.
-2. **`--make-char "<name>"`** — drive creation unattended, the way `--say`
-   drives chat. Fills the name, sends, and leaves the result on screen.
+1. **`--stop-at charselect`** — there is no way to hold the client on the
+   character-select screen (`--autologin` drives through, without it you sit
+   at login). **Every visual proof below is on that screen or reached from
+   it**, so nothing here can be captured unattended until this exists. Highest
+   priority item in Step 0.
+2. **`--make-char "<name>"`** — drive creation unattended, as `--say` drives chat.
 3. **Trace channel `char`** — `char.slot-click`, `char.create-send`,
-   `char.create-ok`, `char.create-refused` (with the code). A refusal that
-   shows nothing and a packet that never went look identical.
-4. **F3 fields** — selected slot, whether it is empty, and the last creation
-   result. Same argument as the `Cmd:` field added in #94.
-5. **Tests** — packet round-trip for `0x0A39` with known bytes against the
-   generated client table (`clientlengths_test.go` pattern); a decode test per
-   refusal code; a table test for name validation; a geometry test for the
-   radar polygon if we build it.
-6. **UC-219, UC-220, UC-221** (game range 200–299; 218 is the highest in use).
+   `char.create-ok`, `char.create-refused` with the code.
+4. **F3 fields** — selected slot, empty or not, last creation result.
+5. **Tests** — `0x0A39` round-trip against the generated client table; a decode
+   test per refusal code; name-validation table test against the server's real
+   rules (4–23, letters/digits/space); palette-application test in Step 4.
+6. **UC-219, UC-220, UC-221.**
 
 ## Steps
 
 ### Step 1 — An empty slot is visible and answers a double-click
 - **Changes:** `internal/game/ui/charselect_native.go`, `internal/game/states/charselect.go`
-- **Done when:** all slots draw a frame; an empty one reads as empty; double-clicking it logs `char.slot-click` with the index and `empty=true`. Nothing navigates yet.
+- **Done when:** every slot draws a frame; empty ones read as empty; a double-click logs `char.slot-click` with `empty=true`. Nothing navigates yet.
 - **Proved by:** `--stop-at charselect --screenshot-after 6s`; UC-219
-- **Reference:** ref-01
 
-### Step 2 — The creation screen opens, drawn from `win_make.bmp`
+### Step 2 — The creation screen opens, drawn from `bg_back2.tga`
 - **Changes:** new `CharCreateState`, new `internal/game/ui/charcreate_native.go`
-- **Done when:** the double-click opens a screen showing the ref-01 background with the name field, and cancel returns to char select with nothing sent.
+- **Done when:** the double-click opens the ref-01 layout — race cards, sex toggle, empty preview area, name field, hair grid, Go back / Create. Go back returns having sent nothing.
 - **Proved by:** screenshot matching ref-01; UC-219
-- **Reference:** ref-01 ①④⑤
+- **Reference:** ref-01 ①②④⑥⑦⑨
 
-### Step 3 — The sprite preview, in the account's sex
+### Step 3 — Sex, race and hair style drive a live preview
 - **Changes:** `charcreate_native.go`, reusing `internal/engine/charsprite`
-- **Done when:** a Novice sprite stands on the shadow ellipse in the sex `client.Session()` reports, and the hair arrows cycle style and colour with the sprite following.
-- **Done when (visual):** the same account shows the same sex it shows in game.
-- **Proved by:** UC-220; `--username midgard-mage` (F) and `midgard-sword` (M) side by side
-- **Reference:** ref-01 ⑥
+- **Done when:** the ♂/♀ toggle switches the sprite; picking Human or Doram switches the body; the 23-cell grid changes hair style; the turn arrows rotate the preview. All from real sprites.
+- **Proved by:** UC-220; one screenshot per sex and per race
+- **Reference:** ref-01 ④⑤⑦
 
-### Step 4 — Name entry and the creation round trip
+### Step 4 — Hair colour, which needs external palettes
+- **Changes:** `pkg/formats` (a `.pal` reader), `internal/engine/charsprite`, `internal/engine/sprite/composite.go`
+- **Done when:** the 10 swatches recolour the preview's hair, and the same palette is applied to the character in game so the two agree.
+- **Proved by:** palette unit test; UC-220; a screenshot of the same character on this screen and in Prontera
+- **Reference:** ref-01 ⑧
+- **Note:** the largest step. Nothing in the engine reads external `.pal` files today.
+
+### Step 5 — Name entry and the creation round trip
 - **Changes:** new `internal/network/packets/charcreate.go`, `charselect.go`
-- **Done when:** typing a name and pressing OK sends `0x0A39`; `0x0B6F` returns to char select with the character in the slot; `0x006E` `0x00` says the name is taken and keeps you on the screen.
+- **Done when:** a valid name and Create sends `0x0A39`; `0x0B6F` returns to char select with the character in the chosen slot; `0x006E` `0x00` says the name is taken and keeps you on the screen; names the server would reject on length or characters are refused locally without a packet.
 - **Proved by:** packet round-trip tests; `--make-char`; `--trace=char,net`; UC-221
-- **Reference:** ref-01 ⑤
-
-### Step 5 — The stat table, honestly
-- **Changes:** `charcreate_native.go`
-- **Done when:** the six stats read 1 and the hexagon is filled to match — the values the server will actually create (see Open question 1 for whether they are editable at all).
-- **Proved by:** the numbers on screen equal the numbers in `char` after creation, read via `make server-shell-db`; UC-221
-- **Reference:** ref-01 ②③
+- **Reference:** ref-01 ⑥⑨
 
 ### Step 6 — Docs
-- `docs/ENGINE_FEATURES.md` — the creation screen and the packetver constraint
+- `docs/ENGINE_FEATURES.md` — the creation screen, the palette reader, the packetver constraint
+- `docs/research/` — the three `CH_MAKE_CHAR` variants and what our server accepts, so nobody re-derives them
 - Session log
-- `docs/research/` note on the three `CH_MAKE_CHAR` variants, so the next person does not re-derive them
 
 ## Done when (feature)
 
-- Double-clicking an empty slot opens the creation screen; cancel returns having sent nothing.
-- The sprite matches the account's sex without asking.
-- Hair style and colour cycle, and the preview follows.
-- A free name creates the character; it appears in the chosen slot and can be entered.
-- A taken name says so and keeps you on the screen.
-- The stats shown are the stats the character is created with.
+- Double-clicking an empty slot opens creation; Go back sends nothing.
+- Human and Doram are both creatable and both render.
+- The sex toggle changes the sprite, and the created character has that sex.
+- All 23 hair styles and all 10 colours apply, and match in game.
+- A valid free name creates the character in the chosen slot; it can be entered.
+- A taken name is reported and keeps you on the screen.
+- A name that is too short, too long, or has disallowed characters is refused
+  before a packet is sent.
+- The new character has 48 status points to spend.
 
 ## Out of scope
 
-- **Character deletion** (`CH_DELETE_CHAR`) — its own flow, with a timer and an email confirmation on modern servers.
-- **Job choice.** `0x0A39` carries a job, but the MVP is Novice only (#49), and the Doram alternative needs a sprite set we do not load.
-- **More than three visible slots / slot paging** — see Open question 3.
-- **Spending status points**, which happens in the stat window (PR #108).
+- **Character deletion** (`CH_DELETE_CHAR`) — its own flow with a timer.
+- **Spending the 48 status points** — the stat window, PR #108.
+- **Slot paging** — see Open question 2.
 
 ## Open questions
 
-1. **The stat allocation cannot be sent, so what should the screen do?** The
-   server hardcodes all six to 1 at our packetver and hands out
-   `start_status_points` to spend in game instead. Three honest options:
-   **(a)** build ref-01 with the stat arrows inert and the numbers showing the
-   1s the server will assign — the referenced look, no lie about what it does;
-   **(b)** build ref-02 (`win_make2.bmp`), which is the layout the original
-   itself switched to for exactly this reason — honest, but not the screen
-   asked for; **(c)** let the arrows allocate and spend the points
-   automatically via `CZ_STATUS_CHANGE` right after creation — gives Boris the
-   interaction he wants, but it is our invention, not the original's, and it
-   can half-fail after the character already exists. **Recommended: (a).**
-2. **Should the name be pre-checked?** There is no "is this name free" query;
-   uniqueness is only knowable by trying. We can reject locally what is
-   locally knowable (empty, too long, control characters) and let `0x00` answer
-   the rest. Planned that way.
-3. **Three slots or nine?** The UI draws three (`charSelSlotX`) while the
-   seeded accounts allow nine (`character_slots = 9`). The original pages
-   through slots in threes. Creating into slot 3+ is unreachable until that
-   exists. Planned as **three, no paging**, with creation restricted to a
-   visible empty slot — say if paging should be in scope.
-4. **Should `--stop-at` be general?** Written as `charselect` only here, but
-   the same problem will recur for any screen between login and the map.
+1. **Doram: build it now or leave the card "coming soon"?** Our server accepts
+   Summoner and the sprites are in the archive, so it is genuinely available.
+   It does mean a second body sprite set through the preview and in game.
+   Planned as **build it**, per "complete, matched to our server" — say if it
+   should wait.
+2. **Three slots or nine?** The UI draws three rects while the accounts allow
+   nine, and the original pages in threes. Creating into slot 3+ is
+   unreachable until paging exists. Planned as **add paging**, since "full
+   functionality" implies reaching every slot the account has.
+3. **Should the preview rotate, or just face front?** ref-01 has turn arrows.
+   Cheap if `charsprite` already exposes the eight directions; otherwise it is
+   its own small piece of work. Planned as **yes**.
 
 ## Investigation notes
 
-- The GRF holds **three** creation layouts from three client eras. Searching
-  `make_character` finds only the newest and suggests the classic screen is
-  absent; it is not — it lives in `login_interface/`, and nostalro naming it
-  is what found it.
-- `PACKETVER_RE_NUM >= 20211103` in the `HC_ACCEPT_MAKECHAR` guard is our exact
-  version. Worth re-checking after any `make server-rebuild` onto newer rAthena.
+- `grftool search` caps at 50 results with no indication. Use `list` with a
+  glob for any inventory. This is worth fixing in the tool itself.
+- The GRF holds **four** creation layouts from four client eras. Searching
+  `make_character` finds the newest two and misses the classic screen entirely,
+  which lives under `login_interface/`.
+- Korean directory names are EUC-KR inside the archive. Decoding a listing as
+  UTF-8 with replacement characters produces a path `extract` cannot find —
+  pass raw bytes.
 
 ## Revision log
 
-- 2026-09-01 — Created.
+- 2026-09-01 — Created against `win_make.bmp` (classic hexagon layout).
+- 2026-09-01 — **Rebuilt around `make_character_ver2` (ref-01).** Boris: the
+  old RFC scope is not current; build the full functionality our server
+  supports. Consequences: the screen now has a control for every field
+  `0x0A39` carries and none for anything it does not; Doram and the sex toggle
+  are in; hair colour is in and brings external `.pal` support with it; the
+  Novice-only limit is gone. Open question 1 of the first revision (what to do
+  about stat allocation, which the wire cannot carry) is **resolved** — this
+  layout has no stat allocation to reconcile.
