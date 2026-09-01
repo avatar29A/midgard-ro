@@ -19,7 +19,8 @@ func TestCursorForUnitKinds(t *testing.T) {
 		{"nothing", nil, cursor.StateDefault},
 		{"an NPC", &entity.Entity{Type: entity.TypeNPC}, cursor.StateTalk},
 		{"a warp", &entity.Entity{Type: entity.TypeWarp}, cursor.StateWarp},
-		{"a monster", &entity.Entity{Type: entity.TypeMonster}, cursor.StateDefault},
+		{"a monster", &entity.Entity{Type: entity.TypeMonster}, cursor.StateAttack},
+		{"a ground item", &entity.Entity{Type: entity.TypeItem}, cursor.StatePick},
 		{"a player", &entity.Entity{Type: entity.TypePlayer}, cursor.StateDefault},
 	}
 	for _, tt := range tests {

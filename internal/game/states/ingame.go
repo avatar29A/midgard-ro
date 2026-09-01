@@ -79,7 +79,27 @@ type InGameState struct {
 	// stood still on the way, which is how an unreachable item is given up on.
 	pendingPickup       uint32
 	pendingPickupIdleMs float32
-	markerPulse         float32
+
+	// targetID is the unit being attacked, and pendingAttack one being walked
+	// to before the first blow. pendingAttackIdleMs counts how long the
+	// character has stood still on the way, which is how an unreachable
+	// target is given up on.
+	// targetID is the unit being fought, kept until it dies, leaves, or
+	// another click countermands it. attacking records whether the server has
+	// been told to swing, and the two timers throttle chasing it and
+	// reissuing the blow.
+	// attackRange is the reach of the equipped weapon, as the server reports
+	// it. Zero until the first ZC_ATTACK_RANGE arrives.
+	attackRange int
+
+	// damageNumbers are the figures floating up from recent blows.
+	damageNumbers []floatingDamage
+
+	targetID    uint32
+	attacking   bool
+	repathMs    float32
+	resendMs    float32
+	markerPulse float32
 
 	// markerTraceAt rate limits the marker diagnostics.
 	markerTraceAt time.Time
@@ -274,6 +294,8 @@ func (s *InGameState) loadPlayerSprites() {
 
 	logger.Info("character sprites loaded",
 		zap.String("sprite", s.playerRender.SpritePath()),
+		zap.Int("weaponLook", spec.Weapon),
+		zap.String("weapon", s.playerRender.WeaponPath()),
 		zap.Int("idleFrames", s.playerRender.FrameCount(entity.ActionIdle, entity.DirS)),
 		zap.Int("walkFrames", s.playerRender.FrameCount(entity.ActionWalk, entity.DirS)))
 }
@@ -685,16 +707,33 @@ func (s *InGameState) Update(dt float64) error {
 		s.wasWalking = walking
 
 		s.updatePendingPickup(deltaMs, walking)
+		s.updateCombat(deltaMs, walking)
+		s.updateDamageNumbers(deltaMs)
 
 		// Advance the sprite animation. Frame counts come from the loaded
 		// sheet; with no sprites this parks on frame 0 harmlessly.
-		idleFrames, walkFrames, pickupFrames := 0, 0, 0
+		// The armed stance is worn while there is something to stand ready
+		// against, and dropped the moment the fight is over.
+		s.player.Ready = s.targetID != 0
+
+		idleFrames, walkFrames, onceFrames, standbyFrames := 0, 0, 0, 0
 		if s.playerRender != nil {
 			idleFrames = s.playerRender.FrameCount(entity.ActionIdle, s.player.Direction)
 			walkFrames = s.playerRender.FrameCount(entity.ActionWalk, s.player.Direction)
-			pickupFrames = s.playerRender.FrameCount(entity.ActionPickup, s.player.Direction)
+
+			if playing := s.player.PlayingAction(); playing >= 0 {
+				onceFrames = s.playerRender.FrameCount(playing, s.player.Direction)
+
+				// The sprite's own rate, the way a unit's is taken. The pick-up
+				// was running at a rate picked by hand and was first too slow
+				// and then too fast; the ACT has said all along.
+				s.player.AnimIntervalMs[playing] = s.playerRender.FrameInterval(playing)
+			}
+			if s.player.Ready {
+				standbyFrames = s.playerRender.FrameCount(entity.ActionStandby, s.player.Direction)
+			}
 		}
-		s.player.AdvanceAnimation(deltaMs, idleFrames, walkFrames, pickupFrames)
+		s.player.AdvanceAnimation(deltaMs, idleFrames, walkFrames, onceFrames, standbyFrames)
 
 		// Update cell position
 		s.TileX, s.TileY = s.player.CurrentCell()
@@ -1247,6 +1286,9 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_ITEM_DISAPPEAR, s.handleGroundItemGone)
 	s.client.RegisterHandler(packets.ZC_ITEM_PICKUP_ACK, s.handlePickupAck)
 	s.client.RegisterHandler(packets.ZC_ITEM_THROW_ACK, s.handleDropAck)
+	s.client.RegisterHandler(packets.ZC_NOTIFY_ACT, s.handleDamage)
+	s.client.RegisterHandler(packets.ZC_MONSTER_HP_INFO, s.handleMonsterHP)
+	s.client.RegisterHandler(packets.ZC_ATTACK_RANGE, s.handleAttackRange)
 	s.client.RegisterHandler(packets.ZC_COUPLESTATUS, s.handleCoupleStatus)
 	s.client.RegisterHandler(packets.ZC_LONGPAR_CHANGE, s.handleStatusChange)
 	s.client.RegisterHandler(packets.ZC_LONGLONGPAR_CHANGE, s.handleStatusChange)
@@ -1438,9 +1480,26 @@ func (s *InGameState) handleEntityVanish(data []byte) error {
 	if aid == s.selfAID() {
 		// The server reports our own death and teleports through this packet
 		// too. Removing ourselves would delete the character being played, so
-		// only note it.
+		// only note it — and, when it was death, lie down.
 		trace.Emit(trace.Net, "vanish-self", zap.Uint8("reason", reason))
+
+		if reason == packets.VanishDied && s.player != nil {
+			s.player.Die()
+			s.forgetAttack()
+			s.forgetPendingPickup()
+		}
+
 		return nil
+	}
+
+	// A unit that died falls over where it stands, and is taken off the map
+	// when the fade finishes rather than blinking out mid-blow. Every other
+	// reason is a unit leaving our view, which has nothing to watch.
+	if reason == packets.VanishDied {
+		if e := s.entityManager.Get(aid); e != nil && e.Body != nil {
+			e.IsDead = true
+			e.Body.Die()
+		}
 	}
 
 	removeUnit(s.entityManager, aid)
@@ -1884,6 +1943,7 @@ func (s *InGameState) ClickWorld(mouseX, mouseY, viewportW, viewportH float32) {
 	// Whatever this click turns out to mean, it replaces any errand still in
 	// progress. PickUpItem sets a new one if that is what this click was.
 	s.forgetPendingPickup()
+	s.forgetAttack()
 
 	// A unit under the pointer takes the click. For an NPC, walking there
 	// instead would be the wrong thing twice over: the conversation would not
@@ -1908,6 +1968,12 @@ func (s *InGameState) ClickWorld(mouseX, mouseY, viewportW, viewportH float32) {
 			if err := s.RequestMove(stepX, stepY); err != nil {
 				logger.Warn("walk to warp failed", zap.Error(err))
 			}
+			return
+		}
+
+		if s.isAttackable(e) {
+			s.AttackTarget(e)
+
 			return
 		}
 
@@ -2176,6 +2242,23 @@ func (s *InGameState) CaptureScene() ([]byte, int32, int32) {
 	return s.scene.CaptureImage()
 }
 
+// barWorthShowing reports whether a unit's health is worth the screen space.
+//
+// Monsters earn a bar by being the target or by being pointed at. Everything
+// else that carries one — other players, once they are modeled — keeps it
+// unconditionally, because theirs is not a fight the pointer is choosing.
+func (s *InGameState) barWorthShowing(e *entity.Entity) bool {
+	if e.Type != entity.TypeMonster {
+		return true
+	}
+
+	if e.ID == s.targetID {
+		return true
+	}
+
+	return s.hoverEntity != nil && s.hoverEntity.ID == e.ID
+}
+
 // msSinceStart is the elapsed time since t in milliseconds, for traces.
 func msSinceStart(t time.Time) float64 {
 	return float64(time.Since(t).Microseconds()) / 1000
@@ -2188,10 +2271,13 @@ func msSinceStart(t time.Time) float64 {
 // finished positions and needs nothing from the scene.
 //
 // The player is always included: their own bars are what the request was for,
-// and their HP and SP are the only ones the server keeps current. Other units
-// are included when their kind says so — Entity.ShowHP, which NewEntity
-// already sets per type — and their HP is whatever the spawn packet said until
-// Track F starts calling Manager.SetVitals.
+// and their HP and SP are the only ones the server keeps current.
+//
+// A monster's bar is shown only while it is the target or under the pointer.
+// The server keeps sending a damaged monster's health for as long as it is in
+// view, so drawing every one that has ever been hit left bars standing over
+// half the map long after the fight — and the bar was asked for as part of
+// what "selected" looks like, alongside the name and the mark.
 func (s *InGameState) EntityBars(viewportW, viewportH float32) []EntityBar {
 	if s.scene == nil || !s.SceneReady {
 		return nil
@@ -2217,6 +2303,10 @@ func (s *InGameState) EntityBars(viewportW, viewportH float32) []EntityBar {
 
 	for _, e := range s.entityManager.All() {
 		if e.Body == nil || !e.ShowHP || e.MaxHP <= 0 || e.ID == s.selfAID() {
+			continue
+		}
+
+		if !s.barWorthShowing(e) {
 			continue
 		}
 
