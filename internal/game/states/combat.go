@@ -9,14 +9,12 @@ import (
 	"github.com/Faultbox/midgard-ro/internal/trace"
 )
 
-// attackRange is how close the character has to be to swing, in cells.
+// defaultAttackRange is the reach assumed until the server says otherwise.
 //
-// One, which is melee. The server checks the attacker's real weapon range in
-// battle_check_range and refuses from further off, so this is the client
-// agreeing with the common case rather than the whole truth: a bow would be
-// further, and this will need the range the server actually gave us when
-// there is a weapon that reaches.
-const attackRange = 1
+// One cell, which is a bare fist. The server sends the real figure in
+// ZC_ATTACK_RANGE whenever the weapon changes, and that is what is used once
+// it arrives — this only covers the moment before the first one.
+const defaultAttackRange = 1
 
 // targetRepathMs is how often the walk towards a target is reissued while
 // chasing it.
@@ -162,8 +160,46 @@ func (s *InGameState) withinAttackRange(e *entity.Entity) bool {
 
 	targetX, targetY := e.Body.CurrentCell()
 	playerX, playerY := s.player.CurrentCell()
+	reach := s.reach()
 
-	return abs(targetX-playerX) <= attackRange && abs(targetY-playerY) <= attackRange
+	return abs(targetX-playerX) <= reach && abs(targetY-playerY) <= reach
+}
+
+// reach is how far the character can strike, in cells.
+//
+// Whatever the server last said, which is the figure battle_check_range will
+// measure the blow against. Stopping short of it is what keeps the character
+// from walking onto whatever it is fighting, and a weapon that reaches makes
+// the difference much larger than one cell.
+func (s *InGameState) reach() int {
+	if s.attackRange > 0 {
+		return s.attackRange
+	}
+
+	return defaultAttackRange
+}
+
+// handleAttackRange takes the reach of the equipped weapon.
+func (s *InGameState) handleAttackRange(data []byte) error {
+	reach, ok := packets.DecodeAttackRange(data)
+	if !ok {
+		logger.Warn("short attack range packet", zap.Int("len", len(data)))
+
+		return nil
+	}
+
+	// A nonsense figure is ignored rather than believed: standing off at a
+	// range the server will refuse is worse than standing too close.
+	if reach < 1 || reach > 20 {
+		logger.Warn("ignoring an implausible attack range", zap.Int("range", reach))
+
+		return nil
+	}
+
+	s.attackRange = reach
+	trace.Emit(trace.HUD, "attack-range", zap.Int("cells", reach))
+
+	return nil
 }
 
 // forgetAttack drops the target and any errand to reach it.

@@ -88,6 +88,10 @@ type InGameState struct {
 	// another click countermands it. attacking records whether the server has
 	// been told to swing, and the two timers throttle chasing it and
 	// reissuing the blow.
+	// attackRange is the reach of the equipped weapon, as the server reports
+	// it. Zero until the first ZC_ATTACK_RANGE arrives.
+	attackRange int
+
 	targetID    uint32
 	attacking   bool
 	repathMs    float32
@@ -1266,6 +1270,7 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_ITEM_THROW_ACK, s.handleDropAck)
 	s.client.RegisterHandler(packets.ZC_NOTIFY_ACT, s.handleDamage)
 	s.client.RegisterHandler(packets.ZC_MONSTER_HP_INFO, s.handleMonsterHP)
+	s.client.RegisterHandler(packets.ZC_ATTACK_RANGE, s.handleAttackRange)
 	s.client.RegisterHandler(packets.ZC_COUPLESTATUS, s.handleCoupleStatus)
 	s.client.RegisterHandler(packets.ZC_LONGPAR_CHANGE, s.handleStatusChange)
 	s.client.RegisterHandler(packets.ZC_LONGLONGPAR_CHANGE, s.handleStatusChange)
