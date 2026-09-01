@@ -7,11 +7,12 @@ import (
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
 )
 
-// The Status window the Info button opens.
+// The status block, which is the foot of the equipment window.
 //
 // statwin_bg.bmp carries the whole layout — the six names down the left, the
-// derived headings on the right — with the numbers left out. So this draws
-// the bitmap and fills in the boxes, rather than laying anything out itself.
+// derived headings on the right — with the numbers left out. So this fills in
+// the boxes rather than laying anything out itself, and the window it sits in
+// draws the bitmap under them.
 const (
 	statsTexture = basicInterfacePath + "statwin_bg.bmp"
 
@@ -44,56 +45,6 @@ const (
 	statsTextScale float32 = 0.75
 )
 
-// drawStatsWindow draws the Status window when the Info button has opened it.
-func (b *UI2DBackend) drawStatsWindow(state InGameUIState, screenW, screenH float32) {
-	if !b.IsWindowOpen(WindowInfo) {
-		return
-	}
-
-	tex, err := b.texCache.Load(statsTexture)
-	if err != nil {
-		return
-	}
-
-	title := hudWindowTitles[WindowInfo]
-	frameH := statsH + ui2d.FrameTitleH
-
-	openX := (screenW - statsW) / 2
-	openY := (screenH - frameH) / 2
-
-	// The body is statwin_bg.bmp, so the frame must not paint one: rectangles
-	// and images go in separate batches, and the fill would cover the bitmap
-	// however the calls are ordered.
-	opts := ui2d.DefaultWindowOptions()
-
-	if !b.ctx.BeginWindowEx(statsWindowID, openX, openY, statsW, frameH, title, opts) {
-		// Minimized is not closed: the frame has already drawn its title bar
-		// and the window is still open, just collapsed. Only a real close
-		// takes the menu button back out.
-		if b.ctx.WindowClosed(statsWindowID) {
-			b.ToggleWindow(WindowInfo)
-		}
-
-		return
-	}
-
-	// After BeginWindow, so the contents move with the frame rather than
-	// trailing it by a frame while it is dragged.
-	x, y := openX, openY
-	if rect, ok := b.ctx.WindowRect(statsWindowID); ok {
-		x, y = rect.X, rect.Y
-	}
-
-	b.ctx.CaptureMouse(ui2d.Rect{X: x, Y: y, W: statsW, H: frameH})
-
-	body := y + ui2d.FrameTitleH
-	r := b.ctx.Renderer()
-	r.DrawImage(tex.ID, x, body, statsW, statsH, ui2d.ColorWhite)
-
-	b.drawStatValues(state, x, body)
-	b.ctx.EndWindow()
-}
-
 // drawStatValues fills in the six boxes and the status point total.
 func (b *UI2DBackend) drawStatValues(state InGameUIState, x, y float32) {
 	r := b.ctx.Renderer()
@@ -123,11 +74,19 @@ func (b *UI2DBackend) drawStatValues(state InGameUIState, x, y float32) {
 			r.DrawText(x+statsValueX+4+valueW, textY, label, statsTextScale, color)
 		}
 
-		// The raise button, in the cell between the two, and only when there
-		// is a point to spend: the original leaves the cell empty otherwise,
-		// and a button that cannot do anything is worse than no button.
-		if state.StatusPoints > 0 {
-			b.drawStatRaise(x+statsArrowX, rowY)
+		// The raise button, in the cell between the two, and only when this
+		// stat can actually be raised: the original leaves the cell empty
+		// otherwise, and a button that cannot do anything is worse than none.
+		//
+		// Affordability is the server's own rule rather than a cap written
+		// down here. Each stat's next point costs more than the last, and
+		// rAthena reports that cost per stat in ZC_STATUS — so a stat at its
+		// ceiling prices itself out of reach without the client needing to
+		// know where the ceiling is.
+		if cost := state.PrimaryCost[i]; cost > 0 && state.StatusPoints >= cost {
+			if b.drawStatRaise("hud_stat_raise_"+strconv.Itoa(i), x+statsArrowX, rowY) {
+				b.statAction = StatAction{Stat: packets.SP_STR + uint16(i)}
+			}
 		}
 
 		// What raising it by one would cost, in the third cell.
@@ -198,9 +157,6 @@ func rangeText(a, b int) string {
 	return strconv.Itoa(low) + " ~ " + strconv.Itoa(high)
 }
 
-// statsWindowID is the frame's id, needed to read its position back.
-const statsWindowID = "hud_win_stats"
-
 var (
 	// A bonus is green when it helps and red when it does not, which is the
 	// only thing that distinguishes the two at a glance.
@@ -211,16 +167,12 @@ var (
 	statsArrowHot = ui2d.Color{R: 1, G: 1, B: 0.75, A: 1}
 )
 
-// drawStatRaise draws the button that spends a status point on one stat.
-//
-// It is drawn and not yet wired: raising a stat is CZ_STATUS_CHANGE, which
-// this window does not send. Showing it is still right — the cell is there in
-// the bitmap and the original fills it whenever there are points — and it is
-// hidden when there are none, so it never offers something it cannot do.
-func (b *UI2DBackend) drawStatRaise(x, y float32) {
+// drawStatRaise draws the button that spends a status point on one stat, and
+// reports a click on it.
+func (b *UI2DBackend) drawStatRaise(id string, x, y float32) bool {
 	tex, err := b.texCache.Load(statsArrow)
 	if err != nil {
-		return
+		return false
 	}
 
 	arrowY := y + (statsBoxH-statsArrowW)/2
@@ -232,4 +184,26 @@ func (b *UI2DBackend) drawStatRaise(x, y float32) {
 	}
 
 	b.ctx.Renderer().DrawImage(tex.ID, box.X, box.Y, box.W, box.H, tint)
+
+	return b.ctx.InvisibleButtonAt(id, box.X, box.Y, box.W, box.H)
+}
+
+// StatAction is a status point being spent on one stat.
+type StatAction struct {
+	// Stat is the status id — SP_STR through SP_LUK — not the row it sits on
+	// in the window.
+	Stat uint16
+}
+
+// TakeStatAction returns a stat the player asked to raise and clears it. The
+// interface has no connection, so sending it is the caller's job.
+func (b *UI2DBackend) TakeStatAction() (StatAction, bool) {
+	action := b.statAction
+	if action.Stat == 0 {
+		return StatAction{}, false
+	}
+
+	b.statAction = StatAction{}
+
+	return action, true
 }

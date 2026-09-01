@@ -321,7 +321,7 @@ func (b *UI2DBackend) drawMapFooter(win ui2d.Rect) {
 		H: mapWinBtnH,
 	}
 
-	b.drawEscButton(box, label, false)
+	b.drawFlatButton(box, label, false)
 
 	if b.ctx.InvisibleButtonAt("hud_map_view", box.X, box.Y, box.W, box.H) {
 		b.mapWorldView = !b.mapWorldView

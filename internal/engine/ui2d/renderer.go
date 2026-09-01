@@ -221,22 +221,40 @@ type drawCmd struct {
 	texture uint32
 	start   int
 	count   int
+
+	// additive draws the run by adding to what is behind it instead of
+	// covering it. RO's effects are drawn this way — a flash is light, not
+	// paint — and one drawn with ordinary alpha reads as a grey rectangle
+	// laid over the scene.
+	additive bool
 }
 
 // pushCmd records count vertices of a kind, extending the previous command
 // when it can rather than adding another.
-func (r *Renderer) pushCmd(kind drawKind, texture uint32, start, count int) {
+func (r *Renderer) pushCmd(kind drawKind, texture uint32, start int) {
+	r.pushBlendCmd(kind, texture, start, false)
+}
+
+// quadVertices is what every command draws: two triangles. Nothing in this
+// renderer submits anything else, so the count is not worth passing round.
+const quadVertices = 6
+
+// pushBlendCmd is pushCmd for a run that names its own blend mode. Runs merge
+// only when that matches too, or an additive quad would be drawn with the
+// blend of whatever happened to precede it.
+func (r *Renderer) pushBlendCmd(kind drawKind, texture uint32, start int, additive bool) {
 	if n := len(r.commands); n > 0 {
 		last := &r.commands[n-1]
-		if last.kind == kind && last.texture == texture && last.start+last.count == start {
-			last.count += count
+		if last.kind == kind && last.texture == texture &&
+			last.additive == additive && last.start+last.count == start {
+			last.count += quadVertices
 
 			return
 		}
 	}
 
 	r.commands = append(r.commands, drawCmd{
-		kind: kind, texture: texture, start: start, count: count,
+		kind: kind, texture: texture, start: start, count: quadVertices, additive: additive,
 	})
 }
 
@@ -265,13 +283,33 @@ func (r *Renderer) drawQueuedBatches(proj [16]float32) {
 	var (
 		bound    drawKind = 255
 		boundTex uint32
+		additive bool
 	)
+
+	// Restored at the end so the rest of the frame is unaffected by an effect
+	// having been drawn: the blend state is global, and leaving it additive
+	// makes every window drawn afterwards glow.
+	defer func() {
+		if additive {
+			gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+		}
+	}()
 
 	for _, cmd := range r.commands {
 		if cmd.kind != bound {
 			r.bindKind(cmd.kind, proj)
 			bound = cmd.kind
 			boundTex = 0
+		}
+
+		if cmd.additive != additive {
+			if cmd.additive {
+				gl.BlendFunc(gl.SRC_ALPHA, gl.ONE)
+			} else {
+				gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+			}
+
+			additive = cmd.additive
 		}
 
 		// Text draws from one atlas, bound with its shader; images name
@@ -431,6 +469,29 @@ func (r *Renderer) DrawRectOutline(x, y, width, height, thickness float32, color
 	r.addQuad(x+width-thickness, y+thickness, thickness, height-thickness*2, color)
 }
 
+// DrawQuad draws a filled quad from its four corners, clockwise from the top
+// left.
+//
+// For edges that are not horizontal or vertical. A slanted edge built out of
+// rectangles is a staircase whose steps are as coarse as the rectangles are
+// wide; drawn as one quad it is rasterized at the display's own resolution,
+// which on a doubled display is twice as fine as anything expressible in
+// layout points.
+func (r *Renderer) DrawQuad(p0, p1, p2, p3 [2]float32, c Color) {
+	r.pushCmd(drawSolid, 0, len(r.solidVertices)/7)
+
+	r.solidVertices = append(r.solidVertices,
+		p0[0], p0[1], 0, c.R, c.G, c.B, c.A,
+		p1[0], p1[1], 0, c.R, c.G, c.B, c.A,
+		p2[0], p2[1], 0, c.R, c.G, c.B, c.A,
+	)
+	r.solidVertices = append(r.solidVertices,
+		p0[0], p0[1], 0, c.R, c.G, c.B, c.A,
+		p2[0], p2[1], 0, c.R, c.G, c.B, c.A,
+		p3[0], p3[1], 0, c.R, c.G, c.B, c.A,
+	)
+}
+
 // DrawPanel draws a panel with border.
 func (r *Renderer) DrawPanel(x, y, width, height float32, bg, border Color) {
 	// Background
@@ -448,7 +509,7 @@ func (r *Renderer) addQuad(x, y, w, h float32, c Color) {
 func (r *Renderer) addQuadTo(into *[]float32, x, y, w, h float32, c Color) {
 	// Two triangles forming a quad
 	// Vertex format: x, y, z, r, g, b, a (7 floats)
-	r.pushCmd(drawSolid, 0, len(*into)/7, 6)
+	r.pushCmd(drawSolid, 0, len(*into)/7)
 
 	// Triangle 1
 	*into = append(*into,
@@ -485,7 +546,7 @@ func (r *Renderer) addQuadGradient(x, y, w, h float32, t, b Color) {
 func (r *Renderer) addTexturedQuad(x, y, w, h float32, u0, v0, u1, v1 float32, c Color) {
 	// Two triangles forming a quad
 	// Vertex format: x, y, z, u, v, r, g, b, a (9 floats)
-	r.pushCmd(drawText, 0, len(r.textVertices)/9, 6)
+	r.pushCmd(drawText, 0, len(r.textVertices)/9)
 
 	// Triangle 1
 	r.textVertices = append(r.textVertices,
@@ -560,6 +621,77 @@ func (r *Renderer) DrawText(x, y float32, text string, scale float32, color Colo
 		}
 		cursorX += g.Advance * px
 	}
+}
+
+// DrawTextVertical draws a line turned a quarter turn, reading bottom to top.
+//
+// Which is how RO labels a vertical tab: the tab strips in the archive carry
+// their words that way, and stacking upright letters instead reads as a column
+// of letters rather than as a word.
+//
+// The origin is the corner the unrotated line would start at, and the line
+// turns about it — so the text runs upward from y and rightward from x by its
+// own line height. Placing it is therefore the same arithmetic as placing
+// ordinary text, with the measured width and height swapped.
+func (r *Renderer) DrawTextVertical(x, y float32, text string, scale float32, color Color) {
+	if r.font == nil {
+		return
+	}
+
+	f := r.font
+	ascent := f.Ascent() * scale
+	px := scale / f.Density()
+
+	cursorX := float32(0)
+
+	for _, char := range text {
+		g := f.Glyph(char)
+		if g == nil {
+			continue
+		}
+
+		if g.Width > 0 && g.Height > 0 {
+			lx := cursorX + g.BearingX*px
+			ly := ascent + g.BearingY*px
+			gw := float32(g.Width) * px
+			gh := float32(g.Height) * px
+
+			// A quarter turn counter-clockwise on a screen whose y runs down:
+			// (a, b) goes to (b, -a). What was the line's rightward run
+			// becomes upward, and each letter lies on its side with its top
+			// toward the left, which is the way the archive's tabs read.
+			corner := func(a, b float32) [2]float32 {
+				return [2]float32{x + b, y - a}
+			}
+
+			r.addTexturedQuadCorners(
+				corner(lx, ly), corner(lx+gw, ly),
+				corner(lx+gw, ly+gh), corner(lx, ly+gh),
+				g.U0, g.V0, g.U1, g.V1, color,
+			)
+		}
+
+		cursorX += g.Advance * px
+	}
+}
+
+// addTexturedQuadCorners is addTexturedQuad for a quad that is not
+// axis-aligned, corners clockwise from the one the texture's origin sits on.
+func (r *Renderer) addTexturedQuadCorners(p0, p1, p2, p3 [2]float32,
+	u0, v0, u1, v1 float32, c Color,
+) {
+	r.pushCmd(drawText, 0, len(r.textVertices)/9)
+
+	r.textVertices = append(r.textVertices,
+		p0[0], p0[1], 0, u0, v0, c.R, c.G, c.B, c.A,
+		p1[0], p1[1], 0, u1, v0, c.R, c.G, c.B, c.A,
+		p2[0], p2[1], 0, u1, v1, c.R, c.G, c.B, c.A,
+	)
+	r.textVertices = append(r.textVertices,
+		p0[0], p0[1], 0, u0, v0, c.R, c.G, c.B, c.A,
+		p2[0], p2[1], 0, u1, v1, c.R, c.G, c.B, c.A,
+		p3[0], p3[1], 0, u0, v1, c.R, c.G, c.B, c.A,
+	)
 }
 
 // MeasureText returns the width and height of rendered text.
@@ -937,8 +1069,62 @@ func (r *Renderer) DrawImageUV(texID uint32, x, y, w, h, u0, v0, u1, v1 float32,
 
 	// Recorded here rather than in appendImageQuad: the overlay shares that
 	// helper and is drawn on its own terms, above the command list entirely.
-	r.pushCmd(drawImage, texID, len(r.imageVertices)/9, 6)
+	r.pushCmd(drawImage, texID, len(r.imageVertices)/9)
 	appendImageQuad(&r.imageVertices, &r.imageDrawCalls, texID, x, y, w, h, u0, v0, u1, v1, tint)
+}
+
+// DrawImageQuad draws a textured quad from its four corners.
+//
+// Corners rather than a rect and an angle because that is how RO's effect
+// files store them: a quad that is rotated, sheared or squashed has its four
+// points written out, and rebuilding an angle from them only to turn it back
+// into points would lose the shear.
+//
+// Corners go clockwise from the top left, and uv matches them corner for
+// corner.
+func (r *Renderer) DrawImageQuad(texID uint32, corners [4][2]float32, uv [4][2]float32,
+	tint Color, additive bool,
+) {
+	if texID == 0 {
+		return
+	}
+
+	r.pushBlendCmd(drawImage, texID, len(r.imageVertices)/9, additive)
+	appendImageQuadCorners(&r.imageVertices, &r.imageDrawCalls, texID, corners, uv, tint)
+}
+
+// appendImageQuadCorners adds a free-form quad as two triangles.
+func appendImageQuadCorners(vertices *[]float32, calls *[]imageDrawCall, texID uint32,
+	corners [4][2]float32, uv [4][2]float32, c Color,
+) {
+	if texID == 0 {
+		return
+	}
+
+	vertStart := len(*vertices) / 9
+
+	add := func(i int) {
+		*vertices = append(*vertices,
+			corners[i][0], corners[i][1], 0, uv[i][0], uv[i][1], c.R, c.G, c.B, c.A)
+	}
+
+	for _, i := range [6]int{0, 1, 2, 0, 2, 3} {
+		add(i)
+	}
+
+	if n := len(*calls); n > 0 {
+		if last := &(*calls)[n-1]; last.textureID == texID {
+			last.vertCount += 6
+
+			return
+		}
+	}
+
+	*calls = append(*calls, imageDrawCall{
+		textureID: texID,
+		vertStart: vertStart,
+		vertCount: 6,
+	})
 }
 
 // DrawImageTop draws a textured quad above everything else, text included.

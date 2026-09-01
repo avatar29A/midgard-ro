@@ -197,6 +197,16 @@ func (r *Renderer) HasSprites() bool {
 	return r != nil && r.player != nil
 }
 
+// WeaponPath is the archive path the player's weapon loaded from, empty when
+// bare-handed or when the archive had no art for what is held.
+func (r *Renderer) WeaponPath() string {
+	if r == nil || r.player == nil {
+		return ""
+	}
+
+	return r.player.weaponPath
+}
+
 // SpritePath returns the archive path the loaded body sprite came from.
 func (r *Renderer) SpritePath() string {
 	if r == nil || r.player == nil {
@@ -212,6 +222,22 @@ func (r *Renderer) FrameCount(action, direction int) int {
 		return 0
 	}
 	return r.player.frameCount(action, direction)
+}
+
+// FrameInterval is how long the player holds one frame of an action, in
+// milliseconds, taken from its own ACT. Zero when the sheet is not baked or
+// the file did not say.
+func (r *Renderer) FrameInterval(action int) float32 {
+	if r == nil || r.player == nil {
+		return 0
+	}
+
+	index := r.player.actIndex(action)
+	if index < 0 || index >= len(r.player.intervals) {
+		return 0
+	}
+
+	return r.player.intervals[index]
 }
 
 // Render draws the player billboard at the character's render position.
@@ -263,10 +289,16 @@ func (r *Renderer) UnitFrameInterval(spec charsprite.Spec, action int) float32 {
 		return 0
 	}
 	sh := r.units[spec]
-	if sh == nil || action < 0 || action >= len(sh.intervals) {
+	if sh == nil {
 		return 0
 	}
-	return sh.intervals[action]
+
+	index := sh.actIndex(action)
+	if index < 0 || index >= len(sh.intervals) {
+		return 0
+	}
+
+	return sh.intervals[index]
 }
 
 // UnitQuadSize reports the world size of an appearance's billboard, or zeroes
@@ -470,10 +502,29 @@ func (r *Renderer) selectFrame(char *entity.Character, camPosX, camPosZ float32,
 	visualDir, camSector := character.CalculateVisualDirection(camAngle, char.Direction, char.LastCameraSector)
 	char.LastCameraSector = camSector
 
-	frames := sh.frames[char.CurrentAction*charsprite.Directions+visualDir]
+	// CurrentAction is logical; this sheet is keyed by its family's own index.
+	action := sh.actIndex(char.CurrentAction)
+	if action < 0 {
+		action = sh.actIndex(charsprite.ActionIdle)
+	}
+
+	// Not every sprite has eight facings. A ground item has exactly one, so
+	// asking it for the facing the camera happens to want finds nothing — and
+	// since the facing follows the camera, rotating the view made every
+	// dropped item on the map disappear.
+	//
+	// So: this facing, then this action's first facing, then the idle's. A
+	// sprite with one direction draws it whichever way the camera is pointing,
+	// which is what a potato lying on the ground should do.
+	frames := sh.frames[action*charsprite.Directions+visualDir]
 	if len(frames) == 0 {
-		// Fall back to idle for this facing rather than dropping the draw.
+		frames = sh.frames[action*charsprite.Directions]
+	}
+	if len(frames) == 0 {
 		frames = sh.frames[visualDir]
+		if len(frames) == 0 {
+			frames = sh.frames[0]
+		}
 		if len(frames) == 0 {
 			return 0, 0, 0
 		}
@@ -504,15 +555,27 @@ func uploadRGBA(pixels []byte, w, h int) uint32 {
 // already on the GPU. Several units can share one.
 type sheet struct {
 	// frames is keyed by action*Directions+direction, as charsprite bakes it.
-	frames    map[int][]uint32
-	width     int
-	height    int
-	path      string
-	intervals [charsprite.LoadedActions]float32
+	frames     map[int][]uint32
+	width      int
+	height     int
+	path       string
+	weaponPath string
+	intervals  [charsprite.LoadedActions]float32
+
+	// actions is which ACT index each logical action resolves to for this
+	// appearance. Per appearance rather than per family because a weapon
+	// moves two of them — a dagger swings from set 10 and a sword from 11,
+	// and an armed character stands in the combat pose rather than the bare
+	// idle, which is the only stance a weapon is drawn in.
+	actions charsprite.ActionMap
 
 	// dropped is how many animation frames the bake left out, from
 	// charsprite.MaxAnimationFrames.
 	dropped int
+
+	// portrait is where the standing frame's own art sits inside the padded
+	// frame, for anything drawing the character flat.
+	portrait struct{ x, y, w, h int }
 }
 
 // newSheet uploads every frame of a baked appearance, returning nil when there
@@ -525,13 +588,19 @@ func newSheet(assets *charsprite.Assets) *sheet {
 	}
 
 	sh := &sheet{
-		frames:    make(map[int][]uint32, len(assets.Sheet.Frames)),
-		width:     assets.Sheet.Width,
-		height:    assets.Sheet.Height,
-		path:      assets.BodyPath,
-		dropped:   assets.Sheet.Dropped,
-		intervals: assets.Sheet.IntervalMs,
+		frames:     make(map[int][]uint32, len(assets.Sheet.Frames)),
+		width:      assets.Sheet.Width,
+		height:     assets.Sheet.Height,
+		path:       assets.BodyPath,
+		weaponPath: assets.WeaponPath,
+		dropped:    assets.Sheet.Dropped,
+		intervals:  assets.Sheet.IntervalMs,
+		actions:    assets.Sheet.Actions,
 	}
+	sh.portrait.x = assets.Sheet.PortraitX
+	sh.portrait.y = assets.Sheet.PortraitY
+	sh.portrait.w = assets.Sheet.PortraitW
+	sh.portrait.h = assets.Sheet.PortraitH
 	for key, frames := range assets.Sheet.Frames {
 		textures := make([]uint32, len(frames))
 		for i, f := range frames {
@@ -546,13 +615,32 @@ func newSheet(assets *charsprite.Assets) *sheet {
 	return sh
 }
 
+// actIndex turns a logical action into the ACT index this sheet is keyed by,
+// or -1 when the family has no animation for it.
+func (sh *sheet) actIndex(logical int) int {
+	if sh == nil || logical < 0 || logical >= charsprite.LogicalActions {
+		return -1
+	}
+
+	return sh.actions[logical]
+}
+
 // frameCount is nil-safe so callers can ask about an appearance that has not
 // been baked, which parks the animation on frame 0 rather than failing.
+//
+// The action is logical: what the game wants played, not where this family
+// keeps it.
 func (sh *sheet) frameCount(action, direction int) int {
 	if sh == nil {
 		return 0
 	}
-	return len(sh.frames[action*charsprite.Directions+direction])
+
+	index := sh.actIndex(action)
+	if index < 0 {
+		return 0
+	}
+
+	return len(sh.frames[index*charsprite.Directions+direction])
 }
 
 // cost reports how many frames the sheet holds and roughly how much GPU memory
@@ -626,4 +714,52 @@ func (r *Renderer) Destroy() {
 		gl.DeleteProgram(r.program)
 		r.program = 0
 	}
+}
+
+// PortraitFrame is one frame of the player's own sheet, for drawing flat in
+// the interface — the equipment window shows the character it is dressing.
+//
+// What comes back is the texture, the size of the character's own art, and
+// where that art sits inside the texture. The frame is padded to the widest
+// and tallest the sheet holds — a swing with a spear in it — so drawing the
+// whole of it is drawing a character a third the size of mostly nothing.
+//
+// Zero texture means the sheet is not baked yet, which is the ordinary state
+// for the first frames after entering a map.
+func (r *Renderer) PortraitFrame(action, direction, frame int) (
+	texture uint32, w, h float32, u0, v0, u1, v1 float32,
+) {
+	if r == nil || r.player == nil {
+		return 0, 0, 0, 0, 0, 0, 0
+	}
+
+	index := r.player.actIndex(action)
+	if index < 0 {
+		return 0, 0, 0, 0, 0, 0, 0
+	}
+
+	frames := r.player.frames[index*charsprite.Directions+direction]
+	if len(frames) == 0 {
+		frames = r.player.frames[index*charsprite.Directions]
+	}
+	if len(frames) == 0 {
+		return 0, 0, 0, 0, 0, 0, 0
+	}
+
+	sheetW, sheetH := float32(r.player.width), float32(r.player.height)
+	if sheetW <= 0 || sheetH <= 0 {
+		return 0, 0, 0, 0, 0, 0, 0
+	}
+
+	// The sheet did not record where the art sits — an older bake, or a
+	// family with no portrait frame — so the whole frame is the best answer.
+	box := r.player.portrait
+	if box.w <= 0 || box.h <= 0 {
+		return frames[frame%len(frames)], sheetW, sheetH, 0, 0, 1, 1
+	}
+
+	return frames[frame%len(frames)],
+		float32(box.w), float32(box.h),
+		float32(box.x) / sheetW, float32(box.y) / sheetH,
+		float32(box.x+box.w) / sheetW, float32(box.y+box.h) / sheetH
 }

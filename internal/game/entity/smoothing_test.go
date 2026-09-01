@@ -105,7 +105,7 @@ func TestWalkAnimationSurvivesGapBetweenSteps(t *testing.T) {
 	// Walk the step out.
 	for i := 0; i < 20 && c.IsWalkingPath(); i++ {
 		c.Update(16)
-		c.AdvanceAnimation(16, idleFrames, walkFrames)
+		c.AdvanceAnimation(16, idleFrames, walkFrames, 0, 0, 0)
 	}
 	if c.CurrentAction != ActionWalk {
 		t.Fatalf("expected to be walking, action = %d", c.CurrentAction)
@@ -113,8 +113,8 @@ func TestWalkAnimationSurvivesGapBetweenSteps(t *testing.T) {
 	frameBeforeGap := c.CurrentFrame
 
 	// Two frames of nothing while the next acknowledgement is in flight.
-	c.AdvanceAnimation(16, idleFrames, walkFrames)
-	c.AdvanceAnimation(16, idleFrames, walkFrames)
+	c.AdvanceAnimation(16, idleFrames, walkFrames, 0, 0, 0)
+	c.AdvanceAnimation(16, idleFrames, walkFrames, 0, 0, 0)
 
 	if c.CurrentAction != ActionWalk {
 		t.Error("walk cycle dropped to idle during the gap between steps")
@@ -122,7 +122,7 @@ func TestWalkAnimationSurvivesGapBetweenSteps(t *testing.T) {
 
 	// Next step arrives; the cycle should carry on, not restart.
 	c.FollowPath([][2]int{{11, 10}, {12, 10}})
-	c.AdvanceAnimation(16, idleFrames, walkFrames)
+	c.AdvanceAnimation(16, idleFrames, walkFrames, 0, 0, 0)
 
 	if c.CurrentFrame == 0 && frameBeforeGap != 0 {
 		t.Error("walk animation restarted at frame 0 on the next step")
@@ -138,12 +138,12 @@ func TestWalkAnimationSettlesToIdle(t *testing.T) {
 	c.FollowPath([][2]int{{10, 10}, {11, 10}})
 	for i := 0; i < 20 && c.IsWalkingPath(); i++ {
 		c.Update(16)
-		c.AdvanceAnimation(16, idleFrames, walkFrames)
+		c.AdvanceAnimation(16, idleFrames, walkFrames, 0, 0, 0)
 	}
 
 	// Stand still for comfortably longer than the hold.
 	for elapsed := float32(0); elapsed < WalkHoldMs*3; elapsed += 16 {
-		c.AdvanceAnimation(16, idleFrames, walkFrames)
+		c.AdvanceAnimation(16, idleFrames, walkFrames, 0, 0, 0)
 	}
 
 	if c.CurrentAction != ActionIdle {
