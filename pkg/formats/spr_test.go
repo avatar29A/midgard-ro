@@ -3,6 +3,7 @@ package formats
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -303,4 +304,51 @@ func buildSPRWithInvalidImage() []byte {
 	buf.Write(make([]byte, 1024))
 
 	return buf.Bytes()
+}
+
+// palBytes builds a 1024-byte palette where entry i is (i, i+1, i+2, 255).
+func palBytes() []byte {
+	data := make([]byte, PaletteSize)
+	for i := 0; i < 256; i++ {
+		data[i*4] = byte(i)
+		data[i*4+1] = byte(i + 1)
+		data[i*4+2] = byte(i + 2)
+		data[i*4+3] = 255
+	}
+
+	return data
+}
+
+// TestParsePAL: a .pal is the same 256-entry table an SPR carries at its end,
+// which is the whole reason a recolor can be a palette swap.
+func TestParsePAL(t *testing.T) {
+	pal, err := ParsePAL(palBytes())
+	if err != nil {
+		t.Fatalf("ParsePAL: %v", err)
+	}
+
+	for _, i := range []int{0, 1, 128, 255} {
+		want := SPRColor{R: byte(i), G: byte(i + 1), B: byte(i + 2), A: 255}
+		if pal.Colors[i] != want {
+			t.Errorf("color %d = %+v, want %+v", i, pal.Colors[i], want)
+		}
+	}
+}
+
+// TestParsePALRefusesShortData: a truncated palette would read past its own
+// table and color a sprite with whatever followed it.
+func TestParsePALRefusesShortData(t *testing.T) {
+	if _, err := ParsePAL(make([]byte, PaletteSize-1)); !errors.Is(err, ErrBadPalette) {
+		t.Errorf("err = %v, want ErrBadPalette", err)
+	}
+	if _, err := ParsePAL(nil); !errors.Is(err, ErrBadPalette) {
+		t.Errorf("err = %v, want ErrBadPalette", err)
+	}
+}
+
+// TestParsePALIgnoresTrailingBytes: some files carry padding after the table.
+func TestParsePALIgnoresTrailingBytes(t *testing.T) {
+	if _, err := ParsePAL(append(palBytes(), 1, 2, 3)); err != nil {
+		t.Errorf("ParsePAL with padding: %v", err)
+	}
 }

@@ -109,6 +109,20 @@ type Manager struct {
 	// anything past them can be checked unattended. Set from --autologin.
 	AutoPlay bool
 
+	// StopAtCharSelect holds the character select screen instead of entering
+	// the game, so that screen and character creation can be looked at. Only
+	// meaningful together with AutoPlay, which is what gets us past login.
+	StopAtCharSelect bool
+
+	// StopAtCharCreate opens character creation on the first free slot and
+	// holds there, so that screen can be captured without a person to
+	// double-click one.
+	StopAtCharCreate bool
+
+	// MakeCharName is a name to create unattended once the creation screen
+	// is up. Empty means wait for a person.
+	MakeCharName string
+
 	// BGM is nil when audio is unavailable, which the PlayBGM helpers below
 	// tolerate so states never have to check.
 	BGM BGMController

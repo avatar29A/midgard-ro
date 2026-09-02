@@ -280,6 +280,9 @@ func (g *Game) initGameState(cfg *config.Config) error {
 	g.initAudio(cfg)
 
 	g.stateManager.AutoPlay = config.AutoLogin()
+	g.stateManager.StopAtCharSelect = config.StopAtCharSelect()
+	g.stateManager.StopAtCharCreate = config.StopAtCharCreate()
+	g.stateManager.MakeCharName = config.MakeCharName()
 	loginState := states.NewLoginState(loginCfg, g.client, g.stateManager)
 	g.stateManager.Change(loginState)
 
@@ -880,17 +883,48 @@ func (g *Game) renderUI() {
 
 	case *states.CharSelectState:
 		g.uiBackend.RenderCharSelectUI(ui.CharSelectUIState{
-			Characters:    state.GetCharacters(),
-			SelectedIndex: -1, // Managed by the backend
-			StatusMessage: state.GetStatusMessage(),
-			ErrorMessage:  state.GetErrorMessage(),
-			IsLoading:     state.IsLoadingState(),
-			IsReady:       state.IsCharListReady(),
+			Characters:     state.GetCharacters(),
+			SelectedIndex:  -1, // Managed by the backend
+			StatusMessage:  state.GetStatusMessage(),
+			ErrorMessage:   state.GetErrorMessage(),
+			IsLoading:      state.IsLoadingState(),
+			IsReady:        state.IsCharListReady(),
+			CreatableSlots: state.CreatableSlotCount(),
 			OnSelect: func(index int) {
 				g.pendingAction = func() {
 					_ = state.SelectCharacter(index)
 				}
 			},
+			OnCreateSlot: func(slot int) {
+				g.pendingAction = func() {
+					state.RequestCreate(slot)
+				}
+			},
+		}, viewportWidth, viewportHeight)
+
+	case *states.CharCreateState:
+		g.uiBackend.RenderCharCreateUI(ui.CharCreateUIState{
+			Slot:          state.Slot(),
+			Sex:           state.Sex,
+			Name:          state.Name,
+			Job:           state.Job,
+			HairStyle:     state.HairStyle,
+			HairColor:     state.HairColor,
+			Facing:        state.Facing,
+			StatusMessage: state.GetStatusMessage(),
+			ErrorMessage:  state.GetErrorMessage(),
+			OnCancel: func() {
+				g.pendingAction = func() {
+					state.Cancel()
+				}
+			},
+			OnSetSex:   func(sex uint8) { state.SetSex(sex) },
+			OnSetJob:   func(job int) { state.SetJob(job) },
+			OnSetHair:  func(style int) { state.SetHairStyle(style) },
+			OnSetColor: func(color int) { state.SetHairColor(color) },
+			OnSetName:  func(name string) { state.SetName(name) },
+			OnCreate:   func() { g.pendingAction = func() { state.Create() } },
+			OnTurn:     func(delta int) { state.Turn(delta) },
 		}, viewportWidth, viewportHeight)
 
 	case *states.LoadingState:

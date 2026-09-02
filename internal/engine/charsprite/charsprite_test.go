@@ -622,3 +622,127 @@ func lowestOpaqueRow(pixels []byte, w, h int) int {
 
 	return -1
 }
+
+// TestDoramUsesItsOwnSpriteTree: Doram characters are a second race with the
+// same tree beneath it. Job is the only thing that says which one to read —
+// there is no race field anywhere — so a wrong answer here silently draws a
+// human for a Doram, or fails to find a sprite at all.
+func TestDoramUsesItsOwnSpriteTree(t *testing.T) {
+	tests := []struct {
+		name     string
+		spec     Spec
+		wantBody string
+		wantHead string
+	}{
+		{
+			name:     "a male Doram",
+			spec:     Spec{Job: JobSummoner, HairStyle: 1},
+			wantBody: `data\sprite\도람족\몸통\남\summoner_남.spr`,
+			wantHead: `data\sprite\도람족\머리통\남\1_남.spr`,
+		},
+		{
+			name:     "a female Doram",
+			spec:     Spec{Job: JobSummoner, Female: true, HairStyle: 2},
+			wantBody: `data\sprite\도람족\몸통\여\summoner_여.spr`,
+			wantHead: `data\sprite\도람족\머리통\여\2_여.spr`,
+		},
+		{
+			name:     "a male Novice is still human",
+			spec:     Spec{Job: 0, HairStyle: 1},
+			wantBody: `data\sprite\인간족\몸통\남\초보자_남.spr`,
+			wantHead: `data\sprite\인간족\머리통\남\1_남.spr`,
+		},
+		{
+			name:     "a female Swordman is still human",
+			spec:     Spec{Job: 1, Female: true, HairStyle: 3},
+			wantBody: `data\sprite\인간족\몸통\여\검사_여.spr`,
+			wantHead: `data\sprite\인간족\머리통\여\3_여.spr`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bodySPR, _ := tt.spec.BodyPaths()
+			if bodySPR != tt.wantBody {
+				t.Errorf("body = %q, want %q", bodySPR, tt.wantBody)
+			}
+
+			headSPR, _ := tt.spec.HeadPaths()
+			if headSPR != tt.wantHead {
+				t.Errorf("head = %q, want %q", headSPR, tt.wantHead)
+			}
+		})
+	}
+}
+
+// TestOnlySummonerIsDoram: every other job reads from the human tree, and a
+// job we have no name for must not silently become a Doram.
+func TestOnlySummonerIsDoram(t *testing.T) {
+	for _, job := range []int{0, 1, 2, 23, 25, 4217, 4219} {
+		if (Spec{Job: job}).isDoram() {
+			t.Errorf("job %d reads as Doram", job)
+		}
+	}
+
+	if !(Spec{Job: JobSummoner}).isDoram() {
+		t.Errorf("job %d does not read as Doram", JobSummoner)
+	}
+}
+
+// TestHairPalettePath: hair is recolored by swapping the palette, and the two
+// races are not filed the same way — humans sit directly under the hair
+// folder, Doram get a race folder of their own. That asymmetry is the
+// archive's and is easy to "tidy" into a bug.
+func TestHairPalettePath(t *testing.T) {
+	tests := []struct {
+		name string
+		spec Spec
+		want string
+	}{
+		{
+			name: "human male, first color",
+			spec: Spec{Job: JobNovice, HairStyle: 1, HairColor: 0},
+			want: `data\palette\머리\머리1_남_0.pal`,
+		},
+		{
+			name: "human female, last color",
+			spec: Spec{Job: JobNovice, Female: true, HairStyle: 12, HairColor: 8},
+			want: `data\palette\머리\머리12_여_8.pal`,
+		},
+		{
+			name: "doram male gets its own folder",
+			spec: Spec{Job: JobSummoner, HairStyle: 3, HairColor: 5},
+			want: `data\palette\도람족\머리\머리3_남_5.pal`,
+		},
+		{
+			name: "doram female",
+			spec: Spec{Job: JobSummoner, Female: true, HairStyle: 6, HairColor: 2},
+			want: `data\palette\도람족\머리\머리6_여_2.pal`,
+		},
+		{
+			// Style 0 is not a file; every sex has a style 1.
+			name: "style zero falls back to one",
+			spec: Spec{Job: JobNovice, HairStyle: 0, HairColor: 3},
+			want: `data\palette\머리\머리1_남_3.pal`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.spec.HairPalettePath(); got != tt.want {
+				t.Errorf("path = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestHairPalettePathOnlyForPlayers: monsters and NPCs are single sprites with
+// no head to recolor, so asking for one would build a path that cannot exist.
+func TestHairPalettePathOnlyForPlayers(t *testing.T) {
+	for _, kind := range []Kind{KindMonster, KindNPC} {
+		spec := Spec{Kind: kind, Job: 1002, HairStyle: 1}
+		if got := spec.HairPalettePath(); got != "" {
+			t.Errorf("kind %d gave %q, want empty", kind, got)
+		}
+	}
+}

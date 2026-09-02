@@ -71,6 +71,11 @@ func main() {
 	if slots := config.EquipSlots(); len(slots) > 0 {
 		g.SetEquipSlots(slots)
 	}
+	if spec := config.StopAtSpec(); spec != "" &&
+		!config.StopAtCharSelect() && !config.StopAtCharCreate() {
+		logger.Warn("--stop-at not understood, want charselect or charcreate",
+			zap.String("value", spec))
+	}
 
 	// Run the game loop
 	if err := g.Run(); err != nil {
