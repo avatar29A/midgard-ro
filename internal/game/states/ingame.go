@@ -123,6 +123,14 @@ type InGameState struct {
 	pendingLevelUp    bool
 	pendingJobLevelUp bool
 
+	// unknownJobs are unit job ids the sprite table has no name for, kept so
+	// each is complained about once rather than on every sighting.
+	unknownJobs map[int]bool
+
+	// pendingBlows are swings whose outcome is still traveling: the figure,
+	// the flinch and the death wait for the frame the blade lands on.
+	pendingBlows []pendingBlow
+
 	targetID    uint32
 	attacking   bool
 	repathMs    float32
@@ -387,6 +395,7 @@ func (s *InGameState) beginMapLoad(mapName string, at spawnPoint, origin string)
 	s.dropDialog()
 	s.cancelWalk()
 	s.entityManager.Clear()
+	s.forgetPendingBlows()
 
 	trace.Emit(trace.Map, "change",
 		zap.String("from", from), zap.String("to", mapName),
@@ -736,6 +745,7 @@ func (s *InGameState) Update(dt float64) error {
 
 		s.updatePendingPickup(deltaMs, walking)
 		s.updateCombat(deltaMs, walking)
+		s.advancePendingBlows(deltaMs)
 		s.updateDamageNumbers(deltaMs)
 		s.updateEffects(deltaMs)
 		s.updateCelebrations(deltaMs)
@@ -1559,19 +1569,27 @@ func (s *InGameState) handleEntityVanish(data []byte) error {
 			s.player.Die()
 			s.forgetAttack()
 			s.forgetPendingPickup()
+			s.forgetPendingBlows()
 		}
 
 		return nil
 	}
 
-	// A unit that died falls over where it stands, and is taken off the map
-	// when the fade finishes rather than blinking out mid-blow. Every other
-	// reason is a unit leaving our view, which has nothing to watch.
+	// A death that answers a blow still on its way waits for it. The server
+	// decides the moment it decides, which is while the sword is mid-swing,
+	// and a monster that falls over then died before it was hit.
+	//
+	// Only death waits. Every other reason is a unit leaving our view, which
+	// has nothing to do with any blow and nothing to watch.
+	if reason == packets.VanishDied && s.killDeferred(aid) {
+		trace.Emit(trace.Net, "vanish-held",
+			zap.Uint32("aid", aid), zap.Uint8("reason", reason))
+
+		return nil
+	}
+
 	if reason == packets.VanishDied {
-		if e := s.entityManager.Get(aid); e != nil && e.Body != nil {
-			e.IsDead = true
-			e.Body.Die()
-		}
+		s.killUnit(aid)
 	}
 
 	removeUnit(s.entityManager, aid)
@@ -1580,6 +1598,52 @@ func (s *InGameState) handleEntityVanish(data []byte) error {
 		zap.Uint8("reason", reason),
 		zap.Int("units", s.entityManager.Count()))
 	return nil
+}
+
+// killUnit lays a unit down where it stands.
+//
+// It is taken off the map when the fade finishes rather than blinking out
+// mid-blow, which is what removeUnit begins.
+func (s *InGameState) killUnit(aid uint32) {
+	if s.entityManager == nil {
+		return
+	}
+
+	if e := s.entityManager.Get(aid); e != nil && e.Body != nil {
+		e.IsDead = true
+		e.Body.Die()
+	}
+
+	removeUnit(s.entityManager, aid)
+}
+
+// warnIfUndrawable says so when a unit arrives that nothing can draw.
+//
+// A monster whose id is not in the sprite table is not merely undrawn: it is
+// invisible and unclickable, and it still fights. Somebody summoning one has
+// no way to tell that from a bug in the renderer, so the id is named — once
+// each, since the server repeats a unit's report whenever it comes back into
+// view and a warning per sighting would bury the map.
+func (s *InGameState) warnIfUndrawable(e *entity.Entity) {
+	if e.Type != entity.TypeMonster && e.Type != entity.TypeNPC {
+		return
+	}
+
+	if _, known := charsprite.SpriteName(e.Job); known {
+		return
+	}
+
+	if s.unknownJobs == nil {
+		s.unknownJobs = map[int]bool{}
+	}
+	if s.unknownJobs[e.Job] {
+		return
+	}
+	s.unknownJobs[e.Job] = true
+
+	logger.Warn("no sprite for this unit, so it is invisible and cannot be clicked",
+		zap.Int("job", e.Job), zap.String("name", e.Name),
+		zap.String("fix", "regenerate spritenames.go from the client's npcidentity.lub"))
 }
 
 // applyUnit folds one decoded unit report into the entity registry.
@@ -1599,6 +1663,8 @@ func (s *InGameState) applyUnit(u *packets.Entity, kind string) error {
 	if e == nil {
 		return nil
 	}
+
+	s.warnIfUndrawable(e)
 
 	// sheets says whether the appearance actually baked, which is what
 	// separates "the packet never arrived" from "it arrived and nothing was
@@ -1964,6 +2030,7 @@ func (s *InGameState) localTeleport(at spawnPoint) {
 	s.dropDialog()
 	s.cancelWalk()
 	s.entityManager.Clear()
+	s.forgetPendingBlows()
 	s.placePlayer(at)
 
 	trace.Emit(trace.Map, "change",

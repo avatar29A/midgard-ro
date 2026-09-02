@@ -33,8 +33,11 @@ func TestBodyPaths(t *testing.T) {
 		},
 		{
 			// An id we don't have a name for must still resolve, as a novice.
+			// Past the end of rAthena's own job enum, so filling the table in
+			// cannot quietly turn this case into a real job — which is what
+			// happened to the Kagerou id that used to stand here.
 			name:    "unknown job falls back to novice",
-			spec:    Spec{Job: 4211},
+			spec:    Spec{Job: 60000},
 			wantSPR: `data\sprite\인간족\몸통\남\초보자_남.spr`,
 		},
 	}

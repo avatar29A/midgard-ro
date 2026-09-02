@@ -30,6 +30,7 @@ var (
 	flagMouseAt    = flag.String("mouse-at", "", "Once in game, put the pointer at this window position, e.g. 640,360 (QA aid)")
 	flagOpenWindow = flag.String("open-window", "", "Once in game, open these HUD windows, e.g. equip,item (QA aid)")
 	flagEquip      = flag.String("equip", "", "Once in game, wear the items in these inventory slots, e.g. 7,8 (QA aid)")
+	flagAttack     = flag.Bool("attack-nearest", false, "Once in game, attack the nearest monster (QA aid)")
 
 	flagSay sayLines
 )
@@ -86,6 +87,16 @@ func OpenWindows() []string {
 	}
 
 	return names
+}
+
+// AttackNearest reports whether --attack-nearest asked for a fight.
+//
+// Combat is the one thing the other aids cannot reach: it starts with a click
+// on a monster, and an unattended run has no hand to click with. Without this
+// nothing about a blow — its timing, its animation, what happens when the
+// target dies — can be watched without a person sitting there.
+func AttackNearest() bool {
+	return *flagAttack
 }
 
 // EquipSlots returns the inventory slots --equip asked to be worn.

@@ -245,3 +245,96 @@ func TestSittingDoesNotBlockAOneShot(t *testing.T) {
 		t.Errorf("action is %d, want the flinch", c.CurrentAction)
 	}
 }
+
+// TestPlayOnceForFillsTheWholeDuration: a swing has to be over before the next
+// one starts, so it is given a length rather than a rate — however many frames
+// the sprite turns out to have.
+func TestPlayOnceForFillsTheWholeDuration(t *testing.T) {
+	const (
+		frames   = 9
+		duration = 320.0
+		step     = duration / frames
+	)
+
+	c := NewCharacter(0, 0, 0)
+	c.PlayOnceFor(ActionAttack, duration)
+
+	// Halfway through the last frame, the swing is still going and is on it.
+	c.AdvanceAnimation(duration-step/2, 1, 1, frames, 0, 0)
+	if !c.playingOnce {
+		t.Fatalf("the swing ended early, on frame %d", c.CurrentFrame)
+	}
+	if c.CurrentFrame != frames-1 {
+		t.Errorf("frame %d with one to go, want %d", c.CurrentFrame, frames-1)
+	}
+
+	// And it is over by the time the duration is up.
+	c.AdvanceAnimation(step, 1, 1, frames, 0, 0)
+	if c.playingOnce {
+		t.Errorf("the swing is still going past its %vms", duration)
+	}
+}
+
+// TestPlayOnceForTracksAttackSpeed: twice the attack speed is half the swing,
+// which is the whole reason a swing is given a length.
+func TestPlayOnceForTracksAttackSpeed(t *testing.T) {
+	const frames = 9
+
+	elapsed := func(duration float32) float32 {
+		c := NewCharacter(0, 0, 0)
+		c.PlayOnceFor(ActionAttack, duration)
+
+		total := float32(0)
+		for c.playingOnce && total < 5000 {
+			c.AdvanceAnimation(1, 1, 1, frames, 0, 0)
+			total++
+		}
+
+		return total
+	}
+
+	slow, fast := elapsed(432), elapsed(216)
+
+	if slow <= fast {
+		t.Fatalf("the slow swing took %v against the fast one's %v", slow, fast)
+	}
+	if diff := slow - fast*2; diff > frames || diff < -frames {
+		t.Errorf("halving the motion gave %v against %v, want about half", fast, slow)
+	}
+}
+
+// TestASwingIsNotCancelledByMovement: a character reaches its target and
+// swings in the same breath, and the client is still finishing the last step
+// when the server's answer arrives. Canceling on movement threw away most of
+// the swings made while closing on something.
+func TestASwingIsNotCancelledByMovement(t *testing.T) {
+	c := NewCharacter(0, 0, 0)
+	c.PlayAttackFor(320)
+	c.IsMoving = true
+
+	c.AdvanceAnimation(16, 1, 8, 9, 0, 0)
+
+	if !c.playingOnce {
+		t.Error("the swing was canceled by the character still moving")
+	}
+	if c.CurrentAction != ActionAttack {
+		t.Errorf("action is %d, want the attack", c.CurrentAction)
+	}
+}
+
+// TestAFlinchIsStillCancelledByMovement: the reason that rule exists.
+// Walking away from a blow should look like walking, not like still flinching.
+func TestAFlinchIsStillCancelledByMovement(t *testing.T) {
+	c := NewCharacter(0, 0, 0)
+	c.PlayHurt()
+	c.IsMoving = true
+
+	c.AdvanceAnimation(16, 1, 8, 3, 0, 0)
+
+	if c.playingOnce {
+		t.Error("the flinch outlasted the character walking away from it")
+	}
+	if c.CurrentAction != ActionWalk {
+		t.Errorf("action is %d, want the walk", c.CurrentAction)
+	}
+}

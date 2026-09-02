@@ -102,8 +102,18 @@ func (c *Character) AdvanceAnimation(deltaMs float32, idleFrames, walkFrames, on
 		c.sinceWalkMs = 0
 
 		// Moving cancels a one-shot: walking away from a blow should look
-		// like walking, not like still swinging.
-		c.playingOnce = false
+		// like walking, not like still flinching from it.
+		//
+		// Not a swing. A character reaches its target and swings in the same
+		// breath, and the client is still finishing the last step when the
+		// server's answer comes back — so a swing canceled by movement is
+		// most of the swings thrown while closing on something, which is a
+		// monster dying to a blow that was never drawn. The server does not
+		// let a character walk and attack at once, so the walk is over in any
+		// case; it is only the client that has not caught up.
+		if c.OnceAction != ActionAttack {
+			c.playingOnce = false
+		}
 	} else {
 		c.sinceWalkMs += deltaMs
 	}
@@ -178,6 +188,32 @@ func (c *Character) PlayOnceAt(action int, speed float32) {
 	c.playingOnce = true
 	c.OnceAction = action
 	c.OnceSpeed = speed
+	c.OnceDurationMs = 0
+	c.CurrentAction = action
+	c.CurrentFrame = 0
+	c.FrameTime = 0
+}
+
+// PlayOnceFor starts a one-shot that takes the whole of a given time, however
+// many frames it turns out to have.
+//
+// For an animation whose length is decided by something other than the sprite.
+// A swing is: it belongs to an attack, it has to be over before the next one
+// begins, and how often that is is the character's attack speed. Drawn at the
+// sprite's own rate a fast attacker starts its next swing three frames into
+// the last, so no swing ever finishes and none of them look like the speed
+// they are being swung at.
+func (c *Character) PlayOnceFor(action int, durationMs float32) {
+	if durationMs <= 0 {
+		c.PlayOnce(action)
+
+		return
+	}
+
+	c.playingOnce = true
+	c.OnceAction = action
+	c.OnceSpeed = 1
+	c.OnceDurationMs = durationMs
 	c.CurrentAction = action
 	c.CurrentFrame = 0
 	c.FrameTime = 0
@@ -189,8 +225,11 @@ func (c *Character) PlayPickup() { c.PlayOnceAt(ActionPickup, PickupSlowdown) }
 // PlayAttack starts a swing.
 func (c *Character) PlayAttack() { c.PlayOnce(ActionAttack) }
 
-// PlayAttackAt starts a swing scaled to the attacker's attack speed.
-func (c *Character) PlayAttackAt(speed float32) { c.PlayOnceAt(ActionAttack, speed) }
+// PlayAttackFor starts a swing that takes as long as the attack motion it
+// belongs to.
+func (c *Character) PlayAttackFor(durationMs float32) {
+	c.PlayOnceFor(ActionAttack, durationMs)
+}
 
 // PlayHurt starts a flinch.
 func (c *Character) PlayHurt() { c.PlayOnce(ActionHurt) }
@@ -271,8 +310,12 @@ func (c *Character) advanceOnce(deltaMs float32, frames int) bool {
 
 	c.CurrentAction = c.OnceAction
 
+	// A one-shot given a whole duration divides it between its frames; one
+	// given a rate runs at the sprite's, scaled.
 	interval := c.frameIntervalMs(c.OnceAction)
-	if c.OnceSpeed > 0 {
+	if c.OnceDurationMs > 0 {
+		interval = c.OnceDurationMs / float32(frames)
+	} else if c.OnceSpeed > 0 {
 		interval *= c.OnceSpeed
 	}
 	c.FrameTime += deltaMs

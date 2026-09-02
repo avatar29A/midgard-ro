@@ -151,6 +151,48 @@ func (s *InGameState) sendAttack(e *entity.Entity) {
 	}
 }
 
+// AttackNearest picks a fight with the closest monster in view, and reports
+// whether it found one.
+//
+// For unattended runs. Combat otherwise begins with a click on a monster, and
+// nothing about a blow can be watched without a hand to click with.
+func (s *InGameState) AttackNearest() bool {
+	if s.entityManager == nil || s.player == nil {
+		return false
+	}
+
+	var (
+		nearest *entity.Entity
+		best    float32
+	)
+
+	px, _, pz := s.player.RenderPosition()
+
+	for _, e := range s.entityManager.All() {
+		if !s.isAttackable(e) || e.Body == nil {
+			continue
+		}
+
+		x, _, z := e.Body.RenderPosition()
+		dx, dz := x-px, z-pz
+
+		if d := dx*dx + dz*dz; nearest == nil || d < best {
+			nearest, best = e, d
+		}
+	}
+
+	if nearest == nil {
+		return false
+	}
+
+	trace.Emit(trace.HUD, "attack-nearest",
+		zap.Uint32("aid", nearest.ID), zap.String("name", nearest.Name))
+
+	s.AttackTarget(nearest)
+
+	return true
+}
+
 // isAttackable reports whether a unit can be hit at all. Monsters only, for
 // now: hitting other players needs the map's own rules about who may, which
 // is a different feature.
@@ -256,10 +298,18 @@ func (s *InGameState) handleDamage(data []byte) error {
 		return nil
 	}
 
+	// The two numbers to watch: how long the swing takes, which is the attack
+	// motion, and how far into it the blow lands. A zero delay means the swing
+	// and its outcome went out together, which is the fault this replaced.
+	swing := blow.SwingDurationMs()
+	delay := s.hitDelayMs(blow.SourceID, swing)
+
 	trace.Emit(trace.HUD, "damage",
 		zap.Uint32("from", blow.SourceID), zap.Uint32("to", blow.TargetID),
 		zap.Int("amount", blow.Amount), zap.Int("hits", blow.Hits),
-		zap.Bool("miss", blow.Missed()), zap.Bool("critical", blow.Critical()))
+		zap.Bool("miss", blow.Missed()), zap.Bool("critical", blow.Critical()),
+		zap.Int("srcSpeed", blow.SourceSpeed), zap.Float32("swingMs", swing),
+		zap.Float32("hitDelayMs", delay))
 
 	// Both sides turn to face each other. The server says nothing about which
 	// way anyone is looking when a blow lands, so without this a monster that
@@ -267,16 +317,176 @@ func (s *InGameState) handleDamage(data []byte) error {
 	// whose target circled it would go on swinging at where it used to be.
 	s.faceTowards(blow.SourceID, blow.TargetID)
 
-	// The swing plays whether or not it connected — a miss is still a swing —
-	// while the flinch is only for a blow that landed.
+	// The swing starts now — it is the answer to a blow being thrown, and a
+	// swing that waits reads as a character that hesitated.
+	//
+	// What the swing does waits for the swing to get there. An animation is
+	// not instantaneous and its outcome does not belong at its start: a
+	// Swordman's sword takes nine frames and lands on the sixth, so a figure,
+	// a flinch and a death shown at once resolve the exchange half a second
+	// before the blade arrives.
+	s.playAttackAnimation(blow.SourceID, swing)
+
+	if delay > 0 {
+		s.pendingBlows = append(s.pendingBlows, pendingBlow{blow: blow, remainingMs: delay})
+
+		return nil
+	}
+
+	s.landBlow(pendingBlow{blow: blow})
+
+	return nil
+}
+
+// pendingBlow is what a swing does, waiting for the swing to reach the frame
+// where it does it.
+type pendingBlow struct {
+	blow packets.Damage
+
+	// remainingMs counts down to the hit frame.
+	remainingMs float32
+
+	// kills marks a blow the target did not survive. The server says so in a
+	// packet of its own that arrives while the sword is still traveling, and
+	// a unit that falls over then is a unit that died before it was hit.
+	kills bool
+}
+
+// hitDelayMs is how far into a swing of the given length the blow lands.
+//
+// The attacker's own sprite says where in the animation that is; the share of
+// the whole it represents is what survives the swing being sped up or slowed
+// down. A sheet that has not been baked answers zero, which lands the blow at
+// once — the right answer when there is nothing on screen to wait for.
+func (s *InGameState) hitDelayMs(attacker uint32, durationMs float32) float32 {
+	if s.playerRender == nil || attacker == 0 || durationMs <= 0 {
+		return 0
+	}
+
+	var frame, frames int
+
+	if attacker == s.selfAID() {
+		if s.player == nil {
+			return 0
+		}
+
+		frame = s.playerRender.HitFrame(entity.ActionAttack)
+		frames = s.playerRender.FrameCount(entity.ActionAttack, s.player.Direction)
+	} else {
+		if s.entityManager == nil {
+			return 0
+		}
+
+		e := s.entityManager.Get(attacker)
+		if e == nil || e.Body == nil || !unitIsDrawable(e) {
+			return 0
+		}
+
+		spec := unitSpec(e)
+		frame = s.playerRender.UnitHitFrame(spec, entity.ActionAttack)
+		frames = s.playerRender.UnitFrameCount(spec, entity.ActionAttack, e.Body.Direction)
+	}
+
+	if frames <= 0 || frame <= 0 {
+		return 0
+	}
+
+	return durationMs * float32(frame) / float32(frames)
+}
+
+// hitSound is the sound the attacker's swing plays where it lands.
+func (s *InGameState) hitSound(attacker uint32) string {
+	if s.playerRender == nil || attacker == 0 {
+		return ""
+	}
+
+	if attacker == s.selfAID() {
+		return s.playerRender.HitSound(entity.ActionAttack)
+	}
+
+	if s.entityManager == nil {
+		return ""
+	}
+
+	e := s.entityManager.Get(attacker)
+	if e == nil || !unitIsDrawable(e) {
+		return ""
+	}
+
+	return s.playerRender.UnitHitSound(unitSpec(e), entity.ActionAttack)
+}
+
+// landBlow applies what a swing did, at the moment it did it.
+func (s *InGameState) landBlow(p pendingBlow) {
+	blow := p.blow
+
 	s.addDamageNumber(blow)
-	s.playAttackAnimation(blow.SourceID, blow.AnimationSpeed())
+
+	// The sprite names the sound on the frame the blow lands, which is the
+	// same frame as everything else here.
+	if sound := s.hitSound(blow.SourceID); sound != "" {
+		s.soundRequest = worldSoundDir + sound
+	}
+
 	if !blow.Missed() {
 		s.faceTowards(blow.TargetID, blow.SourceID)
 		s.playAnimation(blow.TargetID, entity.ActionHurt)
 	}
 
-	return nil
+	if p.kills {
+		s.killUnit(blow.TargetID)
+	}
+}
+
+// advancePendingBlows lands every swing that has reached its hit frame.
+func (s *InGameState) advancePendingBlows(deltaMs float32) {
+	if len(s.pendingBlows) == 0 {
+		return
+	}
+
+	kept := s.pendingBlows[:0]
+	for _, pending := range s.pendingBlows {
+		pending.remainingMs -= deltaMs
+		if pending.remainingMs > 0 {
+			kept = append(kept, pending)
+
+			continue
+		}
+
+		s.landBlow(pending)
+	}
+
+	s.pendingBlows = kept
+}
+
+// killDeferred marks a target's blow in flight as fatal, and reports whether
+// there was one.
+//
+// The server sends the death the moment it decides it, which is while the
+// sword that caused it is still on its way. Holding it until the blow lands
+// is what keeps a monster on its feet until it is hit.
+func (s *InGameState) killDeferred(aid uint32) bool {
+	// The last one queued, since that is the blow that killed it. Attaching
+	// the death to an earlier one would drop the target on a hit it survived
+	// and leave the fatal blow landing on a corpse.
+	for i := len(s.pendingBlows) - 1; i >= 0; i-- {
+		if s.pendingBlows[i].blow.TargetID == aid {
+			s.pendingBlows[i].kills = true
+
+			return true
+		}
+	}
+
+	return false
+}
+
+// forgetPendingBlows drops every blow in flight.
+//
+// A map change or a death takes away everything they were going to happen to,
+// and a figure floating over a monster on the last map is worse than one that
+// never appeared.
+func (s *InGameState) forgetPendingBlows() {
+	s.pendingBlows = nil
 }
 
 // playGesture plays one of the things ZC_NOTIFY_ACT carries that is not a
@@ -335,10 +545,10 @@ func (s *InGameState) Sitting() bool {
 	return s.player != nil && s.player.Sitting
 }
 
-// playAttackAnimation starts a swing, run at the attacker's own attack speed.
-func (s *InGameState) playAttackAnimation(id uint32, speed float32) {
+// playAttackAnimation starts a swing that takes as long as the attack motion.
+func (s *InGameState) playAttackAnimation(id uint32, durationMs float32) {
 	if body := s.bodyOf(id); body != nil {
-		body.PlayAttackAt(speed)
+		body.PlayAttackFor(durationMs)
 	}
 }
 

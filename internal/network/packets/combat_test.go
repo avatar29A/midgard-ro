@@ -91,31 +91,45 @@ func TestDecodeDamageShort(t *testing.T) {
 	}
 }
 
-// TestDamageAnimationSpeed follows what rAthena documents the original client
-// doing with sdelay: it carries the attacker's attack motion, and the client
-// reads it as an inverted animation speed with 432 standing for the sprite's
-// own rate.
-func TestDamageAnimationSpeed(t *testing.T) {
+// TestSwingDuration follows what rAthena documents the original client doing
+// with sdelay: it carries the attacker's attack motion, read as an inverted
+// animation speed with 432 standing for the sprite's own rate. Measured as a
+// duration against that reference, the swing simply lasts as long as the
+// attack motion.
+func TestSwingDuration(t *testing.T) {
 	tests := []struct {
 		name  string
 		speed int
 		want  float32
 	}{
-		{"the sprite's own rate", 432, 1},
-		{"twice as fast", 216, 0.5},
-		{"four times as fast", 108, 0.25},
-		{"slower than the base is ignored", 800, 1},
-		{"zero is not a speed", 0, 1},
-		{"negative is not a speed", -5, 1},
+		{"the sprite's own rate", 432, 432},
+		{"twice as fast", 216, 216},
+		{"four times as fast", 108, 108},
+		{"ASPD 168, which the server sends as 320", 320, 320},
+		{"slower than the reference is ignored", 800, 432},
+		{"zero is not a speed", 0, 432},
+		{"negative is not a speed", -5, 432},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			blow := Damage{SourceSpeed: tt.speed}
-			if got := blow.AnimationSpeed(); got != tt.want {
-				t.Errorf("AnimationSpeed() = %v, want %v", got, tt.want)
+			if got := blow.SwingDurationMs(); got != tt.want {
+				t.Errorf("SwingDurationMs() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestSwingDurationTracksAttackSpeed: the whole point of reading it this way.
+// A character that swings twice as often has to swing twice as fast, or the
+// animation falls behind the blows and never finishes one.
+func TestSwingDurationTracksAttackSpeed(t *testing.T) {
+	fast := Damage{SourceSpeed: 160}.SwingDurationMs()
+	slow := Damage{SourceSpeed: 320}.SwingDurationMs()
+
+	if fast*2 != slow {
+		t.Errorf("halving the attack motion gave %v against %v, want half", fast, slow)
 	}
 }
 
