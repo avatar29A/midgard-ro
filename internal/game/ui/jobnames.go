@@ -90,6 +90,13 @@ func getJobName(jobID uint16) string {
 		4071: "Genetic",
 		4072: "Shadow Chaser",
 		4073: "Royal Guard (Gryphon)", //nolint:misspell // "Gryphon" is the RO Royal Guard mount name
+
+		// Doram. Creatable on our server alongside Novice, so this is the one
+		// gap in the table a player can reach without the server ever having
+		// been upgraded — it showed as "Unknown (4218)" on the status panel of
+		// a character the client had just made. Named as the server names it
+		// (map_msg.conf:729).
+		4218: "Summoner",
 	}
 
 	if name, ok := jobs[jobID]; ok {
