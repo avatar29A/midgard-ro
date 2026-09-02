@@ -112,6 +112,12 @@ type Spec struct {
 	// kind. Spec is used as a cache key, so this stays a plain string.
 	Name string
 
+	// HairColor is the palette the head sprite is drawn through, and the
+	// value the server stores. RO recolors hair by swapping the palette
+	// rather than by shipping the sprite again, so this picks a .pal file
+	// rather than tinting anything.
+	HairColor int
+
 	// HeadDirection is which of the three head poses to bake (see
 	// HeadStraight). Zero value looks straight ahead.
 	HeadDirection int
@@ -443,7 +449,7 @@ func Load(load Loader, spec Spec) (*Assets, error) {
 		firstAttempt = candidates[0][0]
 	)
 	for _, candidate := range candidates {
-		bodySPR, bodyACT, err = loadPair(load, candidate[0], candidate[1])
+		bodySPR, bodyACT, err = loadPair(load, candidate[0], candidate[1], nil)
 		if err == nil {
 			bodySPRPath = candidate[0]
 			break
@@ -462,7 +468,7 @@ func Load(load Loader, spec Spec) (*Assets, error) {
 	// The head is a separate sprite anchored to the body. Losing it costs us
 	// a face, not the character, so failure here is only worth a note.
 	headSPRPath, headACTPath := spec.HeadPaths()
-	if headSPR, headACT, headErr := loadPair(load, headSPRPath, headACTPath); headErr == nil {
+	if headSPR, headACT, headErr := loadPair(load, headSPRPath, headACTPath, spec.hairPalette(load)); headErr == nil {
 		a.HeadSPR = headSPR
 		a.HeadACT = headACT
 		a.HeadPath = headSPRPath
@@ -471,7 +477,7 @@ func Load(load Loader, spec Spec) (*Assets, error) {
 	// The weapon is a third sprite, and losing it costs a knife rather than a
 	// character, so failure here is worth no more than the head's.
 	for _, candidate := range spec.WeaponPathCandidates() {
-		if weaponSPR, weaponACT, weaponErr := loadPair(load, candidate[0], candidate[1]); weaponErr == nil {
+		if weaponSPR, weaponACT, weaponErr := loadPair(load, candidate[0], candidate[1], nil); weaponErr == nil {
 			a.WeaponSPR = weaponSPR
 			a.WeaponACT = weaponACT
 			a.WeaponPath = candidate[0]
@@ -488,7 +494,7 @@ func Load(load Loader, spec Spec) (*Assets, error) {
 			continue
 		}
 
-		gearSPR, gearACT, gearErr := loadPair(load, sprPath, actPath)
+		gearSPR, gearACT, gearErr := loadPair(load, sprPath, actPath, nil)
 		if gearErr != nil {
 			// Losing a hat costs a hat, not a character, so it is passed over
 			// as quietly as a missing weapon is.
@@ -735,7 +741,36 @@ func place(r sprite.CompositeResult, left, top, maxW, maxH int) []byte {
 	return out
 }
 
-func loadPair(load Loader, sprPath, actPath string) (*formats.SPR, *formats.ACT, error) {
+// hairPalette reads the palette this look's hair is drawn through, or nil to
+// use the sprite's own.
+//
+// A missing file is not an error worth failing a character over: it means this
+// style has no such color, and the sprite's own palette is a correct answer
+// rather than a broken one.
+func (s Spec) hairPalette(load Loader) *formats.SPRPalette {
+	if load == nil || s.Kind != KindPlayer {
+		return nil
+	}
+
+	path := s.HairPalettePath()
+	if path == "" {
+		return nil
+	}
+
+	data, err := load(path)
+	if err != nil {
+		return nil
+	}
+
+	pal, err := formats.ParsePAL(data)
+	if err != nil {
+		return nil
+	}
+
+	return pal
+}
+
+func loadPair(load Loader, sprPath, actPath string, pal *formats.SPRPalette) (*formats.SPR, *formats.ACT, error) {
 	if load == nil {
 		return nil, nil, fmt.Errorf("no asset loader")
 	}
@@ -744,7 +779,7 @@ func loadPair(load Loader, sprPath, actPath string) (*formats.SPR, *formats.ACT,
 	if err != nil {
 		return nil, nil, fmt.Errorf("reading %s: %w", sprPath, err)
 	}
-	spr, err := formats.ParseSPR(sprData)
+	spr, err := formats.ParseSPRWithPalette(sprData, pal)
 	if err != nil {
 		return nil, nil, fmt.Errorf("parsing %s: %w", sprPath, err)
 	}
