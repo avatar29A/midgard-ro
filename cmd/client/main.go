@@ -68,6 +68,10 @@ func main() {
 	if windows := config.OpenWindows(); len(windows) > 0 {
 		g.SetOpenWindows(windows)
 	}
+	if config.AttackNearest() {
+		g.SetAttackNearest(true)
+	}
+
 	if slots := config.EquipSlots(); len(slots) > 0 {
 		g.SetEquipSlots(slots)
 	}

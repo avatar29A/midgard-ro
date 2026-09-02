@@ -151,6 +151,48 @@ func (s *InGameState) sendAttack(e *entity.Entity) {
 	}
 }
 
+// AttackNearest picks a fight with the closest monster in view, and reports
+// whether it found one.
+//
+// For unattended runs. Combat otherwise begins with a click on a monster, and
+// nothing about a blow can be watched without a hand to click with.
+func (s *InGameState) AttackNearest() bool {
+	if s.entityManager == nil || s.player == nil {
+		return false
+	}
+
+	var (
+		nearest *entity.Entity
+		best    float32
+	)
+
+	px, _, pz := s.player.RenderPosition()
+
+	for _, e := range s.entityManager.All() {
+		if !s.isAttackable(e) || e.Body == nil {
+			continue
+		}
+
+		x, _, z := e.Body.RenderPosition()
+		dx, dz := x-px, z-pz
+
+		if d := dx*dx + dz*dz; nearest == nil || d < best {
+			nearest, best = e, d
+		}
+	}
+
+	if nearest == nil {
+		return false
+	}
+
+	trace.Emit(trace.HUD, "attack-nearest",
+		zap.Uint32("aid", nearest.ID), zap.String("name", nearest.Name))
+
+	s.AttackTarget(nearest)
+
+	return true
+}
+
 // isAttackable reports whether a unit can be hit at all. Monsters only, for
 // now: hitting other players needs the map's own rules about who may, which
 // is a different feature.
@@ -256,17 +298,17 @@ func (s *InGameState) handleDamage(data []byte) error {
 		return nil
 	}
 
-	// The delay is the thing to watch here: it is how long the blow spends in
-	// the air, and a zero means the swing and its outcome went out together —
-	// which is the fault this replaced.
-	speed := blow.AnimationSpeed()
-	delay := s.hitDelayMs(blow.SourceID, speed)
+	// The two numbers to watch: how long the swing takes, which is the attack
+	// motion, and how far into it the blow lands. A zero delay means the swing
+	// and its outcome went out together, which is the fault this replaced.
+	swing := blow.SwingDurationMs()
+	delay := s.hitDelayMs(blow.SourceID, swing)
 
 	trace.Emit(trace.HUD, "damage",
 		zap.Uint32("from", blow.SourceID), zap.Uint32("to", blow.TargetID),
 		zap.Int("amount", blow.Amount), zap.Int("hits", blow.Hits),
 		zap.Bool("miss", blow.Missed()), zap.Bool("critical", blow.Critical()),
-		zap.Int("srcSpeed", blow.SourceSpeed), zap.Float32("animSpeed", speed),
+		zap.Int("srcSpeed", blow.SourceSpeed), zap.Float32("swingMs", swing),
 		zap.Float32("hitDelayMs", delay))
 
 	// Both sides turn to face each other. The server says nothing about which
@@ -283,7 +325,7 @@ func (s *InGameState) handleDamage(data []byte) error {
 	// Swordman's sword takes nine frames and lands on the sixth, so a figure,
 	// a flinch and a death shown at once resolve the exchange half a second
 	// before the blade arrives.
-	s.playAttackAnimation(blow.SourceID, speed)
+	s.playAttackAnimation(blow.SourceID, swing)
 
 	if delay > 0 {
 		s.pendingBlows = append(s.pendingBlows, pendingBlow{blow: blow, remainingMs: delay})
@@ -310,45 +352,46 @@ type pendingBlow struct {
 	kills bool
 }
 
-// hitDelayMs is how long after a swing begins before it lands.
+// hitDelayMs is how far into a swing of the given length the blow lands.
 //
-// The attacker's own sprite says: the hit frame of its attack, times the frame
-// interval, at the speed the swing is playing. A sheet that has not been baked
-// answers zero, which lands the blow at once — the right answer when there is
-// nothing on screen to wait for.
-func (s *InGameState) hitDelayMs(attacker uint32, speed float32) float32 {
-	if s.playerRender == nil || attacker == 0 {
+// The attacker's own sprite says where in the animation that is; the share of
+// the whole it represents is what survives the swing being sped up or slowed
+// down. A sheet that has not been baked answers zero, which lands the blow at
+// once — the right answer when there is nothing on screen to wait for.
+func (s *InGameState) hitDelayMs(attacker uint32, durationMs float32) float32 {
+	if s.playerRender == nil || attacker == 0 || durationMs <= 0 {
 		return 0
 	}
 
-	var (
-		frame    int
-		interval float32
-	)
+	var frame, frames int
 
 	if attacker == s.selfAID() {
+		if s.player == nil {
+			return 0
+		}
+
 		frame = s.playerRender.HitFrame(entity.ActionAttack)
-		interval = s.playerRender.FrameInterval(entity.ActionAttack)
+		frames = s.playerRender.FrameCount(entity.ActionAttack, s.player.Direction)
 	} else {
 		if s.entityManager == nil {
 			return 0
 		}
 
 		e := s.entityManager.Get(attacker)
-		if e == nil || !unitIsDrawable(e) {
+		if e == nil || e.Body == nil || !unitIsDrawable(e) {
 			return 0
 		}
 
 		spec := unitSpec(e)
 		frame = s.playerRender.UnitHitFrame(spec, entity.ActionAttack)
-		interval = s.playerRender.UnitFrameInterval(spec, entity.ActionAttack)
+		frames = s.playerRender.UnitFrameCount(spec, entity.ActionAttack, e.Body.Direction)
 	}
 
-	if speed <= 0 {
-		speed = 1
+	if frames <= 0 || frame <= 0 {
+		return 0
 	}
 
-	return float32(frame) * interval * speed
+	return durationMs * float32(frame) / float32(frames)
 }
 
 // hitSound is the sound the attacker's swing plays where it lands.
@@ -502,10 +545,10 @@ func (s *InGameState) Sitting() bool {
 	return s.player != nil && s.player.Sitting
 }
 
-// playAttackAnimation starts a swing, run at the attacker's own attack speed.
-func (s *InGameState) playAttackAnimation(id uint32, speed float32) {
+// playAttackAnimation starts a swing that takes as long as the attack motion.
+func (s *InGameState) playAttackAnimation(id uint32, durationMs float32) {
 	if body := s.bodyOf(id); body != nil {
-		body.PlayAttackAt(speed)
+		body.PlayAttackFor(durationMs)
 	}
 }
 

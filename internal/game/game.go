@@ -104,6 +104,9 @@ type Game struct {
 	openWindows []string
 	equipSlots  []int
 
+	// attackPending is --attack-nearest, waiting for something to fight.
+	attackPending bool
+
 	// toggleBasicInfo is set for the frame Ctrl+V was pressed.
 	toggleBasicInfo bool
 
@@ -547,6 +550,7 @@ func (g *Game) frame() {
 	g.runMouseAt()
 	g.runOpenWindows()
 	g.runEquip()
+	g.runAttackNearest()
 	g.runSay()
 
 	// Render 3D scene (if applicable)
@@ -620,6 +624,34 @@ func (g *Game) runOpenWindows() {
 	}
 
 	g.openWindows = nil
+}
+
+// SetAttackNearest records that --attack-nearest asked for a fight.
+func (g *Game) SetAttackNearest(on bool) {
+	g.attackPending = on
+}
+
+// runAttackNearest picks the fight --attack-nearest asked for, once there is
+// something in view to pick it with.
+//
+// Waits for a monster rather than for the map: the server sends what is nearby
+// after we report ready, so asking the moment the ground is up finds an empty
+// world and gives up on a fight that was about to be possible.
+func (g *Game) runAttackNearest() {
+	if !g.attackPending {
+		return
+	}
+
+	state, ok := g.stateManager.Current().(*states.InGameState)
+	if !ok || !state.MapReady() {
+		return
+	}
+
+	if !state.AttackNearest() {
+		return
+	}
+
+	g.attackPending = false
 }
 
 // SetEquipSlots records the inventory slots --equip asked to be worn.

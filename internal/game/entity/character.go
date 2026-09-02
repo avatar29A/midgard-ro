@@ -80,6 +80,14 @@ type Character struct {
 	OnceAction int
 	OnceSpeed  float32
 
+	// OnceDurationMs is how long the whole one-shot should take, when the
+	// caller knows that rather than a rate. Zero leaves the sprite's own rate
+	// and OnceSpeed in charge.
+	//
+	// A swing knows: it lasts as long as the attack motion the server sent,
+	// which is what keeps it in step with how often the character swings.
+	OnceDurationMs float32
+
 	// Dead holds the character on its death animation until it is revived.
 	Dead bool
 
