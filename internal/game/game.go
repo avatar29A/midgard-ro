@@ -505,6 +505,17 @@ func (g *Game) frame() {
 	// call os.Exit from here, which told the server nothing and left rAthena
 	// holding the session until it timed out.
 	if imgui.IsKeyPressedBoolV(imgui.KeyEscape, false) && g.uiBackend != nil {
+		// A skill waiting for a cell is put down first. Escape means "not
+		// that after all" before it means "open the menu", the same way it
+		// closes a dialog before it closes the game.
+		if state, ok := g.stateManager.Current().(*states.InGameState); ok {
+			if _, holding := state.Placing(); holding {
+				state.CancelPlacing()
+
+				return
+			}
+		}
+
 		g.uiBackend.ToggleEscMenu()
 	}
 
@@ -656,6 +667,19 @@ func (g *Game) runCast() {
 	for _, skill := range g.castSkills {
 		if err := state.UseSkill(uint16(skill), 0); err != nil {
 			logger.Warn("--cast request failed", zap.Int("skill", skill), zap.Error(err))
+
+			continue
+		}
+
+		// A ground skill is now held, waiting for a click nobody is going to
+		// make. Put it under the character's own feet, which is a cell that
+		// always exists and is always in range.
+		if _, holding := state.Placing(); holding {
+			x, y := state.PlayerCell()
+			if err := state.PlaceHeldSkillAt(x, y); err != nil {
+				logger.Warn("--cast could not place that skill",
+					zap.Int("skill", skill), zap.Error(err))
+			}
 		}
 	}
 

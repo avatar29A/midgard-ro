@@ -69,11 +69,14 @@ func (s *InGameState) handleSkillCast(data []byte) error {
 		s.faceTowards(cast.SourceID, cast.TargetID)
 	}
 
+	if cast.SourceID == s.selfAID() {
+		s.beginCast(cast.SkillID, float32(cast.CastMs))
+	}
+
 	// No motion yet. The sprite has cast poses and the client's own table
-	// names one per skill — ACTOR_STATE, read in the last change — but they
-	// are ACT sets this client does not bake, so playing something else would
-	// be inventing a pose rather than using the sprite's. The cast bar this
-	// packet's time is for comes with that.
+	// names one per skill — ACTOR_STATE, read two changes ago — but they are
+	// ACT sets this client does not bake, so playing something else would be
+	// inventing a pose rather than using the sprite's.
 
 	return nil
 }
@@ -196,4 +199,139 @@ func (s *InGameState) UseSkillAt(skillID uint16, level, cellX, cellY int) error 
 		zap.Int("cellX", cellX), zap.Int("cellY", cellY))
 
 	return s.client.Send(packets.EncodeUseSkillAt(skillID, level, cellX, cellY))
+}
+
+// Placing a skill on the ground.
+//
+// A ground skill is asked for twice: once to choose it, and once to say where.
+// Between the two the client is holding a skill and waiting for a cell, which
+// is a state of its own — the next click means "here" rather than "walk there"
+// or "attack that".
+
+// BeginPlacing holds a skill until a cell is chosen for it.
+func (s *InGameState) BeginPlacing(skillID uint16, level int) {
+	s.placingSkill = skillID
+	s.placingLevel = level
+
+	trace.Emit(trace.HUD, "placing-begin",
+		zap.Uint16("skill", skillID), zap.Int("level", level))
+
+	name := skills.Name(skillID)
+	if name == "" {
+		name = "That skill"
+	}
+
+	s.chat.AddLocal(ChatNotice, name+": choose where to place it.")
+}
+
+// Placing reports the skill waiting for a cell, and whether one is.
+func (s *InGameState) Placing() (uint16, bool) {
+	return s.placingSkill, s.placingSkill != 0
+}
+
+// CancelPlacing puts the held skill down without casting it.
+func (s *InGameState) CancelPlacing() {
+	if s.placingSkill == 0 {
+		return
+	}
+
+	trace.Emit(trace.HUD, "placing-cancel", zap.Uint16("skill", s.placingSkill))
+
+	s.placingSkill = 0
+	s.placingLevel = 0
+}
+
+// placeHeldSkill casts the held skill at the cell under the cursor, and
+// reports whether it took the click.
+//
+// The cursor's cell rather than the click's own reading of the screen: the
+// marker is what the player is aiming with, and casting anywhere else would
+// put the skill where the marker was not.
+func (s *InGameState) placeHeldSkill() bool {
+	if s.placingSkill == 0 {
+		return false
+	}
+
+	skill, level := s.placingSkill, s.placingLevel
+	s.placingSkill, s.placingLevel = 0, 0
+
+	if !s.hoverValid {
+		trace.Emit(trace.HUD, "placing-off-map", zap.Uint16("skill", skill))
+
+		return true
+	}
+
+	if err := s.UseSkillAt(skill, level, s.hoverCellX, s.hoverCellY); err != nil {
+		logger.Warn("could not place that skill", zap.Uint16("skill", skill), zap.Error(err))
+	}
+
+	return true
+}
+
+// The cast bar.
+
+// CastProgress is how far through a cast the character is, from zero to one,
+// and whether one is running.
+//
+// The server sends the length in ZC_USESKILL_ACK and nothing else about it:
+// there is no tick, and no "still casting". So the bar is run off that one
+// number, and a cast that is interrupted is ended by the interruption rather
+// than by running out.
+func (s *InGameState) CastProgress() (float32, uint16, bool) {
+	if s.castTotalMs <= 0 {
+		return 0, 0, false
+	}
+
+	done := 1 - s.castLeftMs/s.castTotalMs
+
+	return min(max(done, 0), 1), s.castSkill, true
+}
+
+// advanceCast runs the cast bar down.
+func (s *InGameState) advanceCast(deltaMs float32) {
+	if s.castTotalMs <= 0 {
+		return
+	}
+
+	s.castLeftMs -= deltaMs
+	if s.castLeftMs <= 0 {
+		s.castTotalMs, s.castLeftMs, s.castSkill = 0, 0, 0
+	}
+}
+
+// beginCast starts the bar for our own cast.
+func (s *InGameState) beginCast(skillID uint16, castMs float32) {
+	if castMs <= 0 {
+		// Instant, which most skills are. A bar that appears and vanishes in
+		// one frame is worse than no bar.
+		return
+	}
+
+	s.castSkill = skillID
+	s.castTotalMs = castMs
+	s.castLeftMs = castMs
+}
+
+// PlaceHeldSkillAt casts the held skill at a named cell.
+//
+// For a caller that has a cell already rather than a cursor over one — an
+// unattended run, and whatever else eventually aims a skill without a mouse.
+func (s *InGameState) PlaceHeldSkillAt(cellX, cellY int) error {
+	if s.placingSkill == 0 {
+		return nil
+	}
+
+	skill, level := s.placingSkill, s.placingLevel
+	s.placingSkill, s.placingLevel = 0, 0
+
+	return s.UseSkillAt(skill, level, cellX, cellY)
+}
+
+// PlayerCell is the cell the character is standing on.
+func (s *InGameState) PlayerCell() (int, int) {
+	if s.player == nil {
+		return 0, 0
+	}
+
+	return s.player.CurrentCell()
 }
