@@ -151,3 +151,64 @@ func TestCreatableJobsAreNamed(t *testing.T) {
 		t.Errorf("job 4218 = %q, want Summoner", got)
 	}
 }
+
+// TestMoveCharSelection: the arrows move a slot at a time and take the page
+// with them. Without that they would stop at slot 2 and the other six would
+// only be reachable with the mouse.
+func TestMoveCharSelection(t *testing.T) {
+	const slots = 9
+
+	var b UI2DBackend
+	b.charSelectIdx = 0
+
+	// Right across the first page boundary.
+	for want := 1; want <= 3; want++ {
+		b.moveCharSelection(1, slots)
+		if b.charSelectIdx != want {
+			t.Fatalf("slot = %d, want %d", b.charSelectIdx, want)
+		}
+	}
+	if b.charSelectPage != 1 {
+		t.Errorf("page = %d, want 1 — slot 3 is on the second page", b.charSelectPage)
+	}
+
+	// And back again.
+	b.moveCharSelection(-1, slots)
+	if b.charSelectIdx != 2 || b.charSelectPage != 0 {
+		t.Errorf("slot/page = %d/%d, want 2/0", b.charSelectIdx, b.charSelectPage)
+	}
+}
+
+// TestMoveCharSelectionStopsAtBothEnds: an account's slots are a row, not a
+// ring. Wrapping from the last to the first reads as a mis-click.
+func TestMoveCharSelectionStopsAtBothEnds(t *testing.T) {
+	const slots = 9
+
+	var b UI2DBackend
+
+	b.charSelectIdx = 0
+	b.moveCharSelection(-1, slots)
+	if b.charSelectIdx != 0 {
+		t.Errorf("moving left from the first slot gave %d, want 0", b.charSelectIdx)
+	}
+
+	b.charSelectIdx = slots - 1
+	b.moveCharSelection(1, slots)
+	if b.charSelectIdx != slots-1 {
+		t.Errorf("moving right from the last slot gave %d, want %d", b.charSelectIdx, slots-1)
+	}
+}
+
+// TestMoveCharSelectionFromNothingSelected: charSelectIdx is -1 before a
+// character list arrives, and an arrow press then has to land on a real slot
+// rather than -2.
+func TestMoveCharSelectionFromNothingSelected(t *testing.T) {
+	var b UI2DBackend
+	b.charSelectIdx = -1
+
+	b.moveCharSelection(-1, 9)
+
+	if b.charSelectIdx != 0 {
+		t.Errorf("slot = %d, want 0", b.charSelectIdx)
+	}
+}

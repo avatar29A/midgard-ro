@@ -196,6 +196,7 @@ func (b *UI2DBackend) renderNativeCharSelect(state CharSelectUIState, width, hei
 		}
 	}
 
+	b.charSelectKeys(state)
 	b.drawCharSelectSlots(skin, state, x, y)
 	b.drawCharSelectPaging(skin, state, x, y)
 	b.drawCharSelectInfo(state, x, y)
@@ -286,8 +287,14 @@ func (b *UI2DBackend) drawCharSelectSlots(skin *charSelectSkin, state CharSelect
 			trace.Emit(trace.Char, "slot-doubleclick",
 				zap.Int("slot", slot), zap.Bool("empty", !hasChar))
 
-			if offersCreate && state.OnCreateSlot != nil {
+			switch {
+			case offersCreate && state.OnCreateSlot != nil:
 				state.OnCreateSlot(slot)
+			case hasChar && state.OnSelect != nil:
+				// Double-clicking someone plays them, which is what the
+				// gesture means everywhere else on this screen.
+				b.charSelectIdx = slot
+				state.OnSelect(slot)
 			}
 		}
 
@@ -304,6 +311,76 @@ func (b *UI2DBackend) drawCharSelectSlots(skin *charSelectSkin, state CharSelect
 			}
 		}
 	}
+}
+
+// charSelectKeys moves the selection with the arrow keys and acts on it with
+// Enter.
+//
+// The selection is a slot number rather than a position, so moving off the
+// edge of a page turns the page under it — otherwise the arrows would stop at
+// slot 2 and the other six would only be reachable with the mouse.
+func (b *UI2DBackend) charSelectKeys(state CharSelectUIState) {
+	if !state.IsReady {
+		return
+	}
+
+	in := b.ctx.Input()
+	if in == nil {
+		return
+	}
+
+	slots := b.charSelectSlotCount(state)
+
+	switch {
+	case in.KeyLeftPressed:
+		b.moveCharSelection(-1, slots)
+	case in.KeyRightPressed:
+		b.moveCharSelection(1, slots)
+	}
+
+	if !in.KeyEnterPressed {
+		return
+	}
+
+	slot := b.charSelectIdx
+	if slot < 0 || slot >= slots {
+		return
+	}
+
+	// Enter does what a double click does, so the two gestures cannot
+	// disagree about what a slot means.
+	if slot < len(state.Characters) {
+		if state.OnSelect != nil {
+			trace.Emit(trace.Char, "enter-key", zap.Int("slot", slot), zap.Bool("empty", false))
+			state.OnSelect(slot)
+		}
+
+		return
+	}
+
+	if state.OnCreateSlot != nil {
+		trace.Emit(trace.Char, "enter-key", zap.Int("slot", slot), zap.Bool("empty", true))
+		state.OnCreateSlot(slot)
+	}
+}
+
+// moveCharSelection steps the selection by one slot and brings its page with
+// it. Stops at both ends rather than wrapping: an account's slots are a row,
+// not a ring, and wrapping from the last to the first reads as a mis-click.
+func (b *UI2DBackend) moveCharSelection(delta, slots int) {
+	next := b.charSelectIdx + delta
+	if b.charSelectIdx < 0 {
+		next = 0
+	}
+
+	if next < 0 || next >= slots {
+		return
+	}
+
+	b.charSelectIdx = next
+	b.charSelectPage = next / charSelSlotCount
+
+	trace.Emit(trace.Char, "select-move", zap.Int("slot", next), zap.Int("page", b.charSelectPage))
 }
 
 // charSelectSlotCount is how many slots the screen may page over.
