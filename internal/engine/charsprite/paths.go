@@ -17,8 +17,9 @@ const (
 	// 도람족 "Doram race" — the Summoner and what it grows into are drawn
 	// from a directory of their own rather than from the human one, so the
 	// job decides which root its body comes from.
-	doramBodyDir = `data\sprite\도람족\몸통\`
-	headDir      = spriteRoot + `머리통\`
+	doramSpriteRoot = `data\sprite\도람족\`
+	doramBodyDir    = doramSpriteRoot + `몸통\`
+	headDir         = spriteRoot + `머리통\`
 
 	// Monsters and NPCs are single sprites rather than a body with a head
 	// anchored to it, and live outside the character tree.
@@ -34,7 +35,6 @@ const (
 	//
 	// so the directory is the job's own name, which is also its body sprite's
 	// basename.
-	weaponRoot = spriteRoot
 
 	// Items lying on the ground are named by the archive's own item table
 	// rather than by a job id, so they are the one family identified by a
@@ -362,6 +362,75 @@ func bodyRoot(job int) string {
 	return bodyDir
 }
 
+// weaponRoot is the directory a job's weapon art lives under. A Doram's
+// weapons sit beside its body, in the Doram tree rather than the human one.
+func weaponRoot(job int) string {
+	if doramJobs[job] {
+		return doramSpriteRoot
+	}
+
+	return spriteRoot
+}
+
+// jobWeaponNames is the folder a job's weapon art lives in, where that is not
+// the folder its body lives in.
+//
+// The two usually agree, and where they do this says nothing. Where they do
+// not, the archive is the reason:
+//
+//   - Rebirth draws no weapons of its own. There is no 챔피온 folder at all —
+//     a Champion holds a Monk's knuckle, a Lord Knight a Knight's sword — so
+//     every transcended job points back at the class it came from. A Champion
+//     with nothing in its hand was what said so.
+//   - A Royal Guard's body is 가드 and its weapons are 로얄가드, which is
+//     simply two different names for the same job.
+//   - A mount is a different body and a different set of weapons both, and
+//     the two are not named alike: 룬나이트쁘띠 rides, 페코페코_룬나이트 swings.
+//
+// A job with no entry uses its body's folder, and one whose folder holds
+// nothing draws no weapon — which is right for the costume jobs, where there
+// is no weapon art to draw.
+var jobWeaponNames = map[int]string{
+	// The transcended jobs, back to the class they came from.
+	4008: `기사`, 4009: `프리스트`, 4010: `위저드`, 4011: `제철공`,
+	4012: `헌터`, 4013: `어세신`, 4014: `페코페코_기사`, 4015: `크루세이더`,
+	4016: `몽크`, 4017: `세이지`, 4018: `로그`, 4019: `연금술사`,
+	4020: `바드`, 4021: `무희`, 4022: `신페코크루세이더`,
+
+	// The Rogue line past the second class keeps drawing from the Rogue: the
+	// Stalker folder holds no weapon at all and the Shadow Chaser one holds a
+	// single item's art, the rest shields.
+	4072: `로그`, 4079: `로그`, 4108: `로그`, 4340: `로그`,
+
+	// Royal Guard, whose body and weapons are named differently.
+	4066: `로얄가드`, 4073: `로얄가드`, 4102: `로얄가드`, 4338: `로얄가드`,
+
+	// The mounted third classes.
+	4080: `페코페코_룬나이트`, 4081: `페코페코_룬나이트`, 4109: `페코페코_룬나이트`,
+	4082: `신페코로얄가드`, 4083: `신페코로얄가드`, 4110: `신페코로얄가드`,
+
+	// Later expanded jobs whose weapons sit under another name.
+	4048: `권성`, 4238: `권성`,
+	4215: `rebellion`, 4229: `rebellion`,
+	4243: `성제`, 4244: `성제`,
+
+	// The mounted fourth classes.
+	4278: `windhawk`, 4279: `meister_madogear`,
+	4280: `dragon_knight_chicken`, 4281: `imperial_guard_chicken`,
+	4316: `sky_emperor`,
+}
+
+// JobWeaponName is the folder a job's weapon art lives in.
+func JobWeaponName(job int) string {
+	if name, ok := jobWeaponNames[job]; ok {
+		return name
+	}
+
+	name, _ := JobSpriteName(job)
+
+	return name
+}
+
 // FallbackJob is the job we render when the class id isn't one we know. Every
 // account has a Novice sprite available, so it always resolves.
 const FallbackJob = 0
@@ -457,9 +526,11 @@ func (s Spec) WeaponPathCandidates() [][2]string {
 		return nil
 	}
 
-	job, _ := JobSpriteName(s.Job)
+	// The folder name is also the start of the file name inside it, so the
+	// weapon's job stands in for the body's throughout.
+	job := JobWeaponName(s.Job)
 	sex := s.sexSuffix()
-	dir := fmt.Sprintf(`%s%s\`, weaponRoot, job)
+	dir := fmt.Sprintf(`%s%s\`, weaponRoot(s.Job), job)
 
 	candidates := make([][2]string, 0, 2)
 
