@@ -140,26 +140,39 @@ type Damage struct {
 	IsSPDamage bool
 }
 
-// AnimationSpeed is the attack motion in ms, expressed as the fraction of the
-// sprite's own rate the swing should run at.
+// SwingReferenceMs is how long a swing takes at the rate the sprite was drawn
+// for, and the longest one ever takes.
 //
-// rAthena documents what the original client does with this field, and it is
-// not what the name suggests: sdelay carries the attacker's attack motion,
-// and the client reads it as an inverted animation speed with 432 standing
-// for the sprite's own rate. Half of that plays the swing twice as fast, and
-// anything above it is ignored — which is why the server clamps it to 432
-// before sending.
+// rAthena documents what the original client does with the attack motion, and
+// it is not what the field's name suggests: sdelay carries the attacker's
+// amotion and the client reads it as an inverted animation speed, with 432
+// standing for the sprite's own rate. "216 for example means play the
+// animation at double the speed. 108 is quadruple speed", and anything above
+// 432 is ignored — which is why the server clamps to it before sending.
 //
-// So a character that attacks quickly swings quickly, and the number to
-// divide by is the server's own DEFAULT_ANIMATION_SPEED.
-func (d Damage) AnimationSpeed() float32 {
-	const defaultAnimationSpeed = 432
+// A speed measured against a reference is a duration measured against that
+// reference's own length, and this is that length: at 432 the swing takes
+// 432ms, at 216 half of it, at 108 a quarter. Which makes the whole thing say
+// something simple — a swing lasts as long as the attack motion it belongs to.
+const SwingReferenceMs = 432
 
-	if d.SourceSpeed <= 0 || d.SourceSpeed >= defaultAnimationSpeed {
-		return 1
+// SwingDurationMs is how long the attacker's whole swing should take.
+//
+// The attack motion, which is what ties the animation to attack speed: at ASPD
+// 168 the server's amotion is 320ms, so the swing runs in 320ms and the next
+// one begins as it ends. Drawn at the sprite's own rate instead, a Swordman's
+// nine-frame sword swing takes 900ms — three swings deep before the first has
+// finished, so it never completes, never reaches the frame the blade lands on,
+// and looks nothing like the speed it is being swung at.
+//
+// Capped at the reference, since the client ignores anything slower, and the
+// reference when the server said nothing.
+func (d Damage) SwingDurationMs() float32 {
+	if d.SourceSpeed <= 0 || d.SourceSpeed > SwingReferenceMs {
+		return SwingReferenceMs
 	}
 
-	return float32(d.SourceSpeed) / defaultAnimationSpeed
+	return float32(d.SourceSpeed)
 }
 
 // Missed reports whether the blow did nothing, which the original draws as a
