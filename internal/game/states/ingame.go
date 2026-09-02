@@ -123,6 +123,10 @@ type InGameState struct {
 	pendingLevelUp    bool
 	pendingJobLevelUp bool
 
+	// unknownJobs are unit job ids the sprite table has no name for, kept so
+	// each is complained about once rather than on every sighting.
+	unknownJobs map[int]bool
+
 	// pendingBlows are swings whose outcome is still traveling: the figure,
 	// the flinch and the death wait for the frame the blade lands on.
 	pendingBlows []pendingBlow
@@ -1613,6 +1617,35 @@ func (s *InGameState) killUnit(aid uint32) {
 	removeUnit(s.entityManager, aid)
 }
 
+// warnIfUndrawable says so when a unit arrives that nothing can draw.
+//
+// A monster whose id is not in the sprite table is not merely undrawn: it is
+// invisible and unclickable, and it still fights. Somebody summoning one has
+// no way to tell that from a bug in the renderer, so the id is named — once
+// each, since the server repeats a unit's report whenever it comes back into
+// view and a warning per sighting would bury the map.
+func (s *InGameState) warnIfUndrawable(e *entity.Entity) {
+	if e.Type != entity.TypeMonster && e.Type != entity.TypeNPC {
+		return
+	}
+
+	if _, known := charsprite.SpriteName(e.Job); known {
+		return
+	}
+
+	if s.unknownJobs == nil {
+		s.unknownJobs = map[int]bool{}
+	}
+	if s.unknownJobs[e.Job] {
+		return
+	}
+	s.unknownJobs[e.Job] = true
+
+	logger.Warn("no sprite for this unit, so it is invisible and cannot be clicked",
+		zap.Int("job", e.Job), zap.String("name", e.Name),
+		zap.String("fix", "regenerate spritenames.go from the client's npcidentity.lub"))
+}
+
 // applyUnit folds one decoded unit report into the entity registry.
 //
 // Reports about our own character are dropped: the local player is driven by
@@ -1630,6 +1663,8 @@ func (s *InGameState) applyUnit(u *packets.Entity, kind string) error {
 	if e == nil {
 		return nil
 	}
+
+	s.warnIfUndrawable(e)
 
 	// sheets says whether the appearance actually baked, which is what
 	// separates "the packet never arrived" from "it arrived and nothing was
