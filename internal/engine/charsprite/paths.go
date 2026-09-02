@@ -67,48 +67,32 @@ const (
 	KindItem
 )
 
-// Weapon classes, as rAthena's weapon_type enum numbers them, mapped to the
-// suffix the archive files them under.
+// WeaponSuffix is the suffix the sprite of a weapon look is filed under, and
+// whether the look resolved to one at all.
 //
-// The server sends a look rather than an item: what arrives is either one of
-// these class numbers or, for a weapon with art of its own, the item id. Both
-// are tried — see WeaponPathCandidates — because the archive holds both, and
-// which one a given weapon uses is the archive's business rather than
-// something worth a table of our own.
+// A look is one of two things and nothing on the wire says which. The
+// character list at login carries the weapon *class*, straight out of the
+// server's char table. Every change after that carries the item *id*: rAthena
+// sends an item's view id if its database row has one and the item's own id if
+// it does not, and in the renewal database exactly one weapon of 2806 has a
+// view id. So the class arrives once, at login, and the id arrives every time
+// after.
 //
-// The names are the classes the Novice's own folder proves out: 검 sword,
-// 단검 dagger, 도끼 axe, 롯드 rod, 클럽 club, 양손도끼 two-handed axe.
-var weaponClassNames = map[int]string{
-	1:  `단검`,    // dagger
-	2:  `검`,     // one-handed sword
-	3:  `양손검`,   // two-handed sword
-	4:  `창`,     // one-handed spear
-	5:  `양손창`,   // two-handed spear
-	6:  `도끼`,    // one-handed axe
-	7:  `양손도끼`,  // two-handed axe
-	8:  `클럽`,    // mace
-	10: `롯드`,    // staff
-	11: `활`,     // bow
-	12: `너클`,    // knuckle
-	13: `악기`,    // instrument
-	14: `채찍`,    // whip
-	15: `책`,     // book
-	16: `카타르`,   // katar
-	17: `권총`,    // revolver
-	18: `라이플`,   // rifle
-	19: `개틀링`,   // gatling
-	20: `샷건`,    // shotgun
-	21: `그레네이드`, // grenade
-	22: `수리검`,   // huuma shuriken
-	23: `양손지팡이`, // two-handed staff
-}
+// The two ranges do not meet — classes stop at 102 and item ids start at 501 —
+// so the value answers the question itself, and the class table is tried
+// first.
+func WeaponSuffix(look int) (string, bool) {
+	if suffix, ok := weaponSpriteNames[look]; ok {
+		return suffix, true
+	}
 
-// WeaponClassName is the archive's name for a weapon class, and whether the
-// class is one we know.
-func WeaponClassName(class int) (string, bool) {
-	name, ok := weaponClassNames[class]
+	if class, ok := itemSpriteClass[look]; ok {
+		suffix, ok := weaponSpriteNames[class]
 
-	return name, ok
+		return suffix, ok
+	}
+
+	return "", false
 }
 
 // SpriteName returns the sprite basename for a monster or NPC job id, and
@@ -253,12 +237,20 @@ func (s Spec) WeaponPathCandidates() [][2]string {
 
 	candidates := make([][2]string, 0, 2)
 
-	byID := fmt.Sprintf(`%s%s_%s_%d`, dir, job, sex, s.Weapon)
-	candidates = append(candidates, [2]string{byID + ".spr", byID + ".act"})
+	base := ""
+	if suffix, ok := WeaponSuffix(s.Weapon); ok {
+		base = fmt.Sprintf(`%s%s_%s%s`, dir, job, sex, suffix)
+		candidates = append(candidates, [2]string{base + ".spr", base + ".act"})
+	}
 
-	if class, ok := WeaponClassName(s.Weapon); ok {
-		byClass := fmt.Sprintf(`%s%s_%s_%s`, dir, job, sex, class)
-		candidates = append(candidates, [2]string{byClass + ".spr", byClass + ".act"})
+	// The look as a file name of its own, for art the tables do not know: a
+	// weapon added to the server after this client's data was made is filed by
+	// its id, and trying it costs one load that fails. For a weapon that does
+	// have art of its own the suffix above is already that id, so the two
+	// agree and only one is offered.
+	byID := fmt.Sprintf(`%s%s_%s_%d`, dir, job, sex, s.Weapon)
+	if byID != base {
+		candidates = append(candidates, [2]string{byID + ".spr", byID + ".act"})
 	}
 
 	return candidates
