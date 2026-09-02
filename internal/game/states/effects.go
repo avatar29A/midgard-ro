@@ -26,8 +26,13 @@ const (
 	// STR — so this is the effect or nothing.
 	levelUpEffect = "h_levelup.str"
 
+	// worldSoundDir is where the archive keeps the sounds the world plays —
+	// the level-up chime, and the sound a sprite names on the frame its blow
+	// lands.
+	worldSoundDir = `data\wav\`
+
 	// levelUpSound is the sound that goes with it.
-	levelUpSound = `data\wav\levelup.wav`
+	levelUpSound = worldSoundDir + `levelup.wav`
 )
 
 // activeEffect is one effect playing over a world position.

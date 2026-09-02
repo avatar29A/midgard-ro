@@ -14,7 +14,8 @@ import "fmt"
 const (
 	spriteRoot = `data\sprite\인간족\`
 	bodyDir    = spriteRoot + `몸통\`
-	headDir    = spriteRoot + `머리통\`
+
+	headDir = spriteRoot + `머리통\`
 
 	// Doram characters are a second race with the same tree beneath it —
 	// body and head, split by sex, named the same way. Only the root differs,
@@ -41,6 +42,11 @@ const (
 	// JobSummoner is a Doram, drawn from its own sprite tree.
 	JobSummoner = 4218
 
+	// JobBabySummoner and JobSpiritHandler are the rest of the Doram line,
+	// drawn from the same tree.
+	JobBabySummoner  = 4220
+	JobSpiritHandler = 4308
+
 	// Monsters and NPCs are single sprites rather than a body with a head
 	// anchored to it, and live outside the character tree.
 	//
@@ -55,7 +61,6 @@ const (
 	//
 	// so the directory is the job's own name, which is also its body sprite's
 	// basename.
-	weaponRoot = spriteRoot
 
 	// Items lying on the ground are named by the archive's own item table
 	// rather than by a job id, so they are the one family identified by a
@@ -93,48 +98,32 @@ const (
 	KindItem
 )
 
-// Weapon classes, as rAthena's weapon_type enum numbers them, mapped to the
-// suffix the archive files them under.
+// WeaponSuffix is the suffix the sprite of a weapon look is filed under, and
+// whether the look resolved to one at all.
 //
-// The server sends a look rather than an item: what arrives is either one of
-// these class numbers or, for a weapon with art of its own, the item id. Both
-// are tried — see WeaponPathCandidates — because the archive holds both, and
-// which one a given weapon uses is the archive's business rather than
-// something worth a table of our own.
+// A look is one of two things and nothing on the wire says which. The
+// character list at login carries the weapon *class*, straight out of the
+// server's char table. Every change after that carries the item *id*: rAthena
+// sends an item's view id if its database row has one and the item's own id if
+// it does not, and in the renewal database exactly one weapon of 2806 has a
+// view id. So the class arrives once, at login, and the id arrives every time
+// after.
 //
-// The names are the classes the Novice's own folder proves out: 검 sword,
-// 단검 dagger, 도끼 axe, 롯드 rod, 클럽 club, 양손도끼 two-handed axe.
-var weaponClassNames = map[int]string{
-	1:  `단검`,    // dagger
-	2:  `검`,     // one-handed sword
-	3:  `양손검`,   // two-handed sword
-	4:  `창`,     // one-handed spear
-	5:  `양손창`,   // two-handed spear
-	6:  `도끼`,    // one-handed axe
-	7:  `양손도끼`,  // two-handed axe
-	8:  `클럽`,    // mace
-	10: `롯드`,    // staff
-	11: `활`,     // bow
-	12: `너클`,    // knuckle
-	13: `악기`,    // instrument
-	14: `채찍`,    // whip
-	15: `책`,     // book
-	16: `카타르`,   // katar
-	17: `권총`,    // revolver
-	18: `라이플`,   // rifle
-	19: `개틀링`,   // gatling
-	20: `샷건`,    // shotgun
-	21: `그레네이드`, // grenade
-	22: `수리검`,   // huuma shuriken
-	23: `양손지팡이`, // two-handed staff
-}
+// The two ranges do not meet — classes stop at 102 and item ids start at 501 —
+// so the value answers the question itself, and the class table is tried
+// first.
+func WeaponSuffix(look int) (string, bool) {
+	if suffix, ok := weaponSpriteNames[look]; ok {
+		return suffix, true
+	}
 
-// WeaponClassName is the archive's name for a weapon class, and whether the
-// class is one we know.
-func WeaponClassName(class int) (string, bool) {
-	name, ok := weaponClassNames[class]
+	if class, ok := itemSpriteClass[look]; ok {
+		suffix, ok := weaponSpriteNames[class]
 
-	return name, ok
+		return suffix, ok
+	}
+
+	return "", false
 }
 
 // SpriteName returns the sprite basename for a monster or NPC job id, and
@@ -177,10 +166,272 @@ var jobSpriteNames = map[int]string{
 	24: `건너`,    // Gunslinger
 	25: `닌자`,    // Ninja
 
-	// Doram. Named in ASCII rather than Korean, unlike every entry above,
-	// and drawn from the Doram tree rather than the human one — see
-	// bodyRoot.
-	JobSummoner: `summoner`, // Doram
+	// The transcended jobs, which rebirth reaches. The client keeps this
+	// mapping in its own binary rather than in a table in the archive — the
+	// lua files name NPCs and monsters, not player bodies — so unlike the
+	// sprite table next door this is written out rather than generated. Every
+	// name below was checked against the archive: each has a body sprite for
+	// the sex that can hold the job, and none for the sex that cannot.
+	//
+	// The first classes rebirth into look no different, and share their
+	// sprites. The archive does carry `_h` twins of them — 기사_h against 기사
+	// — but those are the same art: a byte or two apart in a quarter of a
+	// megabyte, against 로드나이트 which differs by thirteen thousand.
+	4001: `초보자`,    // High Novice
+	4002: `검사`,     // High Swordman
+	4003: `마법사`,    // High Mage
+	4004: `궁수`,     // High Archer
+	4005: `성직자`,    // High Acolyte
+	4006: `상인`,     // High Merchant
+	4007: `도둑`,     // High Thief
+	4008: `로드나이트`,  // Lord Knight
+	4009: `하이프리`,   // High Priest
+	4010: `하이위저드`,  // High Wizard
+	4011: `화이트스미스`, // Whitesmith
+	4012: `스나이퍼`,   // Sniper
+	4013: `어쌔신크로스`, // Assassin Cross
+	4014: `로드페코`,   // Lord Knight on a Peco
+	4015: `팔라딘`,    // Paladin
+	4016: `챔피온`,    // Champion
+	4017: `프로페서`,   // Professor
+	4018: `스토커`,    // Stalker
+	4019: `크리에이터`,  // Creator
+	4020: `클라운`,    // Clown, male only
+	4021: `집시`,     // Gypsy, female only
+	4022: `페코팔라딘`,  // Paladin on a Peco
+
+	// The Doram jobs, whose bodies come from a directory of their own — see
+	// bodyRoot. The archive names them in English, as it does the fourth
+	// classes.
+	JobSummoner:      `summoner`,       // Summoner
+	JobBabySummoner:  `summoner`,       // Baby Summoner
+	JobSpiritHandler: `spirit_handler`, // Spirit Handler
+
+	// Mounted and costume forms of the first classes.
+	// A knight on its Peco and a character in a wedding dress are jobs of
+	// their own as far as the protocol is concerned.
+	13: `페코페코_기사`,  // Knight2
+	21: `신페코크루세이더`, // Crusader2
+	22: `결혼`,       // Wedding
+	26: `산타`,       // Xmas
+	27: `여름`,       // Summer
+	28: `한복`,       // Hanbok
+	29: `옥토버패스트`,   // Oktoberfest
+	30: `여름2`,      // Summer2
+
+	// The baby jobs.
+	// A baby is the same drawing as the grown job — the archive has no body
+	// of its own for any of them — so each points at what it grows into.
+	4023: `초보자`,      // Baby
+	4024: `검사`,       // Baby Swordman
+	4025: `마법사`,      // Baby Mage
+	4026: `궁수`,       // Baby Archer
+	4027: `성직자`,      // Baby Acolyte
+	4028: `상인`,       // Baby Merchant
+	4029: `도둑`,       // Baby Thief
+	4030: `기사`,       // Baby Knight
+	4031: `프리스트`,     // Baby Priest
+	4032: `위저드`,      // Baby Wizard
+	4033: `제철공`,      // Baby Blacksmith
+	4034: `헌터`,       // Baby Hunter
+	4035: `어세신`,      // Baby Assassin
+	4036: `페코페코_기사`,  // Baby Knight2
+	4037: `크루세이더`,    // Baby Crusader
+	4038: `몽크`,       // Baby Monk
+	4039: `세이지`,      // Baby Sage
+	4040: `로그`,       // Baby Rogue
+	4041: `연금술사`,     // Baby Alchemist
+	4042: `바드`,       // Baby Bard
+	4043: `무희`,       // Baby Dancer
+	4044: `신페코크루세이더`, // Baby Crusader2
+	4045: `슈퍼노비스`,    // Super Baby
+
+	// The expanded jobs.
+	4046: `태권소년`, // Taekwon
+	4047: `권성`,   // Star Gladiator
+	4048: `권성융합`, // Star Gladiator2
+	4049: `소울링커`, // Soul Linker
+
+	// The third classes, and their transcended and mounted forms.
+	// Rebirth changes nothing about a third class on screen, so the T forms
+	// share their sprite; the mounted ones do not, and have their own.
+	4054: `룬나이트`,   // Rune Knight
+	4055: `워록`,     // Warlock
+	4056: `레인져`,    // Ranger
+	4057: `아크비숍`,   // Arch Bishop
+	4058: `미케닉`,    // Mechanic
+	4059: `길로틴크로스`, // Guillotine Cross
+	4060: `룬나이트`,   // Rune Knight T
+	4061: `워록`,     // Warlock T
+	4062: `레인져`,    // Ranger T
+	4063: `아크비숍`,   // Arch Bishop T
+	4064: `미케닉`,    // Mechanic T
+	4065: `길로틴크로스`, // Guillotine Cross T
+	4066: `가드`,     // Royal Guard
+	4067: `소서러`,    // Sorcerer
+	4068: `민스트럴`,   // Minstrel
+	4069: `원더러`,    // Wanderer
+	4070: `슈라`,     // Sura
+	4071: `제네릭`,    // Genetic
+	4072: `쉐도우체이서`, // Shadow Chaser
+	4073: `가드`,     // Royal Guard T
+	4074: `소서러`,    // Sorcerer T
+	4075: `민스트럴`,   // Minstrel T
+	4076: `원더러`,    // Wanderer T
+	4077: `슈라`,     // Sura T
+	4078: `제네릭`,    // Genetic T
+	4079: `쉐도우체이서`, // Shadow Chaser T
+	4080: `룬나이트쁘띠`, // Rune Knight2
+	4081: `룬나이트쁘띠`, // Rune Knight T2
+	4082: `그리폰가드`,  // Royal Guard2
+	4083: `그리폰가드`,  // Royal Guard T2
+	4084: `레인져늑대`,  // Ranger2
+	4085: `레인져늑대`,  // Ranger T2
+	4086: `마도기어`,   // Mechanic2
+	4087: `마도기어`,   // Mechanic T2
+
+	// Baby third classes.
+	4096: `룬나이트`,   // Baby Rune Knight
+	4097: `워록`,     // Baby Warlock
+	4098: `레인져`,    // Baby Ranger
+	4099: `아크비숍`,   // Baby Arch Bishop
+	4100: `미케닉`,    // Baby Mechanic
+	4101: `길로틴크로스`, // Baby Guillotine Cross
+	4102: `가드`,     // Baby Royal Guard
+	4103: `소서러`,    // Baby Sorcerer
+	4104: `민스트럴`,   // Baby Minstrel
+	4105: `원더러`,    // Baby Wanderer
+	4106: `슈라`,     // Baby Sura
+	4107: `제네릭`,    // Baby Genetic
+	4108: `쉐도우체이서`, // Baby Shadow Chaser
+	4109: `룬나이트쁘띠`, // Baby Rune Knight2
+	4110: `그리폰가드`,  // Baby Royal Guard2
+	4111: `레인져늑대`,  // Baby Ranger2
+	4112: `마도기어`,   // Baby Mechanic2
+
+	// Later expanded jobs and their babies.
+	4190: `슈퍼노비스`,   // Super Novice E
+	4191: `슈퍼노비스`,   // Super Baby E
+	4211: `kagerou`, // Kagerou
+	4212: `oboro`,   // Oboro
+	4215: `리벨리온`,    // Rebellion
+	4222: `닌자`,      // Baby Ninja
+	4223: `kagerou`, // Baby Kagerou
+	4224: `oboro`,   // Baby Oboro
+	4225: `태권소년`,    // Baby Taekwon
+	4226: `권성`,      // Baby Star Gladiator
+	4227: `소울링커`,    // Baby Soul Linker
+	4228: `건너`,      // Baby Gunslinger
+	4229: `리벨리온`,    // Baby Rebellion
+	4238: `권성융합`,    // Baby Star Gladiator2
+	4239: `성제`,      // Star Emperor
+	4240: `소울리퍼`,    // Soul Reaper
+	4241: `성제`,      // Baby Star Emperor
+	4242: `소울리퍼`,    // Baby Soul Reaper
+	4243: `해태성제`,    // Star Emperor2
+	4244: `해태성제`,    // Baby Star Emperor2
+
+	// The fourth classes, which the archive names in English.
+	// Not a rule worth trusting on its own — every one below was looked up
+	// in the archive, including elemetal_master, which is spelt that way.
+	4252: `dragon_knight`,         // Dragon Knight
+	4253: `meister`,               // Meister
+	4254: `shadow_cross`,          // Shadow Cross
+	4255: `arch_mage`,             // Arch Mage
+	4256: `cardinal`,              // Cardinal
+	4257: `windhawk`,              // Windhawk
+	4258: `imperial_guard`,        // Imperial Guard
+	4259: `biolo`,                 // Biolo
+	4260: `abyss_chaser`,          // Abyss Chaser
+	4261: `elemetal_master`,       // Elemental Master
+	4262: `inquisitor`,            // Inquisitor
+	4263: `troubadour`,            // Troubadour
+	4264: `trouvere`,              // Trouvere
+	4278: `wolf_windhawk`,         // Windhawk2
+	4279: `meister_riding`,        // Meister2
+	4280: `dragon_knight_riding`,  // Dragon Knight2
+	4281: `imperial_guard_riding`, // Imperial Guard2
+	4302: `sky_emperor`,           // Sky Emperor
+	4303: `soul_ascetic`,          // Soul Ascetic
+	4304: `shinkiro`,              // Shinkiro
+	4305: `shiranui`,              // Shiranui
+	4306: `night_watch`,           // Night Watch
+	4307: `hyper_novice`,          // Hyper Novice
+	4316: `sky_emperor_riding`,    // Sky Emperor2
+
+	// The fourth-era reissues of the third classes, same art.
+	4332: `룬나이트`,   // Rune Knight 2Nd
+	4333: `미케닉`,    // Mechanic 2Nd
+	4334: `길로틴크로스`, // Guillotine Cross 2Nd
+	4335: `워록`,     // Warlock 2Nd
+	4336: `아크비숍`,   // Archbishop 2Nd
+	4337: `레인져`,    // Ranger 2Nd
+	4338: `가드`,     // Royal Guard 2Nd
+	4339: `제네릭`,    // Genetic 2Nd
+	4340: `쉐도우체이서`, // Shadow Chaser 2Nd
+	4341: `소서러`,    // Sorcerer 2Nd
+	4342: `슈라`,     // Sura 2Nd
+	4343: `민스트럴`,   // Minstrel 2Nd
+	4344: `원더러`,    // Wanderer 2Nd
+}
+
+// jobWeaponNames is the folder a job's weapon art lives in, where that is not
+// the folder its body lives in.
+//
+// The two usually agree, and where they do this says nothing. Where they do
+// not, the archive is the reason:
+//
+//   - Rebirth draws no weapons of its own. There is no 챔피온 folder at all —
+//     a Champion holds a Monk's knuckle, a Lord Knight a Knight's sword — so
+//     every transcended job points back at the class it came from. A Champion
+//     with nothing in its hand was what said so.
+//   - A Royal Guard's body is 가드 and its weapons are 로얄가드, which is
+//     simply two different names for the same job.
+//   - A mount is a different body and a different set of weapons both, and
+//     the two are not named alike: 룬나이트쁘띠 rides, 페코페코_룬나이트 swings.
+//
+// A job with no entry uses its body's folder, and one whose folder holds
+// nothing draws no weapon — which is right for the costume jobs, where there
+// is no weapon art to draw.
+var jobWeaponNames = map[int]string{
+	// The transcended jobs, back to the class they came from.
+	4008: `기사`, 4009: `프리스트`, 4010: `위저드`, 4011: `제철공`,
+	4012: `헌터`, 4013: `어세신`, 4014: `페코페코_기사`, 4015: `크루세이더`,
+	4016: `몽크`, 4017: `세이지`, 4018: `로그`, 4019: `연금술사`,
+	4020: `바드`, 4021: `무희`, 4022: `신페코크루세이더`,
+
+	// The Rogue line past the second class keeps drawing from the Rogue: the
+	// Stalker folder holds no weapon at all and the Shadow Chaser one holds a
+	// single item's art, the rest shields.
+	4072: `로그`, 4079: `로그`, 4108: `로그`, 4340: `로그`,
+
+	// Royal Guard, whose body and weapons are named differently.
+	4066: `로얄가드`, 4073: `로얄가드`, 4102: `로얄가드`, 4338: `로얄가드`,
+
+	// The mounted third classes.
+	4080: `페코페코_룬나이트`, 4081: `페코페코_룬나이트`, 4109: `페코페코_룬나이트`,
+	4082: `신페코로얄가드`, 4083: `신페코로얄가드`, 4110: `신페코로얄가드`,
+
+	// Later expanded jobs whose weapons sit under another name.
+	4048: `권성`, 4238: `권성`,
+	4215: `rebellion`, 4229: `rebellion`,
+	4243: `성제`, 4244: `성제`,
+
+	// The mounted fourth classes.
+	4278: `windhawk`, 4279: `meister_madogear`,
+	4280: `dragon_knight_chicken`, 4281: `imperial_guard_chicken`,
+	4316: `sky_emperor`,
+}
+
+// JobWeaponName is the folder a job's weapon art lives in.
+func JobWeaponName(job int) string {
+	if name, ok := jobWeaponNames[job]; ok {
+		return name
+	}
+
+	name, _ := JobSpriteName(job)
+
+	return name
 }
 
 // FallbackJob is the job we render when the class id isn't one we know. Every
@@ -204,7 +455,15 @@ func JobSpriteName(job int) (string, bool) {
 // Job is the only thing that says so: there is no race field on the wire, and
 // the server infers it from the job the same way.
 func (s Spec) isDoram() bool {
-	return s.Job == JobSummoner
+	return doramJobs[s.Job]
+}
+
+// doramJobs is every job drawn from the Doram tree: the Summoner, its baby,
+// and the Spirit Handler it grows into.
+var doramJobs = map[int]bool{
+	JobSummoner:      true,
+	JobBabySummoner:  true,
+	JobSpiritHandler: true,
 }
 
 // bodyRoot and headRoot pick the tree this look's sprites live under.
@@ -222,6 +481,16 @@ func (s Spec) headRoot() string {
 	}
 
 	return headDir
+}
+
+// weaponRoot picks the tree this look's weapon art lives under. A Doram's
+// weapons sit beside its body rather than in the human tree.
+func (s Spec) weaponRoot() string {
+	if s.isDoram() {
+		return doramRoot
+	}
+
+	return spriteRoot
 }
 
 // HairPalettePath returns the archive path of the palette this look's hair is
@@ -327,18 +596,28 @@ func (s Spec) WeaponPathCandidates() [][2]string {
 		return nil
 	}
 
-	job, _ := JobSpriteName(s.Job)
+	// The folder name is also the start of the file name inside it, so the
+	// weapon's job stands in for the body's throughout.
+	job := JobWeaponName(s.Job)
 	sex := s.sexSuffix()
-	dir := fmt.Sprintf(`%s%s\`, weaponRoot, job)
+	dir := fmt.Sprintf(`%s%s\`, s.weaponRoot(), job)
 
 	candidates := make([][2]string, 0, 2)
 
-	byID := fmt.Sprintf(`%s%s_%s_%d`, dir, job, sex, s.Weapon)
-	candidates = append(candidates, [2]string{byID + ".spr", byID + ".act"})
+	base := ""
+	if suffix, ok := WeaponSuffix(s.Weapon); ok {
+		base = fmt.Sprintf(`%s%s_%s%s`, dir, job, sex, suffix)
+		candidates = append(candidates, [2]string{base + ".spr", base + ".act"})
+	}
 
-	if class, ok := WeaponClassName(s.Weapon); ok {
-		byClass := fmt.Sprintf(`%s%s_%s_%s`, dir, job, sex, class)
-		candidates = append(candidates, [2]string{byClass + ".spr", byClass + ".act"})
+	// The look as a file name of its own, for art the tables do not know: a
+	// weapon added to the server after this client's data was made is filed by
+	// its id, and trying it costs one load that fails. For a weapon that does
+	// have art of its own the suffix above is already that id, so the two
+	// agree and only one is offered.
+	byID := fmt.Sprintf(`%s%s_%s_%d`, dir, job, sex, s.Weapon)
+	if byID != base {
+		candidates = append(candidates, [2]string{byID + ".spr", byID + ".act"})
 	}
 
 	return candidates
