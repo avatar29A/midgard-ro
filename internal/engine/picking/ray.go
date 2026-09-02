@@ -84,6 +84,78 @@ func (r Ray) IntersectPlaneY(planeY float32) (x, z float32, ok bool) {
 	return x, z, true
 }
 
+// IntersectGround walks a ray until it goes below the ground and reports where
+// it crossed.
+//
+// A single flat plane will not do. The ground is not flat: a ramp, a stair or
+// a hillside all put the surface above or below whatever height the plane was
+// chosen at, and a ray that misses by a little vertically misses by a lot
+// horizontally once the camera is anything but overhead. That is what makes
+// the pointer and the cell it picks drift apart as the camera is lowered — and
+// the further from the chosen height you point, the wider the gap.
+//
+// So: step along the ray until it is under the ground, then halve the last
+// step until the crossing is pinned. Stepping finds the first crossing rather
+// than the nearest, which is what picking wants — a ridge between you and the
+// place you clicked should be what the click lands on.
+//
+// The step is in world units; anything up to about half a cell is fine, since
+// the bisection does the accuracy and the step only has to not step over a
+// feature whole.
+func (r Ray) IntersectGround(height func(x, z float32) float32, step, maxDistance float32) (x, z float32, ok bool) {
+	if height == nil || step <= 0 || maxDistance <= 0 {
+		return 0, 0, false
+	}
+
+	above := func(t float32) (float32, float32, bool) {
+		px := r.Origin[0] + t*r.Direction[0]
+		py := r.Origin[1] + t*r.Direction[1]
+		pz := r.Origin[2] + t*r.Direction[2]
+
+		return px, pz, py >= height(px, pz)
+	}
+
+	// Starting underground means the camera is inside the terrain, which is
+	// not a state the map puts it in; nothing sensible can be picked from
+	// there.
+	if _, _, up := above(0); !up {
+		return 0, 0, false
+	}
+
+	last := float32(0)
+
+	for t := step; t <= maxDistance; t += step {
+		if _, _, up := above(t); up {
+			last = t
+
+			continue
+		}
+
+		// Crossed between last and t: halve until the two are close enough
+		// that the cell no longer changes.
+		lo, hi := last, t
+		for i := 0; i < groundBisections; i++ {
+			mid := (lo + hi) / 2
+			if _, _, up := above(mid); up {
+				lo = mid
+			} else {
+				hi = mid
+			}
+		}
+
+		x, z, _ = above((lo + hi) / 2)
+
+		return x, z, true
+	}
+
+	return 0, 0, false
+}
+
+// groundBisections is how many times the crossing is halved. Ten takes a step
+// of a few world units down to thousandths of one, far finer than the cell the
+// answer is rounded to.
+const groundBisections = 10
+
 // IntersectAABB tests ray intersection with an axis-aligned bounding box.
 // Returns the distance to intersection (t) and whether intersection occurred.
 // If the ray starts inside the box, returns the exit distance.

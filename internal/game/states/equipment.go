@@ -246,3 +246,133 @@ func (s *InGameState) handleConfigNotify(data []byte) error {
 // ShowEquipmentOn reports whether other players may look at what this
 // character is wearing.
 func (s *InGameState) ShowEquipmentOn() bool { return s.showEquipment }
+
+// handleSpriteChange applies the server's word that something about how a unit
+// looks has changed.
+//
+// The server says so the moment it happens — a job change, a hat put on, a
+// weapon drawn — and until this was read, none of it showed until the
+// character was logged out and back in, because the appearance was only ever
+// taken from the character list at login.
+func (s *InGameState) handleSpriteChange(data []byte) error {
+	change, ok := packets.DecodeSpriteChange(data)
+	if !ok {
+		logger.Warn("short sprite change", zap.Int("len", len(data)))
+
+		return nil
+	}
+
+	trace.Emit(trace.HUD, "sprite-change",
+		zap.Uint32("aid", change.AID), zap.Uint8("look", change.Look),
+		zap.Uint32("value", change.Value))
+
+	if change.AID == s.selfAID() {
+		s.applyOwnLook(change)
+
+		return nil
+	}
+
+	s.applyUnitLook(change)
+
+	return nil
+}
+
+// applyOwnLook folds a change into our own character and rebakes it.
+func (s *InGameState) applyOwnLook(change packets.SpriteChange) {
+	char := s.CharInfo()
+	if char == nil {
+		return
+	}
+
+	value := uint16(change.Value)
+
+	switch change.Look {
+	case packets.LookBase:
+		char.Class = value
+	case packets.LookHair:
+		char.HairStyle = value
+	case packets.LookWeapon:
+		// A look the archive has no art for is not a reason to disarm the
+		// character. The server sends whichever of the two forms it holds —
+		// the weapon's class, or the item's own id for a weapon with art of
+		// its own — and an item whose database row omits the view falls back
+		// to the id, which the archive files by class instead. Dropping the
+		// weapon on that would take a knife out of a character's hand because
+		// the server phrased the same knife differently.
+		//
+		// Zero is the server saying unarmed, and is always obeyed.
+		if value == 0 || s.weaponHasArt(value) {
+			char.Weapon = value
+		}
+
+		char.Shield = uint16(change.Value2)
+	case packets.LookHeadBottom:
+		char.HeadBottom = value
+	case packets.LookHeadTop:
+		char.HeadTop = value
+	case packets.LookHeadMid:
+		char.HeadMid = value
+	case packets.LookShield:
+		char.Shield = value
+	default:
+		// Hair color, clothes and the rest do not change which sprite is
+		// drawn, only how it is tinted, which nothing here does yet.
+		return
+	}
+
+	s.loadPlayerSprites()
+}
+
+// weaponHasArt reports whether a weapon look names a sprite the archive
+// actually holds.
+func (s *InGameState) weaponHasArt(look uint16) bool {
+	if s.manager == nil || s.manager.TexLoader == nil {
+		return false
+	}
+
+	spec := s.manager.Session.SpriteSpec()
+	spec.Weapon = int(look)
+
+	for _, candidate := range spec.WeaponPathCandidates() {
+		if _, err := s.manager.TexLoader(candidate[0]); err == nil {
+			return true
+		}
+	}
+
+	return false
+}
+
+// applyUnitLook folds a change into somebody else. Their sheet is keyed by
+// appearance, so writing the new look is all it takes — the next frame bakes
+// or finds the sheet that goes with it.
+func (s *InGameState) applyUnitLook(change packets.SpriteChange) {
+	if s.entityManager == nil {
+		return
+	}
+
+	e := s.entityManager.Get(change.AID)
+	if e == nil {
+		return
+	}
+
+	value := int(change.Value)
+
+	switch change.Look {
+	case packets.LookBase:
+		e.Job = value
+		e.SpriteID = value
+	case packets.LookHair:
+		e.HairStyle = value
+	case packets.LookWeapon:
+		e.Weapon = value
+		e.Shield = int(change.Value2)
+	case packets.LookHeadBottom:
+		e.HeadBottom = value
+	case packets.LookHeadTop:
+		e.HeadTop = value
+	case packets.LookHeadMid:
+		e.HeadMid = value
+	case packets.LookShield:
+		e.Shield = value
+	}
+}

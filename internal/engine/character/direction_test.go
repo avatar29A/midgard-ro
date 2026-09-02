@@ -193,3 +193,86 @@ func TestVisualDirectionDefaultCameraMatchesGameplay(t *testing.T) {
 		})
 	}
 }
+
+// TestBillboardFacesTheCameraSquarely: the quad's axes have to be
+// perpendicular to the line of sight, or the sprite is foreshortened by
+// however far the camera is tilted — which at RO's own angle is a third of
+// the character's height.
+func TestBillboardFacesTheCameraSquarely(t *testing.T) {
+	// A camera at RO's pitch of 0.85 radians, 300 units out.
+	const pitch = 0.85
+
+	camX := float32(0)
+	camY := float32(300 * gomath.Sin(pitch))
+	camZ := float32(300 * gomath.Cos(pitch))
+
+	right, up := BillboardVectors(camX, camY, camZ, 0, 0, 0)
+
+	view := [3]float32{camX, camY, camZ}
+	length := float32(gomath.Sqrt(float64(view[0]*view[0] + view[1]*view[1] + view[2]*view[2])))
+	for i := range view {
+		view[i] /= length
+	}
+
+	if d := dot(up, view); absf(d) > 1e-4 {
+		t.Errorf("up is not square to the view: dot = %v", d)
+	}
+	if d := dot(right, view); absf(d) > 1e-4 {
+		t.Errorf("right is not square to the view: dot = %v", d)
+	}
+	if d := dot(right, up); absf(d) > 1e-4 {
+		t.Errorf("the axes are not square to each other: dot = %v", d)
+	}
+
+	if l := length3(up); absf(l-1) > 1e-4 {
+		t.Errorf("up is %v long, want 1 — a quad scaled by it would be the wrong size", l)
+	}
+	if l := length3(right); absf(l-1) > 1e-4 {
+		t.Errorf("right is %v long, want 1", l)
+	}
+
+	// Leaned back, not upright: an upright quad is what the squashing was.
+	if up[1] > 0.99 {
+		t.Errorf("up is %v, which is still upright — the sprite would stay foreshortened", up)
+	}
+}
+
+// TestBillboardIsUprightForALevelCamera: with nothing to lean away from, the
+// quad stands as it always did.
+func TestBillboardIsUprightForALevelCamera(t *testing.T) {
+	right, up := BillboardVectors(0, 0, 100, 0, 0, 0)
+
+	if up != [3]float32{0, 1, 0} {
+		t.Errorf("up = %v, want straight up for a camera at eye level", up)
+	}
+	// Across the view, in the sense this has always used: the other way round
+	// mirrors every sprite.
+	if right != [3]float32{-1, 0, 0} {
+		t.Errorf("right = %v, want across the view", right)
+	}
+}
+
+// TestBillboardNeverRolls: the horizontal axis stays level however the camera
+// is placed, so a sprite is never drawn tilted sideways.
+func TestBillboardNeverRolls(t *testing.T) {
+	for _, cam := range [][3]float32{
+		{100, 200, 100}, {-50, 400, 30}, {0, 10, -300}, {7, 0, 0},
+	} {
+		right, _ := BillboardVectors(cam[0], cam[1], cam[2], 0, 0, 0)
+		if right[1] != 0 {
+			t.Errorf("camera %v gave right = %v, which rolls the sprite", cam, right)
+		}
+	}
+}
+
+func dot(a, b [3]float32) float32 { return a[0]*b[0] + a[1]*b[1] + a[2]*b[2] }
+
+func length3(v [3]float32) float32 { return float32(gomath.Sqrt(float64(dot(v, v)))) }
+
+func absf(v float32) float32 {
+	if v < 0 {
+		return -v
+	}
+
+	return v
+}

@@ -122,6 +122,15 @@ func (c *Character) SetCell(cellX, cellY int) {
 	c.SetPosition(x, c.groundAt(x, z), z)
 }
 
+// SettleOnGround puts the character on the terrain under it, for one that is
+// standing still and so is not having its height worked out by walking.
+func (c *Character) SettleOnGround() {
+	y := c.groundAt(c.RenderX, c.RenderZ)
+
+	c.WorldY = y
+	c.RenderY = y
+}
+
 // IsWalkingPath reports whether a server path is being walked.
 func (c *Character) IsWalkingPath() bool {
 	return len(c.path) > 0
