@@ -127,6 +127,16 @@ type InGameState struct {
 	// each is complained about once rather than on every sighting.
 	unknownJobs map[int]bool
 
+	// placingSkill is a ground skill chosen and waiting for a cell, zero when
+	// none is, and placingLevel the level it will go off at.
+	placingSkill uint16
+	placingLevel int
+
+	// The cast bar: which skill, how long it takes, and how much is left.
+	castSkill   uint16
+	castTotalMs float32
+	castLeftMs  float32
+
 	// pendingBlows are swings whose outcome is still traveling: the figure,
 	// the flinch and the death wait for the frame the blade lands on.
 	pendingBlows []pendingBlow
@@ -746,6 +756,7 @@ func (s *InGameState) Update(dt float64) error {
 		s.updatePendingPickup(deltaMs, walking)
 		s.updateCombat(deltaMs, walking)
 		s.advancePendingBlows(deltaMs)
+		s.advanceCast(deltaMs)
 		s.updateDamageNumbers(deltaMs)
 		s.updateEffects(deltaMs)
 		s.updateCelebrations(deltaMs)
@@ -925,6 +936,13 @@ func (s *InGameState) drawGroundMarker(viewProj math.Mat4) {
 	progress := float32(1)
 	if s.markerPulse > 0 {
 		progress = 1 - s.markerPulse/scene.MarkerPulseMs
+	}
+
+	// A skill waiting for a cell holds the marker at the top of its swell, so
+	// the ring under the cursor reads as armed rather than as the ordinary
+	// where-you-would-walk mark.
+	if s.placingSkill != 0 {
+		progress = 0
 	}
 
 	s.marker.Render(viewProj, worldX, worldY, worldZ, entity.CellSize, progress, 1)
@@ -2220,6 +2238,13 @@ func abs(v int) int {
 func (s *InGameState) ClickWorld(mouseX, mouseY, viewportW, viewportH float32) {
 	// There is no world to click on until the map is up.
 	if s.mapLoader != nil || s.player == nil {
+		return
+	}
+
+	// A skill waiting for a cell takes the click before anything else can:
+	// while one is held, clicking means "here" and not "walk there" or
+	// "attack that".
+	if s.placeHeldSkill() {
 		return
 	}
 

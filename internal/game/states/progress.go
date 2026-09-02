@@ -130,8 +130,15 @@ func (s *InGameState) UseSkill(skillID uint16, level int) error {
 		return nil
 	}
 
+	// A skill that needs a cell is held until one is chosen, rather than cast
+	// at whatever happens to be targeted.
 	if skill.Inf&packets.InfGround != 0 && skill.Inf&(packets.InfAttack|packets.InfSelf|packets.InfSupport) == 0 {
-		s.chat.AddLocal(ChatError, "That skill has to be placed, which is not supported yet.")
+		level := level
+		if level <= 0 {
+			level = skill.Level
+		}
+
+		s.BeginPlacing(skillID, level)
 
 		return nil
 	}
