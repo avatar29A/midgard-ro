@@ -256,10 +256,18 @@ func (s *InGameState) handleDamage(data []byte) error {
 		return nil
 	}
 
+	// The delay is the thing to watch here: it is how long the blow spends in
+	// the air, and a zero means the swing and its outcome went out together —
+	// which is the fault this replaced.
+	speed := blow.AnimationSpeed()
+	delay := s.hitDelayMs(blow.SourceID, speed)
+
 	trace.Emit(trace.HUD, "damage",
 		zap.Uint32("from", blow.SourceID), zap.Uint32("to", blow.TargetID),
 		zap.Int("amount", blow.Amount), zap.Int("hits", blow.Hits),
-		zap.Bool("miss", blow.Missed()), zap.Bool("critical", blow.Critical()))
+		zap.Bool("miss", blow.Missed()), zap.Bool("critical", blow.Critical()),
+		zap.Int("srcSpeed", blow.SourceSpeed), zap.Float32("animSpeed", speed),
+		zap.Float32("hitDelayMs", delay))
 
 	// Both sides turn to face each other. The server says nothing about which
 	// way anyone is looking when a blow lands, so without this a monster that
@@ -267,16 +275,175 @@ func (s *InGameState) handleDamage(data []byte) error {
 	// whose target circled it would go on swinging at where it used to be.
 	s.faceTowards(blow.SourceID, blow.TargetID)
 
-	// The swing plays whether or not it connected — a miss is still a swing —
-	// while the flinch is only for a blow that landed.
+	// The swing starts now — it is the answer to a blow being thrown, and a
+	// swing that waits reads as a character that hesitated.
+	//
+	// What the swing does waits for the swing to get there. An animation is
+	// not instantaneous and its outcome does not belong at its start: a
+	// Swordman's sword takes nine frames and lands on the sixth, so a figure,
+	// a flinch and a death shown at once resolve the exchange half a second
+	// before the blade arrives.
+	s.playAttackAnimation(blow.SourceID, speed)
+
+	if delay > 0 {
+		s.pendingBlows = append(s.pendingBlows, pendingBlow{blow: blow, remainingMs: delay})
+
+		return nil
+	}
+
+	s.landBlow(pendingBlow{blow: blow})
+
+	return nil
+}
+
+// pendingBlow is what a swing does, waiting for the swing to reach the frame
+// where it does it.
+type pendingBlow struct {
+	blow packets.Damage
+
+	// remainingMs counts down to the hit frame.
+	remainingMs float32
+
+	// kills marks a blow the target did not survive. The server says so in a
+	// packet of its own that arrives while the sword is still traveling, and
+	// a unit that falls over then is a unit that died before it was hit.
+	kills bool
+}
+
+// hitDelayMs is how long after a swing begins before it lands.
+//
+// The attacker's own sprite says: the hit frame of its attack, times the frame
+// interval, at the speed the swing is playing. A sheet that has not been baked
+// answers zero, which lands the blow at once — the right answer when there is
+// nothing on screen to wait for.
+func (s *InGameState) hitDelayMs(attacker uint32, speed float32) float32 {
+	if s.playerRender == nil || attacker == 0 {
+		return 0
+	}
+
+	var (
+		frame    int
+		interval float32
+	)
+
+	if attacker == s.selfAID() {
+		frame = s.playerRender.HitFrame(entity.ActionAttack)
+		interval = s.playerRender.FrameInterval(entity.ActionAttack)
+	} else {
+		if s.entityManager == nil {
+			return 0
+		}
+
+		e := s.entityManager.Get(attacker)
+		if e == nil || !unitIsDrawable(e) {
+			return 0
+		}
+
+		spec := unitSpec(e)
+		frame = s.playerRender.UnitHitFrame(spec, entity.ActionAttack)
+		interval = s.playerRender.UnitFrameInterval(spec, entity.ActionAttack)
+	}
+
+	if speed <= 0 {
+		speed = 1
+	}
+
+	return float32(frame) * interval * speed
+}
+
+// hitSound is the sound the attacker's swing plays where it lands.
+func (s *InGameState) hitSound(attacker uint32) string {
+	if s.playerRender == nil || attacker == 0 {
+		return ""
+	}
+
+	if attacker == s.selfAID() {
+		return s.playerRender.HitSound(entity.ActionAttack)
+	}
+
+	if s.entityManager == nil {
+		return ""
+	}
+
+	e := s.entityManager.Get(attacker)
+	if e == nil || !unitIsDrawable(e) {
+		return ""
+	}
+
+	return s.playerRender.UnitHitSound(unitSpec(e), entity.ActionAttack)
+}
+
+// landBlow applies what a swing did, at the moment it did it.
+func (s *InGameState) landBlow(p pendingBlow) {
+	blow := p.blow
+
 	s.addDamageNumber(blow)
-	s.playAttackAnimation(blow.SourceID, blow.AnimationSpeed())
+
+	// The sprite names the sound on the frame the blow lands, which is the
+	// same frame as everything else here.
+	if sound := s.hitSound(blow.SourceID); sound != "" {
+		s.soundRequest = worldSoundDir + sound
+	}
+
 	if !blow.Missed() {
 		s.faceTowards(blow.TargetID, blow.SourceID)
 		s.playAnimation(blow.TargetID, entity.ActionHurt)
 	}
 
-	return nil
+	if p.kills {
+		s.killUnit(blow.TargetID)
+	}
+}
+
+// advancePendingBlows lands every swing that has reached its hit frame.
+func (s *InGameState) advancePendingBlows(deltaMs float32) {
+	if len(s.pendingBlows) == 0 {
+		return
+	}
+
+	kept := s.pendingBlows[:0]
+	for _, pending := range s.pendingBlows {
+		pending.remainingMs -= deltaMs
+		if pending.remainingMs > 0 {
+			kept = append(kept, pending)
+
+			continue
+		}
+
+		s.landBlow(pending)
+	}
+
+	s.pendingBlows = kept
+}
+
+// killDeferred marks a target's blow in flight as fatal, and reports whether
+// there was one.
+//
+// The server sends the death the moment it decides it, which is while the
+// sword that caused it is still on its way. Holding it until the blow lands
+// is what keeps a monster on its feet until it is hit.
+func (s *InGameState) killDeferred(aid uint32) bool {
+	// The last one queued, since that is the blow that killed it. Attaching
+	// the death to an earlier one would drop the target on a hit it survived
+	// and leave the fatal blow landing on a corpse.
+	for i := len(s.pendingBlows) - 1; i >= 0; i-- {
+		if s.pendingBlows[i].blow.TargetID == aid {
+			s.pendingBlows[i].kills = true
+
+			return true
+		}
+	}
+
+	return false
+}
+
+// forgetPendingBlows drops every blow in flight.
+//
+// A map change or a death takes away everything they were going to happen to,
+// and a figure floating over a monster on the last map is worse than one that
+// never appeared.
+func (s *InGameState) forgetPendingBlows() {
+	s.pendingBlows = nil
 }
 
 // playGesture plays one of the things ZC_NOTIFY_ACT carries that is not a

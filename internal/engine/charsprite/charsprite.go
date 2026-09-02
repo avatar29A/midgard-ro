@@ -219,6 +219,56 @@ func (m ActionMap) withWeapon(weapon *formats.ACT) ActionMap {
 	return m
 }
 
+// damageMark is the event a sprite marks its damage frame with.
+//
+// Not a sound — a marker, and the only event in the archive that is not a file
+// name. A Poring's attack carries poring_attack.wav on frame 11 and "atk" on
+// frame 12; the first is when it makes the noise and the second is when the
+// blow lands.
+const damageMark = "atk"
+
+// hitFrame is the frame of an action at which what it depicts happens, and the
+// sound the frames carry.
+//
+// The sprite says so itself, and says it three different ways:
+//
+//   - "atk" on a frame. Every monster in the archive marks its attack this
+//     way: fabre at 2 of 7, pecopeco at 5 of 9, lunatic at 11 of 19, poring at
+//     12 of 28. This is the damage frame proper and is preferred.
+//   - a sound on a frame, when there is no "atk". A player's body marks the
+//     sword swing with attack_sword.wav on frame 5 of 9, which is where the
+//     blade arrives. The last such frame, because a sprite may sound its
+//     wind-up too — a hornet buzzes on frame 0 and stings on frame 7.
+//   - nothing at all, in which case the frame before the last. That is what
+//     rAthena's own note on clif_damage says the client falls back to, and
+//     what the server times its damage against.
+func hitFrame(frames []formats.Frame, events []string) (int, string) {
+	marked, sounded, sound := -1, -1, ""
+
+	for i, frame := range frames {
+		if frame.EventID < 0 || int(frame.EventID) >= len(events) {
+			continue
+		}
+
+		if name := events[frame.EventID]; name == damageMark {
+			marked = i
+		} else if name != "" {
+			sounded, sound = i, name
+		}
+	}
+
+	switch {
+	case marked >= 0:
+		return marked, sound
+	case sounded >= 0:
+		return sounded, sound
+	case len(frames) >= 2:
+		return len(frames) - 2, ""
+	default:
+		return 0, ""
+	}
+}
+
 // actHasArt reports whether an ACT set draws anything at all.
 //
 // A weapon's ACT carries an entry for every set the body has, and leaves the
@@ -292,6 +342,21 @@ type Sheet struct {
 	// ACT. Zero means the file did not say and the caller should fall back to
 	// its own rate.
 	IntervalMs [LoadedActions]float32
+
+	// HitFrame is the frame of an action at which what it depicts actually
+	// happens — for a swing, where the blade arrives.
+	//
+	// An animation is not instantaneous and its outcome does not belong at
+	// its start. A Swordman's sword swing is nine frames and the blade lands
+	// on the sixth; showing the damage, the flinch and the death on the first
+	// resolves the whole exchange half a second before the sword gets there,
+	// which is a monster dying before it has been hit.
+	HitFrame [LoadedActions]int
+
+	// HitSound is the sound file the hit frame carries, without a directory.
+	// Empty when the sprite marks the frame with nothing to play, which is
+	// most of them.
+	HitSound [LoadedActions]string
 
 	// Dropped counts frames left unbaked by MaxAnimationFrames, so a
 	// shortened animation is reported rather than silently shortened.
@@ -583,12 +648,16 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 		Dropped: dropped,
 	}
 
-	// Every direction of an action shares one interval, so the first is the
-	// action's rate.
+	// Every direction of an action shares one interval and one hit frame, so
+	// the first direction is the action's.
 	for action := 0; action < LoadedActions; action++ {
 		idx := action * Directions
 		if idx < len(bodyACT.Intervals) {
 			sheet.IntervalMs[action] = bodyACT.Intervals[idx] * ActIntervalTickMs
+		}
+		if idx < len(bodyACT.Actions) {
+			sheet.HitFrame[action], sheet.HitSound[action] =
+				hitFrame(bodyACT.Actions[idx].Frames, bodyACT.Events)
 		}
 	}
 
