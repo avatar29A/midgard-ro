@@ -68,6 +68,8 @@ type InputState struct {
 	prevKeyEnter     bool
 	prevKeyEscape    bool
 	prevKeyTab       bool
+	prevKeyLeft      bool
+	prevKeyRight     bool
 
 	// Key pressed this frame (edge detected)
 	KeyBackspacePressed bool
@@ -75,6 +77,8 @@ type InputState struct {
 	KeyEnterPressed     bool
 	KeyEscapePressed    bool
 	KeyTabPressed       bool
+	KeyLeftPressed      bool
+	KeyRightPressed     bool
 }
 
 // Update prepares input state for a new frame.
@@ -99,6 +103,8 @@ func (i *InputState) Update() {
 	i.KeyEnterPressed = i.KeyEnter && !i.prevKeyEnter
 	i.KeyEscapePressed = i.KeyEscape && !i.prevKeyEscape
 	i.KeyTabPressed = i.KeyTab && !i.prevKeyTab
+	i.KeyLeftPressed = i.KeyLeft && !i.prevKeyLeft
+	i.KeyRightPressed = i.KeyRight && !i.prevKeyRight
 
 	// Store current state for next frame
 	i.prevMouseLeft = i.MouseLeftDown
@@ -111,6 +117,8 @@ func (i *InputState) Update() {
 	i.prevKeyEnter = i.KeyEnter
 	i.prevKeyEscape = i.KeyEscape
 	i.prevKeyTab = i.KeyTab
+	i.prevKeyLeft = i.KeyLeft
+	i.prevKeyRight = i.KeyRight
 }
 
 // EndFrame clears per-frame input state.

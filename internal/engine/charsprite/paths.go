@@ -7,6 +7,7 @@ import "fmt"
 // on lookup — the same arrangement the UI window skin uses.
 //
 //	인간족   "human race"  — the character sprite root
+//	도람족   "doram race"  — the same tree again for Summoners
 //	몸통     "body"        — job sprites, one per job/sex
 //	머리통   "head"        — hair sprites, numbered per sex
 //	남 / 여  male / female — both a folder and a filename suffix
@@ -14,12 +15,37 @@ const (
 	spriteRoot = `data\sprite\인간족\`
 	bodyDir    = spriteRoot + `몸통\`
 
-	// 도람족 "Doram race" — the Summoner and what it grows into are drawn
-	// from a directory of their own rather than from the human one, so the
-	// job decides which root its body comes from.
-	doramSpriteRoot = `data\sprite\도람족\`
-	doramBodyDir    = doramSpriteRoot + `몸통\`
-	headDir         = spriteRoot + `머리통\`
+	headDir = spriteRoot + `머리통\`
+
+	// Doram characters are a second race with the same tree beneath it —
+	// body and head, split by sex, named the same way. Only the root differs,
+	// which is why this is a prefix swap rather than a second resolver.
+	// Palettes live in their own tree, and the two races are not arranged
+	// the same way there: humans sit directly under 머리 with no race folder,
+	// Doram get one. That asymmetry is the archive's, not ours.
+	//
+	//	머리  "hair"
+	palHairDir      = `data\palette\머리\`
+	palDoramHairDir = `data\palette\도람족\머리\`
+
+	doramRoot    = `data\sprite\도람족\`
+	doramBodyDir = doramRoot + `몸통\`
+	doramHeadDir = doramRoot + `머리통\`
+
+	// The two jobs a character can be created as. Our server allows both:
+	// it is a RENEWAL build at a packet version where allowed_job_flag is 3
+	// (char/char.cpp:2814-2818). They live here because the sprite root
+	// depends on which one it is, and one definition beats three.
+	//
+	// JobNovice is a Human.
+	JobNovice = 0
+	// JobSummoner is a Doram, drawn from its own sprite tree.
+	JobSummoner = 4218
+
+	// JobBabySummoner and JobSpiritHandler are the rest of the Doram line,
+	// drawn from the same tree.
+	JobBabySummoner  = 4220
+	JobSpiritHandler = 4308
 
 	// Monsters and NPCs are single sprites rather than a body with a head
 	// anchored to it, and live outside the character tree.
@@ -177,9 +203,9 @@ var jobSpriteNames = map[int]string{
 	// The Doram jobs, whose bodies come from a directory of their own — see
 	// bodyRoot. The archive names them in English, as it does the fourth
 	// classes.
-	4218: `summoner`,       // Summoner
-	4220: `summoner`,       // Baby Summoner
-	4308: `spirit_handler`, // Spirit Handler
+	JobSummoner:      `summoner`,       // Summoner
+	JobBabySummoner:  `summoner`,       // Baby Summoner
+	JobSpiritHandler: `spirit_handler`, // Spirit Handler
 
 	// Mounted and costume forms of the first classes.
 	// A knight on its Peco and a character in a wedding dress are jobs of
@@ -349,29 +375,6 @@ var jobSpriteNames = map[int]string{
 	4344: `원더러`,    // Wanderer 2Nd
 }
 
-// doramJobs are the jobs drawn from the Doram directory rather than the human
-// one: the Summoner, its baby, and the Spirit Handler it becomes.
-var doramJobs = map[int]bool{4218: true, 4220: true, 4308: true}
-
-// bodyRoot is the directory a job's body sprite lives under.
-func bodyRoot(job int) string {
-	if doramJobs[job] {
-		return doramBodyDir
-	}
-
-	return bodyDir
-}
-
-// weaponRoot is the directory a job's weapon art lives under. A Doram's
-// weapons sit beside its body, in the Doram tree rather than the human one.
-func weaponRoot(job int) string {
-	if doramJobs[job] {
-		return doramSpriteRoot
-	}
-
-	return spriteRoot
-}
-
 // jobWeaponNames is the folder a job's weapon art lives in, where that is not
 // the folder its body lives in.
 //
@@ -447,6 +450,73 @@ func JobSpriteName(job int) (string, bool) {
 
 // sexSuffix is the Korean male/female marker used for both the folder and the
 // filename suffix.
+// isDoram reports whether this look is drawn from the Doram tree.
+//
+// Job is the only thing that says so: there is no race field on the wire, and
+// the server infers it from the job the same way.
+func (s Spec) isDoram() bool {
+	return doramJobs[s.Job]
+}
+
+// doramJobs is every job drawn from the Doram tree: the Summoner, its baby,
+// and the Spirit Handler it grows into.
+var doramJobs = map[int]bool{
+	JobSummoner:      true,
+	JobBabySummoner:  true,
+	JobSpiritHandler: true,
+}
+
+// bodyRoot and headRoot pick the tree this look's sprites live under.
+func (s Spec) bodyRoot() string {
+	if s.isDoram() {
+		return doramBodyDir
+	}
+
+	return bodyDir
+}
+
+func (s Spec) headRoot() string {
+	if s.isDoram() {
+		return doramHeadDir
+	}
+
+	return headDir
+}
+
+// weaponRoot picks the tree this look's weapon art lives under. A Doram's
+// weapons sit beside its body rather than in the human tree.
+func (s Spec) weaponRoot() string {
+	if s.isDoram() {
+		return doramRoot
+	}
+
+	return spriteRoot
+}
+
+// HairPalettePath returns the archive path of the palette this look's hair is
+// drawn through, or "" when there is none to look for.
+//
+// Named 머리<style>_<sex>_<color>.pal. Nine colors, 0 to 8, exist per style
+// and sex; a number outside that simply will not be found, which the caller
+// treats as "use the sprite's own palette".
+func (s Spec) HairPalettePath() string {
+	if s.Kind != KindPlayer {
+		return ""
+	}
+
+	dir := palHairDir
+	if s.isDoram() {
+		dir = palDoramHairDir
+	}
+
+	hair := s.HairStyle
+	if hair <= 0 {
+		hair = 1
+	}
+
+	return fmt.Sprintf(`%s머리%d_%s_%d.pal`, dir, hair, s.sexSuffix(), s.HairColor)
+}
+
 func (s Spec) sexSuffix() string {
 	if s.Female {
 		return female
@@ -476,7 +546,7 @@ func (s Spec) BodyPathCandidates() [][2]string {
 	if s.Kind == KindPlayer {
 		job, _ := JobSpriteName(s.Job)
 		sex := s.sexSuffix()
-		base := fmt.Sprintf(`%s%s\%s_%s`, bodyRoot(s.Job), sex, job, sex)
+		base := fmt.Sprintf(`%s%s\%s_%s`, s.bodyRoot(), sex, job, sex)
 		return [][2]string{{base + ".spr", base + ".act"}}
 	}
 
@@ -530,7 +600,7 @@ func (s Spec) WeaponPathCandidates() [][2]string {
 	// weapon's job stands in for the body's throughout.
 	job := JobWeaponName(s.Job)
 	sex := s.sexSuffix()
-	dir := fmt.Sprintf(`%s%s\`, weaponRoot(s.Job), job)
+	dir := fmt.Sprintf(`%s%s\`, s.weaponRoot(), job)
 
 	candidates := make([][2]string, 0, 2)
 
@@ -594,6 +664,6 @@ func (s Spec) HeadPaths() (sprPath, actPath string) {
 	if hair <= 0 {
 		hair = 1 // style 0 isn't a file; every sex has a style 1
 	}
-	base := fmt.Sprintf(`%s%s\%d_%s`, headDir, sex, hair, sex)
+	base := fmt.Sprintf(`%s%s\%d_%s`, s.headRoot(), sex, hair, sex)
 	return base + ".spr", base + ".act"
 }

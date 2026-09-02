@@ -56,6 +56,11 @@ const (
 	// indistinguishable from one that was never recognized, and the two want
 	// opposite fixes.
 	Cmd = "cmd"
+	// Char covers the character-select and character-creation screens: which
+	// slot was clicked and whether it was empty, what was sent to create a
+	// character, and what the server said back. A creation that silently does
+	// nothing and one that was refused look identical on screen.
+	Char = "char"
 )
 
 // All is the channel spec that turns everything on.

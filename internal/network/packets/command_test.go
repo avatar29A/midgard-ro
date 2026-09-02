@@ -3,6 +3,7 @@ package packets
 import (
 	"bytes"
 	"encoding/binary"
+	"strings"
 	"testing"
 )
 
@@ -167,5 +168,114 @@ func TestEncodeBroadcastRefusesEmpty(t *testing.T) {
 	}
 	if EncodeLocalBroadcast("") != nil {
 		t.Error("encoded an empty local broadcast")
+	}
+}
+
+// TestEncodeMakeCharLayout: 36 bytes, and every field where the server reads
+// it. At our packet version the request carries a job and a sex and no stats —
+// the server writes 1 to each of those itself.
+func TestEncodeMakeCharLayout(t *testing.T) {
+	pkt := EncodeMakeChar(MakeCharRequest{
+		Name:      "QaFreshName",
+		Slot:      3,
+		HairColor: 5,
+		HairStyle: 12,
+		Job:       4218,
+		Sex:       1,
+	})
+
+	if pkt == nil {
+		t.Fatal("EncodeMakeChar returned nil for a valid request")
+	}
+
+	// Not cross-checked against ClientPacketLength: that table is generated
+	// from the map server's clif_packetdb.hpp and holds no char-server
+	// packets at all — CH_ENTER and PING are absent from it too. The size
+	// here is the struct's own, from common/packets.hpp:122-132.
+	if len(pkt) != 36 {
+		t.Fatalf("len = %d, want 36 (type 2 + name 24 + slot 1 + hair 4 + job 4 + sex 1)",
+			len(pkt))
+	}
+
+	if got := binary.LittleEndian.Uint16(pkt[0:2]); got != CH_MAKE_CHAR {
+		t.Errorf("id = 0x%04X, want 0x%04X", got, CH_MAKE_CHAR)
+	}
+
+	name := pkt[2:26]
+	if string(name[:len("QaFreshName")]) != "QaFreshName" {
+		t.Errorf("name = %q", name)
+	}
+	if name[len("QaFreshName")] != 0 {
+		t.Error("name is not terminated inside its field")
+	}
+
+	if pkt[26] != 3 {
+		t.Errorf("slot = %d, want 3", pkt[26])
+	}
+	if got := binary.LittleEndian.Uint16(pkt[27:29]); got != 5 {
+		t.Errorf("hair color = %d, want 5", got)
+	}
+	if got := binary.LittleEndian.Uint16(pkt[29:31]); got != 12 {
+		t.Errorf("hair style = %d, want 12", got)
+	}
+	if got := binary.LittleEndian.Uint32(pkt[31:35]); got != 4218 {
+		t.Errorf("job = %d, want 4218 (Summoner)", got)
+	}
+	if pkt[35] != 1 {
+		t.Errorf("sex = %d, want 1 (male)", pkt[35])
+	}
+}
+
+// TestEncodeMakeCharRefusesUnsendableNames: the field is 24 bytes and must
+// hold a terminator. Everything else about a name is the server's to judge.
+func TestEncodeMakeCharRefusesUnsendableNames(t *testing.T) {
+	if EncodeMakeChar(MakeCharRequest{Name: ""}) != nil {
+		t.Error("encoded an empty name")
+	}
+	if EncodeMakeChar(MakeCharRequest{Name: strings.Repeat("a", 24)}) != nil {
+		t.Error("encoded a 24-byte name, leaving no room for the terminator")
+	}
+	if EncodeMakeChar(MakeCharRequest{Name: strings.Repeat("a", 23)}) == nil {
+		t.Error("refused a 23-byte name, which fits")
+	}
+}
+
+// TestMakeCharRefusal: a taken name is the only answer to "is this name free",
+// because nothing asks that question — so its code must be read exactly.
+func TestMakeCharRefusal(t *testing.T) {
+	code, ok := DecodeMakeCharRefuse([]byte{0x6E, 0x00, MakeCharNameTaken})
+	if !ok {
+		t.Fatal("could not read a refusal")
+	}
+	if code != MakeCharNameTaken {
+		t.Errorf("code = 0x%02X, want 0x00", code)
+	}
+	if msg := MakeCharFailure(code); !strings.Contains(msg, "already taken") {
+		t.Errorf("message = %q, want it to name the cause", msg)
+	}
+
+	if _, ok := DecodeMakeCharRefuse([]byte{0x6E, 0x00}); ok {
+		t.Error("read a refusal from a packet too short to hold one")
+	}
+
+	// Everything the server refuses for another reason still has to say
+	// something rather than nothing.
+	for _, code := range []uint8{MakeCharDenied, MakeCharUnderaged, MakeCharSlotNotAllowed} {
+		if MakeCharFailure(code) == "" {
+			t.Errorf("code 0x%02X has no message", code)
+		}
+	}
+}
+
+// TestMakeCharAcceptIsFramed: 0x0B6F is the id at our packet version, and the
+// framing layer has to know its length or the stream desynchronizes the first
+// time a character is made.
+func TestMakeCharAcceptIsFramed(t *testing.T) {
+	if _, ok := Length(HC_ACCEPT_MAKECHAR); !ok {
+		t.Errorf("0x%04X has no length: the framing layer will lose the stream",
+			HC_ACCEPT_MAKECHAR)
+	}
+	if _, ok := Length(HC_REFUSE_MAKECHAR); !ok {
+		t.Error("0x006E has no length")
 	}
 }

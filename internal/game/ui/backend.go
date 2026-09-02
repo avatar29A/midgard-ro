@@ -108,6 +108,9 @@ type UIBackend interface {
 	// RenderCharSelectUI renders the character selection screen.
 	RenderCharSelectUI(state CharSelectUIState, width, height float32)
 
+	// RenderCharCreateUI renders the character creation screen.
+	RenderCharCreateUI(state CharCreateUIState, width, height float32)
+
 	// RenderLoadingUI renders the map loading screen.
 	RenderLoadingUI(state LoadingUIState, width, height float32)
 
@@ -151,9 +154,64 @@ type CharSelectUIState struct {
 	IsLoading     bool
 	IsReady       bool
 
+	// CreatableSlots is how many slots this account may use, which is what
+	// the screen pages over. Not MAX_CHARS: see states.CharSelectState.
+	CreatableSlots int
+
 	// Callbacks
 	OnSelect      func(index int)
 	OnSelectIndex func(index int)
+
+	// OnCreateSlot asks to create a character in an empty slot. Fired by a
+	// double click on the slot and by the Make button, which the original
+	// shows in the place Ok occupies for a filled one.
+	OnCreateSlot func(slot int)
+}
+
+// The sex values the wire uses, and the server's only two accepted ones.
+const (
+	// SexFemale is 0 on the wire.
+	SexFemale uint8 = 0
+	// SexMale is 1.
+	SexMale uint8 = 1
+)
+
+// CharCreateUIState contains the data needed to render character creation.
+type CharCreateUIState struct {
+	// Slot is where the character will go, decided before this screen opened.
+	Slot int
+
+	// Sex is the character's sex. At our packet version the client chooses
+	// and sends it, so this is a choice rather than a report.
+	Sex uint8
+
+	// Job, HairStyle and Facing are the rest of the look being built.
+	Job       int
+	HairStyle int
+	HairColor int
+	Facing    int
+
+	// Name is what has been typed so far.
+	Name string
+
+	StatusMessage string
+	ErrorMessage  string
+
+	// OnSetName records a keystroke, OnCreate sends the request.
+	OnSetName func(name string)
+	OnCreate  func()
+
+	// OnCancel abandons creation and returns to character select.
+	OnCancel func()
+
+	// OnSetSex, OnSetJob and OnTurn change the look being previewed.
+	OnSetSex func(sex uint8)
+	OnSetJob func(job int)
+
+	// OnSetHair picks a hair style, OnSetColor its palette.
+	OnSetHair  func(style int)
+	OnSetColor func(color int)
+	OnTurn     func(delta int)
 }
 
 // LoadingUIState contains the data needed to render the loading UI.
