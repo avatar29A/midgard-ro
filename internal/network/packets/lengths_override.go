@@ -24,4 +24,13 @@ var packetLengthOverrides = map[uint16]int{
 	// reader logged one "resynchronising 0x0000, skipped: 2" per dropped
 	// item, which is exactly the two bytes it was leaving behind.
 	ZC_ITEM_FALL_ENTRY: 24,
+
+	// ZC_SPRITE_CHANGE. packet_db says 11; clif_sprite_change sends
+	// sizeof(PACKET_ZC_SPRITE_CHANGE), which is 15 at PACKETVER_RE 20211103.
+	//
+	// The 11 is the pre-20180704 shape, before val and val2 widened from
+	// uint16 to uint32 — the guard is rAthena's own, in packets_struct.hpp,
+	// and it is the same widening that made ZC_ITEM_FALL_ENTRY 24 rather than
+	// 22. The table line was never updated to match.
+	ZC_SPRITE_CHANGE: 15,
 }

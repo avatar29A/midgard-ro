@@ -4,12 +4,14 @@ package states
 import (
 	"fmt"
 	gomath "math"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/Faultbox/midgard-ro/internal/config"
 	"github.com/Faultbox/midgard-ro/internal/engine/camera"
+	"github.com/Faultbox/midgard-ro/internal/engine/character"
 	"github.com/Faultbox/midgard-ro/internal/engine/charsprite"
 	"github.com/Faultbox/midgard-ro/internal/engine/picking"
 	"github.com/Faultbox/midgard-ro/internal/engine/playerrender"
@@ -103,6 +105,11 @@ type InGameState struct {
 	// celebrations are level-ups waiting to be shown, and celebrationWaitMs
 	// how long before the next may start. soundRequest is a sound the world
 	// wants played, which the game plays because the state has no audio.
+	// groundTraceMs counts frames for the ground trace's throttle, and
+	// gridTraced marks the one-off height grid as already printed.
+	groundTraceMs int
+	gridTraced    bool
+
 	// showEquipment is the server's word on whether other players may look at
 	// what this character is wearing.
 	showEquipment bool
@@ -764,6 +771,9 @@ func (s *InGameState) Update(dt float64) error {
 
 		// Update cell position
 		s.TileX, s.TileY = s.player.CurrentCell()
+
+		s.traceGround()
+		s.traceHeightGrid()
 	}
 
 	// The click flourish runs down on its own; nothing else clears it.
@@ -817,15 +827,34 @@ func (s *InGameState) Render() error {
 		if s.playerRender == nil {
 			return
 		}
-		s.playerRender.Render(viewProj, s.player, s.camera.PosX, s.camera.PosZ)
-		s.renderUnits(viewProj)
+
+		// The screen's own axes, worked out once from where the camera is and
+		// what it is looking at. Every sprite in the frame is drawn on them,
+		// which is what keeps them all upright and square to the view — a
+		// quad turned toward the camera one sprite at a time tips over for
+		// anything near it, and RO never leans a sprite at all.
+		//
+		// The position is asked for rather than read off the camera's cached
+		// PosX/PosY/PosZ. Those are filled in by whoever last called Position
+		// and are not guaranteed to be this frame's or this target's: taken
+		// as the camera's whereabouts they gave a basis that was not the
+		// screen's at all, and the sprites rose and fell as the camera turned
+		// about a character standing still.
+		eye := s.camera.Position(x, y, z)
+
+		right, up := character.BillboardVectors(
+			eye.X, eye.Y, eye.Z,
+			x, y+camera.LookTargetLift, z)
+
+		s.playerRender.Render(viewProj, s.player, s.camera.PosX, s.camera.PosZ, right, up)
+		s.renderUnits(viewProj, right, up)
 	})
 	return nil
 }
 
 // renderUnits draws the other units on the map, sharing the player's billboard
 // renderer and its sheet cache.
-func (s *InGameState) renderUnits(viewProj math.Mat4) {
+func (s *InGameState) renderUnits(viewProj math.Mat4, right, up [3]float32) {
 	if s.entityManager == nil || s.manager == nil {
 		return
 	}
@@ -848,7 +877,8 @@ func (s *InGameState) renderUnits(viewProj math.Mat4) {
 			}
 			continue
 		}
-		s.playerRender.RenderUnit(viewProj, e.Body, s.camera.PosX, s.camera.PosZ, load, unitSpec(e), e.Alpha())
+		s.playerRender.RenderUnit(viewProj, e.Body, s.camera.PosX, s.camera.PosZ,
+			right, up, load, unitSpec(e), e.Alpha())
 	}
 
 	s.drawGroundMarker(viewProj)
@@ -1321,6 +1351,7 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_REQ_WEAR_EQUIP_ACK, s.handleEquipAck)
 	s.client.RegisterHandler(packets.ZC_REQ_TAKEOFF_EQUIP_ACK, s.handleUnequipAck)
 	s.client.RegisterHandler(packets.ZC_CONFIG_NOTIFY, s.handleConfigNotify)
+	s.client.RegisterHandler(packets.ZC_SPRITE_CHANGE, s.handleSpriteChange)
 	s.client.RegisterHandler(packets.ZC_ITEM_ENTRY, s.handleGroundItemEntry)
 	s.client.RegisterHandler(packets.ZC_ITEM_FALL_ENTRY, s.handleGroundItemFall)
 	s.client.RegisterHandler(packets.ZC_ITEM_DISAPPEAR, s.handleGroundItemGone)
@@ -1564,12 +1595,9 @@ func (s *InGameState) applyUnit(u *packets.Entity, kind string) error {
 		return nil
 	}
 
-	e := upsertUnit(s.entityManager, u, s.unitPath)
+	e := upsertUnit(s.entityManager, u, s.unitPath, s.terrainHeight)
 	if e == nil {
 		return nil
-	}
-	if e.Body != nil {
-		e.Body.TerrainHeight = s.terrainHeight
 	}
 
 	// sheets says whether the appearance actually baked, which is what
@@ -1777,13 +1805,106 @@ func (s *InGameState) selfAID() uint32 {
 	return accountID
 }
 
-// terrainHeight returns the ground altitude at a world position, so units
-// follow the terrain as they walk rather than sinking through hills. Returns
-// zero before the map is loaded, which is what a flat map would give.
+// traceGround reports what the ground under the player is doing, for telling
+// a wrong height apart from a wrong sprite.
+//
+// Only while walking and only every so often: standing still it says the same
+// thing forever, and every frame of a walk would bury everything else in the
+// log.
+func (s *InGameState) traceGround() {
+	if !trace.On(trace.Move) || s.scene == nil || !s.MapLoaded || s.player == nil {
+		return
+	}
+
+	if !s.player.IsMoving {
+		s.groundTraceMs = 0
+
+		return
+	}
+
+	s.groundTraceMs++
+	if s.groundTraceMs%groundTraceEvery != 0 {
+		return
+	}
+
+	tileX, tileZ, u, v, corners := s.scene.TerrainProbe(s.player.RenderX, s.player.RenderZ)
+
+	trace.Emit(trace.Move, "ground",
+		zap.Float32("renderY", s.player.RenderY),
+		zap.Float32("groundY", s.scene.GetTerrainHeight(s.player.RenderX, s.player.RenderZ)),
+		zap.Float32("gatY", s.scene.GatHeight(s.player.RenderX, s.player.RenderZ)),
+		zap.Int("tileX", tileX), zap.Int("tileZ", tileZ),
+		zap.Float32("u", u), zap.Float32("v", v),
+		zap.Float32("sw", corners[0]), zap.Float32("se", corners[1]),
+		zap.Float32("nw", corners[2]), zap.Float32("ne", corners[3]))
+}
+
+// groundTraceEvery is how many frames apart the ground trace speaks, so a
+// walk leaves a readable trail rather than a frame-by-frame flood.
+const groundTraceEvery = 10
+
+// traceHeightGrid prints the ground around the player as a grid, once.
+//
+// Two grids, side by side: what the mesh says the ground is and what the
+// collision map says you walk at. They are not the same map — a town's raised
+// plaza can be built out of models standing on flat ground — and reading the
+// wrong one puts a character inside the steps rather than on them. Seeing them
+// together is the only way to tell which is which.
+func (s *InGameState) traceHeightGrid() {
+	if s.gridTraced || !trace.On(trace.Map) || s.scene == nil || !s.MapLoaded || s.player == nil {
+		return
+	}
+
+	s.gridTraced = true
+
+	cellX, cellY := s.player.CurrentCell()
+
+	var mesh, walk strings.Builder
+
+	for dy := heightGridSpan; dy >= -heightGridSpan; dy-- {
+		for dx := -heightGridSpan; dx <= heightGridSpan; dx++ {
+			x, z := entity.CellToWorld(cellX+dx, cellY+dy)
+
+			fmt.Fprintf(&mesh, "%5.0f", s.scene.GetTerrainHeight(x, z))
+			fmt.Fprintf(&walk, "%5.0f", s.scene.GatHeight(x, z))
+		}
+
+		mesh.WriteByte('\n')
+		walk.WriteByte('\n')
+	}
+
+	trace.Emit(trace.Map, "height-grid",
+		zap.Int("cellX", cellX), zap.Int("cellY", cellY),
+		zap.String("mesh", "\n"+mesh.String()),
+		zap.String("walkable", "\n"+walk.String()))
+}
+
+// heightGridSpan is how many cells either side of the player the grid covers.
+const heightGridSpan = 8
+
+// terrainHeight returns the height a unit stands at, so it follows the ground
+// as it walks rather than sinking through it. Returns zero before the map is
+// loaded, which is what a flat map would give.
+//
+// From the collision map rather than the ground mesh. The two are not the same
+// surface and where they differ the collision map is the one to believe: a
+// town's steps are built out of map models standing on flat ground, so the
+// mesh reports one height for the whole flight while the collision map carries
+// the climb. Geffen's ramp is flat in the mesh and rises from -39 to -12 in
+// the collision map, which is the difference between walking up the steps and
+// walking through them with your head out of the top.
+//
+// The mesh is the fallback for a map with no collision data, where it is the
+// only surface there is.
 func (s *InGameState) terrainHeight(worldX, worldZ float32) float32 {
 	if s.scene == nil || !s.MapLoaded {
 		return 0
 	}
+
+	if s.scene.HasGAT() {
+		return s.scene.GatHeight(worldX, worldZ)
+	}
+
 	return s.scene.GetTerrainHeight(worldX, worldZ)
 }
 
@@ -1871,16 +1992,41 @@ func (s *InGameState) handleServerMove(data []byte) error {
 	return nil
 }
 
-// ScreenToTile maps a screen-space click (in viewport pixels) to a tile
-// coordinate by ray-casting against the y=0 ground plane using the most
-// recent view-projection matrix the scene rendered with.
+// Ground picking: how far apart the samples along a click's ray are, and how
+// far along it they are taken.
 //
-// Returns ok=false if the scene hasn't rendered yet, or if the ray points
-// away from the ground (e.g. clicking the sky).
+// The step is half a cell. The crossing is pinned by bisection afterwards, so
+// the step only has to be fine enough not to stride over a feature whole — and
+// a step of half a cell cannot skip a wall a cell wide. The reach is a long
+// way across a map, because a low camera looking at the horizon runs a long
+// way before it meets anything.
+const (
+	groundPickStep  = float32(2.5)
+	groundPickReach = float32(2000)
+)
+
+// ScreenToTile maps a screen-space click (in viewport pixels) to the cell it
+// landed on, by casting a ray through the most recent view-projection matrix
+// the scene rendered with and walking it into the ground.
+//
+// Returns ok=false if the scene hasn't rendered yet, if the pointer is outside
+// the window, or if the ray meets neither the ground nor the plane through it.
 func (s *InGameState) ScreenToTile(screenX, screenY, viewportW, viewportH float32) (tileX, tileY int, ok bool) {
 	if s.scene == nil || viewportW <= 0 || viewportH <= 0 {
 		trace.Emit(trace.Pick, "reject", zap.Bool("hasScene", s.scene != nil),
 			zap.Float32("viewportW", viewportW), zap.Float32("viewportH", viewportH))
+
+		return 0, 0, false
+	}
+
+	// A pointer outside the window is reported as minus the largest float
+	// there is, and a ray built from that is all NaN — which compares false
+	// against everything, so every test it meets passes it along and a cell
+	// gets picked out of nothing.
+	if screenX < 0 || screenY < 0 || screenX > viewportW || screenY > viewportH {
+		trace.Emit(trace.Pick, "reject-offscreen",
+			zap.Float32("screenX", screenX), zap.Float32("screenY", screenY))
+
 		return 0, 0, false
 	}
 	invViewProj := s.scene.LastViewProj().Inverse()
@@ -1889,7 +2035,19 @@ func (s *InGameState) ScreenToTile(screenX, screenY, viewportW, viewportH float3
 	if s.player != nil {
 		groundY = s.player.RenderY
 	}
-	worldX, worldZ, hit := ray.IntersectPlaneY(groundY)
+	// Walk the real surface. The plane through the player's feet is only
+	// right where it happens to touch the ground, and a ray that misses by a
+	// little vertically misses by a lot horizontally once the camera is
+	// anything but overhead — which is the pointer and the cell it picks
+	// drifting apart on every ramp and stair.
+	worldX, worldZ, hit := ray.IntersectGround(s.terrainHeight, groundPickStep, groundPickReach)
+	onGround := hit
+
+	// The plane is the fallback for a ray that never meets the ground, which
+	// is what pointing at the sky does.
+	if !hit {
+		worldX, worldZ, hit = ray.IntersectPlaneY(groundY)
+	}
 
 	if trace.On(trace.Pick) {
 		trace.Emit(trace.Pick, "ray",
@@ -1900,6 +2058,7 @@ func (s *InGameState) ScreenToTile(screenX, screenY, viewportW, viewportH float3
 			zap.Float32("dirX", ray.Direction[0]), zap.Float32("dirY", ray.Direction[1]),
 			zap.Float32("dirZ", ray.Direction[2]),
 			zap.Float32("groundY", groundY),
+			zap.Bool("onGround", onGround),
 			zap.Bool("hit", hit))
 	}
 
@@ -1907,6 +2066,7 @@ func (s *InGameState) ScreenToTile(screenX, screenY, viewportW, viewportH float3
 		return 0, 0, false
 	}
 	cellX, cellY := entity.WorldToCell(worldX, worldZ)
+	markerX, markerZ := entity.CellToWorld(cellX, cellY)
 
 	if trace.On(trace.Pick) {
 		playerCellX, playerCellY := 0, 0
@@ -1914,10 +2074,20 @@ func (s *InGameState) ScreenToTile(screenX, screenY, viewportW, viewportH float3
 			playerCellX, playerCellY = s.player.CurrentCell()
 		}
 		walkable := s.pathFinder == nil || s.pathFinder.IsWalkable(cellX, cellY)
+		// Where the cell the click landed on draws, back in screen pixels.
+		// The gap between that and the pointer is the thing to watch: the
+		// marker sits on the walkable surface and the pointer is over
+		// whatever is drawn there, and the two are not always the same
+		// surface.
+		markX, markY := s.projectToScreen(
+			markerX, s.terrainHeight(markerX, markerZ), markerZ, viewportW, viewportH)
+
 		trace.Emit(trace.Pick, "hit",
 			zap.Float32("worldX", worldX), zap.Float32("worldZ", worldZ),
 			zap.Int("cellX", cellX), zap.Int("cellY", cellY),
 			zap.Int("playerCellX", playerCellX), zap.Int("playerCellY", playerCellY),
+			zap.Float32("markerScreenX", markX), zap.Float32("markerScreenY", markY),
+			zap.Float32("offX", markX-screenX), zap.Float32("offY", markY-screenY),
 			zap.Bool("walkable", walkable))
 	}
 	return cellX, cellY, true

@@ -1,33 +1,109 @@
 package terrain
 
 import (
+	"math"
+
 	"github.com/Faultbox/midgard-ro/pkg/formats"
 )
 
-// BuildHeightmap creates a heightmap from GND data for model positioning.
+// BuildHeightmap creates a heightmap from GND data, for standing things on
+// the ground.
+//
+// Every tile's four corners are kept rather than averaged. What the query has
+// to agree with is the mesh, and the mesh puts each corner at its own height.
 func BuildHeightmap(gnd *formats.GND) *Heightmap {
 	tilesX := int(gnd.Width)
 	tilesZ := int(gnd.Height)
 
-	altitudes := make([][]float32, tilesX)
+	corners := make([][][4]float32, tilesX)
 	for x := range tilesX {
-		altitudes[x] = make([]float32, tilesZ)
+		corners[x] = make([][4]float32, tilesZ)
 		for z := range tilesZ {
-			tile := gnd.GetTile(x, z)
-			if tile != nil {
-				// Average of 4 corners
-				avgAlt := (tile.Altitude[0] + tile.Altitude[1] + tile.Altitude[2] + tile.Altitude[3]) / 4.0
-				altitudes[x][z] = avgAlt
+			if tile := gnd.GetTile(x, z); tile != nil {
+				corners[x][z] = [4]float32{
+					tile.Altitude[0], tile.Altitude[1],
+					tile.Altitude[2], tile.Altitude[3],
+				}
 			}
 		}
 	}
 
 	return &Heightmap{
-		Altitudes: altitudes,
-		TilesX:    tilesX,
-		TilesZ:    tilesZ,
-		TileZoom:  gnd.Zoom,
+		Corners:  corners,
+		TilesX:   tilesX,
+		TilesZ:   tilesZ,
+		TileZoom: gnd.Zoom,
 	}
+}
+
+// Probe reports what a height query is working from: which tile the position
+// lands in, where inside it, and that tile's four corner heights as world Y.
+//
+// For telling a wrong height apart from a wrong sprite. The corners say
+// whether the ground there is a slope at all, and the fractions say where on
+// it the query is reading.
+func (h *Heightmap) Probe(worldX, worldZ float32) (tileX, tileZ int, u, v float32, corners [4]float32) {
+	if h == nil || h.TileZoom <= 0 || len(h.Corners) == 0 {
+		return 0, 0, 0, 0, corners
+	}
+
+	tileFX := worldX / h.TileZoom
+	tileFZ := worldZ / h.TileZoom
+
+	tileX = int(math.Floor(float64(tileFX)))
+	tileZ = int(math.Floor(float64(tileFZ)))
+
+	if tileX < 0 || tileZ < 0 || tileX >= h.TilesX || tileZ >= h.TilesZ {
+		return tileX, tileZ, 0, 0, corners
+	}
+
+	u = tileFX - float32(tileX)
+	v = tileFZ - float32(tileZ)
+
+	for i, alt := range h.Corners[tileX][tileZ] {
+		corners[i] = -alt
+	}
+
+	return tileX, tileZ, u, v, corners
+}
+
+// HeightAt is the ground's world Y at a position, read off the same surface
+// the mesh draws.
+//
+// Bilinear across the tile's four corners, which is what the mesh's own quad
+// is. Sampling a tile as one height instead put a character on a staircase:
+// it held one altitude the whole way across a tile and then jumped to the
+// next, so on any slope it walked half a tile sunk into the ground and half a
+// tile above it.
+//
+// Off the map is zero, which is what a flat map would give.
+func (h *Heightmap) HeightAt(worldX, worldZ float32) float32 {
+	if h == nil || h.TileZoom <= 0 || len(h.Corners) == 0 {
+		return 0
+	}
+
+	tileFX := worldX / h.TileZoom
+	tileFZ := worldZ / h.TileZoom
+
+	tileX := int(math.Floor(float64(tileFX)))
+	tileZ := int(math.Floor(float64(tileFZ)))
+
+	if tileX < 0 || tileZ < 0 || tileX >= h.TilesX || tileZ >= h.TilesZ {
+		return 0
+	}
+
+	u := tileFX - float32(tileX)
+	v := tileFZ - float32(tileZ)
+
+	c := h.Corners[tileX][tileZ]
+
+	// Along the southern edge, then the northern one, then between them.
+	south := c[0] + (c[1]-c[0])*u
+	north := c[2] + (c[3]-c[2])*u
+
+	// The mesh puts a corner's world Y at minus its stored altitude, so the
+	// query has to negate it too or everything stands under the map.
+	return -(south + (north-south)*v)
 }
 
 // GetInterpolatedHeight returns the interpolated terrain height at a world position.
