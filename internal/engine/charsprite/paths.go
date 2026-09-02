@@ -134,6 +134,40 @@ var jobSpriteNames = map[int]string{
 	23: `슈퍼노비스`, // Super Novice
 	24: `건너`,    // Gunslinger
 	25: `닌자`,    // Ninja
+
+	// The transcended jobs, which rebirth reaches. The client keeps this
+	// mapping in its own binary rather than in a table in the archive — the
+	// lua files name NPCs and monsters, not player bodies — so unlike the
+	// sprite table next door this is written out rather than generated. Every
+	// name below was checked against the archive: each has a body sprite for
+	// the sex that can hold the job, and none for the sex that cannot.
+	//
+	// The first classes rebirth into look no different, and share their
+	// sprites. The archive does carry `_h` twins of them — 기사_h against 기사
+	// — but those are the same art: a byte or two apart in a quarter of a
+	// megabyte, against 로드나이트 which differs by thirteen thousand.
+	4001: `초보자`,    // High Novice
+	4002: `검사`,     // High Swordman
+	4003: `마법사`,    // High Mage
+	4004: `궁수`,     // High Archer
+	4005: `성직자`,    // High Acolyte
+	4006: `상인`,     // High Merchant
+	4007: `도둑`,     // High Thief
+	4008: `로드나이트`,  // Lord Knight
+	4009: `하이프리`,   // High Priest
+	4010: `하이위저드`,  // High Wizard
+	4011: `화이트스미스`, // Whitesmith
+	4012: `스나이퍼`,   // Sniper
+	4013: `어쌔신크로스`, // Assassin Cross
+	4014: `로드페코`,   // Lord Knight on a Peco
+	4015: `팔라딘`,    // Paladin
+	4016: `챔피온`,    // Champion
+	4017: `프로페서`,   // Professor
+	4018: `스토커`,    // Stalker
+	4019: `크리에이터`,  // Creator
+	4020: `클라운`,    // Clown, male only
+	4021: `집시`,     // Gypsy, female only
+	4022: `페코팔라딘`,  // Paladin on a Peco
 }
 
 // FallbackJob is the job we render when the class id isn't one we know. Every
