@@ -326,6 +326,60 @@ update as it arrives.
 
 ---
 
+### Character creation (`internal/game/states/charcreate.go`, `internal/game/ui/charcreate_native.go`)
+
+Double-click an empty slot on character select and build a character: race,
+sex, hair style, hair color, name.
+
+**What the wire allows is what the screen offers, and no more.** At
+`PACKETVER 20211103` the request is `CH_MAKE_CHAR 0x0A39`, 36 bytes, carrying
+name, slot, hair style, hair color, job and sex — six choices, six controls.
+It carries **no starting stats**: those exist only in the pre-2012 `0x0067`
+form of the same packet. The server writes 1 to each stat itself and grants
+`start_status_points` (48 on our build) to spend in the stat window instead.
+That is why the classic hexagon creation screen — the one with a stat radar —
+cannot work here, and why `make_character_ver2/bg_makebg.bmp` is the frame we
+draw: it has a control for every field the packet carries and none for
+anything it does not.
+
+The replies are `HC_ACCEPT_MAKECHAR` and `HC_REFUSE_MAKECHAR 0x006E`. Both
+creation ids move with the packet version and ours sits exactly on a boundary
+(`PACKETVER_RE_NUM >= 20211103`), so the accept is `0x0B6F` rather than the
+older `0x006D`.
+
+**Name rules** are checked locally only for what is locally knowable — 4 to 23
+characters, letters, digits and spaces, from `char_athena.conf` — which buys a
+specific reason instead of the server's single "denied". Whether a name is
+*free* is not guessed at: nothing asks the server that, so the answer is to
+send and read refusal `0x00`.
+
+**Both races are creatable** on our server, which is a RENEWAL build where
+`allowed_job_flag` is 3: Novice and Summoner (Doram). Retail shows Doram as
+"coming soon"; here it is real.
+
+### Character sprites by race and palette (`internal/engine/charsprite/`, `pkg/formats/spr.go`)
+
+Two things this feature added to the sprite layer.
+
+**Race-aware paths.** Character art was rooted at `인간족`, the human race.
+Doram is a second tree with the same shape underneath — body and head, split
+by sex — so the root is now chosen from the job. Nothing on the wire says
+which race a character is; the server infers it from the job and so do we.
+
+**External palettes.** RO recolors hair by handing the sprite a different
+palette rather than by storing it again: every style ships one `.pal` per
+color, and a `.pal` is byte-for-byte the same 256-entry table an SPR carries
+at its end. `formats.ParsePAL` and `formats.ParseSPRWithPalette` are what put
+the two together. Index 0 stays transparent whatever the palette says, so a
+swap cannot make a sprite opaque or invisible.
+
+The palette tree files the two races differently from the sprite tree —
+humans sit directly under `data\palette\머리\`, Doram get a race folder. That
+asymmetry is the archive's and looks like an oversight; tidying it would break
+every human hair color.
+
+---
+
 ### Chat commands (`internal/game/command/`, `internal/game/states/commands.go`)
 
 Typing into the chat box can now do three different things, and which one it
