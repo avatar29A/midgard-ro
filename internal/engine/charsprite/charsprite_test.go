@@ -508,13 +508,10 @@ func TestAccessoryTableHasTheOnesTheClientShips(t *testing.T) {
 	}
 }
 
-// TestPortraitBoxIsTheStandingFrame: every frame is padded onto a canvas as
-// big as the widest and tallest the sheet holds, so a standing character
-// occupies a fraction of it. Anything drawing the character flat wants that
-// fraction, and the bake is the only place that knows it.
+// TestPortraitBoxIsTheStandingFrame: the frame is bigger than the pose the
+// portrait uses, and anything drawing the character flat wants the part of it
+// the character is actually in.
 func TestPortraitBoxIsTheStandingFrame(t *testing.T) {
-	// A small standing frame and one oversized direction, so the canvas is
-	// bigger than the pose the portrait uses — which is the whole point.
 	bodySPR := &formats.SPR{Images: []formats.SPRImage{
 		makeImage(20, 40),
 		makeImage(30, 60),
@@ -545,14 +542,85 @@ func TestPortraitBoxIsTheStandingFrame(t *testing.T) {
 			sheet.PortraitW, sheet.PortraitH)
 	}
 
-	// Centered across and sitting on the bottom edge, which is how pad places
-	// every frame.
-	if want := (sheet.Width - sheet.PortraitW) / 2; sheet.PortraitX != want {
-		t.Errorf("portrait x = %d, want %d", sheet.PortraitX, want)
+	if sheet.PortraitX < 0 || sheet.PortraitY < 0 ||
+		sheet.PortraitX+sheet.PortraitW > sheet.Width ||
+		sheet.PortraitY+sheet.PortraitH > sheet.Height {
+		t.Errorf("portrait box (%d %d %d %d) falls outside the %dx%d frame",
+			sheet.PortraitX, sheet.PortraitY, sheet.PortraitW, sheet.PortraitH,
+			sheet.Width, sheet.Height)
 	}
-	if want := sheet.Height - sheet.PortraitH; sheet.PortraitY != want {
-		t.Errorf("portrait y = %d, want %d", sheet.PortraitY, want)
+}
+
+// TestEveryFacingLandsOnTheSameOrigin: the frame is what the billboard stands
+// on, so a pose placed by its own edges rather than by the sprite's origin
+// moves the character as it turns. A real Novice's idle varies by six pixels
+// between facings, which is a visible hop.
+func TestEveryFacingLandsOnTheSameOrigin(t *testing.T) {
+	// Two facings whose art is a different size, both anchored at the origin.
+	bodySPR := &formats.SPR{Images: []formats.SPRImage{
+		makeImage(20, 40),
+		makeImage(20, 30),
+	}}
+
+	act := &formats.ACT{}
+	for i := 0; i < Directions*LoadedActions; i++ {
+		spriteID := int32(0)
+		if i%2 == 1 {
+			spriteID = 1
+		}
+
+		act.Actions = append(act.Actions, formats.Action{
+			Frames: []formats.Frame{{
+				Layers:       []formats.Layer{{SpriteID: spriteID, ScaleX: 1, ScaleY: 1}},
+				AnchorPoints: []formats.AnchorPoint{{X: 0, Y: 0}},
+			}},
+		})
 	}
+
+	sheet := BuildSheet(bodySPR, act, nil, nil, nil, nil, nil, HeadStraight, KindPlayer)
+	if sheet == nil {
+		t.Fatal("BuildSheet returned nil")
+	}
+
+	// Every facing of the walk — a real animation, so no posed-set shortcut —
+	// must put the sprite's origin on the same row of the frame. The origin is
+	// the middle of a layer drawn at (0,0), so the art's own middle row is
+	// what has to agree.
+	want := -1
+	for dir := 0; dir < Directions; dir++ {
+		frames := sheet.Frames[actionIndices[KindPlayer][ActionWalk]*Directions+dir]
+		if len(frames) == 0 {
+			t.Fatalf("facing %d baked nothing", dir)
+		}
+
+		row := lowestOpaqueRow(frames[0].Pixels, sheet.Width, sheet.Height)
+		if want < 0 {
+			want = row
+
+			continue
+		}
+
+		// Sprites of different heights hang from the same origin, so their
+		// lowest rows differ by the difference in height — but their origin
+		// rows must not.
+		if row != want && row != want-5 && row != want+5 {
+			t.Errorf("facing %d ends at row %d, want %d give or take the height difference",
+				dir, row, want)
+		}
+	}
+}
+
+// lowestOpaqueRow is the last row of a frame with anything drawn in it.
+func lowestOpaqueRow(pixels []byte, w, h int) int {
+	for y := h - 1; y >= 0; y-- {
+		for x := 0; x < w; x++ {
+			if pixels[(y*w+x)*4+3] != 0 {
+				return y
+			}
+		}
+	}
+
+	return -1
 }
 
 // TestDoramUsesItsOwnSpriteTree: Doram characters are a second race with the

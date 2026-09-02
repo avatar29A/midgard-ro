@@ -184,3 +184,51 @@ func DecodeConfigNotify(data []byte) (bool, bool) {
 
 	return data[2] != 0, true
 }
+
+// ZC_SPRITE_CHANGE says one thing about how a unit looks has changed:
+// `<AID>.L <type>.B <val>.L <val2>.L`, 15 bytes.
+//
+// The length is not what packet_db declares. rAthena's own guard —
+// PACKETVER_RE_NUM >= 20180704 — widens val and val2 from uint16 to uint32,
+// which is the 15-byte shape; the table still carries the 11 of the older
+// one. Same disagreement as ZC_ITEM_FALL_ENTRY, and settled the same way:
+// what the client has to match is the clif_send, which writes sizeof(struct).
+const ZC_SPRITE_CHANGE uint16 = 0x01D7
+
+// What a sprite change is about, from rAthena's LOOK_ enumeration. Only the
+// ones that change what is drawn are named.
+const (
+	LookBase       uint8 = 0
+	LookHair       uint8 = 1
+	LookWeapon     uint8 = 2
+	LookHeadBottom uint8 = 3
+	LookHeadTop    uint8 = 4
+	LookHeadMid    uint8 = 5
+	LookShield     uint8 = 8
+	LookRobe       uint8 = 12
+)
+
+// SpriteChange is one of those, decoded.
+type SpriteChange struct {
+	AID  uint32
+	Look uint8
+
+	// Value is the new look, and Value2 the second half of it — a weapon's
+	// shield, for the one type that carries two.
+	Value  uint32
+	Value2 uint32
+}
+
+// DecodeSpriteChange reads ZC_SPRITE_CHANGE.
+func DecodeSpriteChange(data []byte) (SpriteChange, bool) {
+	if len(data) < 15 {
+		return SpriteChange{}, false
+	}
+
+	return SpriteChange{
+		AID:    binary.LittleEndian.Uint32(data[2:]),
+		Look:   data[6],
+		Value:  binary.LittleEndian.Uint32(data[7:]),
+		Value2: binary.LittleEndian.Uint32(data[11:]),
+	}, true
+}

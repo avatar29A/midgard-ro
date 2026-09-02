@@ -42,10 +42,19 @@ type LightmapAtlas struct {
 
 // Heightmap provides terrain height lookup for a map.
 type Heightmap struct {
-	Altitudes [][]float32 // 2D array [x][z] of heights
-	TilesX    int         // Number of tiles in X direction
-	TilesZ    int         // Number of tiles in Z direction
-	TileZoom  float32     // Size of each tile in world units
+	// Corners is every tile's four corner altitudes, in the order the mesh
+	// lays them out: south-west, south-east, north-west, north-east.
+	//
+	// All four, not their average. A tile is a quad with its corners set
+	// independently, so one number for the whole of it is a step where the
+	// ground is a slope — and a character walking over it rises and falls in
+	// tile-wide jumps, standing above the ground at one edge and inside it at
+	// the other.
+	Corners [][][4]float32
+
+	TilesX   int     // Number of tiles in X direction
+	TilesZ   int     // Number of tiles in Z direction
+	TileZoom float32 // Size of each tile in world units
 }
 
 // TileGridVertex represents a vertex for tile grid debug visualization.
