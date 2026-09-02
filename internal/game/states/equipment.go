@@ -289,6 +289,13 @@ func (s *InGameState) applyOwnLook(change packets.SpriteChange) {
 	switch change.Look {
 	case packets.LookBase:
 		char.Class = value
+
+		// The panel's copy as well. It is taken from the character list once,
+		// at login, and kept up to date by the server's parameter packets
+		// after that — and the server sends no parameter for a change of job,
+		// only this. Without it a rebirthed Monk stands there as a Champion
+		// with "Monk" written under its name until the next relog.
+		s.stats.Class = int(value)
 	case packets.LookHair:
 		char.HairStyle = value
 	case packets.LookWeapon:
