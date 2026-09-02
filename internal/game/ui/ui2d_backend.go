@@ -274,6 +274,17 @@ func (b *UI2DBackend) syncInputFromImGui() {
 	in.KeyEscape = imgui.IsKeyDown(imgui.KeyEscape)
 	in.KeyTab = imgui.IsKeyDown(imgui.KeyTab)
 
+	// The arrows move the character-select highlight. InputState has declared
+	// these since it was written and nothing filled them in, so anything
+	// reading them saw a key that was never pressed.
+	in.KeyLeft = imgui.IsKeyDown(imgui.KeyLeftArrow)
+	in.KeyRight = imgui.IsKeyDown(imgui.KeyRightArrow)
+
+	// Delete is read by every text field (widgets_at.go) and was never
+	// filled in either, so it has never done anything in one — the name box
+	// on character creation included.
+	in.KeyDelete = imgui.IsKeyDown(imgui.KeyDelete)
+
 	// Bridge ImGui's per-frame character input queue into ui2d's TextInput
 	// so users can type into our text fields. ImGui already translates
 	// SDL2 SDL_TEXTINPUT events into Wchars on its IO; we just consume the
