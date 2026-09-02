@@ -25,13 +25,21 @@ const (
 	// Client -> Char Server
 	CH_ENTER       uint16 = 0x0065 // Enter char server
 	CH_SELECT_CHAR uint16 = 0x0066 // Select character
-	CH_MAKE_CHAR   uint16 = 0x0067 // Create character
+	// CH_MAKE_CHAR carries a new character. The id moves with the packet
+	// version: 0x0067 carried starting stats, 0x0970 dropped them, and from
+	// PACKETVER 20151001 — which is us — it is 0x0A39 with job and sex added.
+	// See common/packets.hpp:122-157 in the server we build.
+	CH_MAKE_CHAR   uint16 = 0x0A39 // Create character
 	CH_DELETE_CHAR uint16 = 0x0068 // Delete character
 
 	// Char Server -> Client
-	HC_ACCEPT_ENTER    uint16 = 0x006B // Enter accepted + char list
-	HC_REFUSE_ENTER    uint16 = 0x006C // Enter refused
-	HC_ACCEPT_MAKECHAR uint16 = 0x006D // Character created
+	HC_ACCEPT_ENTER uint16 = 0x006B // Enter accepted + char list
+	HC_REFUSE_ENTER uint16 = 0x006C // Enter refused
+	// HC_ACCEPT_MAKECHAR moved with the packet version: 0x006D up to
+	// PACKETVER_MAIN 20201007 / PACKETVER_RE 20211103, and 0x0B6F from
+	// there. Ours is exactly the RE boundary, so this is the new one.
+	// See common/packets.hpp:259-270.
+	HC_ACCEPT_MAKECHAR uint16 = 0x0B6F // Character created
 	HC_NOTIFY_ZONESVR  uint16 = 0x0071 // Map server info (old)
 	HC_NOTIFY_ZONESVR2 uint16 = 0x0AC5 // Map server info (modern rAthena)
 )
@@ -343,13 +351,18 @@ func (c *CharInfo) GetMapName() string {
 // CharSelectAccept (HC_ACCEPT_ENTER 0x006B) response.
 // eAthena uses a 27-byte header before character data.
 type CharSelectAccept struct {
-	PacketID   uint16
-	PacketLen  uint16
-	MaxSlots   uint8
-	AvailSlots uint8
-	PremSlots  uint8
-	Padding    [20]byte // eAthena: billing info + padding = 20 bytes
-	Characters []*CharInfo
+	PacketID  uint16
+	PacketLen uint16
+	// MaxSlots is MAX_CHARS, the server's compile-time ceiling — not what
+	// this account may create. That number rides on HC_ACCEPT_ENTER2.
+	MaxSlots uint8
+	// PremiumStart and PremiumEnd bound the slots the client paints as
+	// premium. They were previously read as an available-slot count, which
+	// they are not.
+	PremiumStart uint8
+	PremiumEnd   uint8
+	Padding      [20]byte // eAthena: billing info + padding = 20 bytes
+	Characters   []*CharInfo
 }
 
 // DecodeCharSelectAccept decodes the character select accept packet.
@@ -358,11 +371,15 @@ func DecodeCharSelectAccept(data []byte) *CharSelectAccept {
 		return nil
 	}
 	p := &CharSelectAccept{
-		PacketID:   readU16(data, 0),
-		PacketLen:  readU16(data, 2),
-		MaxSlots:   data[4],
-		AvailSlots: data[5],
-		PremSlots:  data[6],
+		PacketID:  readU16(data, 0),
+		PacketLen: readU16(data, 2),
+		// 0x006B's three bytes are total, premium_start and premium_end —
+		// not a creatable count. MaxSlots is MAX_CHARS, the compile-time
+		// ceiling; the account's own limit rides on HC_ACCEPT_ENTER2 instead.
+		// See common/packets.hpp:240-251.
+		MaxSlots:     data[4],
+		PremiumStart: data[5],
+		PremiumEnd:   data[6],
 	}
 	copy(p.Padding[:], data[7:27])
 

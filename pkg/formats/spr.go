@@ -54,8 +54,44 @@ type SPR struct {
 	IndexedCount int         // Number of indexed (palette) images; RGBA images start after this
 }
 
+// PaletteSize is the byte length of a 256-color RO palette, whether it is
+// the block at the end of an SPR or a standalone .pal file. The two share a
+// layout, which is what makes recoloring a sprite a palette swap.
+const PaletteSize = 1024
+
+// ErrBadPalette reports a palette file that is not the expected size.
+var ErrBadPalette = errors.New("palette must be 1024 bytes")
+
+// ParsePAL reads a standalone .pal file.
+//
+// RO recolors a sprite by handing it a different palette rather than by
+// storing the sprite again: every hair style ships one .pal per color, and
+// they are byte-for-byte the same layout as the block an SPR carries at its
+// end.
+func ParsePAL(data []byte) (*SPRPalette, error) {
+	if len(data) < PaletteSize {
+		return nil, fmt.Errorf("%w: got %d", ErrBadPalette, len(data))
+	}
+
+	// Trailing bytes are ignored: some files carry a little padding after the
+	// table, and the table is what matters.
+	return parsePalette(data[:PaletteSize]), nil
+}
+
 // ParseSPR parses an SPR file from raw bytes.
 func ParseSPR(data []byte) (*SPR, error) {
+	return ParseSPRWithPalette(data, nil)
+}
+
+// ParseSPRWithPalette parses an SPR, drawing its indexed images through
+// override instead of the palette the file carries.
+//
+// A nil override means use the file's own, which is what ParseSPR does.
+//
+// Index 0 stays transparent whatever the palette says, so a substituted one
+// cannot accidentally make a sprite opaque or invisible — the transparency is
+// a property of the index, not of the color it points at.
+func ParseSPRWithPalette(data []byte, override *SPRPalette) (*SPR, error) {
 	if len(data) < 4 {
 		return nil, ErrTruncatedSPRData
 	}
@@ -107,13 +143,20 @@ func ParseSPR(data []byte) (*SPR, error) {
 	}
 	spr.Palette = parsePalette(data[len(data)-1024:])
 
+	// Draw through the caller's palette when there is one. The file's own is
+	// still recorded, because it is what the sprite looks like unrecolored.
+	drawPalette := spr.Palette
+	if override != nil {
+		drawPalette = override
+	}
+
 	// Calculate where image data ends (before palette)
 	imageDataEnd := int64(len(data) - 1024 - 4) // -4 for header already consumed
 
 	// Parse indexed images
 	useRLE := version.Major == 2 && version.Minor >= 1
 	for i := uint16(0); i < indexedCount; i++ {
-		img, err := parseIndexedImage(r, spr.Palette, useRLE)
+		img, err := parseIndexedImage(r, drawPalette, useRLE)
 		if err != nil {
 			return nil, fmt.Errorf("parsing indexed image %d: %w", i, err)
 		}

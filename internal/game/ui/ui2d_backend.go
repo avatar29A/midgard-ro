@@ -10,7 +10,6 @@ import (
 	"github.com/go-gl/gl/v4.1-core/gl"
 	"go.uber.org/zap"
 
-	"github.com/Faultbox/midgard-ro/internal/engine/charsprite"
 	"github.com/Faultbox/midgard-ro/internal/engine/cursor"
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
 	"github.com/Faultbox/midgard-ro/internal/logger"
@@ -51,11 +50,13 @@ type UI2DBackend struct {
 	assetLoader func(string) ([]byte, error)
 
 	// Character portraits for the select screen, keyed by sprite spec.
-	charSelPortraits map[charsprite.Spec]*charSelectPortrait
+	charSelPortraits map[portraitKey]*charSelectPortrait
 
 	// Character select art, and where its window has been dragged to.
 	charSelSkin        *charSelectSkin
 	charSelTried       bool
+	charCreateSkin     *charCreateSkin
+	charCreateTried    bool
 	charSelX, charSelY float32
 	charSelPlaced      bool
 
@@ -174,6 +175,10 @@ type UI2DBackend struct {
 	loginUsername string
 	loginPassword string
 	charSelectIdx int
+
+	// charSelectPage is which run of three slots the screen is showing.
+	// Slots on screen are charSelectPage*charSelSlotCount + position.
+	charSelectPage int
 }
 
 // NewUI2DBackend creates a new ui2d UI backend.
@@ -268,6 +273,17 @@ func (b *UI2DBackend) syncInputFromImGui() {
 	in.KeyEnter = imgui.IsKeyDown(imgui.KeyEnter)
 	in.KeyEscape = imgui.IsKeyDown(imgui.KeyEscape)
 	in.KeyTab = imgui.IsKeyDown(imgui.KeyTab)
+
+	// The arrows move the character-select highlight. InputState has declared
+	// these since it was written and nothing filled them in, so anything
+	// reading them saw a key that was never pressed.
+	in.KeyLeft = imgui.IsKeyDown(imgui.KeyLeftArrow)
+	in.KeyRight = imgui.IsKeyDown(imgui.KeyRightArrow)
+
+	// Delete is read by every text field (widgets_at.go) and was never
+	// filled in either, so it has never done anything in one — the name box
+	// on character creation included.
+	in.KeyDelete = imgui.IsKeyDown(imgui.KeyDelete)
 
 	// Bridge ImGui's per-frame character input queue into ui2d's TextInput
 	// so users can type into our text fields. ImGui already translates
@@ -435,6 +451,12 @@ func (b *UI2DBackend) DrawSceneTexture(x, y, w, h float32, textureID uint32) {
 const (
 	uiTexBasePath    = `data\texture\유저인터페이스\`
 	loginTexBasePath = uiTexBasePath + `login_interface\`
+	// makeCharTexBasePath holds the creation screen's art. Character select
+	// borrows its paging arrows from here — see charselect_native.go.
+	makeCharTexBasePath = uiTexBasePath + `make_character\`
+	// makeCharVer2TexBasePath holds the modern creation screen's art —
+	// the frame, the hair thumbnails, the color swatches, the sex toggle.
+	makeCharVer2TexBasePath = uiTexBasePath + `make_character_ver2\`
 
 	// The login screen backdrop. Verified present in data.grf — the previous
 	// login_bg.bmp / login_logo.bmp were not in the archive at all, which is

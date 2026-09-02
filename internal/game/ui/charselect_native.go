@@ -9,6 +9,7 @@ import (
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
 	"github.com/Faultbox/midgard-ro/internal/logger"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
+	"github.com/Faultbox/midgard-ro/internal/trace"
 )
 
 // The original character select is a single 576x342 texture with the slot
@@ -69,6 +70,21 @@ const (
 	charSelCancelRig = float32(4)
 )
 
+// charSelSlotCount is how many slots the screen shows at once. The original
+// pages through an account's slots in threes and so do we.
+const charSelSlotCount = 3
+
+// Paging arrows, drawn either side of the slot row. The art is the matched
+// left/right pair from the creation screen — 38x20, three states — because
+// character select's own directory has only a `next`, and one arrow cannot
+// say "back".
+const (
+	charSelArrowW   = float32(38)
+	charSelArrowH   = float32(20)
+	charSelArrowGap = float32(6)
+	charSelArrowY   = charSelSlotY + (charSelSlotH-charSelArrowH)/2
+)
+
 // charSelSlotX are the three slots' left edges.
 var charSelSlotX = [3]float32{60, 224, 386}
 
@@ -78,6 +94,11 @@ type charSelectSkin struct {
 	box    *TextureInfo
 
 	ok, make, cancel *TextureInfo
+
+	// prev and next page the slot row. Optional: they are loaded separately
+	// from the rest, because a miss here should cost the paging arrows and
+	// not the whole screen.
+	prev, next *TextureInfo
 }
 
 // loadCharSelectSkin loads the character select art. A miss leaves the skin
@@ -118,7 +139,28 @@ func (b *UI2DBackend) loadCharSelectSkin() *charSelectSkin {
 		cancel: loaded[4],
 	}
 
+	// Optional, and deliberately not in the loop above: without these the
+	// screen still works, it just cannot page. Losing character select
+	// entirely over a missing arrow would be the worse trade.
+	b.charSelSkin.prev = b.optionalTexture(makeCharTexBasePath + `arrow_box_l_out.bmp`)
+	b.charSelSkin.next = b.optionalTexture(makeCharTexBasePath + `arrow_box_r_out.bmp`)
+
 	return b.charSelSkin
+}
+
+// optionalTexture loads art the screen can do without, reporting a miss at
+// warn rather than failing. A swallowed miss is what once left the login
+// screen black with nothing in the log to say why.
+func (b *UI2DBackend) optionalTexture(path string) *TextureInfo {
+	tex, err := b.texCache.Load(path)
+	if err != nil {
+		logger.Warn("optional character select art unavailable",
+			zap.String("path", path), zap.Error(err))
+
+		return nil
+	}
+
+	return tex
 }
 
 // renderNativeCharSelect draws the original character select and reports
@@ -154,7 +196,9 @@ func (b *UI2DBackend) renderNativeCharSelect(state CharSelectUIState, width, hei
 		}
 	}
 
+	b.charSelectKeys(state)
 	b.drawCharSelectSlots(skin, state, x, y)
+	b.drawCharSelectPaging(skin, state, x, y)
 	b.drawCharSelectInfo(state, x, y)
 	b.drawCharSelectButtons(skin, state, x, y)
 
@@ -200,31 +244,206 @@ func charSelectMessage(state CharSelectUIState) string {
 }
 
 // drawCharSelectSlots highlights the selected slot and makes all three
-// clickable.
+// clickable, whether or not they hold a character.
+//
+// An empty slot answers too. It used to be skipped outright, which left it
+// with no rect and nothing drawn — the screen showed only the shadow ellipse
+// painted into the background, and there was no way to say "I want this one".
+// Selecting an empty slot is what puts Make under the pointer, which is how
+// the original says a slot is free.
 func (b *UI2DBackend) drawCharSelectSlots(skin *charSelectSkin, state CharSelectUIState, x, y float32) {
-	for slot, slotX := range charSelSlotX {
+	for pos, slotX := range charSelSlotX {
+		// The slot on screen is a position within the page, not the slot
+		// itself. charSelectIdx is always the real slot number, so that
+		// paging cannot silently point selection at a different character.
+		slot := b.charSelectPage*charSelSlotCount + pos
+		if slot >= b.charSelectSlotCount(state) {
+			continue
+		}
+
 		left := x + slotX
 		top := y + charSelSlotY
+		hasChar := slot < len(state.Characters)
 
 		if slot == b.charSelectIdx {
 			b.ctx.Renderer().DrawImage(skin.box.ID,
 				left-charSelSlotShiftX, top, charSelSlotW, charSelSlotH, ui2d.ColorWhite)
 		}
 
-		// Only slots with a character in them respond.
-		if slot >= len(state.Characters) {
-			continue
+		if hasChar {
+			b.drawCharSelectPortrait(state.Characters[slot], left, top)
 		}
 
-		b.drawCharSelectPortrait(state.Characters[slot], left, top)
+		// While the list is still coming, every slot looks empty because there
+		// is nothing to draw in it. Offering creation then would offer it on
+		// slots that are actually occupied.
+		offersCreate := state.IsReady && !hasChar
+
+		// Double click first: it must be seen whether or not the press also
+		// counts as a select, and on an empty slot it is the shortcut
+		// straight into creation.
+		rect := ui2d.Rect{X: left, Y: top, W: charSelSlotW, H: charSelSlotH}
+		if b.ctx.DoubleClickedIn(fmt.Sprintf("charselect_slot_dbl_%d", slot), rect) {
+			trace.Emit(trace.Char, "slot-doubleclick",
+				zap.Int("slot", slot), zap.Bool("empty", !hasChar))
+
+			switch {
+			case offersCreate && state.OnCreateSlot != nil:
+				state.OnCreateSlot(slot)
+			case hasChar && state.OnSelect != nil:
+				// Double-clicking someone plays them, which is what the
+				// gesture means everywhere else on this screen.
+				b.charSelectIdx = slot
+				state.OnSelect(slot)
+			}
+		}
 
 		if b.ctx.InvisibleButtonAt(fmt.Sprintf("charselect_slot_%d", slot),
 			left, top, charSelSlotW, charSelSlotH) {
 			b.charSelectIdx = slot
 
-			if state.OnSelectIndex != nil {
+			trace.Emit(trace.Char, "slot-click",
+				zap.Int("slot", slot), zap.Bool("empty", !hasChar))
+
+			// Only a slot holding a character has one to report.
+			if hasChar && state.OnSelectIndex != nil {
 				state.OnSelectIndex(slot)
 			}
+		}
+	}
+}
+
+// charSelectKeys moves the selection with the arrow keys and acts on it with
+// Enter.
+//
+// The selection is a slot number rather than a position, so moving off the
+// edge of a page turns the page under it — otherwise the arrows would stop at
+// slot 2 and the other six would only be reachable with the mouse.
+func (b *UI2DBackend) charSelectKeys(state CharSelectUIState) {
+	if !state.IsReady {
+		return
+	}
+
+	in := b.ctx.Input()
+	if in == nil {
+		return
+	}
+
+	slots := b.charSelectSlotCount(state)
+
+	switch {
+	case in.KeyLeftPressed:
+		b.moveCharSelection(-1, slots)
+	case in.KeyRightPressed:
+		b.moveCharSelection(1, slots)
+	}
+
+	if !in.KeyEnterPressed {
+		return
+	}
+
+	slot := b.charSelectIdx
+	if slot < 0 || slot >= slots {
+		return
+	}
+
+	// Enter does what a double click does, so the two gestures cannot
+	// disagree about what a slot means.
+	if slot < len(state.Characters) {
+		if state.OnSelect != nil {
+			trace.Emit(trace.Char, "enter-key", zap.Int("slot", slot), zap.Bool("empty", false))
+			state.OnSelect(slot)
+		}
+
+		return
+	}
+
+	if state.OnCreateSlot != nil {
+		trace.Emit(trace.Char, "enter-key", zap.Int("slot", slot), zap.Bool("empty", true))
+		state.OnCreateSlot(slot)
+	}
+}
+
+// moveCharSelection steps the selection by one slot and brings its page with
+// it. Stops at both ends rather than wrapping: an account's slots are a row,
+// not a ring, and wrapping from the last to the first reads as a mis-click.
+func (b *UI2DBackend) moveCharSelection(delta, slots int) {
+	next := b.charSelectIdx + delta
+	if b.charSelectIdx < 0 {
+		next = 0
+	}
+
+	if next < 0 || next >= slots {
+		return
+	}
+
+	b.charSelectIdx = next
+	b.charSelectPage = next / charSelSlotCount
+
+	trace.Emit(trace.Char, "select-move", zap.Int("slot", next), zap.Int("page", b.charSelectPage))
+}
+
+// charSelectSlotCount is how many slots the screen may page over.
+//
+// Falls back to what is on screen at once when the account's own count has
+// not arrived, so a missing HC_ACCEPT_ENTER2 shows three slots rather than
+// none.
+func (b *UI2DBackend) charSelectSlotCount(state CharSelectUIState) int {
+	if state.CreatableSlots > 0 {
+		return state.CreatableSlots
+	}
+
+	return charSelSlotCount
+}
+
+// charSelectPageCount is how many pages the slots divide into.
+func (b *UI2DBackend) charSelectPageCount(state CharSelectUIState) int {
+	slots := b.charSelectSlotCount(state)
+
+	return (slots + charSelSlotCount - 1) / charSelSlotCount
+}
+
+// drawCharSelectPaging draws the arrows either side of the slot row and moves
+// between pages.
+//
+// Drawn only when there is more than one page and only when the art loaded:
+// an account with three slots has nothing to page through, and an arrow that
+// cannot be drawn must not still be clickable.
+func (b *UI2DBackend) drawCharSelectPaging(skin *charSelectSkin, state CharSelectUIState, x, y float32) {
+	pages := b.charSelectPageCount(state)
+	if pages <= 1 || skin.prev == nil || skin.next == nil {
+		return
+	}
+
+	// Clamp first: the account's slot count arrives after the screen has
+	// already drawn once, and it can only shrink the range.
+	if b.charSelectPage >= pages {
+		b.charSelectPage = pages - 1
+	}
+	if b.charSelectPage < 0 {
+		b.charSelectPage = 0
+	}
+
+	r := b.ctx.Renderer()
+	arrowY := y + charSelArrowY
+	prevX := x + charSelSlotX[0] - charSelArrowW - charSelArrowGap
+	nextX := x + charSelSlotX[len(charSelSlotX)-1] + charSelSlotW + charSelArrowGap
+
+	if b.charSelectPage > 0 {
+		r.DrawImage(skin.prev.ID, prevX, arrowY, charSelArrowW, charSelArrowH, ui2d.ColorWhite)
+
+		if b.ctx.InvisibleButtonAt("charselect_prev", prevX, arrowY, charSelArrowW, charSelArrowH) {
+			b.charSelectPage--
+			trace.Emit(trace.Char, "page", zap.Int("page", b.charSelectPage))
+		}
+	}
+
+	if b.charSelectPage < pages-1 {
+		r.DrawImage(skin.next.ID, nextX, arrowY, charSelArrowW, charSelArrowH, ui2d.ColorWhite)
+
+		if b.ctx.InvisibleButtonAt("charselect_next", nextX, arrowY, charSelArrowW, charSelArrowH) {
+			b.charSelectPage++
+			trace.Emit(trace.Char, "page", zap.Int("page", b.charSelectPage))
 		}
 	}
 }
@@ -283,7 +502,13 @@ func (b *UI2DBackend) drawCharSelectButtons(skin *charSelectSkin, state CharSele
 	} else {
 		// Character creation is not implemented yet; the button is drawn
 		// because the slot is empty and the original offers it there.
-		b.skinButton("charselect_make", actionX, btnY, skin.make, skin.make, skin.make, "Make")
+		if b.skinButton("charselect_make", actionX, btnY, skin.make, skin.make, skin.make, "Make") {
+			trace.Emit(trace.Char, "make-click", zap.Int("slot", b.charSelectIdx))
+
+			if b.charSelectIdx >= 0 && state.OnCreateSlot != nil {
+				state.OnCreateSlot(b.charSelectIdx)
+			}
+		}
 	}
 
 	b.skinButton("charselect_cancel", cancelX, btnY, skin.cancel, skin.cancel, skin.cancel, "Cancel")
@@ -299,23 +524,31 @@ type charSelectPortrait struct {
 // A character whose sprite will not load simply has an empty slot; the screen
 // stays usable, which matters more than the picture.
 func (b *UI2DBackend) portraitFor(char *packets.CharInfo) *charSelectPortrait {
-	spec := charsprite.Spec{
+	return b.portraitForSpec(charsprite.Spec{
 		Job:       int(char.Class),
 		Female:    char.Sex == 0,
 		HairStyle: int(char.HairStyle),
-	}
+	}, charSelFacing)
+}
 
+// portraitForSpec bakes one look's frame into a texture, once per look and
+// facing.
+//
+// Split from portraitFor so a look that has no character behind it yet can be
+// drawn too — which is the whole of the creation screen's preview.
+func (b *UI2DBackend) portraitForSpec(spec charsprite.Spec, facing int) *charSelectPortrait {
 	if b.charSelPortraits == nil {
-		b.charSelPortraits = make(map[charsprite.Spec]*charSelectPortrait)
+		b.charSelPortraits = make(map[portraitKey]*charSelectPortrait)
 	}
 
-	if portrait, ok := b.charSelPortraits[spec]; ok {
+	key := portraitKey{spec: spec, facing: facing}
+	if portrait, ok := b.charSelPortraits[key]; ok {
 		return portrait
 	}
 
 	// Remember the failure too, so a missing sprite is looked up once rather
 	// than every frame.
-	b.charSelPortraits[spec] = nil
+	b.charSelPortraits[key] = nil
 
 	if b.assetLoader == nil {
 		return nil
@@ -330,7 +563,7 @@ func (b *UI2DBackend) portraitFor(char *packets.CharInfo) *charSelectPortrait {
 	}
 
 	// The idle frame facing the viewer is the pose the original shows.
-	frames := assets.Sheet.Frames[charsprite.ActionIdle*charsprite.Directions+charSelFacing]
+	frames := assets.Sheet.Frames[charsprite.ActionIdle*charsprite.Directions+facing]
 	if len(frames) == 0 {
 		logger.Warn("character sprite has no idle frame",
 			zap.Int("job", spec.Job), zap.String("path", assets.BodyPath))
@@ -345,9 +578,17 @@ func (b *UI2DBackend) portraitFor(char *packets.CharInfo) *charSelectPortrait {
 		height: float32(assets.Sheet.Height),
 	}
 
-	b.charSelPortraits[spec] = portrait
+	b.charSelPortraits[key] = portrait
 
 	return portrait
+}
+
+// portraitKey is what a baked portrait is cached under. Facing is part of it
+// because the creation screen turns the preview, and each direction is a
+// different frame.
+type portraitKey struct {
+	spec   charsprite.Spec
+	facing int
 }
 
 // drawCharSelectPortrait stands a character on the shadow painted in its slot.
