@@ -72,6 +72,10 @@ func main() {
 		g.SetAttackNearest(true)
 	}
 
+	if cast := config.CastSkills(); len(cast) > 0 {
+		g.SetCastSkills(cast)
+	}
+
 	if slots := config.EquipSlots(); len(slots) > 0 {
 		g.SetEquipSlots(slots)
 	}
