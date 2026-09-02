@@ -253,6 +253,36 @@ func (r *Renderer) FrameInterval(action int) float32 {
 	return r.player.intervals[index]
 }
 
+// HitFrame is the frame of the player's action at which what it depicts
+// happens — for a swing, where the blade arrives.
+func (r *Renderer) HitFrame(action int) int {
+	if r == nil || r.player == nil {
+		return 0
+	}
+
+	index := r.player.actIndex(action)
+	if index < 0 || index >= len(r.player.hitFrames) {
+		return 0
+	}
+
+	return r.player.hitFrames[index]
+}
+
+// HitSound is the sound the player's action plays on its hit frame, or empty
+// when the sprite marks it with nothing.
+func (r *Renderer) HitSound(action int) string {
+	if r == nil || r.player == nil {
+		return ""
+	}
+
+	index := r.player.actIndex(action)
+	if index < 0 || index >= len(r.player.hitSounds) {
+		return ""
+	}
+
+	return r.player.hitSounds[index]
+}
+
 // Render draws the player billboard at the character's render position.
 // camPosX/Z are the camera world XZ — used both to orient the billboard and to
 // choose which of the 8 sprite facings to show.
@@ -314,6 +344,47 @@ func (r *Renderer) UnitFrameInterval(spec charsprite.Spec, action int) float32 {
 	}
 
 	return sh.intervals[index]
+}
+
+// UnitHitFrame is the frame of a unit's action at which what it depicts
+// happens. Zero for an appearance whose sheet has not been baked yet, which
+// starts the swing and its outcome together — the same answer as before any of
+// this, and the right one when there is nothing on screen to wait for.
+func (r *Renderer) UnitHitFrame(spec charsprite.Spec, action int) int {
+	if r == nil {
+		return 0
+	}
+
+	sh := r.units[spec]
+	if sh == nil {
+		return 0
+	}
+
+	index := sh.actIndex(action)
+	if index < 0 || index >= len(sh.hitFrames) {
+		return 0
+	}
+
+	return sh.hitFrames[index]
+}
+
+// UnitHitSound is the sound a unit's action plays on its hit frame.
+func (r *Renderer) UnitHitSound(spec charsprite.Spec, action int) string {
+	if r == nil {
+		return ""
+	}
+
+	sh := r.units[spec]
+	if sh == nil {
+		return ""
+	}
+
+	index := sh.actIndex(action)
+	if index < 0 || index >= len(sh.hitSounds) {
+		return ""
+	}
+
+	return sh.hitSounds[index]
 }
 
 // UnitQuadSize reports the world size of an appearance's billboard, or zeroes
@@ -615,6 +686,8 @@ type sheet struct {
 	path       string
 	weaponPath string
 	intervals  [charsprite.LoadedActions]float32
+	hitFrames  [charsprite.LoadedActions]int
+	hitSounds  [charsprite.LoadedActions]string
 
 	// actions is which ACT index each logical action resolves to for this
 	// appearance. Per appearance rather than per family because a weapon
@@ -653,6 +726,8 @@ func newSheet(assets *charsprite.Assets) *sheet {
 		weaponPath: assets.WeaponPath,
 		dropped:    assets.Sheet.Dropped,
 		intervals:  assets.Sheet.IntervalMs,
+		hitFrames:  assets.Sheet.HitFrame,
+		hitSounds:  assets.Sheet.HitSound,
 		actions:    assets.Sheet.Actions,
 	}
 	sh.originX = assets.Sheet.OriginX
