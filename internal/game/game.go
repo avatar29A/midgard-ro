@@ -107,6 +107,9 @@ type Game struct {
 	// attackPending is --attack-nearest, waiting for something to fight.
 	attackPending bool
 
+	// castSkills is --cast, waiting for the skill list.
+	castSkills []int
+
 	// toggleBasicInfo is set for the frame Ctrl+V was pressed.
 	toggleBasicInfo bool
 
@@ -554,6 +557,7 @@ func (g *Game) frame() {
 	g.runOpenWindows()
 	g.runEquip()
 	g.runAttackNearest()
+	g.runCast()
 	g.runSay()
 
 	// Render 3D scene (if applicable)
@@ -627,6 +631,35 @@ func (g *Game) runOpenWindows() {
 	}
 
 	g.openWindows = nil
+}
+
+// SetCastSkills records the skills --cast asked to be cast.
+func (g *Game) SetCastSkills(skills []int) {
+	g.castSkills = skills
+}
+
+// runCast casts what --cast named, once the skill list has arrived.
+//
+// Waits for the list rather than for the map: a cast is refused outright for a
+// skill the character does not have, and asking before the server has said
+// what it has would report that refusal for every skill.
+func (g *Game) runCast() {
+	if len(g.castSkills) == 0 {
+		return
+	}
+
+	state, ok := g.stateManager.Current().(*states.InGameState)
+	if !ok || !state.MapReady() || len(state.Skills()) == 0 {
+		return
+	}
+
+	for _, skill := range g.castSkills {
+		if err := state.UseSkill(uint16(skill), 0); err != nil {
+			logger.Warn("--cast request failed", zap.Int("skill", skill), zap.Error(err))
+		}
+	}
+
+	g.castSkills = nil
 }
 
 // SetAttackNearest records that --attack-nearest asked for a fight.
