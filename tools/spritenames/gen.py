@@ -42,8 +42,8 @@ def resolve(proto, registers, operand):
     Following those is the difference between reading a hundred entries and
     reading all of them.
     """
-    if lub.is_constant(operand):
-        return proto.constants[lub.constant_index(operand)]
+    if lub.is_constant(operand, proto.version):
+        return proto.constants[lub.constant_index(operand, proto.version)]
     return registers.get(operand)
 
 
@@ -52,10 +52,10 @@ def walk(path, handle_settable, handle_gettable=None):
     for proto in lub.load(path):
         registers = {}
         for instruction in proto.code:
-            op, a, b, c = lub.decode(instruction)
+            op, a, b, c = lub.decode(instruction, proto.version)
 
             if op == lub.OP_LOADK:
-                registers[a] = proto.constants[lub.bx(instruction)]
+                registers[a] = proto.constants[lub.bx(instruction, proto.version)]
             elif op == lub.OP_GETTABLE and handle_gettable is not None:
                 handle_gettable(resolve(proto, registers, c))
             elif op == lub.OP_SETTABLE:

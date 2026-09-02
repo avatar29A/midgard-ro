@@ -293,12 +293,9 @@ func (s *InGameState) applyOwnLook(change packets.SpriteChange) {
 		char.HairStyle = value
 	case packets.LookWeapon:
 		// A look the archive has no art for is not a reason to disarm the
-		// character. The server sends whichever of the two forms it holds —
-		// the weapon's class, or the item's own id for a weapon with art of
-		// its own — and an item whose database row omits the view falls back
-		// to the id, which the archive files by class instead. Dropping the
-		// weapon on that would take a knife out of a character's hand because
-		// the server phrased the same knife differently.
+		// character. What arrives is an item id, and the client's own tables
+		// turn that into a sprite; a weapon those tables have never heard of
+		// would otherwise empty a hand that is holding something.
 		//
 		// Zero is the server saying unarmed, and is always obeyed.
 		if value == 0 || s.weaponHasArt(value) {
@@ -324,7 +321,8 @@ func (s *InGameState) applyOwnLook(change packets.SpriteChange) {
 }
 
 // weaponHasArt reports whether a weapon look names a sprite the archive
-// actually holds.
+// actually holds — the look resolved through the client's tables, and the file
+// that came out of them present.
 func (s *InGameState) weaponHasArt(look uint16) bool {
 	if s.manager == nil || s.manager.TexLoader == nil {
 		return false
