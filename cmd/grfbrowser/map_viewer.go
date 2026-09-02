@@ -210,10 +210,9 @@ type MapViewer struct {
 	mapHeight float32 // Height in world units (tiles * zoom)
 
 	// Terrain height data for model positioning (Stage 2 - ADR-014)
-	terrainAltitudes [][]float32 // [x][y] -> average altitude at tile center
-	terrainTileZoom  float32     // GND zoom factor
-	terrainTilesX    int         // Number of tiles in X
-	terrainTilesZ    int         // Number of tiles in Z
+	terrainTileZoom float32 // GND zoom factor
+	terrainTilesX   int     // Number of tiles in X
+	terrainTilesZ   int     // Number of tiles in Z
 
 	// Water rendering (Stage 4 - ADR-014)
 	waterProgram   uint32
@@ -763,7 +762,6 @@ func (mv *MapViewer) LoadMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(
 
 	// Store terrain height data for model positioning (Stage 2 - ADR-014)
 	hm := terrain.BuildHeightmap(gnd)
-	mv.terrainAltitudes = hm.Altitudes
 	mv.terrainTilesX = hm.TilesX
 	mv.terrainTilesZ = hm.TilesZ
 	mv.terrainTileZoom = hm.TileZoom
@@ -1988,7 +1986,8 @@ func (mv *MapViewer) renderPlayerCharacter(viewProj math.Mat4) {
 
 	// ========== STEP 1: Calculate camera-facing billboard vectors ==========
 	// Use render position for smooth visual appearance
-	camRight, camUp := character.BillboardVectors(mv.FollowCam.PosX, mv.FollowCam.PosZ, player.RenderX, player.RenderZ)
+	camRight, camUp := character.BillboardVectors(mv.FollowCam.PosX, mv.FollowCam.PosY, mv.FollowCam.PosZ,
+		player.RenderX, player.RenderY, player.RenderZ)
 
 	// ========== STEP 2: Calculate visual direction with hysteresis ==========
 	cameraAngle := character.CameraAngleToPlayer(mv.FollowCam.PosX, mv.FollowCam.PosZ, player.RenderX, player.RenderZ)
