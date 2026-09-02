@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/Faultbox/midgard-ro/internal/engine/charsprite"
@@ -127,5 +128,26 @@ func TestHairStyleCountMatchesThumbnails(t *testing.T) {
 	}
 	if got := hairStyleCount(charsprite.JobSummoner); got != 6 {
 		t.Errorf("doram styles = %d, want 6", got)
+	}
+}
+
+// TestCreatableJobsAreNamed: every job a player can create has to have a name
+// in the table, or the client shows them "Unknown (4218)" on the status panel
+// of a character it just made itself.
+//
+// Doram was exactly that gap: the sprite layer learned the job, the name table
+// did not.
+func TestCreatableJobsAreNamed(t *testing.T) {
+	for _, job := range []uint16{charsprite.JobNovice, charsprite.JobSummoner} {
+		name := getJobName(job)
+		if strings.HasPrefix(name, "Unknown") {
+			t.Errorf("job %d is creatable but reads as %q", job, name)
+		}
+	}
+
+	// Named as the server names it (map_msg.conf:729), so the client and the
+	// server do not disagree about what a player is.
+	if got := getJobName(charsprite.JobSummoner); got != "Summoner" {
+		t.Errorf("job 4218 = %q, want Summoner", got)
 	}
 }
