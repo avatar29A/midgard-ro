@@ -13,7 +13,12 @@ import "fmt"
 const (
 	spriteRoot = `data\sprite\인간족\`
 	bodyDir    = spriteRoot + `몸통\`
-	headDir    = spriteRoot + `머리통\`
+
+	// 도람족 "Doram race" — the Summoner and what it grows into are drawn
+	// from a directory of their own rather than from the human one, so the
+	// job decides which root its body comes from.
+	doramBodyDir = `data\sprite\도람족\몸통\`
+	headDir      = spriteRoot + `머리통\`
 
 	// Monsters and NPCs are single sprites rather than a body with a head
 	// anchored to it, and live outside the character tree.
@@ -168,6 +173,193 @@ var jobSpriteNames = map[int]string{
 	4020: `클라운`,    // Clown, male only
 	4021: `집시`,     // Gypsy, female only
 	4022: `페코팔라딘`,  // Paladin on a Peco
+
+	// The Doram jobs, whose bodies come from a directory of their own — see
+	// bodyRoot. The archive names them in English, as it does the fourth
+	// classes.
+	4218: `summoner`,       // Summoner
+	4220: `summoner`,       // Baby Summoner
+	4308: `spirit_handler`, // Spirit Handler
+
+	// Mounted and costume forms of the first classes.
+	// A knight on its Peco and a character in a wedding dress are jobs of
+	// their own as far as the protocol is concerned.
+	13: `페코페코_기사`,  // Knight2
+	21: `신페코크루세이더`, // Crusader2
+	22: `결혼`,       // Wedding
+	26: `산타`,       // Xmas
+	27: `여름`,       // Summer
+	28: `한복`,       // Hanbok
+	29: `옥토버패스트`,   // Oktoberfest
+	30: `여름2`,      // Summer2
+
+	// The baby jobs.
+	// A baby is the same drawing as the grown job — the archive has no body
+	// of its own for any of them — so each points at what it grows into.
+	4023: `초보자`,      // Baby
+	4024: `검사`,       // Baby Swordman
+	4025: `마법사`,      // Baby Mage
+	4026: `궁수`,       // Baby Archer
+	4027: `성직자`,      // Baby Acolyte
+	4028: `상인`,       // Baby Merchant
+	4029: `도둑`,       // Baby Thief
+	4030: `기사`,       // Baby Knight
+	4031: `프리스트`,     // Baby Priest
+	4032: `위저드`,      // Baby Wizard
+	4033: `제철공`,      // Baby Blacksmith
+	4034: `헌터`,       // Baby Hunter
+	4035: `어세신`,      // Baby Assassin
+	4036: `페코페코_기사`,  // Baby Knight2
+	4037: `크루세이더`,    // Baby Crusader
+	4038: `몽크`,       // Baby Monk
+	4039: `세이지`,      // Baby Sage
+	4040: `로그`,       // Baby Rogue
+	4041: `연금술사`,     // Baby Alchemist
+	4042: `바드`,       // Baby Bard
+	4043: `무희`,       // Baby Dancer
+	4044: `신페코크루세이더`, // Baby Crusader2
+	4045: `슈퍼노비스`,    // Super Baby
+
+	// The expanded jobs.
+	4046: `태권소년`, // Taekwon
+	4047: `권성`,   // Star Gladiator
+	4048: `권성융합`, // Star Gladiator2
+	4049: `소울링커`, // Soul Linker
+
+	// The third classes, and their transcended and mounted forms.
+	// Rebirth changes nothing about a third class on screen, so the T forms
+	// share their sprite; the mounted ones do not, and have their own.
+	4054: `룬나이트`,   // Rune Knight
+	4055: `워록`,     // Warlock
+	4056: `레인져`,    // Ranger
+	4057: `아크비숍`,   // Arch Bishop
+	4058: `미케닉`,    // Mechanic
+	4059: `길로틴크로스`, // Guillotine Cross
+	4060: `룬나이트`,   // Rune Knight T
+	4061: `워록`,     // Warlock T
+	4062: `레인져`,    // Ranger T
+	4063: `아크비숍`,   // Arch Bishop T
+	4064: `미케닉`,    // Mechanic T
+	4065: `길로틴크로스`, // Guillotine Cross T
+	4066: `가드`,     // Royal Guard
+	4067: `소서러`,    // Sorcerer
+	4068: `민스트럴`,   // Minstrel
+	4069: `원더러`,    // Wanderer
+	4070: `슈라`,     // Sura
+	4071: `제네릭`,    // Genetic
+	4072: `쉐도우체이서`, // Shadow Chaser
+	4073: `가드`,     // Royal Guard T
+	4074: `소서러`,    // Sorcerer T
+	4075: `민스트럴`,   // Minstrel T
+	4076: `원더러`,    // Wanderer T
+	4077: `슈라`,     // Sura T
+	4078: `제네릭`,    // Genetic T
+	4079: `쉐도우체이서`, // Shadow Chaser T
+	4080: `룬나이트쁘띠`, // Rune Knight2
+	4081: `룬나이트쁘띠`, // Rune Knight T2
+	4082: `그리폰가드`,  // Royal Guard2
+	4083: `그리폰가드`,  // Royal Guard T2
+	4084: `레인져늑대`,  // Ranger2
+	4085: `레인져늑대`,  // Ranger T2
+	4086: `마도기어`,   // Mechanic2
+	4087: `마도기어`,   // Mechanic T2
+
+	// Baby third classes.
+	4096: `룬나이트`,   // Baby Rune Knight
+	4097: `워록`,     // Baby Warlock
+	4098: `레인져`,    // Baby Ranger
+	4099: `아크비숍`,   // Baby Arch Bishop
+	4100: `미케닉`,    // Baby Mechanic
+	4101: `길로틴크로스`, // Baby Guillotine Cross
+	4102: `가드`,     // Baby Royal Guard
+	4103: `소서러`,    // Baby Sorcerer
+	4104: `민스트럴`,   // Baby Minstrel
+	4105: `원더러`,    // Baby Wanderer
+	4106: `슈라`,     // Baby Sura
+	4107: `제네릭`,    // Baby Genetic
+	4108: `쉐도우체이서`, // Baby Shadow Chaser
+	4109: `룬나이트쁘띠`, // Baby Rune Knight2
+	4110: `그리폰가드`,  // Baby Royal Guard2
+	4111: `레인져늑대`,  // Baby Ranger2
+	4112: `마도기어`,   // Baby Mechanic2
+
+	// Later expanded jobs and their babies.
+	4190: `슈퍼노비스`,   // Super Novice E
+	4191: `슈퍼노비스`,   // Super Baby E
+	4211: `kagerou`, // Kagerou
+	4212: `oboro`,   // Oboro
+	4215: `리벨리온`,    // Rebellion
+	4222: `닌자`,      // Baby Ninja
+	4223: `kagerou`, // Baby Kagerou
+	4224: `oboro`,   // Baby Oboro
+	4225: `태권소년`,    // Baby Taekwon
+	4226: `권성`,      // Baby Star Gladiator
+	4227: `소울링커`,    // Baby Soul Linker
+	4228: `건너`,      // Baby Gunslinger
+	4229: `리벨리온`,    // Baby Rebellion
+	4238: `권성융합`,    // Baby Star Gladiator2
+	4239: `성제`,      // Star Emperor
+	4240: `소울리퍼`,    // Soul Reaper
+	4241: `성제`,      // Baby Star Emperor
+	4242: `소울리퍼`,    // Baby Soul Reaper
+	4243: `해태성제`,    // Star Emperor2
+	4244: `해태성제`,    // Baby Star Emperor2
+
+	// The fourth classes, which the archive names in English.
+	// Not a rule worth trusting on its own — every one below was looked up
+	// in the archive, including elemetal_master, which is spelt that way.
+	4252: `dragon_knight`,         // Dragon Knight
+	4253: `meister`,               // Meister
+	4254: `shadow_cross`,          // Shadow Cross
+	4255: `arch_mage`,             // Arch Mage
+	4256: `cardinal`,              // Cardinal
+	4257: `windhawk`,              // Windhawk
+	4258: `imperial_guard`,        // Imperial Guard
+	4259: `biolo`,                 // Biolo
+	4260: `abyss_chaser`,          // Abyss Chaser
+	4261: `elemetal_master`,       // Elemental Master
+	4262: `inquisitor`,            // Inquisitor
+	4263: `troubadour`,            // Troubadour
+	4264: `trouvere`,              // Trouvere
+	4278: `wolf_windhawk`,         // Windhawk2
+	4279: `meister_riding`,        // Meister2
+	4280: `dragon_knight_riding`,  // Dragon Knight2
+	4281: `imperial_guard_riding`, // Imperial Guard2
+	4302: `sky_emperor`,           // Sky Emperor
+	4303: `soul_ascetic`,          // Soul Ascetic
+	4304: `shinkiro`,              // Shinkiro
+	4305: `shiranui`,              // Shiranui
+	4306: `night_watch`,           // Night Watch
+	4307: `hyper_novice`,          // Hyper Novice
+	4316: `sky_emperor_riding`,    // Sky Emperor2
+
+	// The fourth-era reissues of the third classes, same art.
+	4332: `룬나이트`,   // Rune Knight 2Nd
+	4333: `미케닉`,    // Mechanic 2Nd
+	4334: `길로틴크로스`, // Guillotine Cross 2Nd
+	4335: `워록`,     // Warlock 2Nd
+	4336: `아크비숍`,   // Archbishop 2Nd
+	4337: `레인져`,    // Ranger 2Nd
+	4338: `가드`,     // Royal Guard 2Nd
+	4339: `제네릭`,    // Genetic 2Nd
+	4340: `쉐도우체이서`, // Shadow Chaser 2Nd
+	4341: `소서러`,    // Sorcerer 2Nd
+	4342: `슈라`,     // Sura 2Nd
+	4343: `민스트럴`,   // Minstrel 2Nd
+	4344: `원더러`,    // Wanderer 2Nd
+}
+
+// doramJobs are the jobs drawn from the Doram directory rather than the human
+// one: the Summoner, its baby, and the Spirit Handler it becomes.
+var doramJobs = map[int]bool{4218: true, 4220: true, 4308: true}
+
+// bodyRoot is the directory a job's body sprite lives under.
+func bodyRoot(job int) string {
+	if doramJobs[job] {
+		return doramBodyDir
+	}
+
+	return bodyDir
 }
 
 // FallbackJob is the job we render when the class id isn't one we know. Every
@@ -215,7 +407,7 @@ func (s Spec) BodyPathCandidates() [][2]string {
 	if s.Kind == KindPlayer {
 		job, _ := JobSpriteName(s.Job)
 		sex := s.sexSuffix()
-		base := fmt.Sprintf(`%s%s\%s_%s`, bodyDir, sex, job, sex)
+		base := fmt.Sprintf(`%s%s\%s_%s`, bodyRoot(s.Job), sex, job, sex)
 		return [][2]string{{base + ".spr", base + ".act"}}
 	}
 
