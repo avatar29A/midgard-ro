@@ -214,10 +214,11 @@ func (s *InGameState) BeginPlacing(skillID uint16, level int) {
 
 // BeginTargeting holds a skill until somebody is chosen for it.
 //
-// A support skill can go on anybody, and until one is picked there is nothing
-// to send: casting it at whatever happened to be attacked last would heal a
-// monster, and casting it always at the caster would make half the skill
-// unreachable — which is what it did.
+// A targeted skill can go on the caster, another player, or a monster, and
+// which of those this particular skill allows is the server's question — Heal
+// goes on people and on the undead, an attack skill is refused against a
+// player who is not in a fight. So anything picked is sent and the refusal, if
+// there is one, comes back and is printed.
 func (s *InGameState) BeginTargeting(skillID uint16, level int) {
 	s.beginHolding(skillID, level, true, "choose who to cast it on")
 }
@@ -272,18 +273,26 @@ func (s *InGameState) placeHeldSkill(mouseX, mouseY, viewportW, viewportH float3
 	s.placingSkill, s.placingLevel, s.placingAtUnit = 0, 0, false
 
 	if atUnit {
-		// Whoever is under the pointer, and the caster when that is nobody:
-		// a support skill always has one target that is certainly valid, and
-		// a click on empty ground meaning "on me" is what the original does.
-		target := s.selfAID()
-		if e := s.PickEntity(mouseX, mouseY, viewportW, viewportH); e != nil {
-			target = e.ID
+		// Whoever is under the pointer. A click on anything that is not a
+		// target simply puts the skill down: the original drops it rather
+		// than casting on the caster, and casting on the caster would spend
+		// SP nobody asked to spend.
+		//
+		// Whether this particular target is allowed is the server's to say —
+		// an attack skill on a player who is not in a fight is refused, and
+		// the refusal already reaches the chat.
+		e := s.PickEntity(mouseX, mouseY, viewportW, viewportH)
+		if e == nil {
+			trace.Emit(trace.HUD, "cast-no-target", zap.Uint16("skill", skill))
+
+			return true
 		}
 
 		trace.Emit(trace.HUD, "cast-at-unit",
-			zap.Uint16("skill", skill), zap.Uint32("target", target))
+			zap.Uint16("skill", skill), zap.Uint32("target", e.ID),
+			zap.String("name", e.Name))
 
-		if err := s.castAt(skill, level, target); err != nil {
+		if err := s.castAt(skill, level, e.ID); err != nil {
 			logger.Warn("could not cast that skill", zap.Uint16("skill", skill), zap.Error(err))
 		}
 

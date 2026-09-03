@@ -138,3 +138,19 @@ func TestPlacingAndTargetingAreTheSameHold(t *testing.T) {
 		t.Error("cancel left the hold pointed at a unit")
 	}
 }
+
+// TestAClickOnNothingDropsATargetedSkill: the original puts the skill down
+// rather than casting it on the caster. Casting on the caster would spend SP
+// nobody asked to spend, on a click that meant "never mind".
+func TestAClickOnNothingDropsATargetedSkill(t *testing.T) {
+	s := &InGameState{}
+	s.BeginTargeting(28, 10)
+
+	// No entity manager, so nothing is under the pointer.
+	if !s.placeHeldSkill(0, 0, 0, 0) {
+		t.Fatal("the click was not taken by the held skill")
+	}
+	if _, holding := s.Placing(); holding {
+		t.Error("the skill is still held after a click on nothing")
+	}
+}
