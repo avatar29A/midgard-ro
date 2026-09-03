@@ -110,9 +110,9 @@ type Game struct {
 	// castSkills is --cast, waiting for the skill list.
 	castSkills []int
 
-	// systemCursorShown is the last state the system cursor was seen in, so
-	// its coming back is reported once rather than every frame.
-	systemCursorShown bool
+	// hadWindowFocus is whether the window had focus last frame, which is
+	// what says when the system cursor needs hiding again.
+	hadWindowFocus bool
 
 	// toggleBasicInfo is set for the frame Ctrl+V was pressed.
 	toggleBasicInfo bool
@@ -571,7 +571,7 @@ func (g *Game) frame() {
 	g.runMouseAt()
 	g.runOpenWindows()
 	g.runEquip()
-	g.watchSystemCursor()
+	g.hideSystemCursor()
 	g.runAttackNearest()
 	g.runCast()
 	g.runSay()
@@ -649,30 +649,40 @@ func (g *Game) runOpenWindows() {
 	g.openWindows = nil
 }
 
-// watchSystemCursor reports the system cursor coming back.
+// hideSystemCursor keeps the system pointer hidden, which takes more than
+// hiding it once.
 //
-// The game draws RO's own, so the system one would be a second pointer beside
-// it. It is hidden at startup and imgui is told not to touch it, and this says
-// whether anything puts it back — logged on change only, since the answer is
-// usually "no" sixty times a second.
-func (g *Game) watchSystemCursor() {
-	shown, err := sdl.ShowCursor(sdl.QUERY)
-	if err != nil {
+// The game draws RO's own cursor, so the system one is a second pointer beside
+// it. Hiding it at startup works and SDL goes on reporting it hidden — but
+// coming back to the window puts it on screen again, because on macOS the
+// hiding is AppKit's [NSCursor hide] and AppKit undoes it when the window is
+// activated. SDL never hears about that, so it thinks nothing has changed and
+// hiding it again does nothing: the call returns early on a state it believes
+// it is already in.
+//
+// So on regaining focus it is shown and hidden again, which forces the hide
+// through. Watched by focus rather than by the cursor's reported state,
+// because the reported state is exactly what is wrong.
+func (g *Game) hideSystemCursor() {
+	focused := sdl.GetMouseFocus() != nil || sdl.GetKeyboardFocus() != nil
+
+	if focused == g.hadWindowFocus {
 		return
 	}
 
-	visible := shown == sdl.ENABLE
-	if visible == g.systemCursorShown {
+	g.hadWindowFocus = focused
+	if !focused {
 		return
 	}
 
-	g.systemCursorShown = visible
-	logger.Info("system cursor changed", zap.Bool("shown", visible))
+	if _, err := sdl.ShowCursor(sdl.ENABLE); err != nil {
+		logger.Warn("could not reset the system cursor", zap.Error(err))
 
-	if visible {
-		if _, err := sdl.ShowCursor(sdl.DISABLE); err != nil {
-			logger.Warn("could not hide the system cursor again", zap.Error(err))
-		}
+		return
+	}
+
+	if _, err := sdl.ShowCursor(sdl.DISABLE); err != nil {
+		logger.Warn("could not hide the system cursor", zap.Error(err))
 	}
 }
 
