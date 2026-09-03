@@ -180,3 +180,10 @@ func (s *InGameState) findSkill(skillID uint16) (packets.Skill, bool) {
 
 	return packets.Skill{}, false
 }
+
+// HasSkill reports whether the server has told us the character knows one.
+func (s *InGameState) HasSkill(skillID uint16) bool {
+	_, known := s.findSkill(skillID)
+
+	return known
+}

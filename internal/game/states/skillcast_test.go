@@ -255,3 +255,30 @@ func TestAnOffensiveSkillIsAimedToo(t *testing.T) {
 		t.Error("an offensive skill is waiting for a cell rather than for somebody")
 	}
 }
+
+// TestEffectFileNames: the archive files a skill effect under the table's own
+// name with the EF_ taken off — EF_FIREHIT is firehit.str. Thirty-five of the
+// effects the table names are there under exactly that rule.
+func TestEffectFileNames(t *testing.T) {
+	for _, tc := range []struct{ effect, want string }{
+		{"EF_FIREHIT", "firehit.str"},
+		{"EF_WINDHIT", "windhit.str"},
+		{"EF_MAGNIFICAT", "magnificat.str"},
+		{"EF_STORMGUST", "stormgust.str"},
+	} {
+		if got := effectFileFor(tc.effect); got != tc.want {
+			t.Errorf("effectFileFor(%q) = %q, want %q", tc.effect, got, tc.want)
+		}
+	}
+}
+
+// TestEffectFileRefusesWhatIsNotOne: a name that is not an effect must not be
+// turned into a file name, or the loader goes looking for ".str" and caches a
+// miss under the empty string.
+func TestEffectFileRefusesWhatIsNotOne(t *testing.T) {
+	for _, name := range []string{"", "EF_", "FIREHIT", "ef_firehit"} {
+		if got := effectFileFor(name); got != "" {
+			t.Errorf("effectFileFor(%q) = %q, want nothing", name, got)
+		}
+	}
+}
