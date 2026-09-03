@@ -105,7 +105,7 @@ func TestBurstsAgeOut(t *testing.T) {
 		s := &InGameState{}
 		spec, _ := burstFor(name, 1)
 		runMs := spec.runMs
-		s.playBurst(name, spec, 0, 0, 0)
+		s.playBurst(name, spec, [3]float32{}, [3]float32{})
 
 		if len(s.bursts) != 1 {
 			t.Fatalf("%s: %d bursts playing, want 1", name, len(s.bursts))
@@ -250,7 +250,7 @@ func quadsThrough(name string) (frames [][]EffectQuad) {
 
 	for step := 0; step < 10; step++ {
 		b.ageMs = b.runMs * float32(step) / 10
-		frames = append(frames, b.quadsAt(400, 300, boltFallPx[0], boltFallPx[1]))
+		frames = append(frames, b.quadsAt(400, 300, boltFromPx[0], boltFromPx[1]))
 	}
 
 	return frames
@@ -270,15 +270,15 @@ func playing(name string) *activeBurst {
 	spec, _ := burstFor(name, 1)
 
 	return &activeBurst{
-		parts: spec.parts,
-		fallX: spec.fallX, fallY: spec.fallY, fallZ: spec.fallZ,
+		parts:  spec.parts,
+		otherX: spec.otherX, otherY: spec.otherY, otherZ: spec.otherZ,
 		runMs: spec.runMs,
 	}
 }
 
-// boltFallPx stands in for the projection: a shot comes down from up and to
+// boltFromPx stands in for the projection: a shot comes down from up and to
 // one side, and the tests do not have a camera to work that out with.
-var boltFallPx = [2]float32{120, -300}
+var boltFromPx = [2]float32{120, -300}
 
 // TestEveryBurstDrawsSomething: the whole point. A burst that lays out no
 // quads is an effect that plays and is not seen, which is what Cold Bolt did
@@ -338,7 +338,7 @@ func TestBurstsStayNearWhatTheyHit(t *testing.T) {
 		for step := 0; step < 10; step++ {
 			b.ageMs = b.runMs * float32(step) / 10
 
-			for _, q := range b.quadsAt(originX, originY, boltFallPx[0], boltFallPx[1]) {
+			for _, q := range b.quadsAt(originX, originY, boltFromPx[0], boltFromPx[1]) {
 				for _, c := range q.Corners {
 					if dx := c[0] - originX; dx < -400 || dx > 400 {
 						t.Fatalf("%s reaches %v across at %vms", name, dx, b.ageMs)
@@ -359,10 +359,10 @@ func TestBurstParticlesMove(t *testing.T) {
 		b := playing(name)
 
 		b.ageMs = b.runMs * 0.3
-		early := b.quadsAt(400, 300, boltFallPx[0], boltFallPx[1])
+		early := b.quadsAt(400, 300, boltFromPx[0], boltFromPx[1])
 
 		b.ageMs = b.runMs * 0.6
-		late := b.quadsAt(400, 300, boltFallPx[0], boltFallPx[1])
+		late := b.quadsAt(400, 300, boltFromPx[0], boltFromPx[1])
 
 		if len(early) == 0 || len(late) == 0 {
 			t.Errorf("%s draws nothing in the middle of its run", name)
@@ -443,7 +443,7 @@ func TestAShotArrivesWhereItWasAimed(t *testing.T) {
 
 	// Just born, it is up by the fall.
 	b.ageMs = shot.birthMs + 1
-	quads := b.quadsAt(originX, originY, boltFallPx[0], boltFallPx[1])
+	quads := b.quadsAt(originX, originY, boltFromPx[0], boltFromPx[1])
 	if len(quads) != 1 {
 		t.Fatalf("%d quads for one shot just born", len(quads))
 	}
@@ -456,7 +456,7 @@ func TestAShotArrivesWhereItWasAimed(t *testing.T) {
 
 	// About to land, it is on the target.
 	b.ageMs = shot.birthMs + shot.lifeMs*0.98
-	quads = b.quadsAt(originX, originY, boltFallPx[0], boltFallPx[1])
+	quads = b.quadsAt(originX, originY, boltFromPx[0], boltFromPx[1])
 	if len(quads) != 1 {
 		t.Fatalf("%d quads for one shot about to land", len(quads))
 	}
@@ -474,7 +474,7 @@ func TestAShotLiesAlongItsFall(t *testing.T) {
 	b := playing("EF_ICEARROW")
 	b.ageMs = b.parts[0].birthMs + b.parts[0].lifeMs/2
 
-	quads := b.quadsAt(400, 300, boltFallPx[0], boltFallPx[1])
+	quads := b.quadsAt(400, 300, boltFromPx[0], boltFromPx[1])
 	if len(quads) != 1 {
 		t.Fatalf("%d quads", len(quads))
 	}
@@ -488,7 +488,7 @@ func TestAShotLiesAlongItsFall(t *testing.T) {
 	long[1] -= (quads[0].Corners[0][1] + quads[0].Corners[1][1]) / 2
 
 	// The way it is going: from up and to one side, down onto the target.
-	fall := [2]float32{-boltFallPx[0], -boltFallPx[1]}
+	fall := [2]float32{-boltFromPx[0], -boltFromPx[1]}
 
 	dot := long[0]*fall[0] + long[1]*fall[1]
 	lenLong := math.Hypot(float64(long[0]), float64(long[1]))
@@ -518,8 +518,103 @@ func TestBothBoltsHaveArt(t *testing.T) {
 		if got := spec.parts[0].texture; got != want {
 			t.Errorf("%s draws %q, want %q", name, got, want)
 		}
-		if spec.fallY <= 0 {
-			t.Errorf("%s falls from %v above, want it overhead", name, spec.fallY)
+		if spec.otherY <= 0 {
+			t.Errorf("%s falls from %v above, want it overhead", name, spec.otherY)
+		}
+	}
+}
+
+// TestTheSpikeLineRunsFromTheCaster: Frost Diver throws a line of spikes out
+// of the ground from the mage to what was aimed at. Drawn around the target
+// alone it is a heap of ice with nothing thrown at all.
+func TestTheSpikeLineRunsFromTheCaster(t *testing.T) {
+	spec, ok := burstFor("EF_FROSTDIVER", 1)
+	if !ok {
+		t.Fatal("EF_FROSTDIVER has no burst")
+	}
+
+	if !spec.fromCaster {
+		t.Error("the line is not drawn from the caster")
+	}
+
+	// In order, from the caster's end to the target's, and each one a little
+	// after the one before it.
+	for i := 1; i < len(spec.parts); i++ {
+		if spec.parts[i].atOther >= spec.parts[i-1].atOther {
+			t.Errorf("spike %d stands at %v, no nearer the target than spike %d at %v",
+				i, spec.parts[i].atOther, i-1, spec.parts[i-1].atOther)
+		}
+		if spec.parts[i].birthMs <= spec.parts[i-1].birthMs {
+			t.Errorf("spike %d comes up at %v, no later than spike %d at %v",
+				i, spec.parts[i].birthMs, i-1, spec.parts[i-1].birthMs)
+		}
+	}
+
+	if first := spec.parts[0].atOther; first < 0.9 {
+		t.Errorf("the line starts %v of the way along, want it at the caster", first)
+	}
+	if last := spec.parts[len(spec.parts)-1].atOther; last > 0.15 {
+		t.Errorf("the line stops %v of the way along, want it at the target", last)
+	}
+}
+
+// TestTheSealWaitsForTheLine: closed at the moment the packet lands, the ice
+// shuts over the target before the spell has reached them.
+func TestTheSealWaitsForTheLine(t *testing.T) {
+	line, _ := burstFor("EF_FROSTDIVER", 1)
+	seal, ok := burstFor("EF_FROSTDIVER2", 1)
+	if !ok {
+		t.Fatal("EF_FROSTDIVER2 has no burst")
+	}
+
+	reach := line.parts[len(line.parts)-1].birthMs
+	for i, p := range seal.parts {
+		if p.birthMs < reach {
+			t.Errorf("seal spike %d closes at %v, before the line arrives at %v",
+				i, p.birthMs, reach)
+		}
+	}
+
+	if seal.fromCaster {
+		t.Error("the seal is drawn from the caster; it closes over the target")
+	}
+}
+
+// TestASpikeGrowsOutOfTheGround: its base stays where it broke through while
+// the point climbs. One that rises whole reads as a shard floating up.
+func TestASpikeGrowsOutOfTheGround(t *testing.T) {
+	spec, _ := burstFor("EF_FROSTDIVER2", 1)
+
+	for i, p := range spec.parts {
+		if p.growH <= 0 {
+			t.Errorf("spike %d does not grow", i)
+		}
+
+		// Up by half of what it grows: the top rises by the whole growth and
+		// the bottom stays put. Screen space, so up is negative.
+		if want := -p.growH; p.vy != want {
+			t.Errorf("spike %d moves %v while growing %v, want %v so its base stays still",
+				i, p.vy, p.growH, want)
+		}
+	}
+}
+
+// TestSpikesStandUpright: near enough. A line of them all at the same angle is
+// a fence, and one lying over is not a spike at all.
+func TestSpikesStandUpright(t *testing.T) {
+	for _, name := range []string{"EF_FROSTDIVER", "EF_FROSTDIVER2"} {
+		spec, _ := burstFor(name, 1)
+
+		angles := map[float32]bool{}
+		for i, p := range spec.parts {
+			if p.angle < -0.4 || p.angle > 0.4 {
+				t.Errorf("%s spike %d leans %v radians, which is on its side", name, i, p.angle)
+			}
+			angles[p.angle] = true
+		}
+
+		if len(angles) < 2 {
+			t.Errorf("%s stands every spike at the same angle, which is a fence", name)
 		}
 	}
 }

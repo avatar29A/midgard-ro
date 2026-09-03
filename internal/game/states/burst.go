@@ -77,15 +77,19 @@ type burstParticle struct {
 	// the ones that darken as well as brighten, like Bash's halo.
 	additive bool
 
-	// fromFall makes the particle ignore x/y and vx/vy and instead travel
-	// from where the burst falls from to the burst's own anchor, arriving as
-	// its life ends. It is turned to point along the way it is going, which
-	// is what makes a bolt read as falling rather than sliding.
-	fromFall bool
+	// atOther is where along the burst's own line the particle sits: nought
+	// at the anchor, one at the other end. A burst with no other end has all
+	// of them at nought, which is a burst around a point.
+	atOther float32
 
-	// fallJitter shifts the start sideways, so ten bolts aimed at the same
-	// unit do not fall down the same line.
-	fallJitter [2]float32
+	// fallsIn makes it travel from there to the anchor over its life instead
+	// of staying put, turned to lie along the way it is going — which is what
+	// makes a bolt read as falling rather than sliding.
+	fallsIn bool
+
+	// jitter shifts where it starts, so ten of them along the same line do
+	// not sit on top of each other.
+	jitter [2]float32
 }
 
 // alphaAt is how strongly the particle draws at an age, and zero once it has
@@ -124,25 +128,32 @@ func (p burstParticle) alphaAt(age float32) float32 {
 }
 
 // burstSpec is a burst before it is played: its particles, how long the whole
-// thing runs, and where in the world the falling ones fall from.
+// thing runs, and where its other end is.
 //
-// The fall is a world offset rather than a screen one because it has to be
-// projected: a bolt that dropped a fixed number of pixels would come down at
-// the wrong angle the moment the camera turned.
+// Some effects are drawn between two places rather than around one — a bolt
+// falls out of the sky onto what it hits, Frost Diver walks a line of spikes
+// from the caster to the target. The other end is a world offset from the
+// anchor rather than a screen one because it has to be projected: a bolt that
+// dropped a fixed number of pixels would come down at the wrong angle the
+// moment the camera turned, and a line of spikes would point the wrong way.
 type burstSpec struct {
 	parts []burstParticle
 	runMs float32
 
-	fallX, fallY, fallZ float32
+	otherX, otherY, otherZ float32
+
+	// fromCaster says the other end is wherever the caster is standing, which
+	// is not a fixed offset and is filled in when the burst is played.
+	fromCaster bool
 }
 
 // activeBurst is one playing.
 type activeBurst struct {
 	parts []burstParticle
 
-	// fallX, fallY and fallZ are the world offset the falling particles come
-	// from, relative to the anchor.
-	fallX, fallY, fallZ float32
+	// otherX, otherY and otherZ are the burst's other end, as a world offset
+	// from the anchor.
+	otherX, otherY, otherZ float32
 
 	// Where it plays, in world space, projected each frame so it stays on the
 	// unit it was aimed at even as the camera turns.
@@ -158,19 +169,31 @@ type activeBurst struct {
 	traced bool
 }
 
-// playBurst starts one over a world position.
-func (s *InGameState) playBurst(name string, spec burstSpec, x, y, z float32) {
+// playBurst starts one over a world position, with the caster at from.
+func (s *InGameState) playBurst(name string, spec burstSpec, from, at [3]float32) {
 	if len(spec.parts) == 0 {
 		return
+	}
+
+	other := [3]float32{spec.otherX, spec.otherY, spec.otherZ}
+	if spec.fromCaster {
+		// The caster is wherever they are standing, so the other end is only
+		// known now. Without one the burst collapses onto the target, which
+		// for a line of spikes is a heap of them in one place.
+		if from == ([3]float32{}) {
+			return
+		}
+
+		other = [3]float32{from[0] - at[0], from[1] - at[1], from[2] - at[2]}
 	}
 
 	trace.Emit(trace.HUD, "burst-play",
 		zap.String("effect", name), zap.Int("parts", len(spec.parts)))
 
 	s.bursts = append(s.bursts, &activeBurst{
-		parts: spec.parts,
-		fallX: spec.fallX, fallY: spec.fallY, fallZ: spec.fallZ,
-		x: x, y: y, z: z,
+		parts:  spec.parts,
+		otherX: other[0], otherY: other[1], otherZ: other[2],
+		x: at[0], y: at[1], z: at[2],
 		runMs: spec.runMs,
 	})
 }
@@ -206,17 +229,18 @@ func (s *InGameState) burstQuads(viewportW, viewportH float32) []EffectQuad {
 			continue
 		}
 
-		// Where the falling ones come from, in pixels: the anchor's own
-		// offset projected, so the fall follows the camera.
-		var fallX, fallY float32
-		if b.fallX != 0 || b.fallY != 0 || b.fallZ != 0 {
-			fx, fy := s.projectToScreen(b.x+b.fallX, b.y+b.fallY, b.z+b.fallZ, viewportW, viewportH)
-			if fx >= 0 {
-				fallX, fallY = fx-originX, fy-originY
+		// The other end in pixels: projected each frame, so the line the
+		// burst is drawn along follows the camera.
+		var otherX, otherY float32
+		if b.otherX != 0 || b.otherY != 0 || b.otherZ != 0 {
+			ox, oy := s.projectToScreen(b.x+b.otherX, b.y+b.otherY, b.z+b.otherZ,
+				viewportW, viewportH)
+			if ox >= 0 {
+				otherX, otherY = ox-originX, oy-originY
 			}
 		}
 
-		quads := b.quadsAt(originX, originY, fallX, fallY)
+		quads := b.quadsAt(originX, originY, otherX, otherY)
 		if trace.On(trace.HUD) && !b.traced && len(quads) > 0 {
 			b.traced = true
 
@@ -237,7 +261,7 @@ func (s *InGameState) burstQuads(viewportW, viewportH float32) []EffectQuad {
 // why it is here rather than in the loop above: the projection needs a scene
 // and a camera, and the shape of an effect over time can be looked at without
 // either.
-func (b *activeBurst) quadsAt(originX, originY, fallX, fallY float32) []EffectQuad {
+func (b *activeBurst) quadsAt(originX, originY, otherX, otherY float32) []EffectQuad {
 	out := make([]EffectQuad, 0, len(b.parts))
 
 	for _, p := range b.parts {
@@ -265,18 +289,27 @@ func (b *activeBurst) quadsAt(originX, originY, fallX, fallY float32) []EffectQu
 		// rather than a rate times a time.
 		angle := p.angle + p.spin*frames + p.spinAccel*frames*(frames+1)/2
 
-		if p.fromFall {
-			// All the way in over its life, so it arrives as it goes out.
-			left := 1 - age/p.lifeMs
-			fromX, fromY := fallX+p.fallJitter[0], fallY+p.fallJitter[1]
+		if p.atOther != 0 || p.fallsIn {
+			fromX := otherX*p.atOther + p.jitter[0]
+			fromY := otherY*p.atOther + p.jitter[1]
 
-			x = originX + fromX*left
-			y = originY + fromY*left
+			x = originX + fromX
+			y = originY + fromY
 
-			// Turned to lie along the way it is going. The quad is drawn
-			// upright, so this is the angle that puts its long axis on the
-			// line from where it started to where it lands.
-			angle = float32(math.Atan2(float64(fromX), float64(-fromY)))
+			if p.fallsIn {
+				// All the way in over its life, so it arrives as it goes out,
+				// and turned to lie along the way it is going. The quad is
+				// drawn upright, so this is the angle that puts its long axis
+				// on the line from where it started to where it lands.
+				left := 1 - age/p.lifeMs
+
+				x = originX + fromX*left
+				y = originY + fromY*left
+				angle = float32(math.Atan2(float64(fromX), float64(-fromY)))
+			}
+
+			x += p.vx * frames
+			y += p.vy*frames + 0.5*p.ay*frames*frames
 		}
 
 		out = append(out, EffectQuad{
@@ -559,11 +592,12 @@ func boltParts(hits int, style boltStyle) burstSpec {
 	parts := make([]burstParticle, 0, shots)
 	for i := 0; i < shots; i++ {
 		parts = append(parts, burstParticle{
-			fromFall: true,
+			atOther: 1,
+			fallsIn: true,
 
 			// Five units either way, so ten shots at one unit do not all come
 			// down the same line.
-			fallJitter: [2]float32{
+			jitter: [2]float32{
 				(hash01(uint32(i), 31) - 0.5) * 10 * burstScale,
 				(hash01(uint32(i), 32) - 0.5) * 4 * burstScale,
 			},
@@ -586,9 +620,126 @@ func boltParts(hits int, style boltStyle) burstSpec {
 	}
 
 	return burstSpec{
-		parts: parts,
-		runMs: boltImpactMs(shots-1) + burstFrames(4),
-		fallX: boltFall[0], fallY: boltFall[1], fallZ: boltFall[2],
+		parts:  parts,
+		runMs:  boltImpactMs(shots-1) + burstFrames(4),
+		otherX: boltFall[0], otherY: boltFall[1], otherZ: boltFall[2],
+	}
+}
+
+// Ice spikes.
+//
+// Frost Diver walks a line of them out of the ground from the caster to what
+// it was aimed at, and then seals the target in a ring of larger ones. Neither
+// is in the archive as an animation — there is no frostdiver.str — only the
+// one texture they are all cut from.
+//
+// From nostalro-client's frost_diver.rs.
+
+// A spike pushes up out of the ground over its first third and then stands
+// still until it goes. It grows rather than rises: the base stays where it
+// came out of the ground while the point climbs, which is what makes it read
+// as ice breaking through rather than as a shard floating up.
+const (
+	spikeRunFrames  = 40
+	spikeRiseFrames = 20
+	spikeFadeFrames = 10
+	spikeAlpha      = 200.0 / 255
+
+	// spikeStepFrames is how long the line takes to reach the next spike
+	// along. One a frame, so the line runs out as fast as the original's
+	// projectile walks it.
+	spikeStepFrames = 1
+
+	// frostDiverSpikes is how many stand in the line. The original puts one
+	// every two units and so has as many as the distance calls for; a fixed
+	// number spreads them along whatever the distance turns out to be, which
+	// looks the same and does not need the distance to build the burst.
+	frostDiverSpikes = 14
+)
+
+// frostDiverParts is the line of spikes from the caster to the target.
+func frostDiverParts() burstSpec {
+	parts := make([]burstParticle, 0, frostDiverSpikes)
+	for i := 0; i < frostDiverSpikes; i++ {
+		// From just clear of the caster to the target, in order, so the line
+		// runs the way the spell was thrown.
+		along := 1 - float32(i)/frostDiverSpikes
+
+		parts = append(parts, spikeParticle(uint32(i), along,
+			burstFrames(spikeStepFrames*float32(i)), 0.3, 0.6, 7, 10))
+	}
+
+	return burstSpec{
+		parts:      parts,
+		runMs:      frostDiverReachMs() + burstFrames(spikeRunFrames),
+		fromCaster: true,
+	}
+}
+
+// frostDiver2Parts is the ring that closes over whatever was hit — the eight
+// larger spikes the original seals a frozen target in.
+//
+// It waits for the line to arrive. Closed at the moment the packet lands it
+// would seal the target before the spell had reached them.
+func frostDiver2Parts() burstSpec {
+	const spikes = 8
+
+	parts := make([]burstParticle, 0, spikes)
+	for i := 0; i < spikes; i++ {
+		part := spikeParticle(uint32(i)+100, 0, frostDiverReachMs(), 0.6, 1.4, 4, 6.5)
+
+		// Around the target rather than along a line: a ring of a cell or so,
+		// spread by the same hash everything else here is spread by.
+		angle := 2 * math.Pi * float64(hash01(uint32(i), 41))
+		radius := (1.5 + 3.5*hash01(uint32(i), 42)) * burstScale
+
+		part.jitter = [2]float32{
+			float32(math.Cos(angle)) * radius,
+			float32(math.Sin(angle)) * radius / 2,
+		}
+		part.atOther = 0.0001 // enough to take the jittered path
+
+		parts = append(parts, part)
+	}
+
+	return burstSpec{parts: parts, runMs: frostDiverReachMs() + burstFrames(spikeRunFrames)}
+}
+
+// frostDiverReachMs is how long the line takes to run out to the target.
+func frostDiverReachMs() float32 {
+	return burstFrames(spikeStepFrames * frostDiverSpikes)
+}
+
+// spikeParticle is one of them, sized within the ranges given in world units.
+func spikeParticle(seed uint32, along, birthMs, minWid, maxWid, minHigh, maxHigh float32) burstParticle {
+	halfWid := (minWid + (maxWid-minWid)*hash01(seed, 43)) * burstScale
+	height := (minHigh + (maxHigh-minHigh)*hash01(seed, 44)) * burstScale
+
+	// Up over the rise and no further. Half the growth each frame in size and
+	// half in position keeps the base still while the point climbs.
+	grow := height / 2 / spikeRiseFrames
+
+	return burstParticle{
+		atOther: along,
+
+		// It starts as a sliver at ground level and is grown into.
+		halfW: halfWid,
+		halfH: height / 2 / spikeRiseFrames,
+		growH: grow,
+		vy:    -grow,
+
+		// A few degrees off upright, so a line of them is not a row of posts.
+		angle: (hash01(seed, 45) - 0.5) * 0.35,
+
+		birthMs:   birthMs,
+		lifeMs:    burstFrames(spikeRunFrames),
+		fadeInMs:  burstFrames(2),
+		fadeOutMs: burstFrames(spikeFadeFrames),
+		maxAlpha:  spikeAlpha,
+
+		texture:  "ice.tga",
+		tint:     [3]float32{0.78, 0.9, 1.0},
+		additive: true,
 	}
 }
 
@@ -618,6 +769,12 @@ func burstFor(effect string, hits int) (burstSpec, bool) {
 
 	case "EF_FIREARROW":
 		return boltParts(hits, fireBolt), true
+
+	case "EF_FROSTDIVER":
+		return frostDiverParts(), true
+
+	case "EF_FROSTDIVER2":
+		return frostDiver2Parts(), true
 	}
 
 	return burstSpec{}, false

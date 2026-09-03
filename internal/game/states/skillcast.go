@@ -967,15 +967,30 @@ func (s *InGameState) playSkillEffects(effects []string, x, y, z float32) {
 }
 
 // playSkillBursts starts the ones drawn in code rather than read from a file.
-func (s *InGameState) playSkillBursts(effects []string, hits int, x, y, z float32) {
+//
+// from is where the caster is standing, for the effects drawn between the two
+// of them rather than around one — Frost Diver walks its spikes out from
+// there. Zero when there is nobody to draw from, and those effects are then
+// left out rather than heaped on the target.
+func (s *InGameState) playSkillBursts(effects []string, hits int, from, at [3]float32) {
 	for _, effect := range effects {
 		spec, ok := burstFor(effect, hits)
 		if !ok {
 			continue
 		}
 
-		s.playBurst(effect, spec, x, y, z)
+		s.playBurst(effect, spec, from, at)
 	}
+}
+
+// casterAt is where a caster is standing, for an effect drawn from them.
+func (s *InGameState) casterAt(id uint32) [3]float32 {
+	x, y, z, ok := s.effectHeight(id)
+	if !ok {
+		return [3]float32{}
+	}
+
+	return [3]float32{x, y, z}
 }
 
 // A volley's shots land one after another.
@@ -990,6 +1005,9 @@ func (s *InGameState) playSkillBursts(effects []string, hits int, x, y, z float3
 type delayedEffect struct {
 	effect string
 	target uint32
+
+	// caster is who threw it, for the effects drawn from them to the target.
+	caster uint32
 
 	delayMs float32
 }
@@ -1018,7 +1036,7 @@ func (s *InGameState) advanceDelayedEffects(deltaMs float32) {
 
 		one := []string{waiting.effect}
 		s.playSkillEffects(one, x, y, z)
-		s.playSkillBursts(one, 1, x, y, z)
+		s.playSkillBursts(one, 1, s.casterAt(waiting.caster), [3]float32{x, y, z})
 	}
 
 	s.delayedEffects = kept
@@ -1087,10 +1105,11 @@ func (s *InGameState) playSkillUseEffects(use packets.SkillUse) {
 	}
 
 	hits := max(use.Hits, 1)
+	from := s.casterAt(use.SourceID)
 
 	if x, y, z, ok := s.effectHeight(use.SourceID); ok {
 		s.playSkillEffects(effects.OnCaster, x, y, z)
-		s.playSkillBursts(effects.OnCaster, hits, x, y, z)
+		s.playSkillBursts(effects.OnCaster, hits, from, [3]float32{x, y, z})
 
 		// And the flash a skill starts with, for the ones that start here.
 		// A skill with a cast time shows that when the cast begins; every
@@ -1099,7 +1118,7 @@ func (s *InGameState) playSkillUseEffects(use packets.SkillUse) {
 		//
 		// Bursts only. The begin-cast effect that comes from a file is the
 		// casting circle, and beginCastAura owns that.
-		s.playSkillBursts(effects.BeginCast, hits, x, y, z)
+		s.playSkillBursts(effects.BeginCast, hits, from, [3]float32{x, y, z})
 	}
 	s.playSkillSounds(effects.OnCaster)
 
@@ -1109,19 +1128,20 @@ func (s *InGameState) playSkillUseEffects(use packets.SkillUse) {
 		if len(bolts) > 0 {
 			// The volley now, and what its shots hit with as each one lands.
 			if x, y, z, ok := s.effectHeight(use.TargetID); ok {
-				s.playSkillBursts(bolts, hits, x, y, z)
+				s.playSkillBursts(bolts, hits, from, [3]float32{x, y, z})
 			}
 
 			for i := 0; i < min(hits, boltMax); i++ {
 				for _, effect := range onImpact {
 					s.delayedEffects = append(s.delayedEffects, delayedEffect{
-						effect: effect, target: use.TargetID, delayMs: boltImpactMs(i),
+						effect: effect, target: use.TargetID, caster: use.SourceID,
+						delayMs: boltImpactMs(i),
 					})
 				}
 			}
 		} else if x, y, z, ok := s.effectHeight(use.TargetID); ok {
 			s.playSkillEffects(effects.OnTarget, x, y, z)
-			s.playSkillBursts(effects.OnTarget, hits, x, y, z)
+			s.playSkillBursts(effects.OnTarget, hits, from, [3]float32{x, y, z})
 		}
 
 		s.playSkillSounds(effects.OnTarget)
@@ -1130,7 +1150,7 @@ func (s *InGameState) playSkillUseEffects(use packets.SkillUse) {
 	if use.Ground {
 		x, z := entity.CellToWorld(use.CellX, use.CellY)
 		s.playSkillEffects(effects.OnGround, x, s.terrainHeight(x, z), z)
-		s.playSkillBursts(effects.OnGround, hits, x, s.terrainHeight(x, z), z)
+		s.playSkillBursts(effects.OnGround, hits, from, [3]float32{x, s.terrainHeight(x, z), z})
 		s.playSkillSounds(effects.OnGround)
 	}
 }
