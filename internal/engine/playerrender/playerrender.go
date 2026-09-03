@@ -407,6 +407,16 @@ func (r *Renderer) UnitQuadSize(spec charsprite.Spec) (w, h float32) {
 	return float32(sh.width) * r.scale, float32(sh.height) * r.scale
 }
 
+// QuadSize is the world size of the player's own billboard, or zeroes before
+// it has been baked.
+func (r *Renderer) QuadSize() (w, h float32) {
+	if r == nil || r.player == nil {
+		return 0, 0
+	}
+
+	return float32(r.player.width) * r.scale, float32(r.player.height) * r.scale
+}
+
 // CachedUnitSheets reports how many distinct appearances are held in memory.
 func (r *Renderer) CachedUnitSheets() int {
 	if r == nil {

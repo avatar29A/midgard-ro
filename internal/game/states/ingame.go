@@ -68,6 +68,7 @@ type InGameState struct {
 	// it sits on and hoverValid whether the cursor is over the ground at all;
 	// markerPulse counts down the flourish a click sets off.
 	marker     *scene.GroundMarker
+	castAura   *scene.GroundMarker
 	hoverCellX int
 	hoverCellY int
 	hoverValid bool
@@ -126,6 +127,26 @@ type InGameState struct {
 	// unknownJobs are unit job ids the sprite table has no name for, kept so
 	// each is complained about once rather than on every sighting.
 	unknownJobs map[int]bool
+
+	// placingSkill is a skill chosen and waiting to be aimed, zero when none
+	// is, and placingLevel the level it will go off at. placingAtUnit says
+	// which it is waiting for: a unit, or a cell.
+	placingSkill  uint16
+	placingLevel  int
+	placingAtUnit bool
+
+	// The cast bar: which skill, how long it takes, and how much is left.
+	castSkill   uint16
+	castTotalMs float32
+	castLeftMs  float32
+
+	// castAuras are the rings under whoever is casting, and holdCastAura keeps
+	// one there for --cast-aura.
+	castAuras    []castingAura
+	holdCastAura bool
+
+	// skillLabels are skill names floating over whoever they were cast on.
+	skillLabels []floatingSkillName
 
 	// pendingBlows are swings whose outcome is still traveling: the figure,
 	// the flinch and the death wait for the frame the blade lands on.
@@ -359,6 +380,18 @@ func (s *InGameState) loadPortalRenderer() {
 		// Warned, not fatal: everything else still works, and a click just
 		// goes back to having no feedback.
 		logger.Warn("no click marker texture", zap.Error(err))
+	}
+
+	aura, err := scene.NewTube(scene.CastAuraTexture, scene.CastAuraTint, scene.CastAuraSides)
+	if err != nil {
+		logger.Warn("no casting aura", zap.Error(err))
+
+		return
+	}
+	s.castAura = aura
+
+	if err := s.castAura.LoadTexture(s.manager.TexLoader); err != nil {
+		logger.Warn("no casting aura texture", zap.Error(err))
 	}
 }
 
@@ -679,6 +712,11 @@ func (s *InGameState) Exit() error {
 		s.portals.Destroy()
 		s.portals = nil
 	}
+	if s.castAura != nil {
+		s.castAura.Destroy()
+		s.castAura = nil
+	}
+
 	if s.marker != nil {
 		s.marker.Destroy()
 		s.marker = nil
@@ -746,6 +784,9 @@ func (s *InGameState) Update(dt float64) error {
 		s.updatePendingPickup(deltaMs, walking)
 		s.updateCombat(deltaMs, walking)
 		s.advancePendingBlows(deltaMs)
+		s.advanceCast(deltaMs)
+		s.advanceSkillLabels(deltaMs)
+		s.advanceCastAuras(deltaMs)
 		s.updateDamageNumbers(deltaMs)
 		s.updateEffects(deltaMs)
 		s.updateCelebrations(deltaMs)
@@ -892,6 +933,7 @@ func (s *InGameState) renderUnits(viewProj math.Mat4, right, up [3]float32) {
 	}
 
 	s.drawGroundMarker(viewProj)
+	s.drawCastAuras(viewProj)
 	s.traceUnitStats(tracked, drawn)
 }
 
@@ -925,6 +967,15 @@ func (s *InGameState) drawGroundMarker(viewProj math.Mat4) {
 	progress := float32(1)
 	if s.markerPulse > 0 {
 		progress = 1 - s.markerPulse/scene.MarkerPulseMs
+	}
+
+	// A skill waiting for a cell holds the marker at the top of its swell, so
+	// the ring on the ground reads as armed rather than as the ordinary
+	// where-you-would-walk mark. Not for a skill waiting for somebody: there
+	// the cursor is what says so, and a swollen ring would point at ground
+	// the skill is not going to.
+	if s.placingSkill != 0 && !s.placingAtUnit {
+		progress = 0
 	}
 
 	s.marker.Render(viewProj, worldX, worldY, worldZ, entity.CellSize, progress, 1)
@@ -1355,6 +1406,11 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_PAR_CHANGE, s.handleStatusChange)
 	s.client.RegisterHandler(packets.ZC_STATUS, s.handleStatus)
 	s.client.RegisterHandler(packets.ZC_SKILLINFO_LIST, s.handleSkillList)
+	s.client.RegisterHandler(packets.ZC_ACK_TOUSESKILL, s.handleSkillFail)
+	s.client.RegisterHandler(packets.ZC_USESKILL_ACK, s.handleSkillCast)
+	s.client.RegisterHandler(packets.ZC_USE_SKILL, s.handleSkillUse)
+	s.client.RegisterHandler(packets.ZC_NOTIFY_SKILL, s.handleSkillDamage)
+	s.client.RegisterHandler(packets.ZC_NOTIFY_GROUNDSKILL, s.handleGroundSkill)
 	s.client.RegisterHandler(packets.ZC_INVENTORY_ITEMLIST_NORMAL, s.handleInventoryNormal)
 	s.client.RegisterHandler(packets.ZC_INVENTORY_ITEMLIST_EQUIP, s.handleInventoryEquip)
 	s.client.RegisterHandler(packets.ZC_USE_ITEM_ACK, s.handleUseItemAck)
@@ -2215,6 +2271,13 @@ func abs(v int) int {
 func (s *InGameState) ClickWorld(mouseX, mouseY, viewportW, viewportH float32) {
 	// There is no world to click on until the map is up.
 	if s.mapLoader != nil || s.player == nil {
+		return
+	}
+
+	// A skill waiting for a cell takes the click before anything else can:
+	// while one is held, clicking means "here" and not "walk there" or
+	// "attack that".
+	if s.placeHeldSkill(mouseX, mouseY, viewportW, viewportH) {
 		return
 	}
 

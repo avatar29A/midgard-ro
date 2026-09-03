@@ -107,6 +107,12 @@ type Game struct {
 	// attackPending is --attack-nearest, waiting for something to fight.
 	attackPending bool
 
+	// castSkills is --cast, waiting for the skill list.
+	castSkills []int
+
+	// holdCastAura is --cast-aura, waiting for the map.
+	holdCastAura bool
+
 	// toggleBasicInfo is set for the frame Ctrl+V was pressed.
 	toggleBasicInfo bool
 
@@ -502,6 +508,17 @@ func (g *Game) frame() {
 	// call os.Exit from here, which told the server nothing and left rAthena
 	// holding the session until it timed out.
 	if imgui.IsKeyPressedBoolV(imgui.KeyEscape, false) && g.uiBackend != nil {
+		// A skill waiting for a cell is put down first. Escape means "not
+		// that after all" before it means "open the menu", the same way it
+		// closes a dialog before it closes the game.
+		if state, ok := g.stateManager.Current().(*states.InGameState); ok {
+			if _, holding := state.Placing(); holding {
+				state.CancelPlacing()
+
+				return
+			}
+		}
+
 		g.uiBackend.ToggleEscMenu()
 	}
 
@@ -554,6 +571,8 @@ func (g *Game) frame() {
 	g.runOpenWindows()
 	g.runEquip()
 	g.runAttackNearest()
+	g.runCast()
+	g.runHoldCastAura()
 	g.runSay()
 
 	// Render 3D scene (if applicable)
@@ -627,6 +646,68 @@ func (g *Game) runOpenWindows() {
 	}
 
 	g.openWindows = nil
+}
+
+// SetHoldCastAura keeps the casting ring on, for --cast-aura.
+func (g *Game) SetHoldCastAura() {
+	g.holdCastAura = true
+}
+
+// runHoldCastAura turns it on once the map is up.
+func (g *Game) runHoldCastAura() {
+	if !g.holdCastAura {
+		return
+	}
+
+	state, ok := g.stateManager.Current().(*states.InGameState)
+	if !ok || !state.MapReady() {
+		return
+	}
+
+	state.HoldCastAura()
+	g.holdCastAura = false
+}
+
+// SetCastSkills records the skills --cast asked to be cast.
+func (g *Game) SetCastSkills(skills []int) {
+	g.castSkills = skills
+}
+
+// runCast casts what --cast named, once the skill list has arrived.
+//
+// Waits for the list rather than for the map: a cast is refused outright for a
+// skill the character does not have, and asking before the server has said
+// what it has would report that refusal for every skill.
+func (g *Game) runCast() {
+	if len(g.castSkills) == 0 {
+		return
+	}
+
+	state, ok := g.stateManager.Current().(*states.InGameState)
+	if !ok || !state.MapReady() || len(state.Skills()) == 0 {
+		return
+	}
+
+	for _, skill := range g.castSkills {
+		if err := state.UseSkill(uint16(skill), 0); err != nil {
+			logger.Warn("--cast request failed", zap.Int("skill", skill), zap.Error(err))
+
+			continue
+		}
+
+		// A ground skill is now held, waiting for a click nobody is going to
+		// make. Put it under the character's own feet, which is a cell that
+		// always exists and is always in range.
+		if _, holding := state.Placing(); holding {
+			x, y := state.PlayerCell()
+			if err := state.PlaceHeldSkillAt(x, y); err != nil {
+				logger.Warn("--cast could not place that skill",
+					zap.Int("skill", skill), zap.Error(err))
+			}
+		}
+	}
+
+	g.castSkills = nil
 }
 
 // SetAttackNearest records that --attack-nearest asked for a fight.
@@ -1010,13 +1091,20 @@ func (g *Game) renderUI() {
 			mapCellsX, mapCellsY = int(gat.Width), int(gat.Height)
 		}
 
+		castBar, casting := state.CastingBar(viewportWidth, viewportHeight)
+
 		uiState := ui.InGameUIState{
-			MapName:         state.GetMapName(),
-			MapCellsX:       mapCellsX,
-			MapCellsY:       mapCellsY,
-			ChatLines:       state.ChatLines(),
-			EntityBars:      state.EntityBars(viewportWidth, viewportHeight),
-			WorldLabels:     state.WorldLabels(viewportWidth, viewportHeight),
+			MapName:    state.GetMapName(),
+			MapCellsX:  mapCellsX,
+			MapCellsY:  mapCellsY,
+			ChatLines:  state.ChatLines(),
+			EntityBars: state.EntityBars(viewportWidth, viewportHeight),
+			CastBar:    castBar,
+			CastingNow: casting,
+
+			WorldLabels: append(
+				state.WorldLabels(viewportWidth, viewportHeight),
+				state.SkillLabels(viewportWidth, viewportHeight)...),
 			WorldEffects:    state.EffectQuads(viewportWidth, viewportHeight),
 			TargetMarker:    targetMarker,
 			DamageNumbers:   state.DamageNumbers(viewportWidth, viewportHeight),
@@ -1549,6 +1637,17 @@ func (g *Game) updateCursor(state *states.InGameState, io *imgui.IO, mouseX, mou
 	want := cursor.StateDefault
 
 	hudCursor, hudAsked := g.uiBackend.WantCursor()
+
+	// A skill waiting to be aimed outranks everything but the camera: the
+	// pointer is not asking what is under it any more, it is asking where the
+	// skill goes. This is the ring the original shows, action 10 of
+	// cursors.spr.
+	if _, holding := state.Placing(); holding && !imgui.IsMouseDragging(imgui.MouseButtonRight) {
+		state.SetHoverEntity(nil)
+		g.uiBackend.SetCursorState(cursor.StateTarget)
+
+		return
+	}
 
 	switch {
 	// Rotating outranks everything. The camera is swinging, so whatever the

@@ -31,6 +31,8 @@ var (
 	flagOpenWindow = flag.String("open-window", "", "Once in game, open these HUD windows, e.g. equip,item (QA aid)")
 	flagEquip      = flag.String("equip", "", "Once in game, wear the items in these inventory slots, e.g. 7,8 (QA aid)")
 	flagAttack     = flag.Bool("attack-nearest", false, "Once in game, attack the nearest monster (QA aid)")
+	flagCast       = flag.String("cast", "", "Once in game, cast these skills by id, e.g. 5,28 (QA aid)")
+	flagCastAura   = flag.Bool("cast-aura", false, "Keep the casting ring under the character, to look at it (QA aid)")
 
 	flagSay sayLines
 )
@@ -99,6 +101,25 @@ func AttackNearest() bool {
 	return *flagAttack
 }
 
+// CastSkills returns the skill ids --cast asked to be cast, in order.
+//
+// The other half of what --attack-nearest is for: a skill is cast from a
+// hotkey or a window, and an unattended run has neither. Every skill in the
+// game answers one of a handful of ways — it goes off, it is refused with a
+// reason, or nothing happens at all — and telling those apart is what a
+// regression over a whole job's skills needs.
+func CastSkills() []int {
+	return intList(*flagCast)
+}
+
+// HoldCastAura reports whether --cast-aura asked for the casting ring to stay.
+//
+// An effect that lasts as long as a cast is hard to judge in the second or two
+// it is on screen, and most casts are shorter than that. This holds it still.
+func HoldCastAura() bool {
+	return *flagCastAura
+}
+
 // EquipSlots returns the inventory slots --equip asked to be worn.
 //
 // By slot rather than by item id because that is what the wear packet takes,
@@ -118,6 +139,24 @@ func EquipSlots() []int {
 	}
 
 	return slots
+}
+
+// intList reads a comma-separated list of numbers, skipping what does not
+// parse rather than failing the run — a QA aid that refuses to start over a
+// stray comma is worse than one that does what it understood.
+func intList(spec string) []int {
+	if spec == "" {
+		return nil
+	}
+
+	var out []int
+	for _, field := range strings.Split(spec, ",") {
+		if value, err := strconv.Atoi(strings.TrimSpace(field)); err == nil {
+			out = append(out, value)
+		}
+	}
+
+	return out
 }
 
 // TraceSpec returns the --trace channel list, empty when tracing is off.
