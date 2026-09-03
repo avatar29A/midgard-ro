@@ -139,11 +139,17 @@ func (s *InGameState) updateEffects(deltaMs float32) {
 // EffectQuads is everything to draw for the effects playing, projected into
 // the viewport.
 func (s *InGameState) EffectQuads(viewportW, viewportH float32) []EffectQuad {
-	if len(s.effects) == 0 || s.scene == nil || !s.SceneReady {
+	if s.scene == nil || !s.SceneReady {
 		return nil
 	}
 
-	var out []EffectQuad
+	// The bursts drawn in code go through the same path as the ones read from
+	// a file: both end as quads around a projected point.
+	out := s.burstQuads(viewportW, viewportH)
+
+	if len(s.effects) == 0 {
+		return out
+	}
 
 	for _, e := range s.effects {
 		originX, originY := s.projectToScreen(e.x, e.y, e.z, viewportW, viewportH)

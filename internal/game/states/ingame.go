@@ -114,6 +114,10 @@ type InGameState struct {
 	// what this character is wearing.
 	showEquipment bool
 
+	// bursts are the particle effects playing — the ones the original draws
+	// in code rather than from a file.
+	bursts []*activeBurst
+
 	// sounds are what the world wants played this frame.
 	sounds []string
 
@@ -792,6 +796,7 @@ func (s *InGameState) Update(dt float64) error {
 		s.advanceSkillLabels(deltaMs)
 		s.advanceCastAuras(deltaMs)
 		s.advancePendingSkill(deltaMs)
+		s.advanceBursts(deltaMs)
 		s.updateDamageNumbers(deltaMs)
 		s.updateEffects(deltaMs)
 		s.updateCelebrations(deltaMs)
