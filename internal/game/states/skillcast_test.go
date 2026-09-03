@@ -1,6 +1,7 @@
 package states
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/Faultbox/midgard-ro/internal/game/entity"
@@ -184,7 +185,7 @@ func TestOnlyHealingSkillsShowAFigure(t *testing.T) {
 // leaves the map covered in them.
 func TestSkillLabelsAgeOut(t *testing.T) {
 	s, mob := withMob()
-	s.skillLabels = []floatingSkillName{{text: "Increase AGI", target: mob.ID}}
+	s.skillLabels = []floatingSkillName{{text: "Increase AGI", target: mob.ID, lifeMs: skillLabelLifeMs}}
 
 	s.advanceSkillLabels(skillLabelLifeMs / 2)
 	if len(s.skillLabels) != 1 {
@@ -237,8 +238,8 @@ func TestASkillLabelGoesWithItsTarget(t *testing.T) {
 func TestOneNameOverOneHead(t *testing.T) {
 	s, mob := withMob()
 
-	s.addSkillLabel(mob.ID, 29)
-	s.addSkillLabel(mob.ID, 34)
+	s.addSkillLabel(mob.ID, 29, skillLabelLifeMs)
+	s.addSkillLabel(mob.ID, 34, skillLabelLifeMs)
 
 	if len(s.skillLabels) != 1 {
 		t.Errorf("%d labels over one head, want 1", len(s.skillLabels))
@@ -366,5 +367,121 @@ func TestASoundIsAskedForOnce(t *testing.T) {
 
 	if got := s.TakeSounds(); got != nil {
 		t.Errorf("the queue was not cleared: %v", got)
+	}
+}
+
+// TestASkillShoutsItsName: the original's own sign that a skill went off is
+// its name over the caster, with two marks after it. A skill that did damage
+// shouts too — the name used to be kept for buffs, which left every attack
+// skill silent.
+func TestASkillShoutsItsName(t *testing.T) {
+	s, mob := withMob()
+
+	s.addSkillLabel(mob.ID, 14, skillLabelLifeMs) // MG_COLDBOLT
+
+	if len(s.skillLabels) != 1 {
+		t.Fatalf("%d labels, want 1", len(s.skillLabels))
+	}
+	if got := s.skillLabels[0].text; got != "Cold Bolt !!" {
+		t.Errorf("the shout reads %q, want %q", got, "Cold Bolt !!")
+	}
+}
+
+// TestACastLabelLastsTheCast: the name is shown while the cast runs, so it has
+// to last exactly that long. One that outlives it hangs over a character doing
+// nothing; one that ends early leaves the bar unlabelled.
+func TestACastLabelLastsTheCast(t *testing.T) {
+	s, mob := withMob()
+
+	s.addSkillLabel(mob.ID, 14, 2000)
+
+	s.advanceSkillLabels(1900)
+	if len(s.skillLabels) != 1 {
+		t.Fatal("the cast label went before the cast ended")
+	}
+
+	s.advanceSkillLabels(200)
+	if len(s.skillLabels) != 0 {
+		t.Error("the cast label outlived the cast")
+	}
+}
+
+// TestTheCastLabelClearsTheCastBar: the bar is drawn ten pixels above the head
+// and six tall, and the name is shown at the same time. Printed at the same
+// height they would be printed over each other.
+func TestTheCastLabelClearsTheCastBar(t *testing.T) {
+	const castBarTop = 16
+
+	if skillLabelRise <= castBarTop {
+		t.Errorf("the name rises %v, which is not clear of the bar at %v",
+			skillLabelRise, castBarTop)
+	}
+}
+
+// TestTheBattleLogReportsOurOwnSkill: what it hit, for how much, and what it
+// cost. The cost is the one figure nothing else in the client shows.
+func TestTheBattleLogReportsOurOwnSkill(t *testing.T) {
+	s, mob := withMob()
+	s.skills = []packets.Skill{{ID: 14, Level: 10, SP: 25}}
+	mob.Name = "Poring"
+
+	s.reportSkill(packets.SkillUse{
+		SourceID: 5000, TargetID: mob.ID, SkillID: 14, Damage: 1374, Hits: 10,
+	}, 5000)
+
+	lines := s.chat.Lines()
+	if len(lines) != 2 {
+		t.Fatalf("%d lines in the log, want a cost and a hit: %v", len(lines), lines)
+	}
+
+	for _, line := range lines {
+		if line.Kind != ChatDamage {
+			t.Errorf("line %q is kind %d, want ChatDamage so it lands in the battle tab",
+				line.Text, line.Kind)
+		}
+	}
+
+	if !strings.Contains(lines[0].Text, "25 SP") {
+		t.Errorf("the cost line reads %q", lines[0].Text)
+	}
+	if !strings.Contains(lines[1].Text, "1374 damage over 10 hits") {
+		t.Errorf("the damage line reads %q", lines[1].Text)
+	}
+	if !strings.Contains(lines[1].Text, mob.Name) {
+		t.Errorf("the damage line does not name what was hit: %q", lines[1].Text)
+	}
+}
+
+// TestTheBattleLogReportsWhatHitUs: a skill aimed at us is our log too.
+func TestTheBattleLogReportsWhatHitUs(t *testing.T) {
+	s, mob := withMob()
+
+	s.reportSkill(packets.SkillUse{
+		SourceID: mob.ID, TargetID: 5000, SkillID: 19, Damage: 120, Hits: 1,
+	}, 5000)
+
+	lines := s.chat.Lines()
+	if len(lines) != 1 {
+		t.Fatalf("%d lines, want 1: %v", len(lines), lines)
+	}
+	if !strings.Contains(lines[0].Text, "120 damage") || !strings.Contains(lines[0].Text, "you") {
+		t.Errorf("the line reads %q", lines[0].Text)
+	}
+	if strings.Contains(lines[0].Text, "over") {
+		t.Errorf("a single hit is reported as several: %q", lines[0].Text)
+	}
+}
+
+// TestTheBattleLogIgnoresOtherPeoplesFights: a fight across the field is not
+// our log, and a busy map would drown ours in it.
+func TestTheBattleLogIgnoresOtherPeoplesFights(t *testing.T) {
+	s, mob := withMob()
+
+	s.reportSkill(packets.SkillUse{
+		SourceID: mob.ID, TargetID: 9999, SkillID: 19, Damage: 120, Hits: 1,
+	}, 5000)
+
+	if lines := s.chat.Lines(); len(lines) != 0 {
+		t.Errorf("%d lines from somebody else's fight: %v", len(lines), lines)
 	}
 }
