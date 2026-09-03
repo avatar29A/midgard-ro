@@ -439,7 +439,7 @@ func (s *InGameState) placeHeldSkill(mouseX, mouseY, viewportW, viewportH float3
 			zap.Uint16("skill", skill), zap.Uint32("target", target),
 			zap.String("name", name))
 
-		if err := s.castAt(skill, level, target); err != nil {
+		if err := s.castOrApproach(skill, level, target); err != nil {
 			logger.Warn("could not cast that skill", zap.Uint16("skill", skill), zap.Error(err))
 		}
 
@@ -844,4 +844,150 @@ func (s *InGameState) playSkillUseEffects(use packets.SkillUse) {
 		x, z := entity.CellToWorld(use.CellX, use.CellY)
 		s.playSkillEffects(effects.OnGround, x, s.terrainHeight(x, z), z)
 	}
+}
+
+// Casting at something too far away.
+//
+// A skill aimed at a target out of its reach used to be sent anyway and
+// refused. The original walks: the character closes on the target, stops as
+// soon as it is near enough, and casts. Held here rather than sent because the
+// server refuses a cast from too far and says so, which is a message instead
+// of a spell.
+
+// pendingSkillCast is a skill waiting for the character to get close enough.
+type pendingSkillCast struct {
+	skill  uint16
+	level  int
+	target uint32
+
+	// repathMs throttles reissuing the walk while the target moves, the same
+	// way chasing something to hit it does.
+	repathMs float32
+}
+
+// castOrApproach casts at a unit, or walks towards it first.
+func (s *InGameState) castOrApproach(skillID uint16, level int, target uint32) error {
+	if s.withinSkillRange(skillID, target) {
+		s.forgetPendingSkill()
+
+		return s.castAt(skillID, level, target)
+	}
+
+	if s.entityOf(target) == nil {
+		// Nothing to walk towards — the caster itself, or somebody who has
+		// gone. Send it and let the server answer.
+		return s.castAt(skillID, level, target)
+	}
+
+	trace.Emit(trace.HUD, "cast-approach",
+		zap.Uint16("skill", skillID), zap.Uint32("target", target),
+		zap.Int("range", s.skillRange(skillID)))
+
+	s.pendingSkill = &pendingSkillCast{skill: skillID, level: level, target: target}
+
+	return nil
+}
+
+// skillRange is how far a skill reaches, in cells, as the server reported it.
+//
+// Zero for a skill the server has not listed, and a reach of one for a skill
+// it listed with none — that is a melee skill, and treating no range as
+// unlimited would have the character cast Bash across the map.
+func (s *InGameState) skillRange(skillID uint16) int {
+	skill, known := s.findSkill(skillID)
+	if !known {
+		return 0
+	}
+
+	if skill.Range <= 0 {
+		return 1
+	}
+
+	return skill.Range
+}
+
+// withinSkillRange reports whether a cast would reach.
+func (s *InGameState) withinSkillRange(skillID uint16, target uint32) bool {
+	if s.player == nil {
+		return true
+	}
+
+	if target == s.selfAID() {
+		return true
+	}
+
+	e := s.entityOf(target)
+	if e == nil || e.Body == nil {
+		return true
+	}
+
+	reach := s.skillRange(skillID)
+	if reach <= 0 {
+		return true
+	}
+
+	targetX, targetY := e.Body.CurrentCell()
+	playerX, playerY := s.player.CurrentCell()
+
+	return abs(targetX-playerX) <= reach && abs(targetY-playerY) <= reach
+}
+
+// advancePendingSkill walks towards what is being cast at, and casts when it
+// is near enough.
+func (s *InGameState) advancePendingSkill(deltaMs float32) {
+	pending := s.pendingSkill
+	if pending == nil {
+		return
+	}
+
+	e := s.entityOf(pending.target)
+	if e == nil || e.Body == nil || e.IsDead {
+		s.forgetPendingSkill()
+
+		return
+	}
+
+	if s.withinSkillRange(pending.skill, pending.target) {
+		skill, level := pending.skill, pending.level
+		target := pending.target
+		s.forgetPendingSkill()
+
+		// Stopped where it stands: the walk is canceled by arriving rather
+		// than by reaching the cell it was sent to, so the character casts
+		// from the furthest point that reaches.
+		s.cancelWalk()
+
+		if err := s.castAt(skill, level, target); err != nil {
+			logger.Warn("could not cast on approach",
+				zap.Uint16("skill", skill), zap.Error(err))
+		}
+
+		return
+	}
+
+	pending.repathMs -= deltaMs
+	if pending.repathMs > 0 {
+		return
+	}
+	pending.repathMs = targetRepathMs
+
+	// Towards the target's own cell. The server stops the walk on the last
+	// free cell before it, and this stops itself as soon as the range check
+	// passes, which is sooner.
+	cellX, cellY := e.Body.CurrentCell()
+	if err := s.RequestMove(cellX, cellY); err != nil {
+		logger.Warn("could not walk to cast", zap.Error(err))
+	}
+}
+
+// forgetPendingSkill drops a cast that was waiting to get close.
+func (s *InGameState) forgetPendingSkill() {
+	if s.pendingSkill == nil {
+		return
+	}
+
+	trace.Emit(trace.HUD, "cast-approach-dropped",
+		zap.Uint16("skill", s.pendingSkill.skill))
+
+	s.pendingSkill = nil
 }

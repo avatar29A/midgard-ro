@@ -1,6 +1,11 @@
 package states
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/Faultbox/midgard-ro/internal/game/entity"
+	"github.com/Faultbox/midgard-ro/internal/network/packets"
+)
 
 // TestPlacingHoldsTheSkillUntilACellIsChosen: a ground skill is asked for
 // twice, and between the two the client is holding one. Nothing should go out
@@ -280,5 +285,49 @@ func TestEffectFileRefusesWhatIsNotOne(t *testing.T) {
 		if got := effectFileFor(name); got != "" {
 			t.Errorf("effectFileFor(%q) = %q, want nothing", name, got)
 		}
+	}
+}
+
+// TestSkillRangeTreatsNoneAsMelee: the server lists some skills with no range
+// at all, and that means a melee skill rather than an unlimited one. Read as
+// unlimited, Bash would be cast across the map and refused every time.
+func TestSkillRangeTreatsNoneAsMelee(t *testing.T) {
+	s := &InGameState{skills: []packets.Skill{
+		{ID: 5, Level: 10, Range: 0},
+		{ID: 14, Level: 10, Range: 9},
+	}}
+
+	if got := s.skillRange(5); got != 1 {
+		t.Errorf("a skill listed with no range reaches %d, want 1", got)
+	}
+	if got := s.skillRange(14); got != 9 {
+		t.Errorf("Cold Bolt reaches %d, want 9", got)
+	}
+	if got := s.skillRange(999); got != 0 {
+		t.Errorf("a skill the server never listed reaches %d, want 0", got)
+	}
+}
+
+// TestCastingOnYourselfIsAlwaysInRange: a skill on the caster has nowhere to
+// walk to, and treating it as out of range would leave it waiting forever.
+func TestCastingOnYourselfIsAlwaysInRange(t *testing.T) {
+	s := &InGameState{player: entity.NewCharacter(0, 0, 0)}
+
+	if !s.withinSkillRange(28, s.selfAID()) {
+		t.Error("a skill on the caster is out of its own range")
+	}
+}
+
+// TestAPendingCastGoesWithItsTarget: whoever it was for is gone, so is the
+// walk — otherwise the character keeps closing on a corpse.
+func TestAPendingCastGoesWithItsTarget(t *testing.T) {
+	s, mob := withMob()
+	s.pendingSkill = &pendingSkillCast{skill: 14, level: 10, target: mob.ID}
+
+	s.entityManager.Remove(mob.ID)
+	s.advancePendingSkill(16)
+
+	if s.pendingSkill != nil {
+		t.Error("the cast is still waiting for a target that has gone")
 	}
 }
