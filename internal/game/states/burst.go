@@ -324,13 +324,17 @@ func (b *activeBurst) quadsAt(to projection) []EffectQuad {
 		if p.fallsIn {
 			// Turned to lie along the way it is going, which is the line from
 			// where it started to where it lands, in pixels.
+			//
+			// The quad's own long axis is across rather than up: the shard in
+			// icearrow.tga lies on its side in the square it is drawn in, and
+			// a quad built tall makes a wide shape into a stretched smear.
 			fromX, fromY, _, started := to(
 				b.x+b.otherX+p.x+p.jitter[0],
 				b.y+b.otherY+p.y+p.jitter[1],
 				b.z+b.otherZ+p.z+p.jitter[2])
 
 			if started {
-				angle = float32(math.Atan2(float64(fromX-screenX), float64(screenY-fromY)))
+				angle = float32(math.Atan2(float64(screenY-fromY), float64(screenX-fromX)))
 			}
 		}
 
@@ -588,7 +592,10 @@ type boltStyle struct {
 	texture string
 	tint    [3]float32
 
-	// halfLen and halfWid are its size in world units.
+	// halfLen is along the way it is falling and halfWid across it, in world
+	// units. The art lies on its side — the shard in icearrow.tga runs left
+	// to right across the square it is drawn in — so the long one is the
+	// quad's width and the shard is turned onto its path from there.
 	halfLen, halfWid float32
 }
 
@@ -644,8 +651,8 @@ func boltParts(hits int, style boltStyle) burstSpec {
 				(hash01(uint32(i), 33) - 0.5) * 10,
 			},
 
-			halfW:   style.halfWid,
-			halfH:   style.halfLen,
+			halfW:   style.halfLen,
+			halfH:   style.halfWid,
 			tint:    style.tint,
 			texture: style.texture,
 
