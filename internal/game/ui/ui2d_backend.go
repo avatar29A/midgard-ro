@@ -26,6 +26,15 @@ type UI2DBackend struct {
 	// one that will not load says so once rather than every frame.
 	missingEffectArt map[string]bool
 
+	// tooltip is what the pointer is over this frame, drawn at the end of it.
+	tooltip tooltip
+
+	// skillLevels is the level each skill is set to go off at, and
+	// skillChosen the row the Skill window's use button acts on. Both are the
+	// window's own: nothing on the wire carries either.
+	skillLevels map[uint16]int
+	skillChosen uint16
+
 	// Login screen textures (lazy-loaded)
 	loginBgTex    *TextureInfo
 	loadingTex    map[int]*TextureInfo // the loading screens, by 1-based index; nil for a missing one
@@ -195,6 +204,7 @@ func NewUI2DBackend(width, height int) (*UI2DBackend, error) {
 	return &UI2DBackend{
 		ctx:           ctx,
 		charSelectIdx: -1,
+		skillLevels:   map[uint16]int{},
 	}, nil
 }
 
@@ -1052,6 +1062,11 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 	// Last: whatever is being dragged rides over everything it might be
 	// dropped on.
 	b.drawDraggedItem()
+
+	// And after that, what the pointer is resting on. Collected while the
+	// windows were drawn, painted here because draw order is the only thing
+	// that decides what is on top.
+	b.drawTooltip(width, height)
 
 	// After the windows, so it sees whichever grip the pointer ended on. RO
 	// has no resize pointer of its own, so this is the hand it shows for

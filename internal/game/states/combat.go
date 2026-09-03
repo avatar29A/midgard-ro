@@ -424,8 +424,14 @@ func (s *InGameState) landBlow(p pendingBlow) {
 
 	// The sprite names the sound on the frame the blow lands, which is the
 	// same frame as everything else here.
+	// From where it landed, so a fight across the field is quieter than one
+	// at the character's feet.
+	x, z := s.blowPlace(blow)
+
 	if sound := s.hitSound(blow.SourceID); sound != "" {
-		s.playSound(worldSoundDir + sound)
+		s.playSoundAt(worldSoundDir+sound, x, z)
+	} else if s.strikesBarehanded(blow.SourceID) {
+		s.playSoundAt(worldSoundDir+barehandedSound(blow.TargetID), x, z)
 	}
 
 	if !blow.Missed() {
@@ -672,4 +678,123 @@ func (s *InGameState) TargetMarker(viewportW, viewportH float32) (TargetMarker, 
 	}
 
 	return TargetMarker{ScreenX: x, ScreenY: y}, true
+}
+
+// Bare hands.
+//
+// The attack sounds a body's sprite carries belong to its weapons — a Mage's
+// ACT names attack_rod and attack_short_sword, a Swordman's attack_sword and
+// attack_spear — and each sits on the set that weapon swings from. Set five,
+// the one an unarmed character swings from, names none at all, so a character
+// with nothing in hand struck in silence while every monster's blow landed
+// with its own noise.
+//
+// The archive has the sound; it is just not in the sprite. _hit_fist1 to 3 are
+// what a fist makes, and one of the three is what an unarmed blow plays.
+
+// barehandedSounds are the three, which the original picks between so a run of
+// blows is not the same noise over and over.
+var barehandedSounds = [...]string{"_hit_fist1.wav", "_hit_fist2.wav", "_hit_fist3.wav"}
+
+// barehandedSound picks one, by who is being hit rather than by a clock: two
+// blows landing in the same frame on the same target should sound alike, and
+// the sound queue would drop the second of them anyway.
+func barehandedSound(target uint32) string {
+	return barehandedSounds[target%uint32(len(barehandedSounds))]
+}
+
+// strikesBarehanded reports whether a blow came from a character with nothing
+// in hand, which is the one case the sprite has no sound for.
+//
+// Only characters. A monster whose sprite names no sound for its attack has
+// none, and giving it a fist would be inventing one.
+func (s *InGameState) strikesBarehanded(attacker uint32) bool {
+	if attacker == 0 {
+		return false
+	}
+
+	if attacker == s.selfAID() {
+		return true
+	}
+
+	e := s.entityOf(attacker)
+
+	return e != nil && e.Type == entity.TypePlayer
+}
+
+// The noise a unit makes as it walks.
+//
+// A sprite carries it the same way it carries the sound of a blow: an event on
+// one frame of the walk cycle, which the original plays each time the
+// animation comes round to it. A Poring squelches, a Wolf's feet land — and
+// without this a field of monsters moved in silence.
+//
+// Played from where the unit is, so one at the edge of the screen is quieter
+// than one underfoot and the far side of the map is silent altogether.
+
+// advanceUnitSounds plays what the units in view are making.
+func (s *InGameState) advanceUnitSounds() {
+	if s.entityManager == nil || s.playerRender == nil {
+		return
+	}
+
+	for _, e := range s.entityManager.All() {
+		frame, sound := s.walkNoiseOf(e)
+		if sound == "" {
+			e.SoundFrame = -1
+
+			continue
+		}
+
+		// On the way in to the frame rather than while it is on it: the
+		// animation holds a frame for several ticks, and a sound started on
+		// each of them is the same noise over itself.
+		if e.Body.CurrentFrame == frame && e.SoundFrame != frame {
+			s.playSoundAt(worldSoundDir+sound, e.Body.RenderX, e.Body.RenderZ)
+		}
+
+		e.SoundFrame = e.Body.CurrentFrame
+	}
+}
+
+// walkNoiseOf is the frame a unit makes its walking noise on and what it is,
+// or no sound when it is not walking or has none.
+func (s *InGameState) walkNoiseOf(e *entity.Entity) (frame int, sound string) {
+	if e == nil || e.Body == nil || e.IsDead || e.Leaving || !unitIsDrawable(e) {
+		return 0, ""
+	}
+
+	if !e.Body.IsWalkingPath() {
+		return 0, ""
+	}
+
+	spec := unitSpec(e)
+
+	frame = s.playerRender.UnitHitFrame(spec, entity.ActionWalk)
+	if frame < 0 {
+		return 0, ""
+	}
+
+	return frame, s.playerRender.UnitHitSound(spec, entity.ActionWalk)
+}
+
+// blowPlace is where a blow landed, for how loud it should be.
+func (s *InGameState) blowPlace(blow packets.Damage) (x, z float32) {
+	if body := s.bodyOf(blow.TargetID); body != nil {
+		return body.RenderX, body.RenderZ
+	}
+
+	if body := s.bodyOf(blow.SourceID); body != nil {
+		return body.RenderX, body.RenderZ
+	}
+
+	// Neither is on the map any more, which is a blow that killed something
+	// as it left. Heard as if it were here rather than dropped.
+	if s.player != nil {
+		px, _, pz := s.player.RenderPosition()
+
+		return px, pz
+	}
+
+	return 0, 0
 }

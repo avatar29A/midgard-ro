@@ -76,7 +76,12 @@ type Scene struct {
 	AmbientColor [3]float32
 	DiffuseColor [3]float32
 	LightOpacity float32
-	Brightness   float32
+
+	// Sounds are the map's own noises — a fountain, a forge, a river — as the
+	// world file lists them. Kept here rather than played here: the scene has
+	// no sound of its own.
+	Sounds     []*formats.RSWSoundSource
+	Brightness float32
 
 	// Point lights
 	PointLights         []PointLight
@@ -246,6 +251,12 @@ func (s *Scene) BeginMap(gnd *formats.GND, rsw *formats.RSW, texLoader func(stri
 		if err == nil {
 			s.GAT, _ = formats.ParseGAT(gatData)
 		}
+	}
+
+	// The map's own noises: a fountain, a forge, a river. Kept rather than
+	// used here — the scene has no sound — for whoever plays them.
+	if rsw != nil {
+		s.Sounds = rsw.GetSounds()
 	}
 
 	// Extract lighting from RSW
