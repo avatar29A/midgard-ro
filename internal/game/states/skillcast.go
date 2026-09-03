@@ -169,17 +169,25 @@ func (s *InGameState) applySkillUse(use packets.SkillUse) {
 	// the skill level into the same field, so Increase Agi at level 10 sends
 	// a 10 that means nothing and Heal sends the hit points. Which skills
 	// restore is the client's own knowledge, and healSkills is it.
-	if use.Damage > 0 || use.TargetID == 0 {
+	if use.Damage > 0 {
 		return
+	}
+
+	// Over whoever it went on, or over the caster when it went on nobody — a
+	// skill placed on the ground and one cast on the world at large both name
+	// themselves over the character that cast them.
+	over := use.TargetID
+	if over == 0 {
+		over = use.SourceID
 	}
 
 	if healSkills[use.SkillID] && use.Amount > 0 {
-		s.addHealNumber(use.TargetID, use.Amount)
+		s.addHealNumber(over, use.Amount)
 
 		return
 	}
 
-	s.addSkillLabel(use.TargetID, use.SkillID)
+	s.addSkillLabel(over, use.SkillID)
 }
 
 // healSkills restore hit points, and show the figure rather than their name.

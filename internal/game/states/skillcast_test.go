@@ -239,3 +239,19 @@ func TestOneNameOverOneHead(t *testing.T) {
 		t.Errorf("%d labels over one head, want 1", len(s.skillLabels))
 	}
 }
+
+// TestAnOffensiveSkillIsAimedToo: Decrease Agi is TargetType Attack, not
+// Support, and used to be refused for want of a target rather than asking for
+// one. Anything cast on a unit waits for one to be picked.
+func TestAnOffensiveSkillIsAimedToo(t *testing.T) {
+	s := &InGameState{}
+	s.BeginTargeting(30, 10)
+
+	skill, holding := s.Placing()
+	if !holding || skill != 30 {
+		t.Fatalf("the skill was not held: %d, %v", skill, holding)
+	}
+	if !s.placingAtUnit {
+		t.Error("an offensive skill is waiting for a cell rather than for somebody")
+	}
+}

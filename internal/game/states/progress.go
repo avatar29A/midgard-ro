@@ -147,25 +147,22 @@ func (s *InGameState) UseSkill(skillID uint16, level int) error {
 		level = skill.Level
 	}
 
-	// A skill that can go on somebody else waits for that somebody. Casting
-	// it at the caster instead would put half of every support skill out of
-	// reach, which is what "no target" looked like.
-	if skill.Inf&packets.InfSupport != 0 && skill.Inf&packets.InfAttack == 0 {
+	// Anything cast on a unit waits for one to be chosen, unless a fight is
+	// already under way and has chosen it. That covers both halves: a support
+	// skill goes on whoever is picked, and an offensive one — Decrease Agi is
+	// TargetType Attack, not Support — is aimed the same way rather than
+	// refused for want of a target.
+	if skill.Inf&(packets.InfSupport|packets.InfAttack) != 0 {
+		if skill.Inf&packets.InfAttack != 0 && s.targetID != 0 {
+			return s.castAt(skillID, level, s.targetID)
+		}
+
 		s.BeginTargeting(skillID, level)
 
 		return nil
 	}
 
 	target := s.selfAID()
-	if skill.Inf&packets.InfAttack != 0 {
-		if s.targetID == 0 {
-			s.chat.AddLocal(ChatError, "Choose a target first.")
-
-			return nil
-		}
-
-		target = s.targetID
-	}
 
 	trace.Emit(trace.HUD, "use-skill",
 		zap.Uint16("skill", skillID), zap.Int("level", level), zap.Uint32("target", target))
