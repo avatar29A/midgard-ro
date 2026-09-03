@@ -139,6 +139,9 @@ type InGameState struct {
 	castTotalMs float32
 	castLeftMs  float32
 
+	// skillLabels are skill names floating over whoever they were cast on.
+	skillLabels []floatingSkillName
+
 	// pendingBlows are swings whose outcome is still traveling: the figure,
 	// the flinch and the death wait for the frame the blade lands on.
 	pendingBlows []pendingBlow
@@ -759,6 +762,7 @@ func (s *InGameState) Update(dt float64) error {
 		s.updateCombat(deltaMs, walking)
 		s.advancePendingBlows(deltaMs)
 		s.advanceCast(deltaMs)
+		s.advanceSkillLabels(deltaMs)
 		s.updateDamageNumbers(deltaMs)
 		s.updateEffects(deltaMs)
 		s.updateCelebrations(deltaMs)
