@@ -1,10 +1,10 @@
 package ui
 
 import (
-	"bytes"
 	"fmt"
-	"image"
 	"strings"
+
+	"github.com/Faultbox/midgard-ro/pkg/formats"
 
 	"github.com/Faultbox/midgard-ro/internal/engine/texture"
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
@@ -56,7 +56,7 @@ func (tc *TextureCache) Load(grfPath string) (*TextureInfo, error) {
 		return nil, fmt.Errorf("loading texture %s: %w", grfPath, err)
 	}
 
-	img, _, err := image.Decode(bytes.NewReader(data))
+	img, err := formats.DecodeImage(data)
 	if err != nil {
 		return nil, fmt.Errorf("decoding texture %s: %w", grfPath, err)
 	}

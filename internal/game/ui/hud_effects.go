@@ -1,8 +1,11 @@
 package ui
 
 import (
+	"go.uber.org/zap"
+
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
 	"github.com/Faultbox/midgard-ro/internal/game/states"
+	"github.com/Faultbox/midgard-ro/internal/logger"
 )
 
 // Drawing the world's STR effects.
@@ -28,6 +31,19 @@ func (b *UI2DBackend) drawWorldEffects(quads []states.EffectQuad) {
 	for _, quad := range quads {
 		tex, err := b.texCache.Load(states.EffectTexturePath() + quad.Texture)
 		if err != nil {
+			// Once per texture. An effect whose art will not load draws
+			// nothing at all, and silently: the skill fires, the trace says
+			// it played, and the screen stays empty.
+			if !b.missingEffectArt[quad.Texture] {
+				if b.missingEffectArt == nil {
+					b.missingEffectArt = map[string]bool{}
+				}
+				b.missingEffectArt[quad.Texture] = true
+
+				logger.Warn("effect texture would not load",
+					zap.String("texture", quad.Texture), zap.Error(err))
+			}
+
 			continue
 		}
 
