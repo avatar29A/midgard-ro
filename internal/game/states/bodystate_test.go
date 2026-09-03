@@ -146,3 +146,25 @@ func TestTheIceIsHeldAtFullHeight(t *testing.T) {
 		}
 	}
 }
+
+// TestTheIceFitsWhatItSeals: the units are not one size. A block cut to a
+// Poring leaves a Wolf standing out of it, and one cut to the Wolf buries the
+// Poring — the original seals whatever it is cast on, whole.
+func TestTheIceFitsWhatItSeals(t *testing.T) {
+	small := frozenPart(frozenBlock, 6)
+	large := frozenPart(frozenBlock, 18)
+
+	if large.halfH <= small.halfH || large.halfW <= small.halfW {
+		t.Errorf("a block for a tall unit is %vx%v against %vx%v for a short one",
+			large.halfW, large.halfH, small.halfW, small.halfH)
+	}
+
+	// And it covers the unit rather than standing beside it: taller than what
+	// it seals, with its base on the ground.
+	if frozenBlockOver <= 1 {
+		t.Errorf("the ice stands %v times its target, which does not cover it", frozenBlockOver)
+	}
+	if frozenBlockLeast <= 0 {
+		t.Error("a unit that has not been measured gets no ice at all")
+	}
+}
