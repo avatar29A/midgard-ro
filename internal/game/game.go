@@ -698,26 +698,44 @@ func (g *Game) runCast() {
 		}
 	}
 
-	for _, skill := range g.castSkills {
-		if err := state.UseSkill(uint16(skill), 0); err != nil {
-			logger.Warn("--cast request failed", zap.Int("skill", skill), zap.Error(err))
+	// One a frame, and the next only once this one is away. A targeted skill
+	// waits for something to aim at, and holding the rest behind it keeps them
+	// in the order they were asked for.
+	skill := g.castSkills[0]
 
-			continue
+	if err := state.UseSkill(uint16(skill), 0); err != nil {
+		logger.Warn("--cast request failed", zap.Int("skill", skill), zap.Error(err))
+
+		g.castSkills = g.castSkills[1:]
+
+		return
+	}
+
+	// The skill is now held, waiting for a click nobody is going to make. A
+	// targeted one goes on the nearest monster, which is what an attack skill
+	// has to hit for anything of it to be seen; a ground one goes under the
+	// character's own feet, a cell that always exists and is always in range.
+	switch _, holding := state.Placing(); {
+	case !holding:
+	case state.Targeting():
+		if !state.CastHeldAtNearest() {
+			// Nothing in view yet. The monsters on a field arrive as unit
+			// reports over the first seconds on the map, so the frame the
+			// skill list finishes on is usually still an empty field: put the
+			// skill down and ask again rather than spending the request on it.
+			state.CancelPlacing()
+
+			return
 		}
-
-		// A ground skill is now held, waiting for a click nobody is going to
-		// make. Put it under the character's own feet, which is a cell that
-		// always exists and is always in range.
-		if _, holding := state.Placing(); holding {
-			x, y := state.PlayerCell()
-			if err := state.PlaceHeldSkillAt(x, y); err != nil {
-				logger.Warn("--cast could not place that skill",
-					zap.Int("skill", skill), zap.Error(err))
-			}
+	default:
+		x, y := state.PlayerCell()
+		if err := state.PlaceHeldSkillAt(x, y); err != nil {
+			logger.Warn("--cast could not place that skill",
+				zap.Int("skill", skill), zap.Error(err))
 		}
 	}
 
-	g.castSkills = nil
+	g.castSkills = g.castSkills[1:]
 }
 
 // SetAttackNearest records that --attack-nearest asked for a fight.

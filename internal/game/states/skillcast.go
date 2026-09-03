@@ -386,6 +386,13 @@ func (s *InGameState) Placing() (uint16, bool) {
 	return s.placingSkill, s.placingSkill != 0
 }
 
+// Targeting reports whether the held skill is waiting for a unit rather than
+// for a cell. The two are aimed differently and cannot stand in for each
+// other: a cell given to a targeted skill is refused by the server.
+func (s *InGameState) Targeting() bool {
+	return s.placingSkill != 0 && s.placingAtUnit
+}
+
 // CancelPlacing puts the held skill down without casting it.
 func (s *InGameState) CancelPlacing() {
 	if s.placingSkill == 0 {
@@ -467,6 +474,55 @@ func (s *InGameState) placeHeldSkill(mouseX, mouseY, viewportW, viewportH float3
 	return true
 }
 
+// CastHeldAtNearest aims the held skill at the closest monster in view, and
+// reports whether it found one.
+//
+// For unattended runs, the same way AttackNearest is: an attack skill is
+// chosen and then clicked onto something, and nothing an attack skill draws
+// can be watched without a hand to click with.
+func (s *InGameState) CastHeldAtNearest() bool {
+	if s.placingSkill == 0 || !s.placingAtUnit || s.entityManager == nil || s.player == nil {
+		return false
+	}
+
+	var (
+		nearest *entity.Entity
+		best    float32
+	)
+
+	px, _, pz := s.player.RenderPosition()
+
+	for _, e := range s.entityManager.All() {
+		if !s.isAttackable(e) || e.Body == nil {
+			continue
+		}
+
+		x, _, z := e.Body.RenderPosition()
+		dx, dz := x-px, z-pz
+
+		if d := dx*dx + dz*dz; nearest == nil || d < best {
+			nearest, best = e, d
+		}
+	}
+
+	if nearest == nil {
+		return false
+	}
+
+	skill, level := s.placingSkill, s.placingLevel
+	s.placingSkill, s.placingLevel, s.placingAtUnit = 0, 0, false
+
+	trace.Emit(trace.HUD, "cast-at-nearest",
+		zap.Uint16("skill", skill), zap.Uint32("target", nearest.ID),
+		zap.String("name", nearest.Name))
+
+	if err := s.castOrApproach(skill, level, nearest.ID); err != nil {
+		logger.Warn("could not cast that skill", zap.Uint16("skill", skill), zap.Error(err))
+	}
+
+	return true
+}
+
 // castAt sends a cast at a named unit, past the targeting UseSkill does.
 func (s *InGameState) castAt(skillID uint16, level int, target uint32) error {
 	if s.client == nil {
@@ -530,7 +586,7 @@ func (s *InGameState) PlaceHeldSkillAt(cellX, cellY int) error {
 	}
 
 	skill, level := s.placingSkill, s.placingLevel
-	s.placingSkill, s.placingLevel = 0, 0
+	s.placingSkill, s.placingLevel, s.placingAtUnit = 0, 0, false
 
 	return s.UseSkillAt(skill, level, cellX, cellY)
 }
@@ -827,6 +883,18 @@ func (s *InGameState) playSkillEffects(effects []string, x, y, z float32) {
 	}
 }
 
+// playSkillBursts starts the ones drawn in code rather than read from a file.
+func (s *InGameState) playSkillBursts(effects []string, x, y, z float32) {
+	for _, effect := range effects {
+		parts, runMs, ok := burstFor(effect)
+		if !ok {
+			continue
+		}
+
+		s.playBurst(effect, parts, runMs, x, y, z)
+	}
+}
+
 // playSkillSounds asks for what a list of effects sounds like.
 //
 // Separate from the drawing because the two do not overlap: an effect can have
@@ -869,12 +937,23 @@ func (s *InGameState) playSkillUseEffects(use packets.SkillUse) {
 
 	if x, y, z, ok := s.effectHeight(use.SourceID); ok {
 		s.playSkillEffects(effects.OnCaster, x, y, z)
+		s.playSkillBursts(effects.OnCaster, x, y, z)
+
+		// And the flash a skill starts with, for the ones that start here.
+		// A skill with a cast time shows that when the cast begins; every
+		// skill that has one of these — Bash, Mammonite, Double Strafe — is
+		// instant, and an instant skill has no cast packet to show it from.
+		//
+		// Bursts only. The begin-cast effect that comes from a file is the
+		// casting circle, and beginCastAura owns that.
+		s.playSkillBursts(effects.BeginCast, x, y, z)
 	}
 	s.playSkillSounds(effects.OnCaster)
 
 	if use.TargetID != 0 {
 		if x, y, z, ok := s.effectHeight(use.TargetID); ok {
 			s.playSkillEffects(effects.OnTarget, x, y, z)
+			s.playSkillBursts(effects.OnTarget, x, y, z)
 		}
 		s.playSkillSounds(effects.OnTarget)
 	}
