@@ -148,7 +148,7 @@ func TestLoadHotkeyItemsSkipsWhatIsNotACell(t *testing.T) {
 	}, map[string]uint32{
 		"0,1": 28,
 		"9,9": 28, // not a cell either
-	})
+	}, nil)
 
 	if b.hotkeyItems[0][0] != (hotkeyCell{id: 501}) {
 		t.Error("the one good entry did not load")
@@ -167,7 +167,7 @@ func TestLoadHotkeyItemsSkipsWhatIsNotACell(t *testing.T) {
 func TestLoadHotkeyItemsKeepsSkillsAndItemsApart(t *testing.T) {
 	b := &UI2DBackend{}
 
-	b.loadHotkeyItems(map[string]uint32{"0,0": 1}, map[string]uint32{"0,1": 1})
+	b.loadHotkeyItems(map[string]uint32{"0,0": 1}, map[string]uint32{"0,1": 1}, nil)
 
 	if b.hotkeyItems[0][0].skill {
 		t.Error("an item loaded as a skill")
@@ -185,7 +185,7 @@ func TestSavedHotkeyItemsWritesOnlyFilledCells(t *testing.T) {
 	b.setHotkeyItem(3, 8, hotkeyCell{id: 512})
 	b.setHotkeyItem(1, 0, hotkeyCell{id: 28, skill: true})
 
-	saved, skills := b.savedHotkeyItems()
+	saved, skills, _ := b.savedHotkeyItems()
 
 	if len(saved) != 2 {
 		t.Errorf("saved %d item cells, want the 2 that are filled", len(saved))
