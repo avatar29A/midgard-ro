@@ -52,6 +52,13 @@ type UIState struct {
 	// before skills could go on the bar still loads its items unchanged.
 	HotkeySkills map[string]uint32 `json:"hotkey_skills,omitempty"`
 
+	// HotkeySkillLevels is what level each of those goes off at, keyed the
+	// same way again, and left out for a cell that goes off at whatever the
+	// character has learned. A third map for the same reason as the second:
+	// a config written before a cell could hold a level still loads, and its
+	// cells keep meaning what they meant.
+	HotkeySkillLevels map[string]int `json:"hotkey_skill_levels,omitempty"`
+
 	// Where the Map window was left and how big. Zero width means unset, and
 	// it opens centered at its default size.
 	MapX float32 `json:"map_x,omitempty"`

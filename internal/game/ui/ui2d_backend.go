@@ -29,6 +29,12 @@ type UI2DBackend struct {
 	// tooltip is what the pointer is over this frame, drawn at the end of it.
 	tooltip tooltip
 
+	// skillLevels is the level each skill is set to go off at, and
+	// skillChosen the row the Skill window's use button acts on. Both are the
+	// window's own: nothing on the wire carries either.
+	skillLevels map[uint16]int
+	skillChosen uint16
+
 	// Login screen textures (lazy-loaded)
 	loginBgTex    *TextureInfo
 	loadingTex    map[int]*TextureInfo // the loading screens, by 1-based index; nil for a missing one
@@ -198,6 +204,7 @@ func NewUI2DBackend(width, height int) (*UI2DBackend, error) {
 	return &UI2DBackend{
 		ctx:           ctx,
 		charSelectIdx: -1,
+		skillLevels:   map[uint16]int{},
 	}, nil
 }
 

@@ -209,7 +209,7 @@ func (b *UI2DBackend) placeHotkeys() {
 
 	b.hotkeyX, b.hotkeyY = saved.HotkeyX, saved.HotkeyY
 	b.hotkeyRows = min(saved.HotkeyRows, hotkeyMaxRows)
-	b.loadHotkeyItems(saved.HotkeyItems, saved.HotkeySkills)
+	b.loadHotkeyItems(saved.HotkeyItems, saved.HotkeySkills, saved.HotkeySkillLevels)
 }
 
 // hotkeyCellKey names a cell in the saved state.
@@ -222,7 +222,7 @@ func hotkeyCellKey(row, col int) string {
 // A key that is not a cell on this bar is skipped rather than refused: a
 // config written when the bar had more rows should lose the rows that are
 // gone and keep the rest, not fail to load at all.
-func (b *UI2DBackend) loadHotkeyItems(items, skills map[string]uint32) {
+func (b *UI2DBackend) loadHotkeyItems(items, skills map[string]uint32, levels map[string]int) {
 	for key, id := range items {
 		if row, col, ok := parseHotkeyCellKey(key); ok && id != 0 {
 			b.setHotkeyItem(row, col, hotkeyCell{id: id})
@@ -231,7 +231,7 @@ func (b *UI2DBackend) loadHotkeyItems(items, skills map[string]uint32) {
 
 	for key, id := range skills {
 		if row, col, ok := parseHotkeyCellKey(key); ok && id != 0 {
-			b.setHotkeyItem(row, col, hotkeyCell{id: id, skill: true})
+			b.setHotkeyItem(row, col, hotkeyCell{id: id, skill: true, level: levels[key]})
 		}
 	}
 }
@@ -258,8 +258,9 @@ func parseHotkeyCellKey(key string) (row, col int, ok bool) {
 
 // savedHotkeyItems is the filled cells, ready to write out, split into the
 // two maps the config keeps them in.
-func (b *UI2DBackend) savedHotkeyItems() (items, skills map[string]uint32) {
+func (b *UI2DBackend) savedHotkeyItems() (items, skills map[string]uint32, levels map[string]int) {
 	items, skills = make(map[string]uint32), make(map[string]uint32)
+	levels = make(map[string]int)
 
 	for row := 0; row < hotkeyMaxRows; row++ {
 		for col := 0; col < hotkeySlots; col++ {
@@ -270,13 +271,19 @@ func (b *UI2DBackend) savedHotkeyItems() (items, skills map[string]uint32) {
 
 			if cell.skill {
 				skills[hotkeyCellKey(row, col)] = cell.id
+
+				// Left out when it means "whatever is learned", so a bar
+				// that nobody has picked a level on writes nothing extra.
+				if cell.level > 0 {
+					levels[hotkeyCellKey(row, col)] = cell.level
+				}
 			} else {
 				items[hotkeyCellKey(row, col)] = cell.id
 			}
 		}
 	}
 
-	return items, skills
+	return items, skills, levels
 }
 
 // saveHotkeyPlacement records where the bar was left and how far it was open.
@@ -286,7 +293,7 @@ func (b *UI2DBackend) saveHotkeyPlacement() {
 	err := config.UpdateUIState(func(state *config.UIState) {
 		state.HotkeyX, state.HotkeyY = b.hotkeyX, b.hotkeyY
 		state.HotkeyRows = b.hotkeyRows
-		state.HotkeyItems, state.HotkeySkills = b.savedHotkeyItems()
+		state.HotkeyItems, state.HotkeySkills, state.HotkeySkillLevels = b.savedHotkeyItems()
 	})
 	if err != nil {
 		logger.Warn("could not save hotkey placement", zap.Error(err))
