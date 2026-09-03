@@ -17,18 +17,17 @@ import (
 // of — so the shape of each one has to be described.
 //
 // The numbers below are nostalro-client's, which derived them from the
-// original; the file each came from is named where it is used. What is not
-// theirs is the space: theirs are billboards in the world, these are quads
-// around a projected point, the same way the STR effects this client already
-// draws are. For a burst that lasts half a second at a fixed camera the two
-// look alike, and it costs no renderer this client does not have.
-
-// burstScale converts nostalro's world units into screen pixels.
+// original; the file each came from is named where it is used. Everything is
+// in the game's own units, where a cell is five, and every particle stands at
+// a place in the world rather than at an offset on the screen.
 //
-// Their effects are measured in the game's own units, where a cell is five.
-// At this client's default camera a cell is about thirty pixels across, so a
-// unit is six.
-const burstScale = float32(6)
+// That was not so at first, and it was wrong. Laid out around a single
+// projected point, a line of ice spikes came out as a row of equal shapes at
+// the same height, none of them sitting on the ground and none of them
+// smaller for being further away. What the original draws are billboards in
+// the world; what these are is a quad per particle, at that particle's own
+// world position, sized by how many pixels a world unit is worth there. The
+// quads still face the screen, which is what RO's effects do anyway.
 
 // burstFPS is the rate every number in this file is counted at. The original
 // ran at sixty frames a second and its effects are written as per-frame steps,
@@ -42,12 +41,13 @@ func burstFrames(n float32) float32 {
 
 // burstParticle is one quad of a burst.
 type burstParticle struct {
-	// Where it starts and where it is going, in pixels from the burst's
-	// anchor. Screen space: up is negative.
-	x, y   float32
-	vx, vy float32
+	// Where it starts and where it is going, in world units from the burst's
+	// anchor. Y is up, as everywhere else in the world.
+	x, y, z    float32
+	vx, vy, vz float32
 
-	// ay is the acceleration downward, for a particle that rises and slows.
+	// ay is the acceleration on it, negative for a particle that rises and
+	// falls back.
 	ay float32
 
 	// angle is its rotation and spin how fast that turns, in radians per
@@ -55,9 +55,9 @@ type burstParticle struct {
 	// fan out and then settle rather than keep spinning.
 	angle, spin, spinAccel float32
 
-	// halfW and halfH are its size, growing by growW and growH each frame.
-	// They are half-sizes because a quad is drawn around its center, and the
-	// rays of a burst straddle the point they radiate from.
+	// halfW and halfH are its size in world units, growing by growW and growH
+	// each frame. They are half-sizes because a quad is drawn around its
+	// center, and the rays of a burst straddle the point they radiate from.
 	halfW, halfH float32
 	growW, growH float32
 
@@ -87,9 +87,9 @@ type burstParticle struct {
 	// makes a bolt read as falling rather than sliding.
 	fallsIn bool
 
-	// jitter shifts where it starts, so ten of them along the same line do
-	// not sit on top of each other.
-	jitter [2]float32
+	// jitter shifts where it starts, in world units, so ten of them along the
+	// same line do not sit on top of each other.
+	jitter [3]float32
 }
 
 // alphaAt is how strongly the particle draws at an age, and zero once it has
@@ -145,6 +145,11 @@ type burstSpec struct {
 	// fromCaster says the other end is wherever the caster is standing, which
 	// is not a fixed offset and is filled in when the burst is played.
 	fromCaster bool
+
+	// onGround puts the whole burst at ground level under whatever it was
+	// aimed at, rather than around the middle of it. Ice grows out of the
+	// ground; a hit flashes on a body.
+	onGround bool
 }
 
 // activeBurst is one playing.
@@ -173,6 +178,11 @@ type activeBurst struct {
 func (s *InGameState) playBurst(name string, spec burstSpec, from, at [3]float32) {
 	if len(spec.parts) == 0 {
 		return
+	}
+
+	if spec.onGround {
+		at = s.groundUnder(at)
+		from = s.groundUnder(from)
 	}
 
 	other := [3]float32{spec.otherX, spec.otherY, spec.otherZ}
@@ -216,6 +226,12 @@ func (s *InGameState) advanceBursts(deltaMs float32) {
 }
 
 // burstQuads projects what is playing into viewport quads.
+//
+// A quad per particle, at that particle's own place in the world. The scale
+// comes from the same projection: how many pixels a world unit is worth is
+// measured where the particle stands, so two spikes of the same height at
+// different distances are drawn at different sizes, which is the whole reason
+// this is not laid out on the screen.
 func (s *InGameState) burstQuads(viewportW, viewportH float32) []EffectQuad {
 	if len(s.bursts) == 0 || s.scene == nil || !s.SceneReady {
 		return nil
@@ -224,29 +240,12 @@ func (s *InGameState) burstQuads(viewportW, viewportH float32) []EffectQuad {
 	var out []EffectQuad
 
 	for _, b := range s.bursts {
-		originX, originY := s.projectToScreen(b.x, b.y, b.z, viewportW, viewportH)
-		if originX < 0 {
-			continue
-		}
+		quads := s.burstQuadsOf(b, viewportW, viewportH)
 
-		// The other end in pixels: projected each frame, so the line the
-		// burst is drawn along follows the camera.
-		var otherX, otherY float32
-		if b.otherX != 0 || b.otherY != 0 || b.otherZ != 0 {
-			ox, oy := s.projectToScreen(b.x+b.otherX, b.y+b.otherY, b.z+b.otherZ,
-				viewportW, viewportH)
-			if ox >= 0 {
-				otherX, otherY = ox-originX, oy-originY
-			}
-		}
-
-		quads := b.quadsAt(originX, originY, otherX, otherY)
 		if trace.On(trace.HUD) && !b.traced && len(quads) > 0 {
 			b.traced = true
 
-			trace.Emit(trace.HUD, "burst-quads",
-				zap.Int("quads", len(quads)),
-				zap.Float32("x", originX), zap.Float32("y", originY))
+			trace.Emit(trace.HUD, "burst-quads", zap.Int("quads", len(quads)))
 		}
 
 		out = append(out, quads...)
@@ -255,13 +254,30 @@ func (s *InGameState) burstQuads(viewportW, viewportH float32) []EffectQuad {
 	return out
 }
 
-// quadsAt lays a burst's particles out around a point on the screen.
+// burstQuadsOf is one burst's worth.
+func (s *InGameState) burstQuadsOf(b *activeBurst, viewportW, viewportH float32) []EffectQuad {
+	return b.quadsAt(func(x, y, z float32) (screenX, screenY, perUnit float32, ok bool) {
+		screenX, screenY = s.projectToScreen(x, y, z, viewportW, viewportH)
+		if screenX < 0 {
+			return 0, 0, 0, false
+		}
+
+		perUnit = s.pixelsPerUnit(x, y, z, screenX, screenY, viewportW, viewportH)
+
+		return screenX, screenY, perUnit, perUnit > 0
+	})
+}
+
+// projection turns a world point into pixels and says how many of them a
+// world unit is worth there.
 //
-// Apart from the projection this is the whole of what a burst is, which is
-// why it is here rather than in the loop above: the projection needs a scene
-// and a camera, and the shape of an effect over time can be looked at without
-// either.
-func (b *activeBurst) quadsAt(originX, originY, otherX, otherY float32) []EffectQuad {
+// Passed in rather than reached for, so the shape of a burst over time can be
+// looked at without a camera: the projection needs a scene and a camera, and
+// where the particles are and how big they get needs neither.
+type projection func(x, y, z float32) (screenX, screenY, perUnit float32, ok bool)
+
+// quadsAt lays a burst's particles out through a projection.
+func (b *activeBurst) quadsAt(to projection) []EffectQuad {
 	out := make([]EffectQuad, 0, len(b.parts))
 
 	for _, p := range b.parts {
@@ -276,45 +292,51 @@ func (b *activeBurst) quadsAt(originX, originY, otherX, otherY float32) []Effect
 		// sixty-a-second original and read as steps per frame.
 		frames := age / 1000 * burstFPS
 
-		x := originX + p.x + p.vx*frames
-		y := originY + p.y + p.vy*frames + 0.5*p.ay*frames*frames
+		// How far along the burst's own line it stands. A shot travels the
+		// whole of it as it falls; everything else stays where it was put.
+		along := p.atOther
+		if p.fallsIn {
+			along *= 1 - age/p.lifeMs
+		}
 
-		halfW := p.halfW + p.growW*frames
-		halfH := p.halfH + p.growH*frames
+		x := b.x + b.otherX*along + p.x + p.jitter[0] + p.vx*frames
+		y := b.y + b.otherY*along + p.y + p.jitter[1] + p.vy*frames + 0.5*p.ay*frames*frames
+		z := b.z + b.otherZ*along + p.z + p.jitter[2] + p.vz*frames
+
+		// A world unit in pixels comes back with the point, measured there
+		// rather than assumed: it is what makes something further away
+		// smaller.
+		screenX, screenY, perUnit, ok := to(x, y, z)
+		if !ok {
+			continue
+		}
+
+		halfW := (p.halfW + p.growW*frames) * perUnit
+		halfH := (p.halfH + p.growH*frames) * perUnit
 		if halfW <= 0 || halfH <= 0 {
 			continue
 		}
 
-		// The spin decelerates, so the angle is the integral of it
-		// rather than a rate times a time.
+		// The spin decelerates, so the angle is the integral of it rather
+		// than a rate times a time.
 		angle := p.angle + p.spin*frames + p.spinAccel*frames*(frames+1)/2
 
-		if p.atOther != 0 || p.fallsIn {
-			fromX := otherX*p.atOther + p.jitter[0]
-			fromY := otherY*p.atOther + p.jitter[1]
+		if p.fallsIn {
+			// Turned to lie along the way it is going, which is the line from
+			// where it started to where it lands, in pixels.
+			fromX, fromY, _, started := to(
+				b.x+b.otherX+p.x+p.jitter[0],
+				b.y+b.otherY+p.y+p.jitter[1],
+				b.z+b.otherZ+p.z+p.jitter[2])
 
-			x = originX + fromX
-			y = originY + fromY
-
-			if p.fallsIn {
-				// All the way in over its life, so it arrives as it goes out,
-				// and turned to lie along the way it is going. The quad is
-				// drawn upright, so this is the angle that puts its long axis
-				// on the line from where it started to where it lands.
-				left := 1 - age/p.lifeMs
-
-				x = originX + fromX*left
-				y = originY + fromY*left
-				angle = float32(math.Atan2(float64(fromX), float64(-fromY)))
+			if started {
+				angle = float32(math.Atan2(float64(fromX-screenX), float64(screenY-fromY)))
 			}
-
-			x += p.vx * frames
-			y += p.vy*frames + 0.5*p.ay*frames*frames
 		}
 
 		out = append(out, EffectQuad{
 			Texture:  p.texture,
-			Corners:  quadCorners(x, y, halfW, halfH, angle),
+			Corners:  quadCorners(screenX, screenY, halfW, halfH, angle),
 			UV:       [4][2]float32{{0, 0}, {1, 0}, {1, 1}, {0, 1}},
 			Color:    [4]float32{p.tint[0], p.tint[1], p.tint[2], alpha},
 			Additive: p.additive,
@@ -322,6 +344,21 @@ func (b *activeBurst) quadsAt(originX, originY, otherX, otherY float32) []Effect
 	}
 
 	return out
+}
+
+// pixelsPerUnit is how many pixels one world unit is worth at a place, found
+// by projecting a point one unit above it.
+//
+// Above rather than to one side: a unit of height is a unit of height
+// whichever way the camera is facing, where a unit east becomes shorter as
+// the camera turns to look along it.
+func (s *InGameState) pixelsPerUnit(x, y, z, screenX, screenY, viewportW, viewportH float32) float32 {
+	upX, upY := s.projectToScreen(x, y+1, z, viewportW, viewportH)
+	if upX < 0 {
+		return 0
+	}
+
+	return float32(math.Hypot(float64(upX-screenX), float64(upY-screenY)))
 }
 
 // quadCorners lays a quad of a given half-size around a point, turned by an
@@ -370,14 +407,18 @@ func coldHitParts() ([]burstParticle, float32) {
 	parts := make([]burstParticle, 0, shards+2)
 
 	for i := 0; i < shards; i++ {
+		// Out in every direction and upward, which is a spray rather than a
+		// ring: thrown flat they all cross the same line on the ground.
 		angle := 2 * math.Pi * float64(hash01(uint32(i), 1))
-		speed := 1.5 + 2.5*hash01(uint32(i), 2)
+		speed := 0.3 + 0.5*hash01(uint32(i), 2)
 
 		parts = append(parts, burstParticle{
-			vx:       float32(math.Cos(angle)) * speed * burstScale * 0.2,
-			vy:       float32(math.Sin(angle)) * speed * burstScale * 0.2,
-			halfW:    0.5 * burstScale,
-			halfH:    (1.5 + hash01(uint32(i), 3)) * burstScale,
+			vx:       float32(math.Cos(angle)) * speed,
+			vz:       float32(math.Sin(angle)) * speed,
+			vy:       0.2 + 0.4*hash01(uint32(i), 6),
+			ay:       -0.03,
+			halfW:    0.5,
+			halfH:    1.5 + hash01(uint32(i), 3),
 			birthMs:  burstFrames(hash01(uint32(i), 4) * 4),
 			lifeMs:   burstFrames(15),
 			fadeInMs: burstFrames(1),
@@ -390,11 +431,11 @@ func coldHitParts() ([]burstParticle, float32) {
 	// Two puffs, born a little apart, growing where the shards left.
 	for i, birth := range [2]float32{0, 7} {
 		parts = append(parts, burstParticle{
-			x:        (hash01(uint32(i), 5) - 0.5) * burstScale,
-			halfW:    1.0 * burstScale,
-			halfH:    1.0 * burstScale,
-			growW:    0.5 * burstScale,
-			growH:    0.5 * burstScale,
+			x:        hash01(uint32(i), 5) - 0.5,
+			halfW:    1.0,
+			halfH:    1.0,
+			growW:    0.15,
+			growH:    0.15,
 			birthMs:  burstFrames(birth),
 			lifeMs:   burstFrames(25),
 			fadeInMs: burstFrames(3),
@@ -418,9 +459,9 @@ func hit2Parts() ([]burstParticle, float32) {
 
 	parts := make([]burstParticle, 0, petals)
 	for i := 0; i < petals; i++ {
-		speed := 0.5 + 4.5*hash01(uint32(i), 11)
+		speed := (0.5 + 4.5*hash01(uint32(i), 11)) * sizeF * 0.25
 		angle := 2 * math.Pi * float64(hash01(uint32(i), 12))
-		radius := 5 * sizeF * hash01(uint32(i), 13) * burstScale
+		radius := 5 * sizeF * hash01(uint32(i), 13)
 
 		texture := "lens1.tga"
 		if i%2 == 1 {
@@ -429,11 +470,11 @@ func hit2Parts() ([]burstParticle, float32) {
 
 		parts = append(parts, burstParticle{
 			x:        float32(math.Cos(angle)) * radius,
-			y:        float32(math.Sin(angle)) * radius,
-			vy:       -speed * burstScale * 0.25,
-			ay:       0.25 * burstScale * 0.05,
-			halfW:    (5 + 15*hash01(uint32(i), 14)) * sizeF * burstScale / 2,
-			halfH:    (20 + 20*hash01(uint32(i), 15)) * sizeF * burstScale / 2,
+			z:        float32(math.Sin(angle)) * radius,
+			vy:       speed,
+			ay:       -speed / 25,
+			halfW:    (5 + 15*hash01(uint32(i), 14)) * sizeF / 2,
+			halfH:    (20 + 20*hash01(uint32(i), 15)) * sizeF / 2,
 			lifeMs:   burstFrames(10 + 20*hash01(uint32(i), 16)),
 			fadeInMs: burstFrames(8),
 			texture:  texture,
@@ -469,8 +510,8 @@ func bashParts() ([]burstParticle, float32) {
 		{3.5, 220.0 / 255},
 	} {
 		parts = append(parts, burstParticle{
-			halfW:     halo.radius * burstScale,
-			halfH:     halo.radius * burstScale,
+			halfW:     halo.radius,
+			halfH:     halo.radius,
 			lifeMs:    burstFrames(runFrames),
 			fadeInMs:  burstFrames(6),
 			fadeOutMs: burstFrames(10),
@@ -497,9 +538,9 @@ func bashParts() ([]burstParticle, float32) {
 			// A ray straddles the point it comes from: the texture is
 			// brightest along its middle, so the quad is its full length and
 			// the anchor is halfway along.
-			halfW:  0.5 / 2 * burstScale,
-			halfH:  (2.8 + 2.8*hash01(uint32(i), 23)) * burstScale,
-			growH:  (0.28 + 0.42*hash01(uint32(i), 24)) * burstScale,
+			halfW:  0.5 / 2,
+			halfH:  2.8 + 2.8*hash01(uint32(i), 23),
+			growH:  0.28 + 0.42*hash01(uint32(i), 24),
 			lifeMs: burstFrames(runFrames),
 
 			fadeInMs:  burstFrames(10),
@@ -597,13 +638,14 @@ func boltParts(hits int, style boltStyle) burstSpec {
 
 			// Five units either way, so ten shots at one unit do not all come
 			// down the same line.
-			jitter: [2]float32{
-				(hash01(uint32(i), 31) - 0.5) * 10 * burstScale,
-				(hash01(uint32(i), 32) - 0.5) * 4 * burstScale,
+			jitter: [3]float32{
+				(hash01(uint32(i), 31) - 0.5) * 10,
+				(hash01(uint32(i), 32) - 0.5) * 4,
+				(hash01(uint32(i), 33) - 0.5) * 10,
 			},
 
-			halfW:   style.halfWid * burstScale,
-			halfH:   style.halfLen * burstScale,
+			halfW:   style.halfWid,
+			halfH:   style.halfLen,
 			tint:    style.tint,
 			texture: style.texture,
 
@@ -673,6 +715,7 @@ func frostDiverParts() burstSpec {
 		parts:      parts,
 		runMs:      frostDiverReachMs() + burstFrames(spikeRunFrames),
 		fromCaster: true,
+		onGround:   true,
 	}
 }
 
@@ -691,18 +734,23 @@ func frostDiver2Parts() burstSpec {
 		// Around the target rather than along a line: a ring of a cell or so,
 		// spread by the same hash everything else here is spread by.
 		angle := 2 * math.Pi * float64(hash01(uint32(i), 41))
-		radius := (1.5 + 3.5*hash01(uint32(i), 42)) * burstScale
+		radius := 1.5 + 3.5*hash01(uint32(i), 42)
 
-		part.jitter = [2]float32{
+		// A ring on the ground around it, not an oval on the screen.
+		part.jitter = [3]float32{
 			float32(math.Cos(angle)) * radius,
-			float32(math.Sin(angle)) * radius / 2,
+			0,
+			float32(math.Sin(angle)) * radius,
 		}
-		part.atOther = 0.0001 // enough to take the jittered path
 
 		parts = append(parts, part)
 	}
 
-	return burstSpec{parts: parts, runMs: frostDiverReachMs() + burstFrames(spikeRunFrames)}
+	return burstSpec{
+		parts:    parts,
+		runMs:    frostDiverReachMs() + burstFrames(spikeRunFrames),
+		onGround: true,
+	}
 }
 
 // frostDiverReachMs is how long the line takes to run out to the target.
@@ -712,8 +760,8 @@ func frostDiverReachMs() float32 {
 
 // spikeParticle is one of them, sized within the ranges given in world units.
 func spikeParticle(seed uint32, along, birthMs, minWid, maxWid, minHigh, maxHigh float32) burstParticle {
-	halfWid := (minWid + (maxWid-minWid)*hash01(seed, 43)) * burstScale
-	height := (minHigh + (maxHigh-minHigh)*hash01(seed, 44)) * burstScale
+	halfWid := minWid + (maxWid-minWid)*hash01(seed, 43)
+	height := minHigh + (maxHigh-minHigh)*hash01(seed, 44)
 
 	// Up over the rise and no further. Half the growth each frame in size and
 	// half in position keeps the base still while the point climbs.
@@ -722,11 +770,12 @@ func spikeParticle(seed uint32, along, birthMs, minWid, maxWid, minHigh, maxHigh
 	return burstParticle{
 		atOther: along,
 
-		// It starts as a sliver at ground level and is grown into.
+		// It starts as a sliver at ground level and is grown into: up by half
+		// of what it grows, so the base stays where it broke through.
 		halfW: halfWid,
 		halfH: height / 2 / spikeRiseFrames,
 		growH: grow,
-		vy:    -grow,
+		vy:    grow,
 
 		// A few degrees off upright, so a line of them is not a row of posts.
 		angle: (hash01(seed, 45) - 0.5) * 0.35,

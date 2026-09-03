@@ -985,6 +985,12 @@ func (s *InGameState) playSkillBursts(effects []string, hits int, from, at [3]fl
 	}
 }
 
+// groundUnder puts a point on the ground below itself, for the bursts that
+// stand there.
+func (s *InGameState) groundUnder(at [3]float32) [3]float32 {
+	return [3]float32{at[0], s.terrainHeight(at[0], at[2]), at[2]}
+}
+
 // casterAt is where a caster is standing, for an effect drawn from them.
 func (s *InGameState) casterAt(id uint32) [3]float32 {
 	x, y, z, ok := s.effectHeight(id)
@@ -1097,6 +1103,18 @@ func (s *InGameState) effectHeight(id uint32) (x, y, z float32, ok bool) {
 	}
 
 	return body.RenderX, middle, body.RenderZ, true
+}
+
+// footingOf is where a unit's feet are, for the effects that stand on the
+// ground rather than burst around a body — a line of ice spikes belongs at
+// ground level, and anchored at the middle of a monster it hangs in the air.
+func (s *InGameState) footingOf(id uint32) (x, y, z float32, ok bool) {
+	body := s.bodyOf(id)
+	if body == nil {
+		return 0, 0, 0, false
+	}
+
+	return body.RenderX, body.RenderY, body.RenderZ, true
 }
 
 // playSkillUseEffects draws what a skill did, wherever it did it.

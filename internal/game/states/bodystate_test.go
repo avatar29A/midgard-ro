@@ -118,9 +118,18 @@ func TestTheIceIsHeldAtFullHeight(t *testing.T) {
 	seal := frostDiver2Parts()
 	held := &activeBurst{parts: seal.parts, ageMs: frostDiverReachMs() + burstFrames(spikeRiseFrames)}
 
-	quads := held.quadsAt(400, 300, 0, 0)
+	quads := held.quadsAt(flatView)
 	if len(quads) != len(seal.parts) {
 		t.Fatalf("%d spikes drawn of %d, want them all standing", len(quads), len(seal.parts))
+	}
+
+	// The same spikes at the moment they break through, to compare against:
+	// held, they should be many times taller than that.
+	fresh := &activeBurst{parts: seal.parts, ageMs: frostDiverReachMs() + burstFrames(3)}
+	young := fresh.quadsAt(flatView)
+
+	if len(young) != len(quads) {
+		t.Fatalf("%d spikes just after breaking through against %d held", len(young), len(quads))
 	}
 
 	for i, q := range quads {
@@ -128,8 +137,12 @@ func TestTheIceIsHeldAtFullHeight(t *testing.T) {
 			t.Errorf("spike %d stands at %v strength, which is on its way out", i, q.Color[3])
 		}
 
-		if _, h := quadSpan(q.Corners); h < 20 {
-			t.Errorf("spike %d is %v tall, which is not grown", i, h)
+		_, grown := quadSpan(q.Corners)
+		_, sliver := quadSpan(young[i].Corners)
+
+		if grown < sliver*4 {
+			t.Errorf("spike %d stands %v tall against %v when it broke through, which is not grown",
+				i, grown, sliver)
 		}
 	}
 }
