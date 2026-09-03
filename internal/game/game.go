@@ -175,9 +175,14 @@ func New(cfg *config.Config) (*Game, error) {
 		flags := io.ConfigFlags()
 		flags &^= imgui.ConfigFlagsViewportsEnable // Clear viewport flag
 
-		// The game draws RO's cursor itself. ImGui otherwise sets the system
-		// cursor every frame, which puts it back however often it is hidden.
-		flags |= imgui.ConfigFlagsNoMouseCursorChange
+		// Deliberately not ConfigFlagsNoMouseCursorChange. The game draws RO's
+		// cursor itself, so the system one has to go — and the code that can
+		// actually make it go is imgui's own SDL backend, which is the half of
+		// this process that owns the window. cimgui-go links a static
+		// libSDL2.a of its own; hiding the cursor from the outside, through
+		// the system SDL this program also links, is asking a different copy
+		// of the library. So the backend is left switching the cursor, and
+		// told every frame to switch it to none.
 		io.SetConfigFlags(flags)
 
 		g.loadKoreanFont()
@@ -185,13 +190,6 @@ func New(cfg *config.Config) (*Game, error) {
 
 	g.imguiBackend.SetBgColor(imgui.NewVec4(0.05, 0.05, 0.08, 1.0))
 	g.imguiBackend.CreateWindow("Midgard RO", cfg.Graphics.Width, cfg.Graphics.Height)
-
-	// The game draws RO's own cursor, so the system one would be a second
-	// pointer on screen. SDL owns it — the windowing backend runs on the same
-	// library — and a failure here is cosmetic, not worth refusing to start.
-	if _, err := sdl.ShowCursor(sdl.DISABLE); err != nil {
-		logger.Warn("could not hide the system cursor", zap.Error(err))
-	}
 
 	// Initialize OpenGL
 	if err := gl.Init(); err != nil {
@@ -567,6 +565,12 @@ func (g *Game) frame() {
 	g.runMouseAt()
 	g.runOpenWindows()
 	g.runEquip()
+	// No system pointer, every frame. imgui's SDL backend reads this and
+	// hides the cursor itself; asking SDL directly does not work, because the
+	// SDL this program links and the one cimgui-go statically links are two
+	// copies with two sets of state, and the window belongs to the other one.
+	imgui.SetMouseCursor(imgui.MouseCursorNone)
+
 	g.runAttackNearest()
 	g.runCast()
 	g.runSay()
