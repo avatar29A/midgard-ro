@@ -22,6 +22,11 @@ import "encoding/binary"
 // packet takes the top half of the option word for a PK flag.
 const ZC_STATE_CHANGE uint16 = 0x0229
 
+// ZC_DISPEL is `<gid>.L`, six bytes: the server saying a unit's cast came to
+// nothing. Its name is from what else it is used for; the cast bar is the
+// part this client cares about.
+const ZC_DISPEL uint16 = 0x01B9
+
 // Body states, rAthena's e_sc_opt1. Five is missing on purpose: Aegis uses it
 // to mark an undead enemy rather than as a state of its own.
 const (

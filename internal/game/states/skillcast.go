@@ -1,6 +1,7 @@
 package states
 
 import (
+	"encoding/binary"
 	"fmt"
 
 	"go.uber.org/zap"
@@ -659,6 +660,62 @@ func (s *InGameState) beginCast(skillID uint16, castMs float32) {
 	s.castSkill = skillID
 	s.castTotalMs = castMs
 	s.castLeftMs = castMs
+}
+
+// Casting reports whether the character is in the middle of one.
+//
+// While it is, it does not move. rAthena's unit_can_move is false for as long
+// as the skill timer runs — bar Free Cast and the guild skills — so a walk
+// asked for here would be refused and the client would be predicting a step
+// no acknowledgement is coming for.
+func (s *InGameState) Casting() bool {
+	return s.castTotalMs > 0 && s.castLeftMs > 0
+}
+
+// handleCastCancelled is the server saying somebody's cast came to nothing.
+//
+// A cast ends early when the caster is hit — for the skills the database
+// marks as interruptible, and unless something is holding the cast up — or
+// when a state that stops them takes hold. There is no packet for a player
+// canceling their own, because there is no way to: the Sage skill Cast
+// Cancel is the only thing in the game that does it, and it is a skill cast
+// at somebody else.
+func (s *InGameState) handleCastCancelled(data []byte) error {
+	const size = 6
+
+	if len(data) < size {
+		logger.Warn("short cast cancel packet", zap.Int("len", len(data)))
+
+		return nil
+	}
+
+	who := binary.LittleEndian.Uint32(data[2:])
+
+	trace.Emit(trace.HUD, "cast-canceled", zap.Uint32("who", who))
+
+	// Whoever it was, their ring goes with it.
+	kept := s.castAuras[:0]
+	for _, aura := range s.castAuras {
+		if aura.caster != who {
+			kept = append(kept, aura)
+		}
+	}
+	s.castAuras = kept
+
+	// And our own bar, and the name over our head.
+	if who == s.selfAID() {
+		s.castSkill, s.castTotalMs, s.castLeftMs = 0, 0, 0
+	}
+
+	for i := range s.skillLabels {
+		if s.skillLabels[i].target == who {
+			s.skillLabels = append(s.skillLabels[:i], s.skillLabels[i+1:]...)
+
+			break
+		}
+	}
+
+	return nil
 }
 
 // PlaceHeldSkillAt casts the held skill at a named cell.
