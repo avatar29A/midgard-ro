@@ -3,6 +3,7 @@ package states
 import (
 	"go.uber.org/zap"
 
+	"github.com/Faultbox/midgard-ro/internal/engine/picking"
 	"github.com/Faultbox/midgard-ro/internal/game/skills"
 	"github.com/Faultbox/midgard-ro/internal/logger"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
@@ -281,18 +282,32 @@ func (s *InGameState) placeHeldSkill(mouseX, mouseY, viewportW, viewportH float3
 		// Whether this particular target is allowed is the server's to say —
 		// an attack skill on a player who is not in a fight is refused, and
 		// the refusal already reaches the chat.
-		e := s.PickEntity(mouseX, mouseY, viewportW, viewportH)
-		if e == nil {
+		var (
+			target uint32
+			name   string
+		)
+
+		if e := s.PickEntity(mouseX, mouseY, viewportW, viewportH); e != nil {
+			target, name = e.ID, e.Name
+		} else if s.pickedSelf(mouseX, mouseY, viewportW, viewportH) {
+			// The character is not in the entity registry — it is driven by
+			// its own prediction rather than by unit reports — so clicking it
+			// picks nothing, and a skill anybody casts on themselves would be
+			// dropped. It is tested for separately.
+			target, name = s.selfAID(), "you"
+		}
+
+		if target == 0 {
 			trace.Emit(trace.HUD, "cast-no-target", zap.Uint16("skill", skill))
 
 			return true
 		}
 
 		trace.Emit(trace.HUD, "cast-at-unit",
-			zap.Uint16("skill", skill), zap.Uint32("target", e.ID),
-			zap.String("name", e.Name))
+			zap.Uint16("skill", skill), zap.Uint32("target", target),
+			zap.String("name", name))
 
-		if err := s.castAt(skill, level, e.ID); err != nil {
+		if err := s.castAt(skill, level, target); err != nil {
 			logger.Warn("could not cast that skill", zap.Uint16("skill", skill), zap.Error(err))
 		}
 
@@ -387,4 +402,37 @@ func (s *InGameState) PlayerCell() (int, int) {
 	}
 
 	return s.player.CurrentCell()
+}
+
+// pickedSelf reports whether a click landed on our own character.
+//
+// Everything else on the map is picked out of the entity registry, and the
+// character being played is deliberately not in it. So its box is built here
+// from the same two things a unit's is: where the body is standing, and how
+// big its billboard was baked.
+func (s *InGameState) pickedSelf(screenX, screenY, viewportW, viewportH float32) bool {
+	if s.player == nil || s.scene == nil || s.playerRender == nil ||
+		viewportW <= 0 || viewportH <= 0 {
+		return false
+	}
+
+	width, height := s.playerRender.QuadSize()
+	if width <= 0 || height <= 0 {
+		return false
+	}
+
+	x, y, z := s.player.RenderX, s.player.RenderY, s.player.RenderZ
+	half := width / 2
+
+	box := picking.AABB{
+		Min: [3]float32{x - half, y, z - half},
+		Max: [3]float32{x + half, y + height, z + half},
+	}
+
+	ray := picking.ScreenToRay(screenX, screenY, viewportW, viewportH,
+		s.scene.LastViewProj().Inverse())
+
+	t, hit := ray.IntersectAABB(box)
+
+	return hit && t >= 0
 }
