@@ -241,3 +241,120 @@ func quadSpan(corners [4][2]float32) (w, h float32) {
 
 	return maxX - minX, maxY - minY
 }
+
+// quadsThrough lays a burst out at ten points across its run.
+func quadsThrough(name string) (frames [][]EffectQuad) {
+	parts, runMs, _ := burstFor(name)
+	b := &activeBurst{parts: parts, runMs: runMs}
+
+	for step := 0; step < 10; step++ {
+		b.ageMs = runMs * float32(step) / 10
+		frames = append(frames, b.quadsAt(400, 300))
+	}
+
+	return frames
+}
+
+// TestEveryBurstDrawsSomething: the whole point. A burst that lays out no
+// quads is an effect that plays and is not seen, which is what Cold Bolt did
+// before there was one.
+func TestEveryBurstDrawsSomething(t *testing.T) {
+	for _, name := range burstNames {
+		frames := quadsThrough(name)
+
+		var most int
+		for _, quads := range frames {
+			if len(quads) > most {
+				most = len(quads)
+			}
+		}
+
+		if most == 0 {
+			t.Errorf("%s never draws a quad", name)
+		}
+	}
+}
+
+// TestBurstsAreBigEnoughToSee: a quad a few pixels across is not an effect.
+// The world units these came from are converted by hand, and getting the
+// conversion wrong is how a burst becomes a speck or fills the screen.
+func TestBurstsAreBigEnoughToSee(t *testing.T) {
+	for _, name := range burstNames {
+		frames := quadsThrough(name)
+
+		var widest, tallest float32
+		for _, quads := range frames {
+			for _, q := range quads {
+				w, h := quadSpan(q.Corners)
+				widest, tallest = max(widest, w), max(tallest, h)
+			}
+		}
+
+		// A character's sprite is around a hundred pixels tall at this
+		// client's camera, so an effect on one is tens of pixels, not ones
+		// and not thousands.
+		if widest < 10 || tallest < 10 {
+			t.Errorf("%s is at most %vx%v pixels, too small to see", name, widest, tallest)
+		}
+		if widest > 1000 || tallest > 1000 {
+			t.Errorf("%s grows to %vx%v pixels, which covers the screen", name, widest, tallest)
+		}
+	}
+}
+
+// TestBurstsStayNearWhatTheyHit: an effect that drifts off is one drawn over
+// somebody else. Half a screen is the limit — Bash's rays are long by design.
+func TestBurstsStayNearWhatTheyHit(t *testing.T) {
+	const originX, originY = 400, 300
+
+	for _, name := range burstNames {
+		parts, runMs, _ := burstFor(name)
+		b := &activeBurst{parts: parts, runMs: runMs}
+
+		for step := 0; step < 10; step++ {
+			b.ageMs = runMs * float32(step) / 10
+
+			for _, q := range b.quadsAt(originX, originY) {
+				for _, c := range q.Corners {
+					if dx := c[0] - originX; dx < -400 || dx > 400 {
+						t.Fatalf("%s reaches %v across at %vms", name, dx, b.ageMs)
+					}
+					if dy := c[1] - originY; dy < -400 || dy > 400 {
+						t.Fatalf("%s reaches %v up or down at %vms", name, dy, b.ageMs)
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestBurstParticlesMove: one whose quads are in the same place from one frame
+// to the next is a still picture rather than a burst.
+func TestBurstParticlesMove(t *testing.T) {
+	for _, name := range burstNames {
+		parts, runMs, _ := burstFor(name)
+		b := &activeBurst{parts: parts, runMs: runMs}
+
+		b.ageMs = runMs * 0.3
+		early := b.quadsAt(400, 300)
+
+		b.ageMs = runMs * 0.6
+		late := b.quadsAt(400, 300)
+
+		if len(early) == 0 || len(late) == 0 {
+			t.Errorf("%s draws nothing in the middle of its run", name)
+			continue
+		}
+
+		same := 0
+		for i := range early {
+			if i < len(late) && early[i].Corners == late[i].Corners {
+				same++
+			}
+		}
+
+		if same == len(early) {
+			t.Errorf("%s is the same picture at 30%% and 60%% of its run", name)
+		}
+	}
+}

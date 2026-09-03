@@ -167,39 +167,53 @@ func (s *InGameState) burstQuads(viewportW, viewportH float32) []EffectQuad {
 			continue
 		}
 
-		for _, p := range b.parts {
-			age := b.ageMs - p.birthMs
+		out = append(out, b.quadsAt(originX, originY)...)
+	}
 
-			alpha := p.alphaAt(age)
-			if alpha <= 0 {
-				continue
-			}
+	return out
+}
 
-			// Frames rather than milliseconds: the numbers came from a
-			// sixty-a-second original and read as steps per frame.
-			frames := age / 1000 * burstFPS
+// quadsAt lays a burst's particles out around a point on the screen.
+//
+// Apart from the projection this is the whole of what a burst is, which is
+// why it is here rather than in the loop above: the projection needs a scene
+// and a camera, and the shape of an effect over time can be looked at without
+// either.
+func (b *activeBurst) quadsAt(originX, originY float32) []EffectQuad {
+	out := make([]EffectQuad, 0, len(b.parts))
 
-			x := originX + p.x + p.vx*frames
-			y := originY + p.y + p.vy*frames + 0.5*p.ay*frames*frames
+	for _, p := range b.parts {
+		age := b.ageMs - p.birthMs
 
-			halfW := p.halfW + p.growW*frames
-			halfH := p.halfH + p.growH*frames
-			if halfW <= 0 || halfH <= 0 {
-				continue
-			}
-
-			// The spin decelerates, so the angle is the integral of it
-			// rather than a rate times a time.
-			angle := p.angle + p.spin*frames + p.spinAccel*frames*(frames+1)/2
-
-			out = append(out, EffectQuad{
-				Texture:  p.texture,
-				Corners:  quadCorners(x, y, halfW, halfH, angle),
-				UV:       [4][2]float32{{0, 0}, {1, 0}, {1, 1}, {0, 1}},
-				Color:    [4]float32{p.tint[0], p.tint[1], p.tint[2], alpha},
-				Additive: p.additive,
-			})
+		alpha := p.alphaAt(age)
+		if alpha <= 0 {
+			continue
 		}
+
+		// Frames rather than milliseconds: the numbers came from a
+		// sixty-a-second original and read as steps per frame.
+		frames := age / 1000 * burstFPS
+
+		x := originX + p.x + p.vx*frames
+		y := originY + p.y + p.vy*frames + 0.5*p.ay*frames*frames
+
+		halfW := p.halfW + p.growW*frames
+		halfH := p.halfH + p.growH*frames
+		if halfW <= 0 || halfH <= 0 {
+			continue
+		}
+
+		// The spin decelerates, so the angle is the integral of it
+		// rather than a rate times a time.
+		angle := p.angle + p.spin*frames + p.spinAccel*frames*(frames+1)/2
+
+		out = append(out, EffectQuad{
+			Texture:  p.texture,
+			Corners:  quadCorners(x, y, halfW, halfH, angle),
+			UV:       [4][2]float32{{0, 0}, {1, 0}, {1, 1}, {0, 1}},
+			Color:    [4]float32{p.tint[0], p.tint[1], p.tint[2], alpha},
+			Additive: p.additive,
+		})
 	}
 
 	return out
