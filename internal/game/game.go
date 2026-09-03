@@ -664,7 +664,11 @@ func (g *Game) runOpenWindows() {
 // through. Watched by focus rather than by the cursor's reported state,
 // because the reported state is exactly what is wrong.
 func (g *Game) hideSystemCursor() {
-	focused := sdl.GetMouseFocus() != nil || sdl.GetKeyboardFocus() != nil
+	// Keyboard focus, which is the window being active. Mouse focus is only
+	// the pointer being over it, and that stays true while another window is
+	// in front — so watching either would never see the window lose focus at
+	// all, and the moment this is for would never come.
+	focused := sdl.GetKeyboardFocus() != nil
 
 	if focused == g.hadWindowFocus {
 		return
