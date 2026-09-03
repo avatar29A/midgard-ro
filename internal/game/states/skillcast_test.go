@@ -178,8 +178,8 @@ func TestOnlyHealingSkillsShowAFigure(t *testing.T) {
 // TestSkillLabelsAgeOut: a name over somebody has to go away, or a fight
 // leaves the map covered in them.
 func TestSkillLabelsAgeOut(t *testing.T) {
-	s := &InGameState{}
-	s.skillLabels = []floatingSkillName{{text: "Increase AGI"}}
+	s, mob := withMob()
+	s.skillLabels = []floatingSkillName{{text: "Increase AGI", target: mob.ID}}
 
 	s.advanceSkillLabels(skillLabelLifeMs / 2)
 	if len(s.skillLabels) != 1 {
@@ -189,5 +189,53 @@ func TestSkillLabelsAgeOut(t *testing.T) {
 	s.advanceSkillLabels(skillLabelLifeMs)
 	if len(s.skillLabels) != 0 {
 		t.Errorf("%d labels outlived their time", len(s.skillLabels))
+	}
+}
+
+// TestASkillLabelFollowsItsTarget: the name belongs over somebody's head, so a
+// character buffed and then walking away carries it. Held as a place it would
+// stay where the cast happened.
+func TestASkillLabelFollowsItsTarget(t *testing.T) {
+	s, mob := withMob()
+	s.skillLabels = []floatingSkillName{{text: "Increase AGI", target: mob.ID}}
+
+	if s.skillLabels[0].target != mob.ID {
+		t.Fatal("the label is not held against a unit")
+	}
+
+	// Nothing about the label changes when the unit moves; where it draws is
+	// read off the body every frame.
+	before := mob.Body.RenderX
+	mob.Body.RenderX = before + 100
+
+	if s.skillLabels[0].target != mob.ID {
+		t.Error("moving the unit disturbed its label")
+	}
+}
+
+// TestASkillLabelGoesWithItsTarget: a name floating where a monster used to
+// stand is worse than no name.
+func TestASkillLabelGoesWithItsTarget(t *testing.T) {
+	s, mob := withMob()
+	s.skillLabels = []floatingSkillName{{text: "Increase AGI", target: mob.ID}}
+
+	s.entityManager.Remove(mob.ID)
+	s.advanceSkillLabels(16)
+
+	if len(s.skillLabels) != 0 {
+		t.Error("the label outlived the unit it was over")
+	}
+}
+
+// TestOneNameOverOneHead: two buffs in a row on the same target replace each
+// other rather than stacking into a pile.
+func TestOneNameOverOneHead(t *testing.T) {
+	s, mob := withMob()
+
+	s.addSkillLabel(mob.ID, 29)
+	s.addSkillLabel(mob.ID, 34)
+
+	if len(s.skillLabels) != 1 {
+		t.Errorf("%d labels over one head, want 1", len(s.skillLabels))
 	}
 }
