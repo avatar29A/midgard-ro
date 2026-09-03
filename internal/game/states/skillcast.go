@@ -3,7 +3,6 @@ package states
 import (
 	"go.uber.org/zap"
 
-	"github.com/Faultbox/midgard-ro/internal/game/entity"
 	"github.com/Faultbox/midgard-ro/internal/game/skills"
 	"github.com/Faultbox/midgard-ro/internal/logger"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
@@ -160,11 +159,11 @@ func (s *InGameState) applySkillUse(use packets.SkillUse) {
 		}
 	}
 
-	// The sprite's own cast motion, for a skill that named one. Skills the
-	// client has no entry for use the plain attack, which is what an
-	// unremarkable skill looks like.
-	if body := s.bodyOf(use.SourceID); body != nil && use.Damage <= 0 {
-		body.PlayOnce(entity.ActionAttack)
+	// What a skill restored, over whoever got it. Nothing else about a heal
+	// shows on screen — no flinch, no death, no figure — so without this a
+	// heal that worked and one that never fired look the same.
+	if use.Damage <= 0 && use.Amount > 0 && use.TargetID != 0 {
+		s.addHealNumber(use.TargetID, use.Amount)
 	}
 }
 
@@ -210,18 +209,34 @@ func (s *InGameState) UseSkillAt(skillID uint16, level, cellX, cellY int) error 
 
 // BeginPlacing holds a skill until a cell is chosen for it.
 func (s *InGameState) BeginPlacing(skillID uint16, level int) {
+	s.beginHolding(skillID, level, false, "choose where to place it")
+}
+
+// BeginTargeting holds a skill until somebody is chosen for it.
+//
+// A support skill can go on anybody, and until one is picked there is nothing
+// to send: casting it at whatever happened to be attacked last would heal a
+// monster, and casting it always at the caster would make half the skill
+// unreachable — which is what it did.
+func (s *InGameState) BeginTargeting(skillID uint16, level int) {
+	s.beginHolding(skillID, level, true, "choose who to cast it on")
+}
+
+func (s *InGameState) beginHolding(skillID uint16, level int, atUnit bool, what string) {
 	s.placingSkill = skillID
 	s.placingLevel = level
+	s.placingAtUnit = atUnit
 
 	trace.Emit(trace.HUD, "placing-begin",
-		zap.Uint16("skill", skillID), zap.Int("level", level))
+		zap.Uint16("skill", skillID), zap.Int("level", level),
+		zap.Bool("atUnit", atUnit))
 
 	name := skills.Name(skillID)
 	if name == "" {
 		name = "That skill"
 	}
 
-	s.chat.AddLocal(ChatNotice, name+": choose where to place it.")
+	s.chat.AddLocal(ChatNotice, name+": "+what+".")
 }
 
 // Placing reports the skill waiting for a cell, and whether one is.
@@ -239,6 +254,7 @@ func (s *InGameState) CancelPlacing() {
 
 	s.placingSkill = 0
 	s.placingLevel = 0
+	s.placingAtUnit = false
 }
 
 // placeHeldSkill casts the held skill at the cell under the cursor, and
@@ -247,13 +263,32 @@ func (s *InGameState) CancelPlacing() {
 // The cursor's cell rather than the click's own reading of the screen: the
 // marker is what the player is aiming with, and casting anywhere else would
 // put the skill where the marker was not.
-func (s *InGameState) placeHeldSkill() bool {
+func (s *InGameState) placeHeldSkill(mouseX, mouseY, viewportW, viewportH float32) bool {
 	if s.placingSkill == 0 {
 		return false
 	}
 
-	skill, level := s.placingSkill, s.placingLevel
-	s.placingSkill, s.placingLevel = 0, 0
+	skill, level, atUnit := s.placingSkill, s.placingLevel, s.placingAtUnit
+	s.placingSkill, s.placingLevel, s.placingAtUnit = 0, 0, false
+
+	if atUnit {
+		// Whoever is under the pointer, and the caster when that is nobody:
+		// a support skill always has one target that is certainly valid, and
+		// a click on empty ground meaning "on me" is what the original does.
+		target := s.selfAID()
+		if e := s.PickEntity(mouseX, mouseY, viewportW, viewportH); e != nil {
+			target = e.ID
+		}
+
+		trace.Emit(trace.HUD, "cast-at-unit",
+			zap.Uint16("skill", skill), zap.Uint32("target", target))
+
+		if err := s.castAt(skill, level, target); err != nil {
+			logger.Warn("could not cast that skill", zap.Uint16("skill", skill), zap.Error(err))
+		}
+
+		return true
+	}
 
 	if !s.hoverValid {
 		trace.Emit(trace.HUD, "placing-off-map", zap.Uint16("skill", skill))
@@ -266,6 +301,15 @@ func (s *InGameState) placeHeldSkill() bool {
 	}
 
 	return true
+}
+
+// castAt sends a cast at a named unit, past the targeting UseSkill does.
+func (s *InGameState) castAt(skillID uint16, level int, target uint32) error {
+	if s.client == nil {
+		return nil
+	}
+
+	return s.client.Send(packets.EncodeUseSkill(skillID, level, target))
 }
 
 // The cast bar.
