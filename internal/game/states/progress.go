@@ -154,7 +154,7 @@ func (s *InGameState) UseSkill(skillID uint16, level int) error {
 	// refused for want of a target.
 	if skill.Inf&(packets.InfSupport|packets.InfAttack) != 0 {
 		if skill.Inf&packets.InfAttack != 0 && s.targetID != 0 {
-			return s.castAt(skillID, level, s.targetID)
+			return s.castOrApproach(skillID, level, s.targetID)
 		}
 
 		s.BeginTargeting(skillID, level)

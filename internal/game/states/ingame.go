@@ -140,6 +140,9 @@ type InGameState struct {
 	castTotalMs float32
 	castLeftMs  float32
 
+	// pendingSkill is a cast waiting for the character to walk into range.
+	pendingSkill *pendingSkillCast
+
 	// castAuras are the rings under whoever is casting, and holdCastAura keeps
 	// one there for --cast-aura.
 	castAuras    []castingAura
@@ -787,6 +790,7 @@ func (s *InGameState) Update(dt float64) error {
 		s.advanceCast(deltaMs)
 		s.advanceSkillLabels(deltaMs)
 		s.advanceCastAuras(deltaMs)
+		s.advancePendingSkill(deltaMs)
 		s.updateDamageNumbers(deltaMs)
 		s.updateEffects(deltaMs)
 		s.updateCelebrations(deltaMs)
@@ -2284,6 +2288,7 @@ func (s *InGameState) ClickWorld(mouseX, mouseY, viewportW, viewportH float32) {
 	// Whatever this click turns out to mean, it replaces any errand still in
 	// progress. PickUpItem sets a new one if that is what this click was.
 	s.forgetPendingPickup()
+	s.forgetPendingSkill()
 	s.forgetAttack()
 
 	// A unit under the pointer takes the click. For an NPC, walking there
