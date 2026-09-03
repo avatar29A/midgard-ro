@@ -68,6 +68,7 @@ type InGameState struct {
 	// it sits on and hoverValid whether the cursor is over the ground at all;
 	// markerPulse counts down the flourish a click sets off.
 	marker     *scene.GroundMarker
+	castAura   *scene.GroundMarker
 	hoverCellX int
 	hoverCellY int
 	hoverValid bool
@@ -138,6 +139,9 @@ type InGameState struct {
 	castSkill   uint16
 	castTotalMs float32
 	castLeftMs  float32
+
+	// castAuras are the rings under whoever is casting.
+	castAuras []castingAura
 
 	// skillLabels are skill names floating over whoever they were cast on.
 	skillLabels []floatingSkillName
@@ -374,6 +378,18 @@ func (s *InGameState) loadPortalRenderer() {
 		// Warned, not fatal: everything else still works, and a click just
 		// goes back to having no feedback.
 		logger.Warn("no click marker texture", zap.Error(err))
+	}
+
+	aura, err := scene.NewGroundQuad(scene.CastAuraTexture, scene.CastAuraTint)
+	if err != nil {
+		logger.Warn("no casting aura", zap.Error(err))
+
+		return
+	}
+	s.castAura = aura
+
+	if err := s.castAura.LoadTexture(s.manager.TexLoader); err != nil {
+		logger.Warn("no casting aura texture", zap.Error(err))
 	}
 }
 
@@ -694,6 +710,11 @@ func (s *InGameState) Exit() error {
 		s.portals.Destroy()
 		s.portals = nil
 	}
+	if s.castAura != nil {
+		s.castAura.Destroy()
+		s.castAura = nil
+	}
+
 	if s.marker != nil {
 		s.marker.Destroy()
 		s.marker = nil
@@ -763,6 +784,7 @@ func (s *InGameState) Update(dt float64) error {
 		s.advancePendingBlows(deltaMs)
 		s.advanceCast(deltaMs)
 		s.advanceSkillLabels(deltaMs)
+		s.advanceCastAuras(deltaMs)
 		s.updateDamageNumbers(deltaMs)
 		s.updateEffects(deltaMs)
 		s.updateCelebrations(deltaMs)
@@ -909,6 +931,7 @@ func (s *InGameState) renderUnits(viewProj math.Mat4, right, up [3]float32) {
 	}
 
 	s.drawGroundMarker(viewProj)
+	s.drawCastAuras(viewProj)
 	s.traceUnitStats(tracked, drawn)
 }
 

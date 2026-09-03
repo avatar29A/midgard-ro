@@ -8,6 +8,7 @@ import (
 	"github.com/Faultbox/midgard-ro/internal/logger"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
 	"github.com/Faultbox/midgard-ro/internal/trace"
+	"github.com/Faultbox/midgard-ro/pkg/math"
 )
 
 // What the server says about a cast.
@@ -72,6 +73,8 @@ func (s *InGameState) handleSkillCast(data []byte) error {
 	if cast.SourceID == s.selfAID() {
 		s.beginCast(cast.SkillID, float32(cast.CastMs))
 	}
+
+	s.beginCastAura(cast)
 
 	// No motion yet. The sprite has cast poses and the client's own table
 	// names one per skill — ACTOR_STATE, read two changes ago — but they are
@@ -592,4 +595,122 @@ func (s *InGameState) CastingBar(viewportW, viewportH float32) (CastBar, bool) {
 		ScreenY:  y,
 		Name:     skills.Name(skill),
 	}, true
+}
+
+// The casting aura: the ring that lies under somebody while they cast.
+//
+// EF_BEGINSPELL in the original, which nostalro-client's port builds from four
+// rising cone emitters around the caster. This is the ring those emitters
+// carry, lying flat and growing, which is what it reads as from a distance and
+// what the client can draw today — the cones want a renderer it does not have.
+// The table says which skills call for it; this is the drawing.
+
+const (
+	// castAuraSizeFrom and castAuraSizeTo are how wide the ring is, in world
+	// units, at the start and end of a cast. Roughly two cells, growing by
+	// half of one — the original's emitters push outward as they rise.
+	castAuraSizeFrom = float32(9)
+	castAuraSizeTo   = float32(12)
+
+	// castAuraFade is how much of the cast is spent fading out at the end,
+	// so the ring does not vanish mid-turn.
+	castAuraFade = float32(0.25)
+)
+
+// castingAura is one caster's ring.
+type castingAura struct {
+	// caster is who it is under, looked up each frame so it follows them.
+	caster uint32
+
+	// leftMs counts down, and totalMs is what it started at.
+	leftMs, totalMs float32
+}
+
+// beginCastAura starts the ring under a caster, if this skill calls for one.
+func (s *InGameState) beginCastAura(cast packets.SkillCast) {
+	effects, known := skills.EffectsOf(cast.SkillID)
+	if !known {
+		return
+	}
+
+	wanted := false
+	for _, name := range effects.BeginCast {
+		if name == castAuraEffect {
+			wanted = true
+		}
+	}
+
+	if !wanted || cast.CastMs == 0 {
+		return
+	}
+
+	// One ring per caster: a second cast replaces the first rather than
+	// stacking two rings in the same place.
+	for i := range s.castAuras {
+		if s.castAuras[i].caster == cast.SourceID {
+			s.castAuras[i] = castingAura{
+				caster:  cast.SourceID,
+				leftMs:  float32(cast.CastMs),
+				totalMs: float32(cast.CastMs),
+			}
+
+			return
+		}
+	}
+
+	s.castAuras = append(s.castAuras, castingAura{
+		caster:  cast.SourceID,
+		leftMs:  float32(cast.CastMs),
+		totalMs: float32(cast.CastMs),
+	})
+}
+
+// castAuraEffect is the effect name the table uses for the casting circle.
+const castAuraEffect = "EF_BEGINSPELL"
+
+// advanceCastAuras runs the rings down.
+func (s *InGameState) advanceCastAuras(deltaMs float32) {
+	if len(s.castAuras) == 0 {
+		return
+	}
+
+	kept := s.castAuras[:0]
+	for _, aura := range s.castAuras {
+		aura.leftMs -= deltaMs
+
+		// Gone with the caster, the same way a skill's name is.
+		if aura.leftMs > 0 && s.bodyOf(aura.caster) != nil {
+			kept = append(kept, aura)
+		}
+	}
+
+	s.castAuras = kept
+}
+
+// drawCastAuras puts a ring under everybody casting.
+func (s *InGameState) drawCastAuras(viewProj math.Mat4) {
+	if s.castAura == nil {
+		return
+	}
+
+	for _, aura := range s.castAuras {
+		body := s.bodyOf(aura.caster)
+		if body == nil || aura.totalMs <= 0 {
+			continue
+		}
+
+		done := 1 - aura.leftMs/aura.totalMs
+		size := castAuraSizeFrom + (castAuraSizeTo-castAuraSizeFrom)*done
+
+		alpha := float32(1)
+		if done > 1-castAuraFade {
+			alpha = (1 - done) / castAuraFade
+		}
+
+		// Pulse zero: the ring is drawn at its own size rather than swelling
+		// the way a click marker does.
+		s.castAura.Render(viewProj,
+			body.RenderX, s.terrainHeight(body.RenderX, body.RenderZ), body.RenderZ,
+			size, 1, alpha)
+	}
 }

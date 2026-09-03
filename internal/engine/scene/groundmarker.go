@@ -20,6 +20,17 @@ import (
 // the cell, not the pointer.
 const GroundMarkerTexture = "data/texture/grid.tga"
 
+// CastAuraTexture is the ring that lies under somebody casting.
+//
+// The yellow ring the original's EF_BEGINSPELL is built from. It is filed
+// under a later skill's folder rather than loose in the effect directory,
+// which is where nostalro-client's port of that effect names it too.
+const CastAuraTexture = "data/texture/effect/pneumaticusprocella/pneumaticusprocella_cast/ring_yellow.tga"
+
+// CastAuraTint is the color of that ring — white with the blue pulled down,
+// which is the [1, 1, 170/255] nostalro-client reads out of the original.
+var CastAuraTint = [4]float32{1.0, 1.0, 170.0 / 255.0, 0.85}
+
 // The marker covers exactly one cell, lifted clear of the terrain it lies on.
 const (
 	// markerLift keeps the quad out of the depth buffer's way, the same
@@ -63,6 +74,11 @@ type GroundMarker struct {
 	vao, vbo uint32
 	verts    int32
 
+	// texturePath is what LoadTexture reads, and tint the color the white
+	// mask in it is drawn as.
+	texturePath string
+	tint        [4]float32
+
 	tex uint32
 }
 
@@ -71,7 +87,18 @@ type GroundMarker struct {
 //
 // Must be called on the GL thread.
 func NewGroundMarker() (*GroundMarker, error) {
-	m := &GroundMarker{}
+	return NewGroundQuad(GroundMarkerTexture, markerTint)
+}
+
+// NewGroundQuad is the marker's machinery with another texture and color on
+// it: a flat quad on the ground at a world position, sized and faded by the
+// caller.
+//
+// The casting aura is the same thing as the cell marker — a ring lying on the
+// terrain under somebody — and building it a second renderer of its own would
+// be two copies of the same shader, the same mesh and the same depth lift.
+func NewGroundQuad(texturePath string, tint [4]float32) (*GroundMarker, error) {
+	m := &GroundMarker{texturePath: texturePath, tint: tint}
 
 	program, err := shader.CompileProgram(shaders.PortalVertexShader, shaders.PortalFragmentShader)
 	if err != nil {
@@ -105,14 +132,14 @@ func (m *GroundMarker) LoadTexture(load func(string) ([]byte, error)) error {
 		return nil
 	}
 
-	data, err := load(GroundMarkerTexture)
+	data, err := load(m.texturePath)
 	if err != nil {
-		return fmt.Errorf("ground marker texture %q: %w", GroundMarkerTexture, err)
+		return fmt.Errorf("ground quad texture %q: %w", m.texturePath, err)
 	}
 
 	img, err := texture.DecodeTGA(data)
 	if err != nil {
-		return fmt.Errorf("decode %q: %w", GroundMarkerTexture, err)
+		return fmt.Errorf("decode %q: %w", m.texturePath, err)
 	}
 
 	bounds := img.Bounds()
@@ -178,7 +205,7 @@ func (m *GroundMarker) Render(viewProj math.Mat4, x, y, z, size, pulse, alpha fl
 	gl.Uniform1f(m.locTopSize, half)
 	gl.Uniform1f(m.locHeight, 0)
 	gl.Uniform1f(m.locSpin, 0)
-	gl.Uniform4f(m.locTint, markerTint[0], markerTint[1], markerTint[2], markerTint[3]*alpha)
+	gl.Uniform4f(m.locTint, m.tint[0], m.tint[1], m.tint[2], m.tint[3]*alpha)
 
 	gl.ActiveTexture(gl.TEXTURE0)
 	gl.BindTexture(gl.TEXTURE_2D, m.tex)
