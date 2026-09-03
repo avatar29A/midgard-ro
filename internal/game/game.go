@@ -110,10 +110,6 @@ type Game struct {
 	// castSkills is --cast, waiting for the skill list.
 	castSkills []int
 
-	// blankCursor is the empty cursor the system pointer is set to; held so
-	// it outlives the call that made it.
-	blankCursor *sdl.Cursor
-
 	// toggleBasicInfo is set for the frame Ctrl+V was pressed.
 	toggleBasicInfo bool
 
@@ -191,9 +187,11 @@ func New(cfg *config.Config) (*Game, error) {
 	g.imguiBackend.CreateWindow("Midgard RO", cfg.Graphics.Width, cfg.Graphics.Height)
 
 	// The game draws RO's own cursor, so the system one would be a second
-	// pointer on screen. A failure here is cosmetic, not worth refusing to
-	// start.
-	g.blankSystemCursor()
+	// pointer on screen. SDL owns it — the windowing backend runs on the same
+	// library — and a failure here is cosmetic, not worth refusing to start.
+	if _, err := sdl.ShowCursor(sdl.DISABLE); err != nil {
+		logger.Warn("could not hide the system cursor", zap.Error(err))
+	}
 
 	// Initialize OpenGL
 	if err := gl.Init(); err != nil {
@@ -569,7 +567,6 @@ func (g *Game) frame() {
 	g.runMouseAt()
 	g.runOpenWindows()
 	g.runEquip()
-	g.hideSystemCursor()
 	g.runAttackNearest()
 	g.runCast()
 	g.runSay()
@@ -645,75 +642,6 @@ func (g *Game) runOpenWindows() {
 	}
 
 	g.openWindows = nil
-}
-
-// blankSystemCursor replaces the system pointer with one that draws nothing.
-//
-// Hiding it does not stick. SDL_ShowCursor goes through AppKit's [NSCursor
-// hide], AppKit undoes that when the window is activated, and SDL is never
-// told — so it believes the cursor is still hidden, reports it hidden, and
-// hiding it again returns early on a state it thinks it is already in.
-// Measured: SDL says hidden, imgui carries NoMouseCursorChange and draws no
-// cursor of its own, and the pointer is on screen regardless.
-//
-// So rather than argue about whether a cursor is shown, the cursor itself is
-// made empty — one transparent pixel. Whatever the window manager puts back on
-// activation, what it puts back is nothing. The hide is kept as well, since
-// where it does work it saves even the blank one from being drawn.
-func (g *Game) blankSystemCursor() {
-	if _, err := sdl.ShowCursor(sdl.DISABLE); err != nil {
-		logger.Warn("could not hide the system cursor", zap.Error(err))
-	}
-
-	surface, err := sdl.CreateRGBSurfaceWithFormat(0, 1, 1, 32, uint32(sdl.PIXELFORMAT_ARGB8888))
-	if err != nil {
-		logger.Warn("could not make a blank cursor", zap.Error(err))
-
-		return
-	}
-
-	// One fully transparent pixel: a cursor with nothing in it.
-	if err := surface.FillRect(nil, 0); err != nil {
-		logger.Warn("could not clear the blank cursor", zap.Error(err))
-		surface.Free()
-
-		return
-	}
-
-	cursor := sdl.CreateColorCursor(surface, 0, 0)
-	surface.Free()
-
-	if cursor == nil {
-		logger.Warn("could not create the blank cursor")
-
-		return
-	}
-
-	// Kept for the process's life: freeing it while it is the active cursor
-	// would leave SDL pointing at nothing.
-	g.blankCursor = cursor
-	sdl.SetCursor(cursor)
-}
-
-// hideSystemCursor keeps the system pointer out of the way.
-//
-// The hide alone does not hold. On macOS SDL_ShowCursor goes through AppKit's
-// [NSCursor hide], and AppKit undoes it when the window is activated and again
-// when the mouse moves; SDL is never told, so it believes the cursor is still
-// hidden and hiding it again returns early on a state it thinks it is in.
-//
-// Forcing it through by toggling — shown, then hidden — made it worse rather
-// than better: while the mouse is moving, the pointer is on screen for the
-// part of every frame between the two calls, which is exactly when it is being
-// looked at. So no toggle. What holds instead is the cursor itself being
-// empty: whatever AppKit puts back, what it puts back is one transparent
-// pixel. This only re-asserts that, and only when something has replaced it.
-func (g *Game) hideSystemCursor() {
-	if g.blankCursor == nil || sdl.GetCursor() == g.blankCursor {
-		return
-	}
-
-	sdl.SetCursor(g.blankCursor)
 }
 
 // SetCastSkills records the skills --cast asked to be cast.
