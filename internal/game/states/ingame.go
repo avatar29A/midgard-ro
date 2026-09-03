@@ -941,9 +941,11 @@ func (s *InGameState) drawGroundMarker(viewProj math.Mat4) {
 	}
 
 	// A skill waiting for a cell holds the marker at the top of its swell, so
-	// the ring under the cursor reads as armed rather than as the ordinary
-	// where-you-would-walk mark.
-	if s.placingSkill != 0 {
+	// the ring on the ground reads as armed rather than as the ordinary
+	// where-you-would-walk mark. Not for a skill waiting for somebody: there
+	// the cursor is what says so, and a swollen ring would point at ground
+	// the skill is not going to.
+	if s.placingSkill != 0 && !s.placingAtUnit {
 		progress = 0
 	}
 

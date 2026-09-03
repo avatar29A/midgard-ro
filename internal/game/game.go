@@ -1607,6 +1607,17 @@ func (g *Game) updateCursor(state *states.InGameState, io *imgui.IO, mouseX, mou
 
 	hudCursor, hudAsked := g.uiBackend.WantCursor()
 
+	// A skill waiting to be aimed outranks everything but the camera: the
+	// pointer is not asking what is under it any more, it is asking where the
+	// skill goes. This is the ring the original shows, action 10 of
+	// cursors.spr.
+	if _, holding := state.Placing(); holding && !imgui.IsMouseDragging(imgui.MouseButtonRight) {
+		state.SetHoverEntity(nil)
+		g.uiBackend.SetCursorState(cursor.StateTarget)
+
+		return
+	}
+
 	switch {
 	// Rotating outranks everything. The camera is swinging, so whatever the
 	// pointer was over a moment ago is not where it is now, and the cursor
