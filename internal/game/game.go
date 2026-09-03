@@ -110,6 +110,10 @@ type Game struct {
 	// castSkills is --cast, waiting for the skill list.
 	castSkills []int
 
+	// systemCursorShown is the last state the system cursor was seen in, so
+	// its coming back is reported once rather than every frame.
+	systemCursorShown bool
+
 	// toggleBasicInfo is set for the frame Ctrl+V was pressed.
 	toggleBasicInfo bool
 
@@ -567,6 +571,7 @@ func (g *Game) frame() {
 	g.runMouseAt()
 	g.runOpenWindows()
 	g.runEquip()
+	g.watchSystemCursor()
 	g.runAttackNearest()
 	g.runCast()
 	g.runSay()
@@ -642,6 +647,33 @@ func (g *Game) runOpenWindows() {
 	}
 
 	g.openWindows = nil
+}
+
+// watchSystemCursor reports the system cursor coming back.
+//
+// The game draws RO's own, so the system one would be a second pointer beside
+// it. It is hidden at startup and imgui is told not to touch it, and this says
+// whether anything puts it back — logged on change only, since the answer is
+// usually "no" sixty times a second.
+func (g *Game) watchSystemCursor() {
+	shown, err := sdl.ShowCursor(sdl.QUERY)
+	if err != nil {
+		return
+	}
+
+	visible := shown == sdl.ENABLE
+	if visible == g.systemCursorShown {
+		return
+	}
+
+	g.systemCursorShown = visible
+	logger.Info("system cursor changed", zap.Bool("shown", visible))
+
+	if visible {
+		if _, err := sdl.ShowCursor(sdl.DISABLE); err != nil {
+			logger.Warn("could not hide the system cursor again", zap.Error(err))
+		}
+	}
 }
 
 // SetCastSkills records the skills --cast asked to be cast.
@@ -1068,12 +1100,14 @@ func (g *Game) renderUI() {
 		}
 
 		uiState := ui.InGameUIState{
-			MapName:         state.GetMapName(),
-			MapCellsX:       mapCellsX,
-			MapCellsY:       mapCellsY,
-			ChatLines:       state.ChatLines(),
-			EntityBars:      state.EntityBars(viewportWidth, viewportHeight),
-			WorldLabels:     state.WorldLabels(viewportWidth, viewportHeight),
+			MapName:    state.GetMapName(),
+			MapCellsX:  mapCellsX,
+			MapCellsY:  mapCellsY,
+			ChatLines:  state.ChatLines(),
+			EntityBars: state.EntityBars(viewportWidth, viewportHeight),
+			WorldLabels: append(
+				state.WorldLabels(viewportWidth, viewportHeight),
+				state.SkillLabels(viewportWidth, viewportHeight)...),
 			WorldEffects:    state.EffectQuads(viewportWidth, viewportHeight),
 			TargetMarker:    targetMarker,
 			DamageNumbers:   state.DamageNumbers(viewportWidth, viewportHeight),

@@ -154,3 +154,40 @@ func TestAClickOnNothingDropsATargetedSkill(t *testing.T) {
 		t.Error("the skill is still held after a click on nothing")
 	}
 }
+
+// TestOnlyHealingSkillsShowAFigure: rAthena writes the amount healed and the
+// skill level into the same field, so a level 10 Increase Agi sends a 10 that
+// means nothing. Shown as a figure it reads as ten hit points restored, which
+// is what it did.
+func TestOnlyHealingSkillsShowAFigure(t *testing.T) {
+	if !healSkills[28] {
+		t.Error("Heal does not show a figure")
+	}
+
+	for _, buff := range []uint16{
+		29, // AL_INCAGI
+		34, // AL_BLESSING
+		66, // PR_IMPOSITIO
+	} {
+		if healSkills[buff] {
+			t.Errorf("skill %d shows a figure, but its amount is a skill level", buff)
+		}
+	}
+}
+
+// TestSkillLabelsAgeOut: a name over somebody has to go away, or a fight
+// leaves the map covered in them.
+func TestSkillLabelsAgeOut(t *testing.T) {
+	s := &InGameState{}
+	s.skillLabels = []floatingSkillName{{text: "Increase AGI"}}
+
+	s.advanceSkillLabels(skillLabelLifeMs / 2)
+	if len(s.skillLabels) != 1 {
+		t.Fatal("the label went early")
+	}
+
+	s.advanceSkillLabels(skillLabelLifeMs)
+	if len(s.skillLabels) != 0 {
+		t.Errorf("%d labels outlived their time", len(s.skillLabels))
+	}
+}

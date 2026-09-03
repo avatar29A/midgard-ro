@@ -160,12 +160,112 @@ func (s *InGameState) applySkillUse(use packets.SkillUse) {
 		}
 	}
 
-	// What a skill restored, over whoever got it. Nothing else about a heal
-	// shows on screen — no flinch, no death, no figure — so without this a
-	// heal that worked and one that never fired look the same.
-	if use.Damage <= 0 && use.Amount > 0 && use.TargetID != 0 {
-		s.addHealNumber(use.TargetID, use.Amount)
+	// A skill that did no damage says so by name over whoever it went on,
+	// which is what the original does for a buff and the only sign most of
+	// them give.
+	//
+	// Except the ones that restore hit points, which show the figure instead.
+	// Nothing on the wire tells the two apart: rAthena writes the amount and
+	// the skill level into the same field, so Increase Agi at level 10 sends
+	// a 10 that means nothing and Heal sends the hit points. Which skills
+	// restore is the client's own knowledge, and healSkills is it.
+	if use.Damage > 0 || use.TargetID == 0 {
+		return
 	}
+
+	if healSkills[use.SkillID] && use.Amount > 0 {
+		s.addHealNumber(use.TargetID, use.Amount)
+
+		return
+	}
+
+	s.addSkillLabel(use.TargetID, use.SkillID)
+}
+
+// healSkills restore hit points, and show the figure rather than their name.
+//
+// Written out because nothing says it: the field rAthena puts the amount in is
+// the same one it puts a skill level in for everything else, and neither the
+// server's skill database nor the client's own table marks a skill as healing
+// — Heal and Increase Agi are both Support and both NoDamage. So this is a
+// list, and a skill that restores and is not on it shows its name instead,
+// which is wrong but not misleading.
+var healSkills = map[uint16]bool{
+	28:   true, // AL_HEAL
+	70:   true, // PR_SANCTUARY
+	231:  true, // AM_POTIONPITCHER
+	2051: true, // AB_HIGHNESSHEAL
+}
+
+// skillLabelLifeMs is how long a skill's name stays over whoever it went on.
+const skillLabelLifeMs = 1400
+
+// floatingSkillName is a skill's name over the unit it was cast on.
+type floatingSkillName struct {
+	text string
+
+	// Where it sits, in world space. It does not move — it is a label, not a
+	// figure thrown up from a blow.
+	x, y, z float32
+
+	ageMs float32
+}
+
+// addSkillLabel names a skill over whoever it was cast on.
+func (s *InGameState) addSkillLabel(targetID uint32, skillID uint16) {
+	name := skills.Name(skillID)
+	if name == "" {
+		return
+	}
+
+	body := s.bodyOf(targetID)
+	if body == nil {
+		return
+	}
+
+	top := body.RenderY
+	if e := s.entityOf(targetID); e != nil {
+		top = s.unitBox(e).Max[1]
+	}
+
+	s.skillLabels = append(s.skillLabels, floatingSkillName{
+		text: name,
+		x:    body.RenderX,
+		y:    top,
+		z:    body.RenderZ,
+	})
+}
+
+// advanceSkillLabels ages the names out.
+func (s *InGameState) advanceSkillLabels(deltaMs float32) {
+	if len(s.skillLabels) == 0 {
+		return
+	}
+
+	kept := s.skillLabels[:0]
+	for _, label := range s.skillLabels {
+		label.ageMs += deltaMs
+		if label.ageMs < skillLabelLifeMs {
+			kept = append(kept, label)
+		}
+	}
+
+	s.skillLabels = kept
+}
+
+// SkillLabels are the skill names to draw over the world this frame.
+func (s *InGameState) SkillLabels(viewportW, viewportH float32) []HoverLabel {
+	if len(s.skillLabels) == 0 {
+		return nil
+	}
+
+	labels := make([]HoverLabel, 0, len(s.skillLabels))
+	for _, label := range s.skillLabels {
+		x, y := s.projectToScreen(label.x, label.y, label.z, viewportW, viewportH)
+		labels = append(labels, HoverLabel{Text: label.text, ScreenX: x, ScreenY: y})
+	}
+
+	return labels
 }
 
 // UseSkillAt casts a skill at a cell.
