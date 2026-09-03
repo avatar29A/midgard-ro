@@ -1,6 +1,7 @@
 package states
 
 import (
+	"encoding/binary"
 	"strings"
 	"testing"
 
@@ -569,5 +570,110 @@ func TestAWaitingHitWaits(t *testing.T) {
 	s.advanceDelayedEffects(200)
 	if len(s.delayedEffects) != 0 {
 		t.Error("the hit never went off")
+	}
+}
+
+// TestACastHoldsTheCharacterStill: rAthena's unit_can_move is false while the
+// skill timer runs, so a walk asked for during a cast is refused. Asking
+// anyway left the character sliding along while the bar filled, predicting a
+// step no acknowledgement was coming for.
+func TestACastHoldsTheCharacterStill(t *testing.T) {
+	s := &InGameState{}
+
+	if s.Casting() {
+		t.Error("a character that has cast nothing is casting")
+	}
+
+	s.beginCast(14, 2000)
+	if !s.Casting() {
+		t.Fatal("a cast of two seconds is not a cast")
+	}
+
+	s.advanceCast(1999)
+	if !s.Casting() {
+		t.Error("the cast ended a millisecond early")
+	}
+
+	s.advanceCast(2)
+	if s.Casting() {
+		t.Error("the cast outlived its own length")
+	}
+}
+
+// TestAnInstantSkillDoesNotHoldStill: most skills have no cast at all, and a
+// character that could not walk for a frame after every one of them would
+// stutter its way across the map.
+func TestAnInstantSkillDoesNotHoldStill(t *testing.T) {
+	s := &InGameState{}
+	s.beginCast(5, 0)
+
+	if s.Casting() {
+		t.Error("an instant skill counts as a cast")
+	}
+}
+
+// cancelFor builds the packet the server sends when a cast comes to nothing.
+func cancelFor(who uint32) []byte {
+	pkt := make([]byte, 6)
+	binary.LittleEndian.PutUint16(pkt, packets.ZC_DISPEL)
+	binary.LittleEndian.PutUint32(pkt[2:], who)
+
+	return pkt
+}
+
+// TestACancelledCastLetsGo: the bar, the ring and the name all belong to a
+// cast that is running, and a cast that was broken is not.
+func TestACancelledCastLetsGo(t *testing.T) {
+	s, mob := withMob()
+	s.castAuras = []castingAura{{caster: mob.ID, leftMs: 1000, totalMs: 1000}}
+	s.addSkillLabel(mob.ID, 14, skillLabelLifeMs)
+
+	pkt := cancelFor(mob.ID)
+
+	if err := s.handleCastCancelled(pkt); err != nil {
+		t.Fatalf("handling: %v", err)
+	}
+
+	if len(s.castAuras) != 0 {
+		t.Errorf("%d rings still turning under a cast that was broken", len(s.castAuras))
+	}
+	if len(s.skillLabels) != 0 {
+		t.Errorf("%d names still over a cast that was broken", len(s.skillLabels))
+	}
+}
+
+// TestACancelForSomebodyElseLeavesOursAlone: the packet names who it was, and
+// two people can be casting at once.
+func TestACancelForSomebodyElseLeavesOursAlone(t *testing.T) {
+	s, mob := withMob()
+	s.beginCast(14, 2000)
+	s.castAuras = []castingAura{{caster: mob.ID, leftMs: 1000, totalMs: 1000}}
+
+	pkt := cancelFor(mob.ID)
+
+	if err := s.handleCastCancelled(pkt); err != nil {
+		t.Fatalf("handling: %v", err)
+	}
+
+	if !s.Casting() {
+		t.Error("somebody else's cast being broken stopped ours")
+	}
+	if len(s.castAuras) != 0 {
+		t.Error("their ring kept turning")
+	}
+}
+
+// TestAShortCancelPacketIsRefused: a truncated one would read an id out of
+// whatever came after it and stop a cast at random.
+func TestAShortCancelPacketIsRefused(t *testing.T) {
+	s := &InGameState{}
+	s.beginCast(14, 2000)
+
+	if err := s.handleCastCancelled([]byte{0xB9, 0x01, 0x00}); err != nil {
+		t.Fatalf("handling: %v", err)
+	}
+
+	if !s.Casting() {
+		t.Error("a short packet stopped the cast")
 	}
 }

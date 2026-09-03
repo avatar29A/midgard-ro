@@ -1411,6 +1411,7 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_NOTIFY_MOVEENTRY, s.handleEntityMove)
 	s.client.RegisterHandler(packets.ZC_NOTIFY_VANISH, s.handleEntityVanish)
 	s.client.RegisterHandler(packets.ZC_STATE_CHANGE, s.handleStateChange)
+	s.client.RegisterHandler(packets.ZC_DISPEL, s.handleCastCancelled)
 	s.client.RegisterHandler(packets.ZC_NPCACK_MAPMOVE, s.handleMapChange)
 	s.client.RegisterHandler(packets.ZC_NPCACK_SERVERMOVE, s.handleServerMove)
 	s.client.RegisterHandler(packets.ZC_NOTIFY_PLAYERMOVE, s.handlePlayerMove)
@@ -2387,6 +2388,17 @@ func (s *InGameState) RequestMove(tileX, tileY int) error {
 	// here, and a seated character that ignores the pointer entirely reads as
 	// one that has stopped responding.
 	if s.Sitting() {
+		s.faceCell(tileX, tileY)
+
+		return nil
+	}
+
+	// Nor does one in the middle of a cast. unit_can_move is false while the
+	// skill timer runs, so the server refuses the walk the same way, and the
+	// original gives no way to walk out of a cast: it lands, or something
+	// breaks it. Asking anyway left the character sliding along while the bar
+	// filled.
+	if s.Casting() {
 		s.faceCell(tileX, tileY)
 
 		return nil
