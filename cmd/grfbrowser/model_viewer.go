@@ -713,7 +713,7 @@ func decodeModelTexture(data []byte, path string, magentaKey bool) (*image.RGBA,
 
 	if strings.HasSuffix(lowerPath, ".tga") {
 		// TGA needs special handling
-		img, err = texture.DecodeTGA(data)
+		img, err = formats.DecodeImage(data)
 	} else {
 		// BMP, PNG, JPG - use standard decoder
 		img, _, err = image.Decode(bytes.NewReader(data))

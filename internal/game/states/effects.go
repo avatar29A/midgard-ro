@@ -139,11 +139,17 @@ func (s *InGameState) updateEffects(deltaMs float32) {
 // EffectQuads is everything to draw for the effects playing, projected into
 // the viewport.
 func (s *InGameState) EffectQuads(viewportW, viewportH float32) []EffectQuad {
-	if len(s.effects) == 0 || s.scene == nil || !s.SceneReady {
+	if s.scene == nil || !s.SceneReady {
 		return nil
 	}
 
-	var out []EffectQuad
+	// The bursts drawn in code go through the same path as the ones read from
+	// a file: both end as quads around a projected point.
+	out := s.burstQuads(viewportW, viewportH)
+
+	if len(s.effects) == 0 {
+		return out
+	}
 
 	for _, e := range s.effects {
 		originX, originY := s.projectToScreen(e.x, e.y, e.z, viewportW, viewportH)
@@ -153,7 +159,10 @@ func (s *InGameState) EffectQuads(viewportW, viewportH float32) []EffectQuad {
 
 		for _, quad := range effect.Frames(e.str, e.ageMs) {
 			placed := EffectQuad{
-				Texture:  quad.Texture,
+				// The whole path. A quad may draw a file out of the effect
+				// texture directory or a frame of a sprite, and the two are
+				// not in the same place.
+				Texture:  effectTexturePath + quad.Texture,
 				UV:       quad.UV,
 				Color:    quad.Color,
 				Additive: quad.Additive,
@@ -172,10 +181,6 @@ func (s *InGameState) EffectQuads(viewportW, viewportH float32) []EffectQuad {
 
 	return out
 }
-
-// EffectTexturePath is where an effect's textures live, for the interface to
-// load them from.
-func EffectTexturePath() string { return effectTexturePath }
 
 // Celebrating a level, which is an effect and a sound together.
 //
@@ -209,19 +214,39 @@ func (s *InGameState) updateCelebrations(deltaMs float32) {
 	s.celebrationWaitMs = s.effectDurationMs(levelUpEffect)
 
 	s.PlayEffectAt(levelUpEffect, s.player.RenderX, s.player.RenderY, s.player.RenderZ)
-	s.soundRequest = levelUpSound
+	s.playSound(levelUpSound)
 }
 
-// TakeSoundRequest returns a sound the game world wants played, and clears it.
-// The state has no audio device, so playing it is the caller's job — the same
-// split the interface has for the packets it cannot send.
-func (s *InGameState) TakeSoundRequest() (string, bool) {
-	path := s.soundRequest
-	if path == "" {
-		return "", false
+// TakeSounds returns every sound the world wants played this frame, and clears
+// them.
+//
+// A list rather than one: a skill going off asks for its own sound at the same
+// moment as the blow that carried it, and a single slot loses whichever came
+// second. The state has no audio device, so playing them is the caller's job —
+// the same split the interface has for the packets it cannot send.
+func (s *InGameState) TakeSounds() []string {
+	if len(s.sounds) == 0 {
+		return nil
 	}
 
-	s.soundRequest = ""
+	out := s.sounds
+	s.sounds = nil
 
-	return path, true
+	return out
+}
+
+// playSound asks for one, unless it is already asked for this frame — a skill
+// that hits three times should not play its sound three times over itself.
+func (s *InGameState) playSound(path string) {
+	if path == "" {
+		return
+	}
+
+	for _, already := range s.sounds {
+		if already == path {
+			return
+		}
+	}
+
+	s.sounds = append(s.sounds, path)
 }

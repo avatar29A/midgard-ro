@@ -154,7 +154,7 @@ func (s *InGameState) UseSkill(skillID uint16, level int) error {
 	// refused for want of a target.
 	if skill.Inf&(packets.InfSupport|packets.InfAttack) != 0 {
 		if skill.Inf&packets.InfAttack != 0 && s.targetID != 0 {
-			return s.castAt(skillID, level, s.targetID)
+			return s.castOrApproach(skillID, level, s.targetID)
 		}
 
 		s.BeginTargeting(skillID, level)
@@ -179,4 +179,11 @@ func (s *InGameState) findSkill(skillID uint16) (packets.Skill, bool) {
 	}
 
 	return packets.Skill{}, false
+}
+
+// HasSkill reports whether the server has told us the character knows one.
+func (s *InGameState) HasSkill(skillID uint16) bool {
+	_, known := s.findSkill(skillID)
+
+	return known
 }

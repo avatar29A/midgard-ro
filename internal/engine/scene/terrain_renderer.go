@@ -2,10 +2,8 @@
 package scene
 
 import (
-	"bytes"
 	"fmt"
 	"image"
-	"strings"
 	"unsafe"
 
 	"github.com/go-gl/gl/v4.1-core/gl"
@@ -148,7 +146,7 @@ func (tr *TerrainRenderer) loadGroundTextures(gnd *formats.GND, texLoader func(s
 			continue
 		}
 
-		img, err := tr.decodeTexture(data, texPath)
+		img, err := decodeMapTexture(data, texPath, true)
 		if err != nil {
 			tr.groundTextures[i] = fallbackTex
 			continue
@@ -158,23 +156,19 @@ func (tr *TerrainRenderer) loadGroundTextures(gnd *formats.GND, texLoader func(s
 	}
 }
 
-func (tr *TerrainRenderer) decodeTexture(data []byte, path string) (*image.RGBA, error) {
-	lowerPath := strings.ToLower(path)
-
-	var img image.Image
-	var err error
-
-	if strings.HasSuffix(lowerPath, ".tga") {
-		img, err = texture.DecodeTGA(data)
-	} else {
-		img, _, err = image.Decode(bytes.NewReader(data))
-	}
-
+// decodeMapTexture reads one of a map's textures and turns it into what the
+// GL upload wants.
+//
+// keyed says whether the magenta the archive uses for transparency should be
+// cut out. The water does not want it — its texture is a full sheet and the
+// key would punch holes in it — and everything else does.
+func decodeMapTexture(data []byte, path string, keyed bool) (*image.RGBA, error) {
+	img, err := formats.DecodeImage(data)
 	if err != nil {
 		return nil, fmt.Errorf("decode %s: %w", path, err)
 	}
 
-	return texture.ImageToRGBA(img, true), nil
+	return texture.ImageToRGBA(img, keyed), nil
 }
 
 func (tr *TerrainRenderer) uploadTexture(img *image.RGBA) uint32 {

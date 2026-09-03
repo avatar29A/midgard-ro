@@ -1,11 +1,12 @@
 package ui
 
 import (
-	"bytes"
 	"fmt"
 	"image"
 	"math"
 	"strings"
+
+	"github.com/Faultbox/midgard-ro/pkg/formats"
 
 	"go.uber.org/zap"
 
@@ -352,7 +353,7 @@ func (b *UI2DBackend) minimapArrows() []uint32 {
 		return nil
 	}
 
-	img, _, err := image.Decode(bytes.NewReader(data))
+	img, err := formats.DecodeImage(data)
 	if err != nil {
 		logger.Warn("minimap arrow will not decode", zap.Error(err))
 
