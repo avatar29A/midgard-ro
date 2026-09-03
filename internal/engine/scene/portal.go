@@ -96,6 +96,42 @@ func NewPortalRenderer() (*PortalRenderer, error) {
 }
 
 // discVertices is a unit quad on the ground, textured corner to corner.
+// tubeVertices is the wall of a unit tube: xz on the unit circle, y 0 at the
+// base and 1 at the top, wrapped once by the texture.
+//
+// The shader has always been able to draw one — it is written as a tube and
+// used with no height for the flat disc — and nothing had ever asked for the
+// standing form until the casting aura did. Two triangles a side, no caps: it
+// is a wall to look through, not a solid.
+func tubeVertices(sides int) []float32 {
+	if sides < 3 {
+		sides = 3
+	}
+
+	out := make([]float32, 0, sides*6*5)
+	for i := 0; i < sides; i++ {
+		a0 := 2 * gomath.Pi * float64(i) / float64(sides)
+		a1 := 2 * gomath.Pi * float64(i+1) / float64(sides)
+
+		x0, z0 := float32(gomath.Cos(a0)), float32(gomath.Sin(a0))
+		x1, z1 := float32(gomath.Cos(a1)), float32(gomath.Sin(a1))
+		u0 := float32(i) / float32(sides)
+		u1 := float32(i+1) / float32(sides)
+
+		out = append(out,
+			x0, 0, z0, u0, 1,
+			x1, 0, z1, u1, 1,
+			x1, 1, z1, u1, 0,
+
+			x0, 0, z0, u0, 1,
+			x1, 1, z1, u1, 0,
+			x0, 1, z0, u0, 0,
+		)
+	}
+
+	return out
+}
+
 func discVertices() []float32 {
 	return []float32{
 		-1, 0, -1, 0, 0,
