@@ -243,6 +243,11 @@ type InGameUIState struct {
 	// into viewport pixels.
 	EntityBars []states.EntityBar
 
+	// CastBar is the cast in progress under the caster's feet, and CastingNow
+	// whether there is one. Most skills are instant and have none.
+	CastBar    states.CastBar
+	CastingNow bool
+
 	// WorldLabels are the names drawn over the world — what the pointer is
 	// on, and the target being fought — already projected.
 	WorldLabels []states.HoverLabel
