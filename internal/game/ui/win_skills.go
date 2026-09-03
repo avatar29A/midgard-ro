@@ -138,10 +138,19 @@ func (b *UI2DBackend) drawSkillRows(state InGameUIState, x, y float32) {
 			r.DrawRect(row.X, row.Y, row.W, row.H, skillsChosenRow)
 		}
 
-		b.drawSkillRow(skill, listX, rowY, listW, state.SkillPoints > 0)
-		b.skillRowInput(skill, row)
-		b.beginSkillDrag(skill, row)
+		// A press on one of the level marks is a press on the mark, not on
+		// the row: without this it also picked the skill up, and the row came
+		// away on the pointer every time the level was changed.
+		overArrow := b.drawSkillRow(skill, listX, rowY, listW, state.SkillPoints > 0)
+
+		b.skillRowInput(skill, row, overArrow)
+
+		if !overArrow {
+			b.beginSkillDrag(skill, row)
+		}
 	}
+
+	b.scrollSkills(state, listX, listY, listW, listH, visible)
 }
 
 // drawSkillRow draws one skill: its icon, then its name over its level, with
@@ -149,7 +158,7 @@ func (b *UI2DBackend) drawSkillRows(state InGameUIState, x, y float32) {
 //
 // affordable is whether there is a point left to spend, which decides — with
 // the server's own Raisable — whether the row offers to spend one.
-func (b *UI2DBackend) drawSkillRow(skill packets.Skill, x, y, w float32, affordable bool) {
+func (b *UI2DBackend) drawSkillRow(skill packets.Skill, x, y, w float32, affordable bool) (overArrow bool) {
 	r := b.ctx.Renderer()
 
 	b.drawSkillIcon(skill.ID, x, y+(skillsRowH-skillsIcon)/2)
@@ -169,7 +178,7 @@ func (b *UI2DBackend) drawSkillRow(skill packets.Skill, x, y, w float32, afforda
 	top := y + (skillsRowH-(2*lineH+skillsLineGap))/2
 
 	r.DrawText(textX, top, fitTextEnd(r, name, skillsTextScale, textW), skillsTextScale, ui2d.ColorText)
-	b.drawSkillLevel(skill, textX, top+lineH+skillsLineGap, lineH)
+	overArrow = b.drawSkillLevel(skill, textX, top+lineH+skillsLineGap, lineH)
 
 	// A skill that targets nothing is passive and has no cost to show.
 	cost := "Passive"
@@ -187,12 +196,14 @@ func (b *UI2DBackend) drawSkillRow(skill packets.Skill, x, y, w float32, afforda
 	// worked out here: prerequisites, job and ceiling all feed Raisable, and
 	// none of them are knowable from the packet alone.
 	if !affordable || !skill.Raisable {
-		return
+		return overArrow
 	}
 
 	if b.drawSkillRaise(skill.ID, x+w-skillsRaiseW, top+(lineH-skillsRaiseW)/2) {
 		b.skillAction = SkillAction{Skill: skill.ID}
 	}
+
+	return overArrow
 }
 
 // beginSkillDrag starts dragging a skill out of its row, so it can be put on
@@ -372,6 +383,12 @@ var (
 	// as the level changes.
 	skillsArrowOff = ui2d.Color{R: 0.66, G: 0.66, B: 0.70, A: 1}
 
+	// skillsArrowHot is a mark under the pointer. Darker than the text rather
+	// than brighter: the status window's marks are images on a dark panel and
+	// a pale tint lifts them, but these are letters on a white body, where
+	// pale is invisible — which is what they went when pressed.
+	skillsArrowHot = ui2d.Color{R: 0.13, G: 0.32, B: 0.78, A: 1}
+
 	// skillsIconBg is the sunken square an icon sits in.
 	skillsIconBg = ui2d.Color{R: 0.85, G: 0.85, B: 0.87, A: 1}
 )
@@ -408,7 +425,7 @@ func (b *UI2DBackend) skillCastLevel(skill packets.Skill) int {
 //
 // A passive skill and a skill known at level one both have nothing to pick, so
 // they show the level plainly. Marks that do nothing are worse than none.
-func (b *UI2DBackend) drawSkillLevel(skill packets.Skill, x, y, lineH float32) {
+func (b *UI2DBackend) drawSkillLevel(skill packets.Skill, x, y, lineH float32) (overArrow bool) {
 	r := b.ctx.Renderer()
 
 	level := b.skillCastLevel(skill)
@@ -416,23 +433,28 @@ func (b *UI2DBackend) drawSkillLevel(skill packets.Skill, x, y, lineH float32) {
 	if skill.Inf == 0 || skill.Level <= 1 {
 		r.DrawText(x, y, "Lv : "+strconv.Itoa(skill.Level), skillsTextScale, ui2d.ColorText)
 
-		return
+		return false
 	}
 
 	text := "Lv : " + strconv.Itoa(level) + " / " + strconv.Itoa(skill.Level)
 	textW, _ := r.MeasureText(text, skillsTextScale)
 
-	if b.drawSkillLevelArrow(skill.ID, "down", "<", x, y, lineH, level > 1) {
+	down := ui2d.Rect{X: x, Y: y, W: skillsLevelArrowW, H: lineH}
+	if b.drawSkillLevelArrow(skill.ID, "down", "<", down, level > 1) {
 		b.setSkillLevel(skill.ID, level-1)
 	}
 
 	textX := x + skillsLevelArrowW + skillsLineGap
 	r.DrawText(textX, y, text, skillsTextScale, ui2d.ColorText)
 
-	if b.drawSkillLevelArrow(skill.ID, "up", ">", textX+textW+skillsLineGap, y, lineH,
-		level < skill.Level) {
+	up := ui2d.Rect{X: textX + textW + skillsLineGap, Y: y, W: skillsLevelArrowW, H: lineH}
+	if b.drawSkillLevelArrow(skill.ID, "up", ">", up, level < skill.Level) {
 		b.setSkillLevel(skill.ID, level+1)
 	}
+
+	in := b.ctx.Input()
+
+	return down.Contains(in.MouseX, in.MouseY) || up.Contains(in.MouseX, in.MouseY)
 }
 
 // setSkillLevel records what a skill is set to go off at.
@@ -449,15 +471,14 @@ func (b *UI2DBackend) setSkillLevel(id uint16, level int) {
 // One that would go past either end is drawn faded and does nothing: the
 // original greys them out rather than hiding them, so the pair stays where it
 // was and the row does not shuffle as the level changes.
-func (b *UI2DBackend) drawSkillLevelArrow(id uint16, which, mark string, x, y, lineH float32, live bool) bool {
+func (b *UI2DBackend) drawSkillLevelArrow(id uint16, which, mark string, box ui2d.Rect, live bool) bool {
 	r := b.ctx.Renderer()
-	box := ui2d.Rect{X: x, Y: y, W: skillsLevelArrowW, H: lineH}
 
 	color := skillsArrowOff
 	if live {
 		color = ui2d.ColorText
 		if box.Contains(b.ctx.Input().MouseX, b.ctx.Input().MouseY) {
-			color = statsArrowHot
+			color = skillsArrowHot
 		}
 	}
 
@@ -478,8 +499,12 @@ func (b *UI2DBackend) drawSkillLevelArrow(id uint16, which, mark string, x, y, l
 // A press chooses the skill, which is what the use button acts on, and a
 // double click casts it there and then — the same two ways the original lets
 // a skill be used from this window.
-func (b *UI2DBackend) skillRowInput(skill packets.Skill, row ui2d.Rect) {
+func (b *UI2DBackend) skillRowInput(skill packets.Skill, row ui2d.Rect, overArrow bool) {
 	in := b.ctx.Input()
+
+	if overArrow {
+		return
+	}
 
 	if in.MouseLeftPressed && row.Contains(in.MouseX, in.MouseY) {
 		b.skillChosen = skill.ID
@@ -562,4 +587,23 @@ func (b *UI2DBackend) chosenSkill(state InGameUIState) (packets.Skill, bool) {
 	// A passive skill is not cast at all — there is nothing to send, and the
 	// server would refuse it — so the button offers nothing for one.
 	return skill, skill.Inf != 0
+}
+
+// scrollSkills moves the list under the wheel.
+//
+// Over the list rather than over the window: the wheel belongs to what is
+// under it, and a window that scrolled while the pointer was on its footer
+// would move under a button being aimed at.
+func (b *UI2DBackend) scrollSkills(state InGameUIState, listX, listY, listW, listH float32, visible int) {
+	in := b.ctx.Input()
+	if in == nil || in.ScrollY == 0 {
+		return
+	}
+
+	if !(ui2d.Rect{X: listX, Y: listY, W: listW, H: listH}).Contains(in.MouseX, in.MouseY) {
+		return
+	}
+
+	maxOffset := max(0, len(state.Skills)-visible)
+	b.skillScroll = min(max(b.skillScroll-int(in.ScrollY), 0), maxOffset)
 }

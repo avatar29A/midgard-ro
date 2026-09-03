@@ -664,6 +664,21 @@ func BuildSheet(bodySPR *formats.SPR, bodyACT *formats.ACT, headSPR *formats.SPR
 		if idx < len(bodyACT.Actions) {
 			sheet.HitFrame[action], sheet.HitSound[action] =
 				hitFrame(bodyACT.Actions[idx].Frames, bodyACT.Events)
+
+			// The blow's sound comes off the weapon rather than the body. A
+			// body's own ACT names the sounds its weapons make — a Mage's
+			// lists attack_rod and attack_short_sword — but no frame of it
+			// ever plays one, because which of them it is depends on what is
+			// being swung. The weapon's ACT is where a frame asks for it, and
+			// without this every blow a character struck was silent.
+			//
+			// The frame stays the body's: that is where the atk mark is, and
+			// it is the body that decides when the blow lands.
+			if weaponACT != nil && idx < len(weaponACT.Actions) {
+				if _, sound := hitFrame(weaponACT.Actions[idx].Frames, weaponACT.Events); sound != "" {
+					sheet.HitSound[action] = sound
+				}
+			}
 		}
 	}
 
