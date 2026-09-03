@@ -1,6 +1,8 @@
 package states
 
 import (
+	"fmt"
+
 	"go.uber.org/zap"
 
 	"strings"
@@ -80,12 +82,15 @@ func (s *InGameState) handleSkillCast(data []byte) error {
 
 	s.beginCastAura(cast)
 
-	// What a cast sounds like. Only for a cast that takes time: an instant
-	// skill's sound is the skill's own, played when it goes off.
+	// What a cast sounds like, and its name over the caster's head for as
+	// long as it runs. Only for a cast that takes time: an instant skill's
+	// sound and name are the skill's own, shown when it goes off.
 	if cast.CastMs > 0 {
 		if effects, known := skills.EffectsOf(cast.SkillID); known {
 			s.playSkillSounds(effects.BeginCast)
 		}
+
+		s.addSkillLabel(cast.SourceID, cast.SkillID, float32(cast.CastMs))
 	}
 
 	// No motion yet. The sprite has cast poses and the client's own table
@@ -177,34 +182,94 @@ func (s *InGameState) applySkillUse(use packets.SkillUse) {
 		}
 	}
 
-	// A skill that did no damage says so by name over whoever it went on,
-	// which is what the original does for a buff and the only sign most of
-	// them give.
-	//
-	// Except the ones that restore hit points, which show the figure instead.
-	// Nothing on the wire tells the two apart: rAthena writes the amount and
-	// the skill level into the same field, so Increase Agi at level 10 sends
-	// a 10 that means nothing and Heal sends the hit points. Which skills
-	// restore is the client's own knowledge, and healSkills is it.
-	if use.Damage > 0 {
-		return
-	}
+	s.reportSkill(use, s.selfAID())
 
-	// Over whoever it went on, or over the caster when it went on nobody — a
-	// skill placed on the ground and one cast on the world at large both name
-	// themselves over the character that cast them.
-	over := use.TargetID
-	if over == 0 {
-		over = use.SourceID
-	}
+	// Every skill shouts its name over the caster, damaging or not. It is the
+	// original's own sign that something was cast, and for most buffs it is
+	// the only one.
+	s.addSkillLabel(use.SourceID, use.SkillID, skillLabelLifeMs)
 
-	if healSkills[use.SkillID] && use.Amount > 0 {
+	// The ones that restore hit points also show the figure, over whoever
+	// they restored. Nothing on the wire tells them apart from a buff:
+	// rAthena writes the amount and the skill level into the same field, so
+	// Increase Agi at level 10 sends a 10 that means nothing and Heal sends
+	// the hit points. Which skills restore is the client's own knowledge, and
+	// healSkills is it.
+	if use.Damage == 0 && healSkills[use.SkillID] && use.Amount > 0 {
+		over := use.TargetID
+		if over == 0 {
+			over = use.SourceID
+		}
+
 		s.addHealNumber(over, use.Amount)
+	}
+}
 
+// The battle log.
+//
+// The chat box has had a Battle tab and a color for its lines since it was
+// written and nothing ever put anything in it. A skill going off is the first
+// thing worth writing there: what it hit and for how much is otherwise a
+// number that floats up and is gone, and what it cost is not shown anywhere at
+// all.
+
+// reportSkill writes what a skill did to the battle tab, when it is ours or it
+// was aimed at us. Somebody else's fight across the field is not our log.
+func (s *InGameState) reportSkill(use packets.SkillUse, self uint32) {
+	if self == 0 {
 		return
 	}
 
-	s.addSkillLabel(over, use.SkillID)
+	name := skills.Name(use.SkillID)
+	if name == "" {
+		name = "A skill"
+	}
+
+	switch {
+	case use.SourceID == self:
+		// What it cost, out of the skill list. The server's own figure for
+		// the level we hold it at, rather than a table of the client's that
+		// disagrees with it for twenty skills.
+		if skill, known := s.findSkill(use.SkillID); known && skill.SP > 0 {
+			s.chat.AddLocal(ChatDamage, fmt.Sprintf("%s: %d SP.", name, skill.SP))
+		}
+
+		if use.Damage > 0 {
+			s.chat.AddLocal(ChatDamage, fmt.Sprintf("%s on %s: %s.",
+				name, s.unitName(use.TargetID, self), damageFigure(use.Damage, use.Hits)))
+		}
+
+	case use.TargetID == self && use.Damage > 0:
+		s.chat.AddLocal(ChatDamage, fmt.Sprintf("%s's %s on you: %s.",
+			s.unitName(use.SourceID, self), name, damageFigure(use.Damage, use.Hits)))
+	}
+}
+
+// damageFigure is what a blow did, and over how many hits when it was more
+// than one. A bolt skill's figure is the total of its bolts, and reading it as
+// a single hit understates what each one did by ten.
+func damageFigure(damage, hits int) string {
+	if hits > 1 {
+		return fmt.Sprintf("%d damage over %d hits", damage, hits)
+	}
+
+	return fmt.Sprintf("%d damage", damage)
+}
+
+// unitName is what to call somebody in a line of the log.
+func (s *InGameState) unitName(id, self uint32) string {
+	switch id {
+	case 0:
+		return "nobody"
+	case self:
+		return "you"
+	}
+
+	if e := s.entityOf(id); e != nil && e.Name != "" {
+		return e.Name
+	}
+
+	return "something"
 }
 
 // healSkills restore hit points, and show the figure rather than their name.
@@ -222,8 +287,16 @@ var healSkills = map[uint16]bool{
 	2051: true, // AB_HIGHNESSHEAL
 }
 
-// skillLabelLifeMs is how long a skill's name stays over whoever it went on.
+// skillLabelLifeMs is how long a skill's name stays over its caster once the
+// skill has gone off.
 const skillLabelLifeMs = 1400
+
+// skillLabelRise is how far above the head the name floats.
+//
+// Clear of the casting bar, which is drawn ten pixels above the head and six
+// tall: the name is shown while the cast runs, and the two would otherwise be
+// printed over each other.
+const skillLabelRise = float32(34)
 
 // floatingSkillName is a skill's name over the unit it was cast on.
 //
@@ -235,27 +308,37 @@ type floatingSkillName struct {
 	text   string
 	target uint32
 
-	ageMs float32
+	ageMs  float32
+	lifeMs float32
 }
 
-// addSkillLabel names a skill over whoever it was cast on.
-func (s *InGameState) addSkillLabel(targetID uint32, skillID uint16) {
+// addSkillLabel shouts a skill's name over its caster, for as long as asked.
+//
+// Over the caster rather than over what it was cast on: the original puts the
+// name where the shout comes from, so a Heal on somebody else names itself
+// over the healer while the figure goes over the healed.
+func (s *InGameState) addSkillLabel(casterID uint32, skillID uint16, lifeMs float32) {
 	name := skills.Name(skillID)
-	if name == "" || s.bodyOf(targetID) == nil {
+	if name == "" || s.bodyOf(casterID) == nil {
 		return
 	}
 
-	// One name at a time over the same head. Two buffs in a row would
-	// otherwise stack into an unreadable pile.
+	// The original's own punctuation. A skill going off is a shout, and the
+	// two marks are how it reads as one.
+	label := floatingSkillName{text: name + " !!", target: casterID, lifeMs: lifeMs}
+
+	// One name at a time over the same head. Two skills in a row would
+	// otherwise stack into an unreadable pile — and a cast that finishes
+	// replaces the name it was showing while it ran.
 	for i := range s.skillLabels {
-		if s.skillLabels[i].target == targetID {
-			s.skillLabels[i] = floatingSkillName{text: name, target: targetID}
+		if s.skillLabels[i].target == casterID {
+			s.skillLabels[i] = label
 
 			return
 		}
 	}
 
-	s.skillLabels = append(s.skillLabels, floatingSkillName{text: name, target: targetID})
+	s.skillLabels = append(s.skillLabels, label)
 }
 
 // advanceSkillLabels ages the names out.
@@ -270,7 +353,7 @@ func (s *InGameState) advanceSkillLabels(deltaMs float32) {
 
 		// Gone with whoever it was over: a name floating where a monster used
 		// to stand is worse than no name.
-		if label.ageMs < skillLabelLifeMs && s.bodyOf(label.target) != nil {
+		if label.ageMs < label.lifeMs && s.bodyOf(label.target) != nil {
 			kept = append(kept, label)
 		}
 	}
@@ -302,7 +385,7 @@ func (s *InGameState) SkillLabels(viewportW, viewportH float32) []HoverLabel {
 		}
 
 		x, y := s.projectToScreen(body.RenderX, top, body.RenderZ, viewportW, viewportH)
-		labels = append(labels, HoverLabel{Text: label.text, ScreenX: x, ScreenY: y})
+		labels = append(labels, HoverLabel{Text: label.text, ScreenX: x, ScreenY: y - skillLabelRise})
 	}
 
 	return labels
