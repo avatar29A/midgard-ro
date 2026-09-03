@@ -32,6 +32,7 @@ var (
 	flagEquip      = flag.String("equip", "", "Once in game, wear the items in these inventory slots, e.g. 7,8 (QA aid)")
 	flagAttack     = flag.Bool("attack-nearest", false, "Once in game, attack the nearest monster (QA aid)")
 	flagCast       = flag.String("cast", "", "Once in game, cast these skills by id, e.g. 5,28 (QA aid)")
+	flagCastAura   = flag.Bool("cast-aura", false, "Keep the casting ring under the character, to look at it (QA aid)")
 
 	flagSay sayLines
 )
@@ -109,6 +110,14 @@ func AttackNearest() bool {
 // regression over a whole job's skills needs.
 func CastSkills() []int {
 	return intList(*flagCast)
+}
+
+// HoldCastAura reports whether --cast-aura asked for the casting ring to stay.
+//
+// An effect that lasts as long as a cast is hard to judge in the second or two
+// it is on screen, and most casts are shorter than that. This holds it still.
+func HoldCastAura() bool {
+	return *flagCastAura
 }
 
 // EquipSlots returns the inventory slots --equip asked to be worn.

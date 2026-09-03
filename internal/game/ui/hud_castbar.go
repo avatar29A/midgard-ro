@@ -18,9 +18,10 @@ const (
 	castBarW = float32(70)
 	castBarH = float32(6)
 
-	// castBarDrop is how far below the feet it sits — under the health bars,
-	// which take entityBarHSP at their tallest.
-	castBarDrop = entityBarDrop + entityBarHSP + 3
+	// castBarRise is how far above the head it sits. Above rather than below:
+	// the ring the cast draws on the ground is already under the feet, and a
+	// bar down there reads as part of it.
+	castBarRise = float32(10)
 )
 
 var (
@@ -32,7 +33,7 @@ var (
 // drawCastBar puts the cast in progress under the caster.
 func (b *UI2DBackend) drawCastBar(bar states.CastBar) {
 	x := bar.ScreenX - castBarW/2
-	y := bar.ScreenY + castBarDrop
+	y := bar.ScreenY - castBarRise - castBarH
 
 	r := b.ctx.Renderer()
 

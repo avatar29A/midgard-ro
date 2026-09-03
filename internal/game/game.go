@@ -110,6 +110,9 @@ type Game struct {
 	// castSkills is --cast, waiting for the skill list.
 	castSkills []int
 
+	// holdCastAura is --cast-aura, waiting for the map.
+	holdCastAura bool
+
 	// toggleBasicInfo is set for the frame Ctrl+V was pressed.
 	toggleBasicInfo bool
 
@@ -569,6 +572,7 @@ func (g *Game) frame() {
 	g.runEquip()
 	g.runAttackNearest()
 	g.runCast()
+	g.runHoldCastAura()
 	g.runSay()
 
 	// Render 3D scene (if applicable)
@@ -642,6 +646,26 @@ func (g *Game) runOpenWindows() {
 	}
 
 	g.openWindows = nil
+}
+
+// SetHoldCastAura keeps the casting ring on, for --cast-aura.
+func (g *Game) SetHoldCastAura() {
+	g.holdCastAura = true
+}
+
+// runHoldCastAura turns it on once the map is up.
+func (g *Game) runHoldCastAura() {
+	if !g.holdCastAura {
+		return
+	}
+
+	state, ok := g.stateManager.Current().(*states.InGameState)
+	if !ok || !state.MapReady() {
+		return
+	}
+
+	state.HoldCastAura()
+	g.holdCastAura = false
 }
 
 // SetCastSkills records the skills --cast asked to be cast.
