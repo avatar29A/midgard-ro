@@ -9,17 +9,17 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Faultbox/midgard-ro/pkg/formats"
+
 	"github.com/AllenDang/cimgui-go/backend"
 	"github.com/AllenDang/cimgui-go/imgui"
 	"golang.org/x/text/encoding/korean"
 	"golang.org/x/text/transform"
-
-	"github.com/Faultbox/midgard-ro/internal/engine/texture"
 )
 
 // decodeTGA decodes a TGA image file using the texture package.
 func decodeTGA(data []byte) (image.Image, error) {
-	return texture.DecodeTGA(data)
+	return formats.DecodeImage(data)
 }
 
 // loadImagePreview loads an image file (BMP, TGA, JPG, PNG) for preview.
