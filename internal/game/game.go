@@ -695,33 +695,25 @@ func (g *Game) blankSystemCursor() {
 	sdl.SetCursor(cursor)
 }
 
-// hideSystemCursor keeps the system pointer out of the way, every frame.
+// hideSystemCursor keeps the system pointer out of the way.
 //
-// Once is not enough and neither is once per focus. On macOS SDL_ShowCursor
-// goes through AppKit's [NSCursor hide], and AppKit undoes it both when the
-// window is activated and when the mouse moves. SDL is never told, so it
-// believes the cursor is still hidden — measured: SDL reports hidden, reports
-// our own blank cursor as the active one, imgui carries NoMouseCursorChange
-// and draws none of its own, and the pointer is on screen regardless. Asking
-// SDL to hide it again does nothing, because it returns early on a state it
-// thinks it is already in.
+// The hide alone does not hold. On macOS SDL_ShowCursor goes through AppKit's
+// [NSCursor hide], and AppKit undoes it when the window is activated and again
+// when the mouse moves; SDL is never told, so it believes the cursor is still
+// hidden and hiding it again returns early on a state it thinks it is in.
 //
-// So the hide is forced through by toggling: shown, then hidden. That would
-// flicker if the cursor being shown were an arrow — which is the other half of
-// why the cursor is blank. Showing nothing for the part of a frame between the
-// two calls costs nothing to look at.
+// Forcing it through by toggling — shown, then hidden — made it worse rather
+// than better: while the mouse is moving, the pointer is on screen for the
+// part of every frame between the two calls, which is exactly when it is being
+// looked at. So no toggle. What holds instead is the cursor itself being
+// empty: whatever AppKit puts back, what it puts back is one transparent
+// pixel. This only re-asserts that, and only when something has replaced it.
 func (g *Game) hideSystemCursor() {
-	if g.blankCursor != nil && sdl.GetCursor() != g.blankCursor {
-		sdl.SetCursor(g.blankCursor)
-	}
-
-	if _, err := sdl.ShowCursor(sdl.ENABLE); err != nil {
+	if g.blankCursor == nil || sdl.GetCursor() == g.blankCursor {
 		return
 	}
 
-	//nolint:errcheck // A cosmetic failure, and warning about it every frame
-	// would be worse than the cursor.
-	sdl.ShowCursor(sdl.DISABLE)
+	sdl.SetCursor(g.blankCursor)
 }
 
 // SetCastSkills records the skills --cast asked to be cast.
