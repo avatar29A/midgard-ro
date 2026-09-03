@@ -21,7 +21,10 @@ const (
 	// castBarRise is how far above the head it sits. Above rather than below:
 	// the ring the cast draws on the ground is already under the feet, and a
 	// bar down there reads as part of it.
-	castBarRise = float32(10)
+	//
+	// Just above, because the skill's name is shown at the same time and goes
+	// above that — see skillLabelRise, which is set to clear this.
+	castBarRise = float32(2)
 )
 
 var (

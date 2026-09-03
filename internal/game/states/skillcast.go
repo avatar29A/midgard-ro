@@ -293,10 +293,12 @@ const skillLabelLifeMs = 1400
 
 // skillLabelRise is how far above the head the name floats.
 //
-// Clear of the casting bar, which is drawn ten pixels above the head and six
-// tall: the name is shown while the cast runs, and the two would otherwise be
-// printed over each other.
-const skillLabelRise = float32(34)
+// Clear of the casting bar, which sits just above the head: the name is shown
+// while the cast runs, and the two would otherwise be printed over each
+// other. The plate hangs below its anchor by the same drop a monster's name
+// does, so this is the height of the plate plus the bar plus a gap rather
+// than a number picked to look right.
+const skillLabelRise = float32(44)
 
 // floatingSkillName is a skill's name over the unit it was cast on.
 //

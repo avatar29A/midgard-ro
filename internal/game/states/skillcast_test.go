@@ -406,15 +406,23 @@ func TestACastLabelLastsTheCast(t *testing.T) {
 	}
 }
 
-// TestTheCastLabelClearsTheCastBar: the bar is drawn ten pixels above the head
-// and six tall, and the name is shown at the same time. Printed at the same
-// height they would be printed over each other.
+// TestTheCastLabelClearsTheCastBar: the bar sits just above the head and the
+// name is shown at the same time, so the name has to rise past both the bar
+// and the drop its own plate hangs by. Printed at the same height the two are
+// printed over each other, which is what they were.
 func TestTheCastLabelClearsTheCastBar(t *testing.T) {
-	const castBarTop = 16
+	// The bar's top, and the drop the plate hangs below its anchor by. Both
+	// live in the interface package, which this one cannot see; they are
+	// repeated here so a change to either shows up as a failure.
+	const (
+		castBarTop = 2 + 6
+		plateDrop  = 4 + 9 + 3
+		plateHigh  = 16
+	)
 
-	if skillLabelRise <= castBarTop {
-		t.Errorf("the name rises %v, which is not clear of the bar at %v",
-			skillLabelRise, castBarTop)
+	if bottom := plateDrop + plateHigh - skillLabelRise; bottom > -castBarTop {
+		t.Errorf("the name ends %v below the head and the bar starts %v below it",
+			bottom, -castBarTop)
 	}
 }
 
