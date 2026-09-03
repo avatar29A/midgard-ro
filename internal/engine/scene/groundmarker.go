@@ -20,6 +20,21 @@ import (
 // the cell, not the pointer.
 const GroundMarkerTexture = "data/texture/grid.tga"
 
+// CastAuraTexture is the ring that lies under somebody casting.
+//
+// The yellow ring the original's EF_BEGINSPELL is built from. It is filed
+// under a later skill's folder rather than loose in the effect directory,
+// which is where nostalro-client's port of that effect names it too.
+const CastAuraTexture = "data/texture/effect/pneumaticusprocella/pneumaticusprocella_cast/ring_yellow.tga"
+
+// CastAuraTint is the color of that ring — white with the blue pulled down,
+// which is the [1, 1, 170/255] nostalro-client reads out of the original.
+var CastAuraTint = [4]float32{1.0, 1.0, 170.0 / 255.0, 0.85}
+
+// CastAuraSides is how many faces the ring is cut into. Twenty, which is what
+// nostalro-client's port of the same effect uses for its cones.
+const CastAuraSides = 20
+
 // The marker covers exactly one cell, lifted clear of the terrain it lies on.
 const (
 	// markerLift keeps the quad out of the depth buffer's way, the same
@@ -63,6 +78,15 @@ type GroundMarker struct {
 	vao, vbo uint32
 	verts    int32
 
+	// texturePath is what LoadTexture reads, and tint the color the white
+	// mask in it is drawn as.
+	texturePath string
+	tint        [4]float32
+
+	// tubeSides is how many faces a standing one is cut into, zero for a flat
+	// one.
+	tubeSides int
+
 	tex uint32
 }
 
@@ -71,7 +95,29 @@ type GroundMarker struct {
 //
 // Must be called on the GL thread.
 func NewGroundMarker() (*GroundMarker, error) {
-	m := &GroundMarker{}
+	return NewGroundQuad(GroundMarkerTexture, markerTint)
+}
+
+// NewGroundQuad is the marker's machinery with another texture and color on
+// it: a flat quad on the ground at a world position, sized and faded by the
+// caller.
+//
+// The casting aura is the same thing as the cell marker — a ring lying on the
+// terrain under somebody — and building it a second renderer of its own would
+// be two copies of the same shader, the same mesh and the same depth lift.
+func NewGroundQuad(texturePath string, tint [4]float32) (*GroundMarker, error) {
+	return newQuad(texturePath, tint, 0)
+}
+
+// NewTube is the same again standing up: a wall of quads around a point,
+// which is what an effect that surrounds somebody is made of. Sides is how
+// many faces the circle is cut into.
+func NewTube(texturePath string, tint [4]float32, sides int) (*GroundMarker, error) {
+	return newQuad(texturePath, tint, sides)
+}
+
+func newQuad(texturePath string, tint [4]float32, sides int) (*GroundMarker, error) {
+	m := &GroundMarker{texturePath: texturePath, tint: tint, tubeSides: sides}
 
 	program, err := shader.CompileProgram(shaders.PortalVertexShader, shaders.PortalFragmentShader)
 	if err != nil {
@@ -88,9 +134,12 @@ func NewGroundMarker() (*GroundMarker, error) {
 	m.locTexture = shader.GetUniform(program, "uTexture")
 	m.locTint = shader.GetUniform(program, "uTint")
 
-	// The same unit quad the portal's disc uses: flat on the ground, textured
-	// corner to corner.
-	m.vao, m.vbo, m.verts = uploadMesh5(discVertices())
+	// Flat on the ground, or standing around a point.
+	if sides > 0 {
+		m.vao, m.vbo, m.verts = uploadMesh5(tubeVertices(sides))
+	} else {
+		m.vao, m.vbo, m.verts = uploadMesh5(discVertices())
+	}
 
 	return m, nil
 }
@@ -105,14 +154,14 @@ func (m *GroundMarker) LoadTexture(load func(string) ([]byte, error)) error {
 		return nil
 	}
 
-	data, err := load(GroundMarkerTexture)
+	data, err := load(m.texturePath)
 	if err != nil {
-		return fmt.Errorf("ground marker texture %q: %w", GroundMarkerTexture, err)
+		return fmt.Errorf("ground quad texture %q: %w", m.texturePath, err)
 	}
 
 	img, err := texture.DecodeTGA(data)
 	if err != nil {
-		return fmt.Errorf("decode %q: %w", GroundMarkerTexture, err)
+		return fmt.Errorf("decode %q: %w", m.texturePath, err)
 	}
 
 	bounds := img.Bounds()
@@ -148,6 +197,44 @@ func MarkerScale(progress float32) float32 {
 	return 1 + markerPulseScale*arch
 }
 
+// RenderTube draws a standing one: a wall of the given height around a point,
+// its radius growing from bottom to top so it leans outward the way the
+// original's cast aura does.
+func (m *GroundMarker) RenderTube(viewProj math.Mat4, x, y, z, bottom, top, height, alpha float32) {
+	if !m.Ready() || alpha <= 0 {
+		return
+	}
+
+	gl.UseProgram(m.program)
+	gl.Enable(gl.BLEND)
+
+	// Added to what is behind it rather than blended over it: this is light,
+	// and the original's is additive too. The alpha channel is left alone for
+	// the reason the flat one leaves it alone.
+	gl.BlendFuncSeparate(gl.SRC_ALPHA, gl.ONE, gl.ZERO, gl.ONE)
+	gl.DepthMask(false)
+	gl.Disable(gl.CULL_FACE)
+
+	gl.UniformMatrix4fv(m.locViewProj, 1, false, &viewProj[0])
+	gl.Uniform3f(m.locPosition, x, y+markerLift, z)
+	gl.Uniform1f(m.locBottomSize, bottom)
+	gl.Uniform1f(m.locTopSize, top)
+	gl.Uniform1f(m.locHeight, height)
+	gl.Uniform1f(m.locSpin, 0)
+	gl.Uniform4f(m.locTint, m.tint[0], m.tint[1], m.tint[2], m.tint[3]*alpha)
+
+	gl.ActiveTexture(gl.TEXTURE0)
+	gl.BindTexture(gl.TEXTURE_2D, m.tex)
+	gl.Uniform1i(m.locTexture, 0)
+
+	gl.BindVertexArray(m.vao)
+	gl.DrawArrays(gl.TRIANGLES, 0, m.verts)
+	gl.BindVertexArray(0)
+
+	gl.DepthMask(true)
+	gl.Disable(gl.BLEND)
+}
+
 // Render draws the marker flat on the ground at a world position.
 //
 // size is the cell's width in world units; pulse runs 0 to 1 across the click
@@ -178,7 +265,7 @@ func (m *GroundMarker) Render(viewProj math.Mat4, x, y, z, size, pulse, alpha fl
 	gl.Uniform1f(m.locTopSize, half)
 	gl.Uniform1f(m.locHeight, 0)
 	gl.Uniform1f(m.locSpin, 0)
-	gl.Uniform4f(m.locTint, markerTint[0], markerTint[1], markerTint[2], markerTint[3]*alpha)
+	gl.Uniform4f(m.locTint, m.tint[0], m.tint[1], m.tint[2], m.tint[3]*alpha)
 
 	gl.ActiveTexture(gl.TEXTURE0)
 	gl.BindTexture(gl.TEXTURE_2D, m.tex)

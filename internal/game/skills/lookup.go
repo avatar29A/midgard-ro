@@ -38,3 +38,16 @@ func EffectOf(skill uint16) (Effect, bool) {
 func Jobs() int {
 	return len(tree)
 }
+
+// EffectsOf is what a skill plays and where, and whether anything is known for
+// it.
+//
+// Four moments, because the original draws four: the circle under the caster
+// while it casts, what the caster does when it goes off, what appears on
+// whoever it hit, and what stays on a cell for a placed skill. A skill with no
+// entry is one nobody has identified yet, not one that plays nothing.
+func EffectsOf(skill uint16) (SkillEffects, bool) {
+	effects, ok := skillEffects[skill]
+
+	return effects, ok
+}

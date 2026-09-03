@@ -1,0 +1,762 @@
+package states
+
+import (
+	"go.uber.org/zap"
+
+	"github.com/Faultbox/midgard-ro/internal/engine/picking"
+	"github.com/Faultbox/midgard-ro/internal/game/skills"
+	"github.com/Faultbox/midgard-ro/internal/logger"
+	"github.com/Faultbox/midgard-ro/internal/network/packets"
+	"github.com/Faultbox/midgard-ro/internal/trace"
+	"github.com/Faultbox/midgard-ro/pkg/math"
+)
+
+// What the server says about a cast.
+//
+// Three packets carry a skill going off and they differ only in what it landed
+// on: a unit and damage, a unit and none, or a cell. What is done with them is
+// the same, so they meet in applySkillUse.
+
+// handleSkillFail is a cast the server refused.
+//
+// Worth saying out loud: a skill that does nothing and explains nothing is
+// indistinguishable from a client that dropped the click. The server has a
+// reason for every refusal and this is where it gets read.
+func (s *InGameState) handleSkillFail(data []byte) error {
+	fail, ok := packets.DecodeSkillFail(data)
+	if !ok {
+		logger.Warn("short skill failure packet", zap.Int("len", len(data)))
+
+		return nil
+	}
+
+	trace.Emit(trace.HUD, "skill-fail",
+		zap.Uint16("skill", fail.SkillID), zap.Uint8("cause", fail.Cause))
+
+	reason := fail.Reason()
+	if reason == "" {
+		// A cause nobody named. Saying its number is worth more than saying
+		// the wrong sentence, and it names what to go and read.
+		reason = "That skill failed."
+	}
+
+	name := skills.Name(fail.SkillID)
+	if name == "" {
+		name = "That skill"
+	}
+
+	s.chat.AddLocal(ChatError, name+": "+reason)
+
+	return nil
+}
+
+// handleSkillCast is a cast beginning, which is the only warning anything gets
+// that something is coming.
+func (s *InGameState) handleSkillCast(data []byte) error {
+	cast, ok := packets.DecodeSkillCast(data)
+	if !ok {
+		logger.Warn("short skill cast packet", zap.Int("len", len(data)))
+
+		return nil
+	}
+
+	trace.Emit(trace.HUD, "skill-cast",
+		zap.Uint32("from", cast.SourceID), zap.Uint32("to", cast.TargetID),
+		zap.Uint16("skill", cast.SkillID), zap.Uint32("castMs", cast.CastMs))
+
+	// The caster turns to face what it is aiming at, the same way a blow makes
+	// both sides look at each other.
+	if cast.TargetID != 0 {
+		s.faceTowards(cast.SourceID, cast.TargetID)
+	}
+
+	if cast.SourceID == s.selfAID() {
+		s.beginCast(cast.SkillID, float32(cast.CastMs))
+	}
+
+	s.beginCastAura(cast)
+
+	// No motion yet. The sprite has cast poses and the client's own table
+	// names one per skill — ACTOR_STATE, read two changes ago — but they are
+	// ACT sets this client does not bake, so playing something else would be
+	// inventing a pose rather than using the sprite's.
+
+	return nil
+}
+
+// handleSkillUse is a skill that did no damage: a buff, a heal, a teleport.
+func (s *InGameState) handleSkillUse(data []byte) error {
+	use, ok := packets.DecodeSkillUse(data)
+	if !ok {
+		logger.Warn("short skill use packet", zap.Int("len", len(data)))
+
+		return nil
+	}
+
+	s.applySkillUse(use)
+
+	return nil
+}
+
+// handleSkillDamage is a skill that did.
+func (s *InGameState) handleSkillDamage(data []byte) error {
+	use, ok := packets.DecodeSkillDamage(data)
+	if !ok {
+		logger.Warn("short skill damage packet", zap.Int("len", len(data)))
+
+		return nil
+	}
+
+	s.applySkillUse(use)
+
+	return nil
+}
+
+// handleGroundSkill is a skill placed on a cell.
+func (s *InGameState) handleGroundSkill(data []byte) error {
+	use, ok := packets.DecodeGroundSkill(data)
+	if !ok {
+		logger.Warn("short ground skill packet", zap.Int("len", len(data)))
+
+		return nil
+	}
+
+	s.applySkillUse(use)
+
+	return nil
+}
+
+// applySkillUse draws a skill going off.
+//
+// The damage goes through the same queue an ordinary blow does, so a skill's
+// figure and its target's flinch wait for the caster's animation exactly as a
+// sword's do. A skill has no attack motion of its own on the wire, so the
+// swing length is the reference one — which is what an instant skill looks
+// like anyway.
+func (s *InGameState) applySkillUse(use packets.SkillUse) {
+	trace.Emit(trace.HUD, "skill-use",
+		zap.Uint32("from", use.SourceID), zap.Uint32("to", use.TargetID),
+		zap.Uint16("skill", use.SkillID), zap.Int("level", use.Level),
+		zap.Int("amount", use.Amount),
+		zap.Int("damage", use.Damage), zap.Bool("ground", use.Ground),
+		zap.Int("cellX", use.CellX), zap.Int("cellY", use.CellY))
+
+	if use.TargetID != 0 {
+		s.faceTowards(use.SourceID, use.TargetID)
+	}
+
+	// A skill that hurt somebody is a blow, and is drawn like one.
+	if use.Damage > 0 && use.TargetID != 0 {
+		blow := packets.Damage{
+			SourceID: use.SourceID,
+			TargetID: use.TargetID,
+			Amount:   use.Damage,
+			Hits:     max(use.Hits, 1),
+		}
+
+		swing := blow.SwingDurationMs()
+		if delay := s.hitDelayMs(use.SourceID, swing); delay > 0 {
+			s.pendingBlows = append(s.pendingBlows,
+				pendingBlow{blow: blow, remainingMs: delay})
+		} else {
+			s.landBlow(pendingBlow{blow: blow})
+		}
+	}
+
+	// A skill that did no damage says so by name over whoever it went on,
+	// which is what the original does for a buff and the only sign most of
+	// them give.
+	//
+	// Except the ones that restore hit points, which show the figure instead.
+	// Nothing on the wire tells the two apart: rAthena writes the amount and
+	// the skill level into the same field, so Increase Agi at level 10 sends
+	// a 10 that means nothing and Heal sends the hit points. Which skills
+	// restore is the client's own knowledge, and healSkills is it.
+	if use.Damage > 0 {
+		return
+	}
+
+	// Over whoever it went on, or over the caster when it went on nobody — a
+	// skill placed on the ground and one cast on the world at large both name
+	// themselves over the character that cast them.
+	over := use.TargetID
+	if over == 0 {
+		over = use.SourceID
+	}
+
+	if healSkills[use.SkillID] && use.Amount > 0 {
+		s.addHealNumber(over, use.Amount)
+
+		return
+	}
+
+	s.addSkillLabel(over, use.SkillID)
+}
+
+// healSkills restore hit points, and show the figure rather than their name.
+//
+// Written out because nothing says it: the field rAthena puts the amount in is
+// the same one it puts a skill level in for everything else, and neither the
+// server's skill database nor the client's own table marks a skill as healing
+// — Heal and Increase Agi are both Support and both NoDamage. So this is a
+// list, and a skill that restores and is not on it shows its name instead,
+// which is wrong but not misleading.
+var healSkills = map[uint16]bool{
+	28:   true, // AL_HEAL
+	70:   true, // PR_SANCTUARY
+	231:  true, // AM_POTIONPITCHER
+	2051: true, // AB_HIGHNESSHEAL
+}
+
+// skillLabelLifeMs is how long a skill's name stays over whoever it went on.
+const skillLabelLifeMs = 1400
+
+// floatingSkillName is a skill's name over the unit it was cast on.
+//
+// The unit rather than the place: the name belongs over somebody's head and
+// follows them, so a character buffed and then walking away carries it. Held
+// as an id and looked up each frame, which is also what makes it vanish with
+// whoever it was on.
+type floatingSkillName struct {
+	text   string
+	target uint32
+
+	ageMs float32
+}
+
+// addSkillLabel names a skill over whoever it was cast on.
+func (s *InGameState) addSkillLabel(targetID uint32, skillID uint16) {
+	name := skills.Name(skillID)
+	if name == "" || s.bodyOf(targetID) == nil {
+		return
+	}
+
+	// One name at a time over the same head. Two buffs in a row would
+	// otherwise stack into an unreadable pile.
+	for i := range s.skillLabels {
+		if s.skillLabels[i].target == targetID {
+			s.skillLabels[i] = floatingSkillName{text: name, target: targetID}
+
+			return
+		}
+	}
+
+	s.skillLabels = append(s.skillLabels, floatingSkillName{text: name, target: targetID})
+}
+
+// advanceSkillLabels ages the names out.
+func (s *InGameState) advanceSkillLabels(deltaMs float32) {
+	if len(s.skillLabels) == 0 {
+		return
+	}
+
+	kept := s.skillLabels[:0]
+	for _, label := range s.skillLabels {
+		label.ageMs += deltaMs
+
+		// Gone with whoever it was over: a name floating where a monster used
+		// to stand is worse than no name.
+		if label.ageMs < skillLabelLifeMs && s.bodyOf(label.target) != nil {
+			kept = append(kept, label)
+		}
+	}
+
+	s.skillLabels = kept
+}
+
+// SkillLabels are the skill names to draw over the world this frame.
+func (s *InGameState) SkillLabels(viewportW, viewportH float32) []HoverLabel {
+	if len(s.skillLabels) == 0 {
+		return nil
+	}
+
+	labels := make([]HoverLabel, 0, len(s.skillLabels))
+	for _, label := range s.skillLabels {
+		body := s.bodyOf(label.target)
+		if body == nil {
+			continue
+		}
+
+		// Over the head, wherever the head is now.
+		top := body.RenderY
+		if e := s.entityOf(label.target); e != nil {
+			top = s.unitBox(e).Max[1]
+		} else if s.playerRender != nil {
+			if _, height := s.playerRender.QuadSize(); height > 0 {
+				top = body.RenderY + height
+			}
+		}
+
+		x, y := s.projectToScreen(body.RenderX, top, body.RenderZ, viewportW, viewportH)
+		labels = append(labels, HoverLabel{Text: label.text, ScreenX: x, ScreenY: y})
+	}
+
+	return labels
+}
+
+// UseSkillAt casts a skill at a cell.
+//
+// Separate from UseSkill because it is a different packet, not a different
+// argument: rAthena parses the two through different handlers, and a
+// ground-placed skill sent as a unit-targeted one is refused rather than
+// misplaced.
+func (s *InGameState) UseSkillAt(skillID uint16, level, cellX, cellY int) error {
+	if s.client == nil {
+		return nil
+	}
+
+	skill, known := s.findSkill(skillID)
+	if !known {
+		return nil
+	}
+
+	if skill.Inf&packets.InfGround == 0 {
+		s.chat.AddLocal(ChatError, "That skill is not placed on the ground.")
+
+		return nil
+	}
+
+	if level <= 0 {
+		level = skill.Level
+	}
+
+	trace.Emit(trace.HUD, "use-skill-at",
+		zap.Uint16("skill", skillID), zap.Int("level", level),
+		zap.Int("cellX", cellX), zap.Int("cellY", cellY))
+
+	return s.client.Send(packets.EncodeUseSkillAt(skillID, level, cellX, cellY))
+}
+
+// Placing a skill on the ground.
+//
+// A ground skill is asked for twice: once to choose it, and once to say where.
+// Between the two the client is holding a skill and waiting for a cell, which
+// is a state of its own — the next click means "here" rather than "walk there"
+// or "attack that".
+
+// BeginPlacing holds a skill until a cell is chosen for it.
+func (s *InGameState) BeginPlacing(skillID uint16, level int) {
+	s.beginHolding(skillID, level, false, "choose where to place it")
+}
+
+// BeginTargeting holds a skill until somebody is chosen for it.
+//
+// A targeted skill can go on the caster, another player, or a monster, and
+// which of those this particular skill allows is the server's question — Heal
+// goes on people and on the undead, an attack skill is refused against a
+// player who is not in a fight. So anything picked is sent and the refusal, if
+// there is one, comes back and is printed.
+func (s *InGameState) BeginTargeting(skillID uint16, level int) {
+	s.beginHolding(skillID, level, true, "choose who to cast it on")
+}
+
+func (s *InGameState) beginHolding(skillID uint16, level int, atUnit bool, what string) {
+	s.placingSkill = skillID
+	s.placingLevel = level
+	s.placingAtUnit = atUnit
+
+	trace.Emit(trace.HUD, "placing-begin",
+		zap.Uint16("skill", skillID), zap.Int("level", level),
+		zap.Bool("atUnit", atUnit))
+
+	name := skills.Name(skillID)
+	if name == "" {
+		name = "That skill"
+	}
+
+	s.chat.AddLocal(ChatNotice, name+": "+what+".")
+}
+
+// Placing reports the skill waiting for a cell, and whether one is.
+func (s *InGameState) Placing() (uint16, bool) {
+	return s.placingSkill, s.placingSkill != 0
+}
+
+// CancelPlacing puts the held skill down without casting it.
+func (s *InGameState) CancelPlacing() {
+	if s.placingSkill == 0 {
+		return
+	}
+
+	trace.Emit(trace.HUD, "placing-cancel", zap.Uint16("skill", s.placingSkill))
+
+	s.placingSkill = 0
+	s.placingLevel = 0
+	s.placingAtUnit = false
+}
+
+// placeHeldSkill casts the held skill at the cell under the cursor, and
+// reports whether it took the click.
+//
+// The cursor's cell rather than the click's own reading of the screen: the
+// marker is what the player is aiming with, and casting anywhere else would
+// put the skill where the marker was not.
+func (s *InGameState) placeHeldSkill(mouseX, mouseY, viewportW, viewportH float32) bool {
+	if s.placingSkill == 0 {
+		return false
+	}
+
+	skill, level, atUnit := s.placingSkill, s.placingLevel, s.placingAtUnit
+	s.placingSkill, s.placingLevel, s.placingAtUnit = 0, 0, false
+
+	if atUnit {
+		// Whoever is under the pointer. A click on anything that is not a
+		// target simply puts the skill down: the original drops it rather
+		// than casting on the caster, and casting on the caster would spend
+		// SP nobody asked to spend.
+		//
+		// Whether this particular target is allowed is the server's to say —
+		// an attack skill on a player who is not in a fight is refused, and
+		// the refusal already reaches the chat.
+		var (
+			target uint32
+			name   string
+		)
+
+		if e := s.PickEntity(mouseX, mouseY, viewportW, viewportH); e != nil {
+			target, name = e.ID, e.Name
+		} else if s.pickedSelf(mouseX, mouseY, viewportW, viewportH) {
+			// The character is not in the entity registry — it is driven by
+			// its own prediction rather than by unit reports — so clicking it
+			// picks nothing, and a skill anybody casts on themselves would be
+			// dropped. It is tested for separately.
+			target, name = s.selfAID(), "you"
+		}
+
+		if target == 0 {
+			trace.Emit(trace.HUD, "cast-no-target", zap.Uint16("skill", skill))
+
+			return true
+		}
+
+		trace.Emit(trace.HUD, "cast-at-unit",
+			zap.Uint16("skill", skill), zap.Uint32("target", target),
+			zap.String("name", name))
+
+		if err := s.castAt(skill, level, target); err != nil {
+			logger.Warn("could not cast that skill", zap.Uint16("skill", skill), zap.Error(err))
+		}
+
+		return true
+	}
+
+	if !s.hoverValid {
+		trace.Emit(trace.HUD, "placing-off-map", zap.Uint16("skill", skill))
+
+		return true
+	}
+
+	if err := s.UseSkillAt(skill, level, s.hoverCellX, s.hoverCellY); err != nil {
+		logger.Warn("could not place that skill", zap.Uint16("skill", skill), zap.Error(err))
+	}
+
+	return true
+}
+
+// castAt sends a cast at a named unit, past the targeting UseSkill does.
+func (s *InGameState) castAt(skillID uint16, level int, target uint32) error {
+	if s.client == nil {
+		return nil
+	}
+
+	return s.client.Send(packets.EncodeUseSkill(skillID, level, target))
+}
+
+// The cast bar.
+
+// CastProgress is how far through a cast the character is, from zero to one,
+// and whether one is running.
+//
+// The server sends the length in ZC_USESKILL_ACK and nothing else about it:
+// there is no tick, and no "still casting". So the bar is run off that one
+// number, and a cast that is interrupted is ended by the interruption rather
+// than by running out.
+func (s *InGameState) CastProgress() (float32, uint16, bool) {
+	if s.castTotalMs <= 0 {
+		return 0, 0, false
+	}
+
+	done := 1 - s.castLeftMs/s.castTotalMs
+
+	return min(max(done, 0), 1), s.castSkill, true
+}
+
+// advanceCast runs the cast bar down.
+func (s *InGameState) advanceCast(deltaMs float32) {
+	if s.castTotalMs <= 0 {
+		return
+	}
+
+	s.castLeftMs -= deltaMs
+	if s.castLeftMs <= 0 {
+		s.castTotalMs, s.castLeftMs, s.castSkill = 0, 0, 0
+	}
+}
+
+// beginCast starts the bar for our own cast.
+func (s *InGameState) beginCast(skillID uint16, castMs float32) {
+	if castMs <= 0 {
+		// Instant, which most skills are. A bar that appears and vanishes in
+		// one frame is worse than no bar.
+		return
+	}
+
+	s.castSkill = skillID
+	s.castTotalMs = castMs
+	s.castLeftMs = castMs
+}
+
+// PlaceHeldSkillAt casts the held skill at a named cell.
+//
+// For a caller that has a cell already rather than a cursor over one — an
+// unattended run, and whatever else eventually aims a skill without a mouse.
+func (s *InGameState) PlaceHeldSkillAt(cellX, cellY int) error {
+	if s.placingSkill == 0 {
+		return nil
+	}
+
+	skill, level := s.placingSkill, s.placingLevel
+	s.placingSkill, s.placingLevel = 0, 0
+
+	return s.UseSkillAt(skill, level, cellX, cellY)
+}
+
+// PlayerCell is the cell the character is standing on.
+func (s *InGameState) PlayerCell() (int, int) {
+	if s.player == nil {
+		return 0, 0
+	}
+
+	return s.player.CurrentCell()
+}
+
+// pickedSelf reports whether a click landed on our own character.
+//
+// Everything else on the map is picked out of the entity registry, and the
+// character being played is deliberately not in it. So its box is built here
+// from the same two things a unit's is: where the body is standing, and how
+// big its billboard was baked.
+func (s *InGameState) pickedSelf(screenX, screenY, viewportW, viewportH float32) bool {
+	if s.player == nil || s.scene == nil || s.playerRender == nil ||
+		viewportW <= 0 || viewportH <= 0 {
+		return false
+	}
+
+	width, height := s.playerRender.QuadSize()
+	if width <= 0 || height <= 0 {
+		return false
+	}
+
+	x, y, z := s.player.RenderX, s.player.RenderY, s.player.RenderZ
+	half := width / 2
+
+	box := picking.AABB{
+		Min: [3]float32{x - half, y, z - half},
+		Max: [3]float32{x + half, y + height, z + half},
+	}
+
+	ray := picking.ScreenToRay(screenX, screenY, viewportW, viewportH,
+		s.scene.LastViewProj().Inverse())
+
+	t, hit := ray.IntersectAABB(box)
+
+	return hit && t >= 0
+}
+
+// CastBar is the cast in progress, ready to draw.
+type CastBar struct {
+	// Progress runs 0 to 1 across the cast.
+	Progress float32
+
+	// ScreenX, ScreenY is where the caster's feet are, in viewport pixels.
+	ScreenX, ScreenY float32
+
+	// Name is the skill being cast, for whatever wants to say so.
+	Name string
+}
+
+// CastingBar is the cast to draw this frame, and whether there is one.
+//
+// Over the caster's head rather than under its feet: the ring the cast draws on
+// the ground is already down there, and a bar in the same place is read as part
+// of it. There is nothing to draw for an instant skill, which is most of them.
+func (s *InGameState) CastingBar(viewportW, viewportH float32) (CastBar, bool) {
+	progress, skill, casting := s.CastProgress()
+	if !casting || s.player == nil {
+		return CastBar{}, false
+	}
+
+	top := s.player.RenderY
+	if s.playerRender != nil {
+		if _, height := s.playerRender.QuadSize(); height > 0 {
+			top += height
+		}
+	}
+
+	x, y := s.projectToScreen(s.player.RenderX, top, s.player.RenderZ,
+		viewportW, viewportH)
+
+	return CastBar{
+		Progress: progress,
+		ScreenX:  x,
+		ScreenY:  y,
+		Name:     skills.Name(skill),
+	}, true
+}
+
+// The casting aura: the ring that lies under somebody while they cast.
+//
+// EF_BEGINSPELL in the original, which nostalro-client's port builds from four
+// rising cone emitters around the caster. This is the ring those emitters
+// carry, lying flat and growing, which is what it reads as from a distance and
+// what the client can draw today — the cones want a renderer it does not have.
+// The table says which skills call for it; this is the drawing.
+
+const (
+	// The aura stands around the caster rather than lying under it: in the
+	// original the character is inside it, and drawn flat it reads as the
+	// wrong thing entirely.
+	//
+	// Radius at the foot and at the top, and how tall. The original's four
+	// emitters start at 4.1 units out and lean from 80 degrees to 10 as they
+	// rise, which is a wall that starts near vertical and opens outward; a
+	// tube with a wider top is that shape without the four separate cones.
+	castAuraRadius    = float32(4.1)
+	castAuraFlare     = float32(1.6)
+	castAuraHeightMax = float32(20)
+
+	// castAuraFade is how much of the cast is spent fading out at the end, so
+	// the aura does not vanish mid-turn.
+	castAuraFade = float32(0.25)
+)
+
+// castingAura is one caster's ring.
+type castingAura struct {
+	// caster is who it is under, looked up each frame so it follows them.
+	caster uint32
+
+	// leftMs counts down, and totalMs is what it started at.
+	leftMs, totalMs float32
+}
+
+// beginCastAura starts the ring under a caster, if this skill calls for one.
+func (s *InGameState) beginCastAura(cast packets.SkillCast) {
+	effects, known := skills.EffectsOf(cast.SkillID)
+	if !known {
+		return
+	}
+
+	wanted := false
+	for _, name := range effects.BeginCast {
+		if name == castAuraEffect {
+			wanted = true
+		}
+	}
+
+	if !wanted || cast.CastMs == 0 {
+		return
+	}
+
+	// One ring per caster: a second cast replaces the first rather than
+	// stacking two rings in the same place.
+	for i := range s.castAuras {
+		if s.castAuras[i].caster == cast.SourceID {
+			s.castAuras[i] = castingAura{
+				caster:  cast.SourceID,
+				leftMs:  float32(cast.CastMs),
+				totalMs: float32(cast.CastMs),
+			}
+
+			return
+		}
+	}
+
+	s.castAuras = append(s.castAuras, castingAura{
+		caster:  cast.SourceID,
+		leftMs:  float32(cast.CastMs),
+		totalMs: float32(cast.CastMs),
+	})
+}
+
+// castAuraEffect is the effect name the table uses for the casting circle.
+const castAuraEffect = "EF_BEGINSPELL"
+
+// castAuraHoldLoopMs is how long one cycle of the held ring takes. The
+// original's is 56 frames at 60fps, which is what nostalro-client reads out of
+// it, so a held one repeats at the same rate rather than at a pace of its own.
+const castAuraHoldLoopMs = float32(56) / 60 * 1000
+
+// HoldCastAura keeps a ring under the character for as long as the client
+// runs, so the effect can be looked at rather than glimpsed.
+func (s *InGameState) HoldCastAura() {
+	s.holdCastAura = true
+}
+
+// advanceCastAuras runs the rings down.
+func (s *InGameState) advanceCastAuras(deltaMs float32) {
+	// Held for inspection: one ring under the character, never expiring, its
+	// growth looping so the whole of it can be seen.
+	if s.holdCastAura && s.player != nil {
+		if len(s.castAuras) == 0 {
+			s.castAuras = []castingAura{{
+				caster:  s.selfAID(),
+				totalMs: castAuraHoldLoopMs,
+				leftMs:  castAuraHoldLoopMs,
+			}}
+		}
+
+		s.castAuras[0].leftMs -= deltaMs
+		if s.castAuras[0].leftMs <= 0 {
+			s.castAuras[0].leftMs = castAuraHoldLoopMs
+		}
+
+		return
+	}
+
+	if len(s.castAuras) == 0 {
+		return
+	}
+
+	kept := s.castAuras[:0]
+	for _, aura := range s.castAuras {
+		aura.leftMs -= deltaMs
+
+		// Gone with the caster, the same way a skill's name is.
+		if aura.leftMs > 0 && s.bodyOf(aura.caster) != nil {
+			kept = append(kept, aura)
+		}
+	}
+
+	s.castAuras = kept
+}
+
+// drawCastAuras puts a ring under everybody casting.
+func (s *InGameState) drawCastAuras(viewProj math.Mat4) {
+	if s.castAura == nil {
+		return
+	}
+
+	for _, aura := range s.castAuras {
+		body := s.bodyOf(aura.caster)
+		if body == nil || aura.totalMs <= 0 {
+			continue
+		}
+
+		done := 1 - aura.leftMs/aura.totalMs
+
+		alpha := float32(1)
+		if done > 1-castAuraFade {
+			alpha = (1 - done) / castAuraFade
+		}
+
+		// It rises over the cast and opens outward as it goes, which is the
+		// four leaning emitters the original builds it from, drawn as one
+		// wall.
+		height := castAuraHeightMax * done
+		top := castAuraRadius + (castAuraFlare-1)*castAuraRadius*done
+
+		s.castAura.RenderTube(viewProj,
+			body.RenderX, s.terrainHeight(body.RenderX, body.RenderZ), body.RenderZ,
+			castAuraRadius, top, height, alpha)
+	}
+}
