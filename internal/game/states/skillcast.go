@@ -1,10 +1,17 @@
 package states
 
 import (
+	"encoding/binary"
+	"fmt"
+
 	"go.uber.org/zap"
 
+	"strings"
+
 	"github.com/Faultbox/midgard-ro/internal/engine/picking"
+	"github.com/Faultbox/midgard-ro/internal/game/entity"
 	"github.com/Faultbox/midgard-ro/internal/game/skills"
+
 	"github.com/Faultbox/midgard-ro/internal/logger"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
 	"github.com/Faultbox/midgard-ro/internal/trace"
@@ -76,6 +83,17 @@ func (s *InGameState) handleSkillCast(data []byte) error {
 
 	s.beginCastAura(cast)
 
+	// What a cast sounds like, and its name over the caster's head for as
+	// long as it runs. Only for a cast that takes time: an instant skill's
+	// sound and name are the skill's own, shown when it goes off.
+	if cast.CastMs > 0 {
+		if effects, known := skills.EffectsOf(cast.SkillID); known {
+			s.playSkillSounds(effects.BeginCast)
+		}
+
+		s.addSkillLabel(cast.SourceID, cast.SkillID, float32(cast.CastMs))
+	}
+
 	// No motion yet. The sprite has cast poses and the client's own table
 	// names one per skill — ACTOR_STATE, read two changes ago — but they are
 	// ACT sets this client does not bake, so playing something else would be
@@ -145,6 +163,8 @@ func (s *InGameState) applySkillUse(use packets.SkillUse) {
 		s.faceTowards(use.SourceID, use.TargetID)
 	}
 
+	s.playSkillUseEffects(use)
+
 	// A skill that hurt somebody is a blow, and is drawn like one.
 	if use.Damage > 0 && use.TargetID != 0 {
 		blow := packets.Damage{
@@ -163,34 +183,157 @@ func (s *InGameState) applySkillUse(use packets.SkillUse) {
 		}
 	}
 
-	// A skill that did no damage says so by name over whoever it went on,
-	// which is what the original does for a buff and the only sign most of
-	// them give.
-	//
-	// Except the ones that restore hit points, which show the figure instead.
-	// Nothing on the wire tells the two apart: rAthena writes the amount and
-	// the skill level into the same field, so Increase Agi at level 10 sends
-	// a 10 that means nothing and Heal sends the hit points. Which skills
-	// restore is the client's own knowledge, and healSkills is it.
-	if use.Damage > 0 {
-		return
-	}
+	s.reportSkill(use, s.selfAID())
 
-	// Over whoever it went on, or over the caster when it went on nobody — a
-	// skill placed on the ground and one cast on the world at large both name
-	// themselves over the character that cast them.
-	over := use.TargetID
-	if over == 0 {
-		over = use.SourceID
-	}
+	// Every skill shouts its name over the caster, damaging or not. It is the
+	// original's own sign that something was cast, and for most buffs it is
+	// the only one.
+	s.addSkillLabel(use.SourceID, use.SkillID, skillLabelLifeMs)
 
-	if healSkills[use.SkillID] && use.Amount > 0 {
+	// The ones that restore hit points also show the figure, over whoever
+	// they restored. Nothing on the wire tells them apart from a buff:
+	// rAthena writes the amount and the skill level into the same field, so
+	// Increase Agi at level 10 sends a 10 that means nothing and Heal sends
+	// the hit points. Which skills restore is the client's own knowledge, and
+	// healSkills is it.
+	if use.Damage == 0 && healSkills[use.SkillID] && use.Amount > 0 {
+		over := use.TargetID
+		if over == 0 {
+			over = use.SourceID
+		}
+
 		s.addHealNumber(over, use.Amount)
+	}
+}
 
+// Ground skills leave a unit behind, and its blows are the caster's.
+//
+// Thunder Storm's lightning does not come from the mage: the skill puts a
+// unit on a cell and the unit does the damage, so every blow arrives from a
+// block id belonging to nobody the client has heard of. Remembering who put
+// it there is what lets a player's own Thunder Storm read as theirs rather
+// than as a stranger's fight across the field.
+
+// handleSkillUnit is one appearing.
+func (s *InGameState) handleSkillUnit(data []byte) error {
+	unit, ok := packets.DecodeSkillUnit(data)
+	if !ok {
+		logger.Warn("short skill unit packet", zap.Int("len", len(data)))
+
+		return nil
+	}
+
+	trace.Emit(trace.HUD, "skill-unit",
+		zap.Uint32("id", unit.ID), zap.Uint32("by", unit.CreatorID),
+		zap.Int("x", unit.X), zap.Int("y", unit.Y), zap.Int("level", unit.Level))
+
+	if s.skillUnits == nil {
+		s.skillUnits = map[uint32]uint32{}
+	}
+
+	s.skillUnits[unit.ID] = unit.CreatorID
+
+	return nil
+}
+
+// handleSkillUnitGone is one going away again.
+func (s *InGameState) handleSkillUnitGone(data []byte) error {
+	id, ok := packets.DecodeSkillUnitGone(data)
+	if !ok {
+		logger.Warn("short skill unit removal", zap.Int("len", len(data)))
+
+		return nil
+	}
+
+	delete(s.skillUnits, id)
+
+	return nil
+}
+
+// casterBehind is who a blow really came from: the unit itself for anything
+// that stands on the map, and whoever placed it for a ground skill.
+func (s *InGameState) casterBehind(id uint32) uint32 {
+	if by, ok := s.skillUnits[id]; ok {
+		return by
+	}
+
+	return id
+}
+
+// The battle log.
+//
+// The chat box has had a Battle tab and a color for its lines since it was
+// written and nothing ever put anything in it. A skill going off is the first
+// thing worth writing there: what it hit and for how much is otherwise a
+// number that floats up and is gone, and what it cost is not shown anywhere at
+// all.
+
+// reportSkill writes what a skill did to the battle tab, when it is ours or it
+// was aimed at us. Somebody else's fight across the field is not our log.
+func (s *InGameState) reportSkill(use packets.SkillUse, self uint32) {
+	if self == 0 {
 		return
 	}
 
-	s.addSkillLabel(over, use.SkillID)
+	name := skills.Name(use.SkillID)
+	if name == "" {
+		name = "A skill"
+	}
+
+	// A ground skill's blows come from the unit it left behind, not from the
+	// hand that placed it.
+	from := s.casterBehind(use.SourceID)
+
+	switch {
+	case from == self:
+		// What it cost, out of the skill list: the server's own figure for
+		// the level we hold it at, rather than a table of the client's that
+		// disagrees with it for twenty skills.
+		//
+		// Only when the skill itself goes off. A ground skill is paid for
+		// once and then strikes for as long as it stands, and charging for
+		// every blow would fill the log with a cost nobody paid.
+		if skill, known := s.findSkill(use.SkillID); known && skill.SP > 0 &&
+			use.SourceID == self {
+			s.chat.AddLocal(ChatDamage, fmt.Sprintf("%s: %d SP.", name, skill.SP))
+		}
+
+		if use.Damage > 0 {
+			s.chat.AddLocal(ChatDamage, fmt.Sprintf("%s on %s: %s.",
+				name, s.unitName(use.TargetID, self), damageFigure(use.Damage, use.Hits)))
+		}
+
+	case use.TargetID == self && use.Damage > 0:
+		s.chat.AddLocal(ChatDamage, fmt.Sprintf("%s's %s on you: %s.",
+			s.unitName(from, self), name, damageFigure(use.Damage, use.Hits)))
+	}
+}
+
+// damageFigure is what a blow did, and over how many hits when it was more
+// than one. A bolt skill's figure is the total of its bolts, and reading it as
+// a single hit understates what each one did by ten.
+func damageFigure(damage, hits int) string {
+	if hits > 1 {
+		return fmt.Sprintf("%d damage over %d hits", damage, hits)
+	}
+
+	return fmt.Sprintf("%d damage", damage)
+}
+
+// unitName is what to call somebody in a line of the log.
+func (s *InGameState) unitName(id, self uint32) string {
+	switch id {
+	case 0:
+		return "nobody"
+	case self:
+		return "you"
+	}
+
+	if e := s.entityOf(id); e != nil && e.Name != "" {
+		return e.Name
+	}
+
+	return "something"
 }
 
 // healSkills restore hit points, and show the figure rather than their name.
@@ -208,8 +351,18 @@ var healSkills = map[uint16]bool{
 	2051: true, // AB_HIGHNESSHEAL
 }
 
-// skillLabelLifeMs is how long a skill's name stays over whoever it went on.
+// skillLabelLifeMs is how long a skill's name stays over its caster once the
+// skill has gone off.
 const skillLabelLifeMs = 1400
+
+// skillLabelRise is how far above the head the name floats.
+//
+// Clear of the casting bar, which sits just above the head: the name is shown
+// while the cast runs, and the two would otherwise be printed over each
+// other. The plate hangs below its anchor by the same drop a monster's name
+// does, so this is the height of the plate plus the bar plus a gap rather
+// than a number picked to look right.
+const skillLabelRise = float32(44)
 
 // floatingSkillName is a skill's name over the unit it was cast on.
 //
@@ -221,27 +374,37 @@ type floatingSkillName struct {
 	text   string
 	target uint32
 
-	ageMs float32
+	ageMs  float32
+	lifeMs float32
 }
 
-// addSkillLabel names a skill over whoever it was cast on.
-func (s *InGameState) addSkillLabel(targetID uint32, skillID uint16) {
+// addSkillLabel shouts a skill's name over its caster, for as long as asked.
+//
+// Over the caster rather than over what it was cast on: the original puts the
+// name where the shout comes from, so a Heal on somebody else names itself
+// over the healer while the figure goes over the healed.
+func (s *InGameState) addSkillLabel(casterID uint32, skillID uint16, lifeMs float32) {
 	name := skills.Name(skillID)
-	if name == "" || s.bodyOf(targetID) == nil {
+	if name == "" || s.bodyOf(casterID) == nil {
 		return
 	}
 
-	// One name at a time over the same head. Two buffs in a row would
-	// otherwise stack into an unreadable pile.
+	// The original's own punctuation. A skill going off is a shout, and the
+	// two marks are how it reads as one.
+	label := floatingSkillName{text: name + " !!", target: casterID, lifeMs: lifeMs}
+
+	// One name at a time over the same head. Two skills in a row would
+	// otherwise stack into an unreadable pile — and a cast that finishes
+	// replaces the name it was showing while it ran.
 	for i := range s.skillLabels {
-		if s.skillLabels[i].target == targetID {
-			s.skillLabels[i] = floatingSkillName{text: name, target: targetID}
+		if s.skillLabels[i].target == casterID {
+			s.skillLabels[i] = label
 
 			return
 		}
 	}
 
-	s.skillLabels = append(s.skillLabels, floatingSkillName{text: name, target: targetID})
+	s.skillLabels = append(s.skillLabels, label)
 }
 
 // advanceSkillLabels ages the names out.
@@ -256,7 +419,7 @@ func (s *InGameState) advanceSkillLabels(deltaMs float32) {
 
 		// Gone with whoever it was over: a name floating where a monster used
 		// to stand is worse than no name.
-		if label.ageMs < skillLabelLifeMs && s.bodyOf(label.target) != nil {
+		if label.ageMs < label.lifeMs && s.bodyOf(label.target) != nil {
 			kept = append(kept, label)
 		}
 	}
@@ -288,7 +451,7 @@ func (s *InGameState) SkillLabels(viewportW, viewportH float32) []HoverLabel {
 		}
 
 		x, y := s.projectToScreen(body.RenderX, top, body.RenderZ, viewportW, viewportH)
-		labels = append(labels, HoverLabel{Text: label.text, ScreenX: x, ScreenY: y})
+		labels = append(labels, HoverLabel{Text: label.text, ScreenX: x, ScreenY: y - skillLabelRise})
 	}
 
 	return labels
@@ -372,6 +535,13 @@ func (s *InGameState) Placing() (uint16, bool) {
 	return s.placingSkill, s.placingSkill != 0
 }
 
+// Targeting reports whether the held skill is waiting for a unit rather than
+// for a cell. The two are aimed differently and cannot stand in for each
+// other: a cell given to a targeted skill is refused by the server.
+func (s *InGameState) Targeting() bool {
+	return s.placingSkill != 0 && s.placingAtUnit
+}
+
 // CancelPlacing puts the held skill down without casting it.
 func (s *InGameState) CancelPlacing() {
 	if s.placingSkill == 0 {
@@ -433,21 +603,98 @@ func (s *InGameState) placeHeldSkill(mouseX, mouseY, viewportW, viewportH float3
 			zap.Uint16("skill", skill), zap.Uint32("target", target),
 			zap.String("name", name))
 
-		if err := s.castAt(skill, level, target); err != nil {
+		if err := s.castOrApproach(skill, level, target); err != nil {
 			logger.Warn("could not cast that skill", zap.Uint16("skill", skill), zap.Error(err))
 		}
 
 		return true
 	}
 
-	if !s.hoverValid {
+	cellX, cellY, aimed := s.groundAimFor(mouseX, mouseY, viewportW, viewportH)
+	if !aimed {
 		trace.Emit(trace.HUD, "placing-off-map", zap.Uint16("skill", skill))
 
 		return true
 	}
 
-	if err := s.UseSkillAt(skill, level, s.hoverCellX, s.hoverCellY); err != nil {
+	if err := s.UseSkillAt(skill, level, cellX, cellY); err != nil {
 		logger.Warn("could not place that skill", zap.Uint16("skill", skill), zap.Error(err))
+	}
+
+	return true
+}
+
+// groundAimFor is the cell a ground skill goes on, for a click at a point.
+//
+// Whoever is under the pointer, if anybody, and otherwise the ground under
+// it. A sprite stands on its cell but is drawn upwards from it, so a pointer
+// on a monster's body meets the ground two or three cells beyond its feet —
+// and a skill aimed there covers cells the monster is not standing on.
+// Thunder Storm reaches two cells either way, so that is the difference
+// between hitting and missing, which is what made it work every other time.
+func (s *InGameState) groundAimFor(mouseX, mouseY, viewportW, viewportH float32) (cellX, cellY int, ok bool) {
+	if e := s.PickEntity(mouseX, mouseY, viewportW, viewportH); e != nil && e.Body != nil {
+		x, y := e.Body.CurrentCell()
+
+		trace.Emit(trace.HUD, "placing-on-unit",
+			zap.Uint32("aid", e.ID), zap.String("name", e.Name),
+			zap.Int("cellX", x), zap.Int("cellY", y),
+			zap.Int("groundX", s.hoverCellX), zap.Int("groundY", s.hoverCellY))
+
+		return x, y, true
+	}
+
+	if !s.hoverValid {
+		return 0, 0, false
+	}
+
+	return s.hoverCellX, s.hoverCellY, true
+}
+
+// CastHeldAtNearest aims the held skill at the closest monster in view, and
+// reports whether it found one.
+//
+// For unattended runs, the same way AttackNearest is: an attack skill is
+// chosen and then clicked onto something, and nothing an attack skill draws
+// can be watched without a hand to click with.
+func (s *InGameState) CastHeldAtNearest() bool {
+	if s.placingSkill == 0 || !s.placingAtUnit || s.entityManager == nil || s.player == nil {
+		return false
+	}
+
+	var (
+		nearest *entity.Entity
+		best    float32
+	)
+
+	px, _, pz := s.player.RenderPosition()
+
+	for _, e := range s.entityManager.All() {
+		if !s.isAttackable(e) || e.Body == nil {
+			continue
+		}
+
+		x, _, z := e.Body.RenderPosition()
+		dx, dz := x-px, z-pz
+
+		if d := dx*dx + dz*dz; nearest == nil || d < best {
+			nearest, best = e, d
+		}
+	}
+
+	if nearest == nil {
+		return false
+	}
+
+	skill, level := s.placingSkill, s.placingLevel
+	s.placingSkill, s.placingLevel, s.placingAtUnit = 0, 0, false
+
+	trace.Emit(trace.HUD, "cast-at-nearest",
+		zap.Uint16("skill", skill), zap.Uint32("target", nearest.ID),
+		zap.String("name", nearest.Name))
+
+	if err := s.castOrApproach(skill, level, nearest.ID); err != nil {
+		logger.Warn("could not cast that skill", zap.Uint16("skill", skill), zap.Error(err))
 	}
 
 	return true
@@ -506,6 +753,62 @@ func (s *InGameState) beginCast(skillID uint16, castMs float32) {
 	s.castLeftMs = castMs
 }
 
+// Casting reports whether the character is in the middle of one.
+//
+// While it is, it does not move. rAthena's unit_can_move is false for as long
+// as the skill timer runs — bar Free Cast and the guild skills — so a walk
+// asked for here would be refused and the client would be predicting a step
+// no acknowledgement is coming for.
+func (s *InGameState) Casting() bool {
+	return s.castTotalMs > 0 && s.castLeftMs > 0
+}
+
+// handleCastCancelled is the server saying somebody's cast came to nothing.
+//
+// A cast ends early when the caster is hit — for the skills the database
+// marks as interruptible, and unless something is holding the cast up — or
+// when a state that stops them takes hold. There is no packet for a player
+// canceling their own, because there is no way to: the Sage skill Cast
+// Cancel is the only thing in the game that does it, and it is a skill cast
+// at somebody else.
+func (s *InGameState) handleCastCancelled(data []byte) error {
+	const size = 6
+
+	if len(data) < size {
+		logger.Warn("short cast cancel packet", zap.Int("len", len(data)))
+
+		return nil
+	}
+
+	who := binary.LittleEndian.Uint32(data[2:])
+
+	trace.Emit(trace.HUD, "cast-canceled", zap.Uint32("who", who))
+
+	// Whoever it was, their ring goes with it.
+	kept := s.castAuras[:0]
+	for _, aura := range s.castAuras {
+		if aura.caster != who {
+			kept = append(kept, aura)
+		}
+	}
+	s.castAuras = kept
+
+	// And our own bar, and the name over our head.
+	if who == s.selfAID() {
+		s.castSkill, s.castTotalMs, s.castLeftMs = 0, 0, 0
+	}
+
+	for i := range s.skillLabels {
+		if s.skillLabels[i].target == who {
+			s.skillLabels = append(s.skillLabels[:i], s.skillLabels[i+1:]...)
+
+			break
+		}
+	}
+
+	return nil
+}
+
 // PlaceHeldSkillAt casts the held skill at a named cell.
 //
 // For a caller that has a cell already rather than a cursor over one — an
@@ -516,7 +819,7 @@ func (s *InGameState) PlaceHeldSkillAt(cellX, cellY int) error {
 	}
 
 	skill, level := s.placingSkill, s.placingLevel
-	s.placingSkill, s.placingLevel = 0, 0
+	s.placingSkill, s.placingLevel, s.placingAtUnit = 0, 0, false
 
 	return s.UseSkillAt(skill, level, cellX, cellY)
 }
@@ -759,4 +1062,409 @@ func (s *InGameState) drawCastAuras(viewProj math.Mat4) {
 			body.RenderX, s.terrainHeight(body.RenderX, body.RenderZ), body.RenderZ,
 			castAuraRadius, top, height, alpha)
 	}
+}
+
+// Playing a skill's effects.
+//
+// The ported table says which effect belongs where; this puts the ones the
+// archive has art for on screen. Thirty-five of the hundred and sixty-five it
+// names are STR animations sitting loose in the effect directory under the
+// name the table uses, which the client's existing player can already run —
+// the hit sparks among them, which is what shows in an ordinary fight.
+//
+// The rest are the ones the original draws in code rather than from a file.
+// They are named and not drawn, and the miss is logged once each, which makes
+// the log the list of what is left.
+
+// effectSoundDir is where the archive keeps what an effect sounds like.
+const effectSoundDir = `data\wav\effect\`
+
+// effectSoundFor is the wav an effect plays, from the name the table uses.
+//
+// Named after the effect rather than after the skill: the archive has
+// ef_bash.wav and ef_frostdiver.wav and no sm_bash.wav at all. Twenty-six of
+// the effects the table names have one, and between them they cover a hundred
+// and twenty-four of its entries — including the casting sound, which belongs
+// to EF_BEGINSPELL and so to every skill that casts.
+func effectSoundFor(effect string) string {
+	if len(effect) <= 3 || effect[:3] != "EF_" {
+		return ""
+	}
+
+	return effectSoundDir + strings.ToLower(effect) + ".wav"
+}
+
+// effectFileFor is the STR the archive files an effect under, from the name
+// the table uses: EF_FIREHIT is firehit.str.
+func effectFileFor(effect string) string {
+	if len(effect) <= 3 || effect[:3] != "EF_" {
+		return ""
+	}
+
+	return strings.ToLower(effect[3:]) + ".str"
+}
+
+// playSkillEffects puts a list of them over a world position.
+func (s *InGameState) playSkillEffects(effects []string, x, y, z float32) {
+	for _, effect := range effects {
+		file := effectFileFor(effect)
+		if file == "" {
+			continue
+		}
+
+		s.PlayEffectAt(file, x, y, z)
+	}
+}
+
+// playSkillBursts starts the ones drawn in code rather than read from a file.
+//
+// from is where the caster is standing, for the effects drawn between the two
+// of them rather than around one — Frost Diver walks its spikes out from
+// there. Zero when there is nobody to draw from, and those effects are then
+// left out rather than heaped on the target.
+func (s *InGameState) playSkillBursts(effects []string, hits int, from, at [3]float32) {
+	for _, effect := range effects {
+		spec, ok := burstFor(effect, hits)
+		if !ok {
+			continue
+		}
+
+		s.playBurst(effect, spec, from, at)
+	}
+}
+
+// groundUnder puts a point on the ground below itself, for the bursts that
+// stand there.
+func (s *InGameState) groundUnder(at [3]float32) [3]float32 {
+	return [3]float32{at[0], s.terrainHeight(at[0], at[2]), at[2]}
+}
+
+// casterAt is where a caster is standing, for an effect drawn from them.
+func (s *InGameState) casterAt(id uint32) [3]float32 {
+	x, y, z, ok := s.effectHeight(id)
+	if !ok {
+		return [3]float32{}
+	}
+
+	return [3]float32{x, y, z}
+}
+
+// A volley's shots land one after another.
+//
+// A bolt skill arrives as one packet saying how much it did over how many
+// blows, and the client draws the blows. What each shot hits has to wait for
+// it to come down: played at the start, ten flashes go off on a target that
+// nothing has reached yet, which is what made a bolt skill look like one
+// blow with a large figure over it.
+
+// delayedEffect is something waiting to be drawn on a unit.
+type delayedEffect struct {
+	effect string
+	target uint32
+
+	// caster is who threw it, for the effects drawn from them to the target.
+	caster uint32
+
+	delayMs float32
+}
+
+// advanceDelayedEffects plays the ones whose moment has come.
+func (s *InGameState) advanceDelayedEffects(deltaMs float32) {
+	if len(s.delayedEffects) == 0 {
+		return
+	}
+
+	kept := s.delayedEffects[:0]
+	for _, waiting := range s.delayedEffects {
+		waiting.delayMs -= deltaMs
+		if waiting.delayMs > 0 {
+			kept = append(kept, waiting)
+
+			continue
+		}
+
+		// Gone with whoever it was aimed at. A flash where a monster used to
+		// stand is worse than no flash.
+		x, y, z, ok := s.effectHeight(waiting.target)
+		if !ok {
+			continue
+		}
+
+		one := []string{waiting.effect}
+		s.playSkillEffects(one, x, y, z)
+		s.playSkillBursts(one, 1, s.casterAt(waiting.caster), [3]float32{x, y, z})
+	}
+
+	s.delayedEffects = kept
+}
+
+// boltEffects are the falling shots. What a skill lists beside one of these is
+// what its shots hit with, and is drawn once for each of them.
+var boltEffects = map[string]bool{
+	"EF_ICEARROW":  true,
+	"EF_FIREARROW": true,
+}
+
+// splitBolts separates a skill's shots from what they hit with.
+func splitBolts(effects []string) (bolts, onImpact []string) {
+	for _, effect := range effects {
+		if boltEffects[effect] {
+			bolts = append(bolts, effect)
+
+			continue
+		}
+
+		onImpact = append(onImpact, effect)
+	}
+
+	return bolts, onImpact
+}
+
+// playSkillSounds asks for what a list of effects sounds like.
+//
+// Separate from the drawing because the two do not overlap: an effect can have
+// a sound and no animation, which is most of them, or an animation and no
+// sound.
+func (s *InGameState) playSkillSounds(effects []string) {
+	for _, effect := range effects {
+		s.playSound(effectSoundFor(effect))
+	}
+}
+
+// effectHeight is where on a unit an effect plays: its middle, rather than the
+// ground it stands on. A spark at a monster's feet reads as a spark at the
+// ground beside it.
+func (s *InGameState) effectHeight(id uint32) (x, y, z float32, ok bool) {
+	body := s.bodyOf(id)
+	if body == nil {
+		return 0, 0, 0, false
+	}
+
+	middle := body.RenderY
+	if e := s.entityOf(id); e != nil {
+		box := s.unitBox(e)
+		middle = (box.Min[1] + box.Max[1]) / 2
+	} else if s.playerRender != nil {
+		if _, height := s.playerRender.QuadSize(); height > 0 {
+			middle = body.RenderY + height/2
+		}
+	}
+
+	return body.RenderX, middle, body.RenderZ, true
+}
+
+// footingOf is where a unit's feet are, for the effects that stand on the
+// ground rather than burst around a body — a line of ice spikes belongs at
+// ground level, and anchored at the middle of a monster it hangs in the air.
+func (s *InGameState) footingOf(id uint32) (x, y, z float32, ok bool) {
+	body := s.bodyOf(id)
+	if body == nil {
+		return 0, 0, 0, false
+	}
+
+	return body.RenderX, body.RenderY, body.RenderZ, true
+}
+
+// playSkillUseEffects draws what a skill did, wherever it did it.
+func (s *InGameState) playSkillUseEffects(use packets.SkillUse) {
+	effects, known := skills.EffectsOf(use.SkillID)
+	if !known {
+		return
+	}
+
+	hits := max(use.Hits, 1)
+	from := s.casterAt(use.SourceID)
+
+	if x, y, z, ok := s.effectHeight(use.SourceID); ok {
+		s.playSkillEffects(effects.OnCaster, x, y, z)
+		s.playSkillBursts(effects.OnCaster, hits, from, [3]float32{x, y, z})
+
+		// And the flash a skill starts with, for the ones that start here.
+		// A skill with a cast time shows that when the cast begins; every
+		// skill that has one of these — Bash, Mammonite, Double Strafe — is
+		// instant, and an instant skill has no cast packet to show it from.
+		//
+		// Bursts only. The begin-cast effect that comes from a file is the
+		// casting circle, and beginCastAura owns that.
+		s.playSkillBursts(effects.BeginCast, hits, from, [3]float32{x, y, z})
+	}
+	s.playSkillSounds(effects.OnCaster)
+
+	if use.TargetID != 0 {
+		bolts, onImpact := splitBolts(effects.OnTarget)
+
+		if len(bolts) > 0 {
+			// The volley now, and what its shots hit with as each one lands.
+			if x, y, z, ok := s.effectHeight(use.TargetID); ok {
+				s.playSkillBursts(bolts, hits, from, [3]float32{x, y, z})
+			}
+
+			for i := 0; i < min(hits, boltMax); i++ {
+				for _, effect := range onImpact {
+					s.delayedEffects = append(s.delayedEffects, delayedEffect{
+						effect: effect, target: use.TargetID, caster: use.SourceID,
+						delayMs: boltImpactMs(i),
+					})
+				}
+			}
+		} else if x, y, z, ok := s.effectHeight(use.TargetID); ok {
+			s.playSkillEffects(effects.OnTarget, x, y, z)
+			s.playSkillBursts(effects.OnTarget, hits, from, [3]float32{x, y, z})
+		}
+
+		s.playSkillSounds(effects.OnTarget)
+	}
+
+	if use.Ground {
+		x, z := entity.CellToWorld(use.CellX, use.CellY)
+		s.playSkillEffects(effects.OnGround, x, s.terrainHeight(x, z), z)
+		s.playSkillBursts(effects.OnGround, hits, from, [3]float32{x, s.terrainHeight(x, z), z})
+		s.playSkillSounds(effects.OnGround)
+	}
+}
+
+// Casting at something too far away.
+//
+// A skill aimed at a target out of its reach used to be sent anyway and
+// refused. The original walks: the character closes on the target, stops as
+// soon as it is near enough, and casts. Held here rather than sent because the
+// server refuses a cast from too far and says so, which is a message instead
+// of a spell.
+
+// pendingSkillCast is a skill waiting for the character to get close enough.
+type pendingSkillCast struct {
+	skill  uint16
+	level  int
+	target uint32
+
+	// repathMs throttles reissuing the walk while the target moves, the same
+	// way chasing something to hit it does.
+	repathMs float32
+}
+
+// castOrApproach casts at a unit, or walks towards it first.
+func (s *InGameState) castOrApproach(skillID uint16, level int, target uint32) error {
+	if s.withinSkillRange(skillID, target) {
+		s.forgetPendingSkill()
+
+		return s.castAt(skillID, level, target)
+	}
+
+	if s.entityOf(target) == nil {
+		// Nothing to walk towards — the caster itself, or somebody who has
+		// gone. Send it and let the server answer.
+		return s.castAt(skillID, level, target)
+	}
+
+	trace.Emit(trace.HUD, "cast-approach",
+		zap.Uint16("skill", skillID), zap.Uint32("target", target),
+		zap.Int("range", s.skillRange(skillID)))
+
+	s.pendingSkill = &pendingSkillCast{skill: skillID, level: level, target: target}
+
+	return nil
+}
+
+// skillRange is how far a skill reaches, in cells, as the server reported it.
+//
+// Zero for a skill the server has not listed, and a reach of one for a skill
+// it listed with none — that is a melee skill, and treating no range as
+// unlimited would have the character cast Bash across the map.
+func (s *InGameState) skillRange(skillID uint16) int {
+	skill, known := s.findSkill(skillID)
+	if !known {
+		return 0
+	}
+
+	if skill.Range <= 0 {
+		return 1
+	}
+
+	return skill.Range
+}
+
+// withinSkillRange reports whether a cast would reach.
+func (s *InGameState) withinSkillRange(skillID uint16, target uint32) bool {
+	if s.player == nil {
+		return true
+	}
+
+	if target == s.selfAID() {
+		return true
+	}
+
+	e := s.entityOf(target)
+	if e == nil || e.Body == nil {
+		return true
+	}
+
+	reach := s.skillRange(skillID)
+	if reach <= 0 {
+		return true
+	}
+
+	targetX, targetY := e.Body.CurrentCell()
+	playerX, playerY := s.player.CurrentCell()
+
+	return abs(targetX-playerX) <= reach && abs(targetY-playerY) <= reach
+}
+
+// advancePendingSkill walks towards what is being cast at, and casts when it
+// is near enough.
+func (s *InGameState) advancePendingSkill(deltaMs float32) {
+	pending := s.pendingSkill
+	if pending == nil {
+		return
+	}
+
+	e := s.entityOf(pending.target)
+	if e == nil || e.Body == nil || e.IsDead {
+		s.forgetPendingSkill()
+
+		return
+	}
+
+	if s.withinSkillRange(pending.skill, pending.target) {
+		skill, level := pending.skill, pending.level
+		target := pending.target
+		s.forgetPendingSkill()
+
+		// Stopped where it stands: the walk is canceled by arriving rather
+		// than by reaching the cell it was sent to, so the character casts
+		// from the furthest point that reaches.
+		s.cancelWalk()
+
+		if err := s.castAt(skill, level, target); err != nil {
+			logger.Warn("could not cast on approach",
+				zap.Uint16("skill", skill), zap.Error(err))
+		}
+
+		return
+	}
+
+	pending.repathMs -= deltaMs
+	if pending.repathMs > 0 {
+		return
+	}
+	pending.repathMs = targetRepathMs
+
+	// Towards the target's own cell. The server stops the walk on the last
+	// free cell before it, and this stops itself as soon as the range check
+	// passes, which is sooner.
+	cellX, cellY := e.Body.CurrentCell()
+	if err := s.RequestMove(cellX, cellY); err != nil {
+		logger.Warn("could not walk to cast", zap.Error(err))
+	}
+}
+
+// forgetPendingSkill drops a cast that was waiting to get close.
+func (s *InGameState) forgetPendingSkill() {
+	if s.pendingSkill == nil {
+		return
+	}
+
+	trace.Emit(trace.HUD, "cast-approach-dropped",
+		zap.Uint16("skill", s.pendingSkill.skill))
+
+	s.pendingSkill = nil
 }

@@ -1,13 +1,15 @@
 package ui
 
 import (
-	"bytes"
 	"fmt"
 	"image"
 	"strings"
 
+	"github.com/Faultbox/midgard-ro/pkg/formats"
+
 	"github.com/Faultbox/midgard-ro/internal/engine/texture"
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
+	"github.com/Faultbox/midgard-ro/internal/game/states"
 )
 
 // TextureInfo holds GPU texture metadata.
@@ -45,10 +47,34 @@ func normalizePath(path string) string {
 // magnified when the UI is stretched across a HiDPI framebuffer, and linear
 // filtering blurs their one-pixel borders and bevels into mush.
 func (tc *TextureCache) Load(grfPath string) (*TextureInfo, error) {
+	return tc.load(grfPath, false)
+}
+
+// LoadSmooth is the same with linear filtering, for the art that is drawn out
+// in the world rather than on the interface.
+//
+// An effect is magnified by however far away it is, and nothing about it is
+// aligned to a pixel — a shard of ice a few dozen pixels across is drawn at
+// whatever size the camera puts it. Nearest turns that into a staircase; the
+// bevels and one-pixel borders that nearest is here to protect are an
+// interface thing and there are none out there.
+func (tc *TextureCache) LoadSmooth(grfPath string) (*TextureInfo, error) {
+	return tc.load(grfPath, true)
+}
+
+func (tc *TextureCache) load(grfPath string, smooth bool) (*TextureInfo, error) {
 	key := normalizePath(grfPath)
+	if smooth {
+		key += "|smooth"
+	}
 
 	if info, ok := tc.cache[key]; ok {
 		return info, nil
+	}
+
+	sprPath, frame, isFrame := states.SpriteFrameOf(grfPath)
+	if isFrame {
+		grfPath = sprPath
 	}
 
 	data, err := tc.loadFunc(grfPath)
@@ -56,7 +82,14 @@ func (tc *TextureCache) Load(grfPath string) (*TextureInfo, error) {
 		return nil, fmt.Errorf("loading texture %s: %w", grfPath, err)
 	}
 
-	img, _, err := image.Decode(bytes.NewReader(data))
+	var img image.Image
+
+	if isFrame {
+		img, err = spriteFrame(data, frame)
+	} else {
+		img, err = formats.DecodeImage(data)
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("decoding texture %s: %w", grfPath, err)
 	}
@@ -65,7 +98,12 @@ func (tc *TextureCache) Load(grfPath string) (*TextureInfo, error) {
 	rgba := texture.ImageToRGBA(img, true)
 	bounds := rgba.Bounds()
 
-	texID := tc.renderer.CreateTextureNearest(bounds.Dx(), bounds.Dy(), rgba.Pix)
+	upload := tc.renderer.CreateTextureNearest
+	if smooth {
+		upload = tc.renderer.CreateTexture
+	}
+
+	texID := upload(bounds.Dx(), bounds.Dy(), rgba.Pix)
 
 	info := &TextureInfo{
 		ID:     texID,
@@ -87,4 +125,27 @@ func (tc *TextureCache) Close() {
 		tc.renderer.DeleteTexture(info.ID)
 	}
 	tc.cache = nil
+}
+
+// spriteFrame is one frame of a sprite, as an image.
+//
+// The archive keeps some effects as sprites rather than as textures — the
+// jagged ice a frozen target is sealed in is seven frames of one — and a
+// frame of those is asked for the same way a file is, so everything that
+// draws through this cache can take either.
+func spriteFrame(data []byte, frame int) (image.Image, error) {
+	spr, err := formats.ParseSPR(data)
+	if err != nil {
+		return nil, err
+	}
+
+	if frame < 0 || frame >= len(spr.Images) {
+		return nil, fmt.Errorf("frame %d of %d", frame, len(spr.Images))
+	}
+
+	f := spr.Images[frame]
+	img := image.NewRGBA(image.Rect(0, 0, int(f.Width), int(f.Height)))
+	copy(img.Pix, f.Pixels)
+
+	return img, nil
 }

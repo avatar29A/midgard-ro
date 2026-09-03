@@ -35,10 +35,17 @@ const (
 	offAID        = 5
 	offGID        = 9
 	offSpeed      = 13
-	offJob        = 23
-	offHead       = 25
-	offWeapon     = 27
-	offShield     = 31
+
+	// The three status words rAthena calls bodyState, healthState and
+	// effectState — its opt1, opt2 and option. Only the first is read: it is
+	// the one that says a unit is petrified, frozen, stunned or asleep, and
+	// those are the states drawn on the unit rather than as an icon.
+	offBodyState = 15
+
+	offJob    = 23
+	offHead   = 25
+	offWeapon = 27
+	offShield = 31
 
 	// The three head gear looks. rAthena's names for them do not run in the
 	// order they read: accessory is the lower slot, accessory2 the upper and
@@ -158,6 +165,11 @@ type Entity struct {
 	HP      int32
 	Name    string
 
+	// BodyState is rAthena's opt1: petrified, frozen, stunned or asleep, one
+	// at a time. It arrives with the unit, so a monster already frozen when
+	// it comes into view is drawn frozen.
+	BodyState uint16
+
 	// X, Y is where the unit is. Dir is its facing, in server directions.
 	X, Y int
 	Dir  int
@@ -268,6 +280,7 @@ func decodeEntityPrefix(data []byte) *Entity {
 		AID:       readU32(data, offAID),
 		GID:       readU32(data, offGID),
 		SpeedMs:   int16(readU16(data, offSpeed)),
+		BodyState: readU16(data, offBodyState),
 		Job:       int16(readU16(data, offJob)),
 		HairStyle: readU16(data, offHead),
 		Weapon:    readU32(data, offWeapon),

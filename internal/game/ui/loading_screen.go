@@ -1,10 +1,10 @@
 package ui
 
 import (
-	"bytes"
 	"fmt"
-	"image"
 	gomath "math"
+
+	"github.com/Faultbox/midgard-ro/pkg/formats"
 
 	"go.uber.org/zap"
 
@@ -76,7 +76,7 @@ func (b *UI2DBackend) decodeLinear(path string) (*TextureInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	img, _, err := image.Decode(bytes.NewReader(data))
+	img, err := formats.DecodeImage(data)
 	if err != nil {
 		return nil, fmt.Errorf("decoding %s: %w", path, err)
 	}

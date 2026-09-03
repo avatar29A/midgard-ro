@@ -104,8 +104,7 @@ type InGameState struct {
 	effectCache map[string]*formats.STR
 
 	// celebrations are level-ups waiting to be shown, and celebrationWaitMs
-	// how long before the next may start. soundRequest is a sound the world
-	// wants played, which the game plays because the state has no audio.
+	// how long before the next may start.
 	// groundTraceMs counts frames for the ground trace's throttle, and
 	// gridTraced marks the one-off height grid as already printed.
 	groundTraceMs int
@@ -115,9 +114,28 @@ type InGameState struct {
 	// what this character is wearing.
 	showEquipment bool
 
+	// delayedEffects are the ones waiting for their moment — a bolt's shot
+	// lands a while after the volley starts.
+	delayedEffects []delayedEffect
+
+	// skillUnits maps a ground skill's unit to whoever placed it. Its blows
+	// arrive from the unit rather than from the caster.
+	skillUnits map[uint32]uint32
+
+	// playerBodyState is the state the character being played is drawn in.
+	// Kept here rather than on an entity because the character is not in the
+	// registry — it is driven by its own prediction.
+	playerBodyState uint16
+
+	// bursts are the particle effects playing — the ones the original draws
+	// in code rather than from a file.
+	bursts []*activeBurst
+
+	// sounds are what the world wants played this frame.
+	sounds []string
+
 	celebrations      int
 	celebrationWaitMs float32
-	soundRequest      string
 
 	// pendingLevelUp and pendingJobLevelUp are levels reached and not yet
 	// acknowledged, which the buttons at the foot of the screen offer.
@@ -139,6 +157,9 @@ type InGameState struct {
 	castSkill   uint16
 	castTotalMs float32
 	castLeftMs  float32
+
+	// pendingSkill is a cast waiting for the character to walk into range.
+	pendingSkill *pendingSkillCast
 
 	// castAuras are the rings under whoever is casting, and holdCastAura keeps
 	// one there for --cast-aura.
@@ -787,6 +808,9 @@ func (s *InGameState) Update(dt float64) error {
 		s.advanceCast(deltaMs)
 		s.advanceSkillLabels(deltaMs)
 		s.advanceCastAuras(deltaMs)
+		s.advancePendingSkill(deltaMs)
+		s.advanceBursts(deltaMs)
+		s.advanceDelayedEffects(deltaMs)
 		s.updateDamageNumbers(deltaMs)
 		s.updateEffects(deltaMs)
 		s.updateCelebrations(deltaMs)
@@ -1390,6 +1414,10 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_NOTIFY_NEWENTRY, s.handleEntitySpawn)
 	s.client.RegisterHandler(packets.ZC_NOTIFY_MOVEENTRY, s.handleEntityMove)
 	s.client.RegisterHandler(packets.ZC_NOTIFY_VANISH, s.handleEntityVanish)
+	s.client.RegisterHandler(packets.ZC_STATE_CHANGE, s.handleStateChange)
+	s.client.RegisterHandler(packets.ZC_DISPEL, s.handleCastCancelled)
+	s.client.RegisterHandler(packets.ZC_SKILL_ENTRY, s.handleSkillUnit)
+	s.client.RegisterHandler(packets.ZC_SKILL_DISAPPEAR, s.handleSkillUnitGone)
 	s.client.RegisterHandler(packets.ZC_NPCACK_MAPMOVE, s.handleMapChange)
 	s.client.RegisterHandler(packets.ZC_NPCACK_SERVERMOVE, s.handleServerMove)
 	s.client.RegisterHandler(packets.ZC_NOTIFY_PLAYERMOVE, s.handlePlayerMove)
@@ -2284,6 +2312,7 @@ func (s *InGameState) ClickWorld(mouseX, mouseY, viewportW, viewportH float32) {
 	// Whatever this click turns out to mean, it replaces any errand still in
 	// progress. PickUpItem sets a new one if that is what this click was.
 	s.forgetPendingPickup()
+	s.forgetPendingSkill()
 	s.forgetAttack()
 
 	// A unit under the pointer takes the click. For an NPC, walking there
@@ -2365,6 +2394,17 @@ func (s *InGameState) RequestMove(tileX, tileY int) error {
 	// here, and a seated character that ignores the pointer entirely reads as
 	// one that has stopped responding.
 	if s.Sitting() {
+		s.faceCell(tileX, tileY)
+
+		return nil
+	}
+
+	// Nor does one in the middle of a cast. unit_can_move is false while the
+	// skill timer runs, so the server refuses the walk the same way, and the
+	// original gives no way to walk out of a cast: it lands, or something
+	// breaks it. Asking anyway left the character sliding along while the bar
+	// filled.
+	if s.Casting() {
 		s.faceCell(tileX, tileY)
 
 		return nil

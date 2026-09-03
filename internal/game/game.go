@@ -688,26 +688,54 @@ func (g *Game) runCast() {
 		return
 	}
 
+	// Every skill asked for has to be in the list, not merely some list. The
+	// character's own skills arrive at login and anything @allskill grants
+	// arrives later, so casting on the first list to turn up refuses half of
+	// what was asked for — which is what it did.
 	for _, skill := range g.castSkills {
-		if err := state.UseSkill(uint16(skill), 0); err != nil {
-			logger.Warn("--cast request failed", zap.Int("skill", skill), zap.Error(err))
-
-			continue
-		}
-
-		// A ground skill is now held, waiting for a click nobody is going to
-		// make. Put it under the character's own feet, which is a cell that
-		// always exists and is always in range.
-		if _, holding := state.Placing(); holding {
-			x, y := state.PlayerCell()
-			if err := state.PlaceHeldSkillAt(x, y); err != nil {
-				logger.Warn("--cast could not place that skill",
-					zap.Int("skill", skill), zap.Error(err))
-			}
+		if !state.HasSkill(uint16(skill)) {
+			return
 		}
 	}
 
-	g.castSkills = nil
+	// One a frame, and the next only once this one is away. A targeted skill
+	// waits for something to aim at, and holding the rest behind it keeps them
+	// in the order they were asked for.
+	skill := g.castSkills[0]
+
+	if err := state.UseSkill(uint16(skill), 0); err != nil {
+		logger.Warn("--cast request failed", zap.Int("skill", skill), zap.Error(err))
+
+		g.castSkills = g.castSkills[1:]
+
+		return
+	}
+
+	// The skill is now held, waiting for a click nobody is going to make. A
+	// targeted one goes on the nearest monster, which is what an attack skill
+	// has to hit for anything of it to be seen; a ground one goes under the
+	// character's own feet, a cell that always exists and is always in range.
+	switch _, holding := state.Placing(); {
+	case !holding:
+	case state.Targeting():
+		if !state.CastHeldAtNearest() {
+			// Nothing in view yet. The monsters on a field arrive as unit
+			// reports over the first seconds on the map, so the frame the
+			// skill list finishes on is usually still an empty field: put the
+			// skill down and ask again rather than spending the request on it.
+			state.CancelPlacing()
+
+			return
+		}
+	default:
+		x, y := state.PlayerCell()
+		if err := state.PlaceHeldSkillAt(x, y); err != nil {
+			logger.Warn("--cast could not place that skill",
+				zap.Int("skill", skill), zap.Error(err))
+		}
+	}
+
+	g.castSkills = g.castSkills[1:]
 }
 
 // SetAttackNearest records that --attack-nearest asked for a fight.
@@ -1105,7 +1133,9 @@ func (g *Game) renderUI() {
 			WorldLabels: append(
 				state.WorldLabels(viewportWidth, viewportHeight),
 				state.SkillLabels(viewportWidth, viewportHeight)...),
-			WorldEffects:    state.EffectQuads(viewportWidth, viewportHeight),
+			WorldEffects: append(
+				state.EffectQuads(viewportWidth, viewportHeight),
+				state.IceQuads(viewportWidth, viewportHeight)...),
 			TargetMarker:    targetMarker,
 			DamageNumbers:   state.DamageNumbers(viewportWidth, viewportHeight),
 			LevelUpButtons:  levelUpButtons,
@@ -1190,7 +1220,7 @@ func (g *Game) renderUI() {
 		// A sound the world asked for — the level-up flash and its chime go
 		// together. The state has no audio device, so it names the file and
 		// this plays it.
-		if path, ok := state.TakeSoundRequest(); ok {
+		for _, path := range state.TakeSounds() {
 			g.playWorldSound(path)
 		}
 

@@ -203,7 +203,7 @@ func TestLevelUpCelebrationsPlayOneAtATime(t *testing.T) {
 
 	s.updateCelebrations(16)
 
-	if _, ok := s.TakeSoundRequest(); !ok {
+	if len(s.TakeSounds()) == 0 {
 		t.Fatal("the first celebration made no sound")
 	}
 	if len(s.effects) != 1 {
@@ -213,7 +213,7 @@ func TestLevelUpCelebrationsPlayOneAtATime(t *testing.T) {
 	// Still inside the first one: the second must wait.
 	s.updateCelebrations(100)
 
-	if _, ok := s.TakeSoundRequest(); ok {
+	if len(s.TakeSounds()) != 0 {
 		t.Error("the second celebration started on top of the first")
 	}
 	if len(s.effects) != 1 {
@@ -223,7 +223,7 @@ func TestLevelUpCelebrationsPlayOneAtATime(t *testing.T) {
 	// Past the first one's length, the second goes.
 	s.updateCelebrations(1000)
 
-	if _, ok := s.TakeSoundRequest(); !ok {
+	if len(s.TakeSounds()) == 0 {
 		t.Error("the second celebration never played")
 	}
 }
@@ -231,12 +231,12 @@ func TestLevelUpCelebrationsPlayOneAtATime(t *testing.T) {
 // TestSoundRequestIsTakenOnce: the game plays what it is handed, and a request
 // left set would play the same sound every frame.
 func TestSoundRequestIsTakenOnce(t *testing.T) {
-	s := &InGameState{soundRequest: "x.wav"}
+	s := &InGameState{sounds: []string{"x.wav"}}
 
-	if path, ok := s.TakeSoundRequest(); !ok || path != "x.wav" {
-		t.Fatalf("TakeSoundRequest = %q, %v", path, ok)
+	if got := s.TakeSounds(); len(got) != 1 || got[0] != "x.wav" {
+		t.Fatalf("TakeSounds = %v", got)
 	}
-	if _, ok := s.TakeSoundRequest(); ok {
+	if len(s.TakeSounds()) != 0 {
 		t.Error("the same sound was handed out twice")
 	}
 }

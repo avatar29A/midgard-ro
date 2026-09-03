@@ -2,17 +2,14 @@
 package scene
 
 import (
-	"bytes"
 	"fmt"
 	"image"
-	"strings"
 	"unsafe"
 
 	"github.com/go-gl/gl/v4.1-core/gl"
 
 	"github.com/Faultbox/midgard-ro/internal/engine/scene/shaders"
 	"github.com/Faultbox/midgard-ro/internal/engine/shader"
-	"github.com/Faultbox/midgard-ro/internal/engine/texture"
 	"github.com/Faultbox/midgard-ro/internal/engine/water"
 	"github.com/Faultbox/midgard-ro/pkg/formats"
 	"github.com/Faultbox/midgard-ro/pkg/math"
@@ -134,7 +131,7 @@ func (wr *WaterRenderer) loadWaterTextures(texLoader func(string) ([]byte, error
 			continue
 		}
 
-		img, err := wr.decodeTexture(data, path)
+		img, err := decodeMapTexture(data, path, false)
 		if err != nil {
 			continue
 		}
@@ -147,21 +144,6 @@ func (wr *WaterRenderer) loadWaterTextures(texLoader func(string) ([]byte, error
 		wr.waterTextures = textures
 		wr.useWaterTex = true
 	}
-}
-
-func (wr *WaterRenderer) decodeTexture(data []byte, path string) (*image.RGBA, error) {
-	lowerPath := strings.ToLower(path)
-	var img image.Image
-	var err error
-	if strings.HasSuffix(lowerPath, ".tga") {
-		img, err = texture.DecodeTGA(data)
-	} else {
-		img, _, err = image.Decode(bytes.NewReader(data))
-	}
-	if err != nil {
-		return nil, err
-	}
-	return texture.ImageToRGBA(img, false), nil
 }
 
 func (wr *WaterRenderer) uploadTexture(img *image.RGBA) uint32 {
