@@ -80,6 +80,14 @@ func (s *InGameState) handleSkillCast(data []byte) error {
 
 	s.beginCastAura(cast)
 
+	// What a cast sounds like. Only for a cast that takes time: an instant
+	// skill's sound is the skill's own, played when it goes off.
+	if cast.CastMs > 0 {
+		if effects, known := skills.EffectsOf(cast.SkillID); known {
+			s.playSkillSounds(effects.BeginCast)
+		}
+	}
+
 	// No motion yet. The sprite has cast poses and the client's own table
 	// names one per skill — ACTOR_STATE, read two changes ago — but they are
 	// ACT sets this client does not bake, so playing something else would be
@@ -779,6 +787,24 @@ func (s *InGameState) drawCastAuras(viewProj math.Mat4) {
 // They are named and not drawn, and the miss is logged once each, which makes
 // the log the list of what is left.
 
+// effectSoundDir is where the archive keeps what an effect sounds like.
+const effectSoundDir = `data\wav\effect\`
+
+// effectSoundFor is the wav an effect plays, from the name the table uses.
+//
+// Named after the effect rather than after the skill: the archive has
+// ef_bash.wav and ef_frostdiver.wav and no sm_bash.wav at all. Twenty-six of
+// the effects the table names have one, and between them they cover a hundred
+// and twenty-four of its entries — including the casting sound, which belongs
+// to EF_BEGINSPELL and so to every skill that casts.
+func effectSoundFor(effect string) string {
+	if len(effect) <= 3 || effect[:3] != "EF_" {
+		return ""
+	}
+
+	return effectSoundDir + strings.ToLower(effect) + ".wav"
+}
+
 // effectFileFor is the STR the archive files an effect under, from the name
 // the table uses: EF_FIREHIT is firehit.str.
 func effectFileFor(effect string) string {
@@ -798,6 +824,17 @@ func (s *InGameState) playSkillEffects(effects []string, x, y, z float32) {
 		}
 
 		s.PlayEffectAt(file, x, y, z)
+	}
+}
+
+// playSkillSounds asks for what a list of effects sounds like.
+//
+// Separate from the drawing because the two do not overlap: an effect can have
+// a sound and no animation, which is most of them, or an animation and no
+// sound.
+func (s *InGameState) playSkillSounds(effects []string) {
+	for _, effect := range effects {
+		s.playSound(effectSoundFor(effect))
 	}
 }
 
@@ -833,16 +870,19 @@ func (s *InGameState) playSkillUseEffects(use packets.SkillUse) {
 	if x, y, z, ok := s.effectHeight(use.SourceID); ok {
 		s.playSkillEffects(effects.OnCaster, x, y, z)
 	}
+	s.playSkillSounds(effects.OnCaster)
 
 	if use.TargetID != 0 {
 		if x, y, z, ok := s.effectHeight(use.TargetID); ok {
 			s.playSkillEffects(effects.OnTarget, x, y, z)
 		}
+		s.playSkillSounds(effects.OnTarget)
 	}
 
 	if use.Ground {
 		x, z := entity.CellToWorld(use.CellX, use.CellY)
 		s.playSkillEffects(effects.OnGround, x, s.terrainHeight(x, z), z)
+		s.playSkillSounds(effects.OnGround)
 	}
 }
 

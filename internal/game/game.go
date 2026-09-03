@@ -1200,7 +1200,7 @@ func (g *Game) renderUI() {
 		// A sound the world asked for — the level-up flash and its chime go
 		// together. The state has no audio device, so it names the file and
 		// this plays it.
-		if path, ok := state.TakeSoundRequest(); ok {
+		for _, path := range state.TakeSounds() {
 			g.playWorldSound(path)
 		}
 
