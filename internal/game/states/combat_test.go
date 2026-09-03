@@ -297,3 +297,52 @@ func TestFaceTowardsSurvivesTheUnknown(t *testing.T) {
 	s.faceTowards(1, 2)
 	s.faceTowards(0, 0)
 }
+
+// TestABarehandedBlowHasASound: the attack sounds a body's sprite carries
+// belong to its weapons, and the set an unarmed character swings from names
+// none. Without a fallback a character with nothing in hand struck in silence
+// while every monster's blow landed with its own noise.
+func TestABarehandedBlowHasASound(t *testing.T) {
+	seen := map[string]bool{}
+	for target := uint32(0); target < 6; target++ {
+		sound := barehandedSound(target)
+		if sound == "" {
+			t.Fatalf("target %d gets no sound", target)
+		}
+
+		seen[sound] = true
+	}
+
+	if len(seen) != len(barehandedSounds) {
+		t.Errorf("%d of the %d fist sounds are ever used: %v",
+			len(seen), len(barehandedSounds), seen)
+	}
+
+	// The same target sounds the same, which is what makes two blows landing
+	// together one noise rather than two.
+	first := barehandedSound(7)
+	if again := barehandedSound(7); again != first {
+		t.Errorf("the same target picked %q and then %q", first, again)
+	}
+}
+
+// TestOnlyCharactersStrikeBarehanded: a monster whose sprite names no sound
+// for its attack has none, and giving it a fist would be inventing one.
+func TestOnlyCharactersStrikeBarehanded(t *testing.T) {
+	s, mob := withMob()
+
+	if s.strikesBarehanded(0) {
+		t.Error("a blow from nobody counts as barehanded")
+	}
+	if s.strikesBarehanded(mob.ID) {
+		t.Error("a monster was given fists")
+	}
+
+	player := entity.NewEntity(77, entity.TypePlayer)
+	player.Body = entity.NewCharacter(0, 0, 0)
+	s.entityManager.Add(player)
+
+	if !s.strikesBarehanded(player.ID) {
+		t.Error("another player's barehanded blow was left silent")
+	}
+}
