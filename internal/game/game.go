@@ -1271,7 +1271,7 @@ func (g *Game) renderUI() {
 		// what it targets, which is the state's question rather than the
 		// interface's.
 		if cast, ok := g.uiBackend.TakeSkillCast(); ok {
-			if err := state.UseSkill(cast.Skill, 0); err != nil {
+			if err := state.UseSkill(cast.Skill, cast.Level); err != nil {
 				logger.Warn("could not use that skill", zap.Error(err))
 			}
 		}

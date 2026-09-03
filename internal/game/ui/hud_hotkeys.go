@@ -86,6 +86,7 @@ func (b *UI2DBackend) drawHotkeys(state InGameUIState, screenW, screenH float32)
 	}
 
 	b.drawHotkeyCells(state)
+	b.hotkeyHover(state)
 	b.drawHotkeyRowNumbers(x, y, rows)
 	b.drawHotkeyClose(x, y)
 
@@ -380,6 +381,15 @@ func (b *UI2DBackend) setHotkeyItem(row, col int, cell hotkeyCell) bool {
 type hotkeyCell struct {
 	id    uint32
 	skill bool
+
+	// level is the level a skill goes off at from this cell. Zero means
+	// whatever the character has it at, which is what a skill dragged
+	// straight out of the window means.
+	//
+	// The same skill can sit on the bar several times at different levels —
+	// a Fire Bolt on one key and a cheaper one on another — which is why the
+	// level belongs to the cell rather than to the skill.
+	level int
 }
 
 // AssignHotkey puts an item in a cell, replacing whatever was there, and
@@ -445,11 +455,16 @@ func (b *UI2DBackend) useHotkey(state InGameUIState, row, col int) {
 		return
 	}
 
-	// A skill needs nothing looked up: the server knows what level it is at,
-	// and which unit it goes to depends on what the skill targets, which is a
-	// question for the state rather than for the bar.
+	// Which unit a skill goes to depends on what it targets, which is a
+	// question for the state rather than for the bar. What level it goes off
+	// at is this cell's own, held down to what the character has.
 	if cell.skill {
-		b.skillCast = SkillCast{Skill: uint16(cell.id)}
+		level := 0
+		if skill, known := findSkillIn(state.Skills, uint16(cell.id)); known {
+			level = hotkeyCastLevel(cell, skill)
+		}
+
+		b.skillCast = SkillCast{Skill: uint16(cell.id), Level: level}
 
 		return
 	}
@@ -473,6 +488,11 @@ type SkillCast struct {
 	// Skill is the skill id. Zero is none: NV_BASIC is 1, so nothing real
 	// collides with the empty value.
 	Skill uint16
+
+	// Level is what it goes off at. Zero means whatever the character has it
+	// at, which is what everything asking for a skill meant before a cell
+	// could hold one at a level of its own.
+	Level int
 }
 
 // TakeSkillCast returns a skill the player asked to use and clears it.
@@ -638,4 +658,127 @@ func (b *UI2DBackend) finishHotkeyDrag() {
 	if moved {
 		b.saveHotkeyPlacement()
 	}
+}
+
+// What a cell holds, and which key fires it.
+//
+// A cell shows an icon and a count and nothing else, which leaves the player
+// to remember which of two similar icons is which skill, what level it goes
+// off at, and whether this row is the one on the function keys or the one on
+// Ctrl. The original says so on hover.
+
+// HotkeyKeyLabel is the key that fires a cell, written the way a player would
+// say it.
+//
+// The rows are bound in the game loop — see hotkeyRows there — and this has to
+// agree with it. Exported for the test over there that holds the two together.
+func HotkeyKeyLabel(row, col int) string {
+	if row < 0 || col < 0 || col >= hotkeySlots {
+		return ""
+	}
+
+	number := strconv.Itoa(col + 1)
+
+	switch row {
+	case 0:
+		return "F" + number
+	case 1:
+		return number
+	case 2:
+		return "Ctrl+" + number
+	case 3:
+		return "Alt+" + number
+	}
+
+	return ""
+}
+
+// hotkeyTooltipFor is what to say about a cell: what it is, then what there is
+// to know about it, then the key.
+func (b *UI2DBackend) hotkeyTooltipFor(state InGameUIState, row, col int) (title string, lines []string) {
+	held := b.hotkeyItems[row][col]
+	if held.id == 0 {
+		return "", nil
+	}
+
+	if held.skill {
+		id := uint16(held.id)
+
+		title = skills.Name(id)
+		if title == "" {
+			title = "Skill #" + strconv.Itoa(int(id))
+		}
+
+		// The level it was put on the bar at, and what the character has it
+		// at. A skill can sit on the bar several times over at different
+		// levels, so the one on this key is worth saying.
+		if skill, known := findSkillIn(state.Skills, id); known {
+			lines = append(lines, "Lv "+strconv.Itoa(hotkeyCastLevel(held, skill))+
+				" of "+strconv.Itoa(skill.Level))
+
+			if skill.Inf == 0 {
+				lines = append(lines, "Passive")
+			} else {
+				lines = append(lines, "SP "+strconv.Itoa(skill.SP))
+			}
+		}
+	} else {
+		title = items.Name(held.id)
+		if title == "" {
+			title = "Item #" + strconv.Itoa(int(held.id))
+		}
+
+		lines = append(lines, "Carried: "+strconv.Itoa(inventoryCount(state.Inventory, held.id)))
+	}
+
+	if key := HotkeyKeyLabel(row, col); key != "" {
+		lines = append(lines, "Key: "+key)
+	}
+
+	return title, lines
+}
+
+// findSkillIn looks one up in what the server last sent.
+func findSkillIn(list []packets.Skill, id uint16) (packets.Skill, bool) {
+	for _, skill := range list {
+		if skill.ID == id {
+			return skill, true
+		}
+	}
+
+	return packets.Skill{}, false
+}
+
+// hotkeyCastLevel is the level a cell goes off at: the one it was put there
+// with, held down to what the character actually has.
+//
+// Held down rather than refused: a skill put on the bar at level ten and then
+// still being learned would otherwise be a key that the server turns away.
+func hotkeyCastLevel(held hotkeyCell, skill packets.Skill) int {
+	if held.level <= 0 || held.level > skill.Level {
+		return skill.Level
+	}
+
+	return held.level
+}
+
+// hotkeyHover shows what the pointer is over.
+func (b *UI2DBackend) hotkeyHover(state InGameUIState) {
+	if b.hotkeyDrag.active || b.itemDrag.active || b.skillDrag.active {
+		return
+	}
+
+	in := b.ctx.Input()
+
+	row, col, ok := b.hotkeyCellAt(in.MouseX, in.MouseY)
+	if !ok {
+		return
+	}
+
+	title, lines := b.hotkeyTooltipFor(state, row, col)
+	if title == "" {
+		return
+	}
+
+	b.setTooltip(title, lines, in.MouseX, in.MouseY)
 }
