@@ -123,6 +123,10 @@ type activeBurst struct {
 
 	ageMs float32
 	runMs float32
+
+	// traced marks that the first frame of this burst has been reported, so
+	// the trace says where it landed once rather than sixty times a second.
+	traced bool
 }
 
 // playBurst starts one over a world position.
@@ -167,7 +171,16 @@ func (s *InGameState) burstQuads(viewportW, viewportH float32) []EffectQuad {
 			continue
 		}
 
-		out = append(out, b.quadsAt(originX, originY)...)
+		quads := b.quadsAt(originX, originY)
+		if trace.On(trace.HUD) && !b.traced {
+			b.traced = true
+
+			trace.Emit(trace.HUD, "burst-quads",
+				zap.Int("quads", len(quads)),
+				zap.Float32("x", originX), zap.Float32("y", originY))
+		}
+
+		out = append(out, quads...)
 	}
 
 	return out

@@ -22,6 +22,10 @@ type UI2DBackend struct {
 	// Texture cache for GRF-based UI textures
 	texCache *TextureCache
 
+	// missingEffectArt is the effect textures already complained about, so
+	// one that will not load says so once rather than every frame.
+	missingEffectArt map[string]bool
+
 	// Login screen textures (lazy-loaded)
 	loginBgTex    *TextureInfo
 	loadingTex    map[int]*TextureInfo // the loading screens, by 1-based index; nil for a missing one

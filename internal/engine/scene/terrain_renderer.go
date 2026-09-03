@@ -2,7 +2,6 @@
 package scene
 
 import (
-	"bytes"
 	"fmt"
 	"image"
 	"strings"
@@ -167,7 +166,7 @@ func (tr *TerrainRenderer) decodeTexture(data []byte, path string) (*image.RGBA,
 	if strings.HasSuffix(lowerPath, ".tga") {
 		img, err = texture.DecodeTGA(data)
 	} else {
-		img, _, err = image.Decode(bytes.NewReader(data))
+		img, err = formats.DecodeImage(data)
 	}
 
 	if err != nil {
