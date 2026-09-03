@@ -23,10 +23,17 @@ import (
 const frozenSprite = `data\sprite\이팩트\얼음땡.spr`
 
 // Frames of it, by what they are.
+//
+// The line uses the two large ones rather than the five small ones. The small
+// frames are a dozen pixels across, and a dozen pixels blown up to a couple of
+// cells is a staircase however it is filtered: at the size the ice has to
+// stand, the big frames are drawn about life size and the small ones six
+// times over. What is lost is variety, and there is enough of that in the
+// sizes and the lean.
 const (
 	frozenBlock  = 0 // the cluster a sealed target stands inside
-	frozenShard  = 2 // the first of the smaller ones, five in a row
-	frozenShards = 5
+	frozenShard  = 0 // the first of the ones the line is built from
+	frozenShards = 2
 )
 
 // frozenFrameSize is how big each frame's art is, in pixels.

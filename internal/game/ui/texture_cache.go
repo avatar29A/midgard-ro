@@ -47,7 +47,26 @@ func normalizePath(path string) string {
 // magnified when the UI is stretched across a HiDPI framebuffer, and linear
 // filtering blurs their one-pixel borders and bevels into mush.
 func (tc *TextureCache) Load(grfPath string) (*TextureInfo, error) {
+	return tc.load(grfPath, false)
+}
+
+// LoadSmooth is the same with linear filtering, for the art that is drawn out
+// in the world rather than on the interface.
+//
+// An effect is magnified by however far away it is, and nothing about it is
+// aligned to a pixel — a shard of ice a few dozen pixels across is drawn at
+// whatever size the camera puts it. Nearest turns that into a staircase; the
+// bevels and one-pixel borders that nearest is here to protect are an
+// interface thing and there are none out there.
+func (tc *TextureCache) LoadSmooth(grfPath string) (*TextureInfo, error) {
+	return tc.load(grfPath, true)
+}
+
+func (tc *TextureCache) load(grfPath string, smooth bool) (*TextureInfo, error) {
 	key := normalizePath(grfPath)
+	if smooth {
+		key += "|smooth"
+	}
 
 	if info, ok := tc.cache[key]; ok {
 		return info, nil
@@ -79,7 +98,12 @@ func (tc *TextureCache) Load(grfPath string) (*TextureInfo, error) {
 	rgba := texture.ImageToRGBA(img, true)
 	bounds := rgba.Bounds()
 
-	texID := tc.renderer.CreateTextureNearest(bounds.Dx(), bounds.Dy(), rgba.Pix)
+	upload := tc.renderer.CreateTextureNearest
+	if smooth {
+		upload = tc.renderer.CreateTexture
+	}
+
+	texID := upload(bounds.Dx(), bounds.Dy(), rgba.Pix)
 
 	info := &TextureInfo{
 		ID:     texID,

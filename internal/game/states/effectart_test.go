@@ -104,15 +104,14 @@ func TestTheFrozenFramesAreWhatTheArchiveHolds(t *testing.T) {
 		}
 	}
 
-	// The block a target is sealed in is the big one, and the shards are the
-	// small ones. Pointing at the wrong frame draws a shard where the block
-	// should be, which is a target standing in the open with a chip of ice
-	// beside it.
-	block := spr.Images[frozenBlock]
+	// The frames the line is built from have to be the detailed ones. A frame
+	// a dozen pixels across, drawn a couple of cells tall, is a staircase
+	// however it is filtered — which is what the line looked like when it was
+	// cut from the small ones.
 	for i := frozenShard; i < frozenShard+frozenShards; i++ {
-		if spr.Images[i].Height >= block.Height {
-			t.Errorf("frame %d is %d tall against the block's %d; it is not a shard",
-				i, spr.Images[i].Height, block.Height)
+		if spr.Images[i].Height < 60 {
+			t.Errorf("the line is drawn from frame %d, which is only %d pixels tall",
+				i, spr.Images[i].Height)
 		}
 	}
 }
