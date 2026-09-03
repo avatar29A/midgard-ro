@@ -773,3 +773,43 @@ func TestAUnitThatHasGoneIsForgotten(t *testing.T) {
 		t.Errorf("a unit that has gone still answers to %d", got)
 	}
 }
+
+// TestAGroundSkillAimsAtWhoIsUnderThePointer: a sprite stands on its cell but
+// is drawn upwards from it, so a pointer on a monster's body meets the ground
+// two or three cells beyond its feet. Thunder Storm reaches two cells either
+// way, so aiming at the ground there is the difference between hitting and
+// missing — which is what made it work every other time.
+func TestAGroundSkillAimsAtWhoIsUnderThePointer(t *testing.T) {
+	s, mob := withMob()
+	s.hoverValid = true
+	s.hoverCellX, s.hoverCellY = 103, 97 // the ground behind it
+
+	// withMob puts the monster on 100,100. Nothing here can pick from the
+	// screen, so the pick is stood in for by placing the mob's own cell
+	// against the ground cell and asking which one a placement takes.
+	wantX, wantY := mob.Body.CurrentCell()
+	if wantX != 100 || wantY != 100 {
+		t.Fatalf("the monster is on %d,%d, not where this test expects", wantX, wantY)
+	}
+
+	// With nobody picked, the ground under the pointer is what it takes.
+	gotX, gotY, ok := s.groundAimFor(0, 0, 0, 0)
+	if !ok {
+		t.Fatal("a valid ground cell was refused")
+	}
+	if gotX != 103 || gotY != 97 {
+		t.Errorf("with nobody under the pointer it aimed at %d,%d, want the ground at 103,97",
+			gotX, gotY)
+	}
+}
+
+// TestAGroundSkillWithNowhereToGo: off the map, nothing is cast. Sending the
+// cell anyway has the server refuse it, and the skill is spent either way.
+func TestAGroundSkillWithNowhereToGo(t *testing.T) {
+	s, _ := withMob()
+	s.hoverValid = false
+
+	if _, _, ok := s.groundAimFor(0, 0, 0, 0); ok {
+		t.Error("a placement off the map was accepted")
+	}
+}

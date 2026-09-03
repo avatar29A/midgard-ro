@@ -610,17 +610,45 @@ func (s *InGameState) placeHeldSkill(mouseX, mouseY, viewportW, viewportH float3
 		return true
 	}
 
-	if !s.hoverValid {
+	cellX, cellY, aimed := s.groundAimFor(mouseX, mouseY, viewportW, viewportH)
+	if !aimed {
 		trace.Emit(trace.HUD, "placing-off-map", zap.Uint16("skill", skill))
 
 		return true
 	}
 
-	if err := s.UseSkillAt(skill, level, s.hoverCellX, s.hoverCellY); err != nil {
+	if err := s.UseSkillAt(skill, level, cellX, cellY); err != nil {
 		logger.Warn("could not place that skill", zap.Uint16("skill", skill), zap.Error(err))
 	}
 
 	return true
+}
+
+// groundAimFor is the cell a ground skill goes on, for a click at a point.
+//
+// Whoever is under the pointer, if anybody, and otherwise the ground under
+// it. A sprite stands on its cell but is drawn upwards from it, so a pointer
+// on a monster's body meets the ground two or three cells beyond its feet —
+// and a skill aimed there covers cells the monster is not standing on.
+// Thunder Storm reaches two cells either way, so that is the difference
+// between hitting and missing, which is what made it work every other time.
+func (s *InGameState) groundAimFor(mouseX, mouseY, viewportW, viewportH float32) (cellX, cellY int, ok bool) {
+	if e := s.PickEntity(mouseX, mouseY, viewportW, viewportH); e != nil && e.Body != nil {
+		x, y := e.Body.CurrentCell()
+
+		trace.Emit(trace.HUD, "placing-on-unit",
+			zap.Uint32("aid", e.ID), zap.String("name", e.Name),
+			zap.Int("cellX", x), zap.Int("cellY", y),
+			zap.Int("groundX", s.hoverCellX), zap.Int("groundY", s.hoverCellY))
+
+		return x, y, true
+	}
+
+	if !s.hoverValid {
+		return 0, 0, false
+	}
+
+	return s.hoverCellX, s.hoverCellY, true
 }
 
 // CastHeldAtNearest aims the held skill at the closest monster in view, and
