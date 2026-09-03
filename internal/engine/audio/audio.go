@@ -337,11 +337,24 @@ func (m *Manager) GetBGMPath() string {
 	return m.bgmPath
 }
 
-// PlaySFX plays a sound effect from WAV data.
+// PlaySFX plays a sound effect from WAV data, at whatever the effects volume
+// is set to.
 func (m *Manager) PlaySFX(data []byte) error {
+	return m.PlaySFXAt(data, 1)
+}
+
+// PlaySFXAt plays one quieter than that, for a sound that comes from
+// somewhere: a monster walking at the far edge of the screen should not be as
+// loud as one at your feet. Gain is a fraction of the effects volume, and one
+// is as loud as PlaySFX.
+func (m *Manager) PlaySFXAt(data []byte, gain float64) error {
+	if gain <= 0 {
+		return nil
+	}
+
 	m.mu.RLock()
 	initialized := m.initialized
-	sfxVol := m.masterVolume * m.sfxVolLevel
+	sfxVol := m.masterVolume * m.sfxVolLevel * clamp(gain, 0, 1)
 	m.mu.RUnlock()
 
 	if !initialized {

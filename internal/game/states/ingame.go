@@ -122,6 +122,10 @@ type InGameState struct {
 	// arrive from the unit rather than from the caster.
 	skillUnits map[uint32]uint32
 
+	// ambient is the map's own sound sources, each counting down to its next
+	// turn.
+	ambient []*ambient
+
 	// playerBodyState is the state the character being played is drawn in.
 	// Kept here rather than on an entity because the character is not in the
 	// registry — it is driven by its own prediction.
@@ -132,7 +136,7 @@ type InGameState struct {
 	bursts []*activeBurst
 
 	// sounds are what the world wants played this frame.
-	sounds []string
+	sounds []Sound
 
 	celebrations      int
 	celebrationWaitMs float32
@@ -535,6 +539,9 @@ func (s *InGameState) finishMapLoad() {
 		zap.Int("models", s.scene.LoadedModels()),
 		zap.String("phases", s.lastLoadPhase))
 
+	// And its own noises, which are the world file's rather than the music's.
+	s.loadAmbientSounds()
+
 	// The map is up, so its background music replaces whatever was playing
 	// and repeats until the player leaves for another map.
 	s.manager.PlayLocationBGM(s.MapName)
@@ -811,6 +818,8 @@ func (s *InGameState) Update(dt float64) error {
 		s.advancePendingSkill(deltaMs)
 		s.advanceBursts(deltaMs)
 		s.advanceDelayedEffects(deltaMs)
+		s.advanceUnitSounds()
+		s.advanceAmbientSounds(deltaMs)
 		s.updateDamageNumbers(deltaMs)
 		s.updateEffects(deltaMs)
 		s.updateCelebrations(deltaMs)

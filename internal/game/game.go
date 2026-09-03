@@ -343,14 +343,14 @@ func (g *Game) playUIClick() {
 //
 // Missing sound is a nicety lost, not a failure: the flash still plays, and a
 // game that stopped because a wav was absent would be worse than a quiet one.
-func (g *Game) playWorldSound(path string) {
+func (g *Game) playWorldSound(path string, gain float32) {
 	if g.audioManager == nil {
 		return
 	}
 
 	data, err := g.assetManager.Load(path)
 	if err == nil {
-		err = g.audioManager.PlaySFX(data)
+		err = g.audioManager.PlaySFXAt(data, float64(gain))
 	}
 
 	if err != nil {
@@ -1220,8 +1220,8 @@ func (g *Game) renderUI() {
 		// A sound the world asked for — the level-up flash and its chime go
 		// together. The state has no audio device, so it names the file and
 		// this plays it.
-		for _, path := range state.TakeSounds() {
-			g.playWorldSound(path)
+		for _, sound := range state.TakeSounds() {
+			g.playWorldSound(sound.Path, sound.Gain)
 		}
 
 		// A double click in the inventory, or an item dragged onto or off the
