@@ -76,6 +76,16 @@ type burstParticle struct {
 	// additive is how nearly every effect in RO is drawn — the exceptions are
 	// the ones that darken as well as brighten, like Bash's halo.
 	additive bool
+
+	// fromFall makes the particle ignore x/y and vx/vy and instead travel
+	// from where the burst falls from to the burst's own anchor, arriving as
+	// its life ends. It is turned to point along the way it is going, which
+	// is what makes a bolt read as falling rather than sliding.
+	fromFall bool
+
+	// fallJitter shifts the start sideways, so ten bolts aimed at the same
+	// unit do not fall down the same line.
+	fallJitter [2]float32
 }
 
 // alphaAt is how strongly the particle draws at an age, and zero once it has
@@ -113,9 +123,26 @@ func (p burstParticle) alphaAt(age float32) float32 {
 	return alpha
 }
 
+// burstSpec is a burst before it is played: its particles, how long the whole
+// thing runs, and where in the world the falling ones fall from.
+//
+// The fall is a world offset rather than a screen one because it has to be
+// projected: a bolt that dropped a fixed number of pixels would come down at
+// the wrong angle the moment the camera turned.
+type burstSpec struct {
+	parts []burstParticle
+	runMs float32
+
+	fallX, fallY, fallZ float32
+}
+
 // activeBurst is one playing.
 type activeBurst struct {
 	parts []burstParticle
+
+	// fallX, fallY and fallZ are the world offset the falling particles come
+	// from, relative to the anchor.
+	fallX, fallY, fallZ float32
 
 	// Where it plays, in world space, projected each frame so it stays on the
 	// unit it was aimed at even as the camera turns.
@@ -124,20 +151,28 @@ type activeBurst struct {
 	ageMs float32
 	runMs float32
 
-	// traced marks that the first frame of this burst has been reported, so
+	// traced marks that this burst's first drawn frame has been reported, so
 	// the trace says where it landed once rather than sixty times a second.
+	// The first drawn frame rather than the first frame at all: a volley's
+	// opening frames are empty while the first shot is still on its way.
 	traced bool
 }
 
 // playBurst starts one over a world position.
-func (s *InGameState) playBurst(name string, parts []burstParticle, runMs, x, y, z float32) {
-	if len(parts) == 0 {
+func (s *InGameState) playBurst(name string, spec burstSpec, x, y, z float32) {
+	if len(spec.parts) == 0 {
 		return
 	}
 
-	trace.Emit(trace.HUD, "burst-play", zap.String("effect", name), zap.Int("parts", len(parts)))
+	trace.Emit(trace.HUD, "burst-play",
+		zap.String("effect", name), zap.Int("parts", len(spec.parts)))
 
-	s.bursts = append(s.bursts, &activeBurst{parts: parts, x: x, y: y, z: z, runMs: runMs})
+	s.bursts = append(s.bursts, &activeBurst{
+		parts: spec.parts,
+		fallX: spec.fallX, fallY: spec.fallY, fallZ: spec.fallZ,
+		x: x, y: y, z: z,
+		runMs: spec.runMs,
+	})
 }
 
 // advanceBursts ages them and drops what has finished.
@@ -171,8 +206,18 @@ func (s *InGameState) burstQuads(viewportW, viewportH float32) []EffectQuad {
 			continue
 		}
 
-		quads := b.quadsAt(originX, originY)
-		if trace.On(trace.HUD) && !b.traced {
+		// Where the falling ones come from, in pixels: the anchor's own
+		// offset projected, so the fall follows the camera.
+		var fallX, fallY float32
+		if b.fallX != 0 || b.fallY != 0 || b.fallZ != 0 {
+			fx, fy := s.projectToScreen(b.x+b.fallX, b.y+b.fallY, b.z+b.fallZ, viewportW, viewportH)
+			if fx >= 0 {
+				fallX, fallY = fx-originX, fy-originY
+			}
+		}
+
+		quads := b.quadsAt(originX, originY, fallX, fallY)
+		if trace.On(trace.HUD) && !b.traced && len(quads) > 0 {
 			b.traced = true
 
 			trace.Emit(trace.HUD, "burst-quads",
@@ -192,7 +237,7 @@ func (s *InGameState) burstQuads(viewportW, viewportH float32) []EffectQuad {
 // why it is here rather than in the loop above: the projection needs a scene
 // and a camera, and the shape of an effect over time can be looked at without
 // either.
-func (b *activeBurst) quadsAt(originX, originY float32) []EffectQuad {
+func (b *activeBurst) quadsAt(originX, originY, fallX, fallY float32) []EffectQuad {
 	out := make([]EffectQuad, 0, len(b.parts))
 
 	for _, p := range b.parts {
@@ -219,6 +264,20 @@ func (b *activeBurst) quadsAt(originX, originY float32) []EffectQuad {
 		// The spin decelerates, so the angle is the integral of it
 		// rather than a rate times a time.
 		angle := p.angle + p.spin*frames + p.spinAccel*frames*(frames+1)/2
+
+		if p.fromFall {
+			// All the way in over its life, so it arrives as it goes out.
+			left := 1 - age/p.lifeMs
+			fromX, fromY := fallX+p.fallJitter[0], fallY+p.fallJitter[1]
+
+			x = originX + fromX*left
+			y = originY + fromY*left
+
+			// Turned to lie along the way it is going. The quad is drawn
+			// upright, so this is the angle that puts its long axis on the
+			// line from where it started to where it lands.
+			angle = float32(math.Atan2(float64(fromX), float64(-fromY)))
+		}
 
 		out = append(out, EffectQuad{
 			Texture:  p.texture,
@@ -422,18 +481,144 @@ func bashParts() ([]burstParticle, float32) {
 	return parts, burstFrames(runFrames)
 }
 
-// burstFor is the burst a named effect plays, and whether there is one.
-func burstFor(effect string) (parts []burstParticle, runMs float32, ok bool) {
-	switch effect {
-	case "EF_COLDHIT":
-		parts, runMs = coldHitParts()
-	case "EF_HIT2":
-		parts, runMs = hit2Parts()
-	case "EF_BASH":
-		parts, runMs = bashParts()
-	default:
-		return nil, 0, false
+// Falling bolts.
+//
+// Cold Bolt and Fire Bolt are not one flash on the target. Each is a volley of
+// shots that fall out of the sky one after another, one per blow the skill
+// landed, and it is the volley that makes a level ten bolt read as ten times
+// a level one rather than as the same picture with a bigger figure on it.
+//
+// From nostalro-client's magic_bolt.rs. The shots come from the same place
+// every time — up, and off to one side — which is the original's own habit
+// rather than anything derived.
+
+// Where a shot falls from, in world units relative to what it is aimed at,
+// and how fast it comes down. A cell is five units, so this is four cells up
+// and a couple across.
+var (
+	boltFall  = [3]float32{21, 42, 14}
+	boltSpeed = float32(1.925)
+)
+
+// boltSpawnFrames is when the first shot appears, and boltPeriodFrames how
+// long until the next. Ten shots take a little over two seconds, which is
+// what a level ten bolt looks like.
+const (
+	boltSpawnFrames  = 12
+	boltPeriodFrames = 10
+	boltMax          = 10
+)
+
+// boltStyle is what one kind of bolt looks like.
+type boltStyle struct {
+	texture string
+	tint    [3]float32
+
+	// halfLen and halfWid are its size in world units.
+	halfLen, halfWid float32
+}
+
+var (
+	iceBolt = boltStyle{
+		texture: "icearrow.tga",
+		tint:    [3]float32{0.7, 0.85, 1.0},
+		halfLen: 11.5,
+		halfWid: 3.8,
 	}
 
-	return parts, runMs, true
+	// The archive files the fire shot under its Korean name, as eight frames
+	// of an animation. One of them, because a burst particle draws one
+	// texture: the shot is on screen for under half a second on its way down.
+	fireBolt = boltStyle{
+		texture: "불화살1.tga",
+		tint:    [3]float32{1.0, 0.85, 0.4},
+		halfLen: 14.0,
+		halfWid: 3.5,
+	}
+)
+
+// boltTravelFrames is how long a shot takes to come down.
+func boltTravelFrames() float32 {
+	fall := boltFall
+
+	return float32(math.Sqrt(float64(fall[0]*fall[0]+fall[1]*fall[1]+fall[2]*fall[2]))) / boltSpeed
+}
+
+// boltImpactMs is when the nth shot of a volley lands, counted from the start
+// of the burst. What the shot hits is drawn then rather than at the start:
+// a flash on a target nothing has reached yet is the thing that made a bolt
+// skill look like a single blow.
+func boltImpactMs(i int) float32 {
+	return burstFrames(boltSpawnFrames + boltPeriodFrames*float32(i) + boltTravelFrames())
+}
+
+// boltParts is a volley of them.
+func boltParts(hits int, style boltStyle) burstSpec {
+	shots := min(max(hits, 1), boltMax)
+
+	parts := make([]burstParticle, 0, shots)
+	for i := 0; i < shots; i++ {
+		parts = append(parts, burstParticle{
+			fromFall: true,
+
+			// Five units either way, so ten shots at one unit do not all come
+			// down the same line.
+			fallJitter: [2]float32{
+				(hash01(uint32(i), 31) - 0.5) * 10 * burstScale,
+				(hash01(uint32(i), 32) - 0.5) * 4 * burstScale,
+			},
+
+			halfW:   style.halfWid * burstScale,
+			halfH:   style.halfLen * burstScale,
+			tint:    style.tint,
+			texture: style.texture,
+
+			birthMs: burstFrames(boltSpawnFrames + boltPeriodFrames*float32(i)),
+			lifeMs:  burstFrames(boltTravelFrames()),
+
+			// Full strength all the way down and gone on arrival: what it hit
+			// takes over from there.
+			fadeInMs:  burstFrames(2),
+			fadeOutMs: burstFrames(2),
+
+			additive: true,
+		})
+	}
+
+	return burstSpec{
+		parts: parts,
+		runMs: boltImpactMs(shots-1) + burstFrames(4),
+		fallX: boltFall[0], fallY: boltFall[1], fallZ: boltFall[2],
+	}
+}
+
+// burstFor is the burst a named effect plays, and whether there is one.
+//
+// hits is how many blows the skill landed, which the bolt skills draw one shot
+// each for. Everything else ignores it.
+func burstFor(effect string, hits int) (burstSpec, bool) {
+	switch effect {
+	case "EF_COLDHIT":
+		parts, runMs := coldHitParts()
+
+		return burstSpec{parts: parts, runMs: runMs}, true
+
+	case "EF_HIT2":
+		parts, runMs := hit2Parts()
+
+		return burstSpec{parts: parts, runMs: runMs}, true
+
+	case "EF_BASH":
+		parts, runMs := bashParts()
+
+		return burstSpec{parts: parts, runMs: runMs}, true
+
+	case "EF_ICEARROW":
+		return boltParts(hits, iceBolt), true
+
+	case "EF_FIREARROW":
+		return boltParts(hits, fireBolt), true
+	}
+
+	return burstSpec{}, false
 }

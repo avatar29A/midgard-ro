@@ -14,20 +14,20 @@ var burstNames = []string{"EF_COLDHIT", "EF_HIT2", "EF_BASH"}
 // with both a file and a burst would be drawn twice.
 func TestBurstsAreDefinedForTheEffectsThatNeedThem(t *testing.T) {
 	for _, name := range burstNames {
-		parts, runMs, ok := burstFor(name)
+		spec, ok := burstFor(name, 1)
 		if !ok {
 			t.Errorf("%s has no burst", name)
 			continue
 		}
-		if len(parts) == 0 {
+		if len(spec.parts) == 0 {
 			t.Errorf("%s has a burst with no particles", name)
 		}
-		if runMs <= 0 {
-			t.Errorf("%s runs for %v", name, runMs)
+		if spec.runMs <= 0 {
+			t.Errorf("%s runs for %v", name, spec.runMs)
 		}
 	}
 
-	if _, _, ok := burstFor("EF_FIREHIT"); ok {
+	if _, ok := burstFor("EF_FIREHIT", 1); ok {
 		t.Error("EF_FIREHIT has a burst as well as an STR, which would draw it twice")
 	}
 }
@@ -36,7 +36,8 @@ func TestBurstsAreDefinedForTheEffectsThatNeedThem(t *testing.T) {
 // finished never appears, which is a particle written and not drawn.
 func TestEveryParticleOutlivesItsBirth(t *testing.T) {
 	for _, name := range burstNames {
-		parts, runMs, _ := burstFor(name)
+		spec, _ := burstFor(name, 1)
+		parts, runMs := spec.parts, spec.runMs
 
 		for i, p := range parts {
 			if p.lifeMs <= 0 {
@@ -61,7 +62,7 @@ func TestEveryParticleOutlivesItsBirth(t *testing.T) {
 // through is a particle nobody sees.
 func TestEveryParticleIsVisibleAtSomePoint(t *testing.T) {
 	for _, name := range burstNames {
-		parts, _, _ := burstFor(name)
+		parts := burstFor2(name)
 
 		for i, p := range parts {
 			var peak float32
@@ -82,7 +83,7 @@ func TestEveryParticleIsVisibleAtSomePoint(t *testing.T) {
 // frame pops out of the scene.
 func TestParticlesFadeOutBeforeTheyGo(t *testing.T) {
 	for _, name := range burstNames {
-		parts, _, _ := burstFor(name)
+		parts := burstFor2(name)
 
 		for i, p := range parts {
 			if a := p.alphaAt(p.lifeMs * 0.99); a > 0.2 {
@@ -102,8 +103,9 @@ func TestParticlesFadeOutBeforeTheyGo(t *testing.T) {
 func TestBurstsAgeOut(t *testing.T) {
 	for _, name := range burstNames {
 		s := &InGameState{}
-		parts, runMs, _ := burstFor(name)
-		s.playBurst(name, parts, runMs, 0, 0, 0)
+		spec, _ := burstFor(name, 1)
+		runMs := spec.runMs
+		s.playBurst(name, spec, 0, 0, 0)
 
 		if len(s.bursts) != 1 {
 			t.Fatalf("%s: %d bursts playing, want 1", name, len(s.bursts))
@@ -126,8 +128,7 @@ func TestBurstsAgeOut(t *testing.T) {
 // shimmer that differs every time reads as a bug.
 func TestTheSameBurstLooksTheSame(t *testing.T) {
 	for _, name := range burstNames {
-		first, _, _ := burstFor(name)
-		second, _, _ := burstFor(name)
+		first, second := burstFor2(name), burstFor2(name)
 
 		if len(first) != len(second) {
 			t.Fatalf("%s: %d particles then %d", name, len(first), len(second))
@@ -144,7 +145,7 @@ func TestTheSameBurstLooksTheSame(t *testing.T) {
 // TestBashRaysRadiateInEveryDirection: twenty rays that all pointed the same
 // way would be a bar rather than a burst.
 func TestBashRaysRadiateInEveryDirection(t *testing.T) {
-	parts, _, _ := burstFor("EF_BASH")
+	parts := burstFor2("EF_BASH")
 
 	quadrants := map[int]int{}
 	rays := 0
@@ -170,7 +171,8 @@ func TestBashRaysRadiateInEveryDirection(t *testing.T) {
 // settles. One that kept its speed would spin for as long as it was drawn, and
 // one accelerating the wrong way would reverse halfway through.
 func TestBashRaysSlowToAStop(t *testing.T) {
-	parts, runMs, _ := burstFor("EF_BASH")
+	spec, _ := burstFor("EF_BASH", 1)
+	parts, runMs := spec.parts, spec.runMs
 
 	for i, p := range parts {
 		if p.spin == 0 {
@@ -190,7 +192,7 @@ func TestBashRaysSlowToAStop(t *testing.T) {
 // TestBashIsDrawnWithOrdinaryAlpha: added, its haloes wash out the unit they
 // are supposed to frame.
 func TestBashIsDrawnWithOrdinaryAlpha(t *testing.T) {
-	parts, _, _ := burstFor("EF_BASH")
+	parts := burstFor2("EF_BASH")
 
 	for i, p := range parts {
 		if p.additive {
@@ -244,16 +246,39 @@ func quadSpan(corners [4][2]float32) (w, h float32) {
 
 // quadsThrough lays a burst out at ten points across its run.
 func quadsThrough(name string) (frames [][]EffectQuad) {
-	parts, runMs, _ := burstFor(name)
-	b := &activeBurst{parts: parts, runMs: runMs}
+	b := playing(name)
 
 	for step := 0; step < 10; step++ {
-		b.ageMs = runMs * float32(step) / 10
-		frames = append(frames, b.quadsAt(400, 300))
+		b.ageMs = b.runMs * float32(step) / 10
+		frames = append(frames, b.quadsAt(400, 300, boltFallPx[0], boltFallPx[1]))
 	}
 
 	return frames
 }
+
+// burstFor2 is the particles of a burst, for the tests that only look at
+// those.
+func burstFor2(name string) []burstParticle {
+	spec, _ := burstFor(name, 1)
+
+	return spec.parts
+}
+
+// playing is a burst mid-flight, ready to be laid out. One blow, which is
+// every burst but a volley and the first shot of one.
+func playing(name string) *activeBurst {
+	spec, _ := burstFor(name, 1)
+
+	return &activeBurst{
+		parts: spec.parts,
+		fallX: spec.fallX, fallY: spec.fallY, fallZ: spec.fallZ,
+		runMs: spec.runMs,
+	}
+}
+
+// boltFallPx stands in for the projection: a shot comes down from up and to
+// one side, and the tests do not have a camera to work that out with.
+var boltFallPx = [2]float32{120, -300}
 
 // TestEveryBurstDrawsSomething: the whole point. A burst that lays out no
 // quads is an effect that plays and is not seen, which is what Cold Bolt did
@@ -308,13 +333,12 @@ func TestBurstsStayNearWhatTheyHit(t *testing.T) {
 	const originX, originY = 400, 300
 
 	for _, name := range burstNames {
-		parts, runMs, _ := burstFor(name)
-		b := &activeBurst{parts: parts, runMs: runMs}
+		b := playing(name)
 
 		for step := 0; step < 10; step++ {
-			b.ageMs = runMs * float32(step) / 10
+			b.ageMs = b.runMs * float32(step) / 10
 
-			for _, q := range b.quadsAt(originX, originY) {
+			for _, q := range b.quadsAt(originX, originY, boltFallPx[0], boltFallPx[1]) {
 				for _, c := range q.Corners {
 					if dx := c[0] - originX; dx < -400 || dx > 400 {
 						t.Fatalf("%s reaches %v across at %vms", name, dx, b.ageMs)
@@ -332,14 +356,13 @@ func TestBurstsStayNearWhatTheyHit(t *testing.T) {
 // to the next is a still picture rather than a burst.
 func TestBurstParticlesMove(t *testing.T) {
 	for _, name := range burstNames {
-		parts, runMs, _ := burstFor(name)
-		b := &activeBurst{parts: parts, runMs: runMs}
+		b := playing(name)
 
-		b.ageMs = runMs * 0.3
-		early := b.quadsAt(400, 300)
+		b.ageMs = b.runMs * 0.3
+		early := b.quadsAt(400, 300, boltFallPx[0], boltFallPx[1])
 
-		b.ageMs = runMs * 0.6
-		late := b.quadsAt(400, 300)
+		b.ageMs = b.runMs * 0.6
+		late := b.quadsAt(400, 300, boltFallPx[0], boltFallPx[1])
 
 		if len(early) == 0 || len(late) == 0 {
 			t.Errorf("%s draws nothing in the middle of its run", name)
@@ -355,6 +378,148 @@ func TestBurstParticlesMove(t *testing.T) {
 
 		if same == len(early) {
 			t.Errorf("%s is the same picture at 30%% and 60%% of its run", name)
+		}
+	}
+}
+
+// TestAVolleyIsOneShotPerBlow: what makes a level ten bolt read as ten times a
+// level one. Drawn as a single flash, the only difference between them is the
+// size of the figure that floats up.
+func TestAVolleyIsOneShotPerBlow(t *testing.T) {
+	for _, tc := range []struct{ hits, want int }{
+		{1, 1}, {3, 3}, {10, 10},
+		{0, 1},   // a skill that reported no blows still shows one shot
+		{99, 10}, // and one that reported more than the original ever draws
+	} {
+		spec, ok := burstFor("EF_ICEARROW", tc.hits)
+		if !ok {
+			t.Fatal("EF_ICEARROW has no burst")
+		}
+
+		if len(spec.parts) != tc.want {
+			t.Errorf("%d blows drew %d shots, want %d", tc.hits, len(spec.parts), tc.want)
+		}
+	}
+}
+
+// TestShotsFallOneAfterAnother: a volley arrives in one packet and is drawn
+// over two seconds. All ten at once would be a single flash again.
+func TestShotsFallOneAfterAnother(t *testing.T) {
+	spec, _ := burstFor("EF_ICEARROW", 10)
+
+	for i := 1; i < len(spec.parts); i++ {
+		if spec.parts[i].birthMs <= spec.parts[i-1].birthMs {
+			t.Errorf("shot %d appears at %v, no later than shot %d at %v",
+				i, spec.parts[i].birthMs, i-1, spec.parts[i-1].birthMs)
+		}
+		if got := boltImpactMs(i) - boltImpactMs(i-1); got <= 0 {
+			t.Errorf("shot %d lands %v after shot %d", i, got, i-1)
+		}
+	}
+
+	// The volley has to outlast its own last shot, or the last one is cut off
+	// halfway down.
+	if last := boltImpactMs(len(spec.parts) - 1); spec.runMs <= last {
+		t.Errorf("the volley ends at %v, before its last shot lands at %v", spec.runMs, last)
+	}
+}
+
+// TestAShotArrivesWhereItWasAimed: it starts where the burst falls from and
+// comes down onto the anchor. One that stopped short, or overshot, would land
+// somewhere the target is not.
+func TestAShotArrivesWhereItWasAimed(t *testing.T) {
+	const originX, originY = 400, 300
+
+	b := playing("EF_ICEARROW")
+	shot := b.parts[0]
+
+	middle := func(quads []EffectQuad) (x, y float32) {
+		for _, c := range quads[0].Corners {
+			x, y = x+c[0]/4, y+c[1]/4
+		}
+
+		return x, y
+	}
+
+	// Just born, it is up by the fall.
+	b.ageMs = shot.birthMs + 1
+	quads := b.quadsAt(originX, originY, boltFallPx[0], boltFallPx[1])
+	if len(quads) != 1 {
+		t.Fatalf("%d quads for one shot just born", len(quads))
+	}
+
+	x, y := middle(quads)
+	if x < originX+50 || y > originY-100 {
+		t.Errorf("the shot starts at %v,%v, which is not up and off to one side of %v,%v",
+			x, y, originX, originY)
+	}
+
+	// About to land, it is on the target.
+	b.ageMs = shot.birthMs + shot.lifeMs*0.98
+	quads = b.quadsAt(originX, originY, boltFallPx[0], boltFallPx[1])
+	if len(quads) != 1 {
+		t.Fatalf("%d quads for one shot about to land", len(quads))
+	}
+
+	x, y = middle(quads)
+	if dx, dy := x-originX, y-originY; dx*dx+dy*dy > 30*30 {
+		t.Errorf("the shot lands at %v,%v, %v from the target at %v,%v",
+			x, y, math.Hypot(float64(dx), float64(dy)), originX, originY)
+	}
+}
+
+// TestAShotLiesAlongItsFall: drawn upright it reads as a shard hanging in the
+// air and sliding, rather than as something coming down.
+func TestAShotLiesAlongItsFall(t *testing.T) {
+	b := playing("EF_ICEARROW")
+	b.ageMs = b.parts[0].birthMs + b.parts[0].lifeMs/2
+
+	quads := b.quadsAt(400, 300, boltFallPx[0], boltFallPx[1])
+	if len(quads) != 1 {
+		t.Fatalf("%d quads", len(quads))
+	}
+
+	// The long axis runs from the top pair of corners to the bottom pair.
+	long := [2]float32{
+		(quads[0].Corners[3][0] + quads[0].Corners[2][0]) / 2,
+		(quads[0].Corners[3][1] + quads[0].Corners[2][1]) / 2,
+	}
+	long[0] -= (quads[0].Corners[0][0] + quads[0].Corners[1][0]) / 2
+	long[1] -= (quads[0].Corners[0][1] + quads[0].Corners[1][1]) / 2
+
+	// The way it is going: from up and to one side, down onto the target.
+	fall := [2]float32{-boltFallPx[0], -boltFallPx[1]}
+
+	dot := long[0]*fall[0] + long[1]*fall[1]
+	lenLong := math.Hypot(float64(long[0]), float64(long[1]))
+	lenFall := math.Hypot(float64(fall[0]), float64(fall[1]))
+
+	if cos := float64(dot) / (lenLong * lenFall); cos < 0.99 {
+		t.Errorf("the shot lies %.0f degrees off the way it is falling",
+			math.Acos(min(max(cos, -1), 1))*180/math.Pi)
+	}
+}
+
+// TestBothBoltsHaveArt: the fire shot is filed under a Korean name and the ice
+// one is not. A name that is wrong loads nothing and draws nothing, which is
+// the fault this whole change was made to fix.
+func TestBothBoltsHaveArt(t *testing.T) {
+	for name, want := range map[string]string{
+		"EF_ICEARROW":  "icearrow.tga",
+		"EF_FIREARROW": "불화살1.tga",
+	} {
+		spec, ok := burstFor(name, 1)
+		if !ok {
+			t.Errorf("%s has no burst", name)
+
+			continue
+		}
+
+		if got := spec.parts[0].texture; got != want {
+			t.Errorf("%s draws %q, want %q", name, got, want)
+		}
+		if spec.fallY <= 0 {
+			t.Errorf("%s falls from %v above, want it overhead", name, spec.fallY)
 		}
 	}
 }
