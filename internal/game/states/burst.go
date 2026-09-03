@@ -426,7 +426,7 @@ func coldHitParts() ([]burstParticle, float32) {
 			birthMs:  burstFrames(hash01(uint32(i), 4) * 4),
 			lifeMs:   burstFrames(15),
 			fadeInMs: burstFrames(1),
-			texture:  "lens1.tga",
+			texture:  effectTexturePath + "lens1.tga",
 			tint:     tint,
 			additive: true,
 		})
@@ -443,7 +443,7 @@ func coldHitParts() ([]burstParticle, float32) {
 			birthMs:  burstFrames(birth),
 			lifeMs:   burstFrames(25),
 			fadeInMs: burstFrames(3),
-			texture:  "smoke.tga",
+			texture:  effectTexturePath + "smoke.tga",
 			tint:     [3]float32{0.8, 0.88, 1.0},
 			additive: true,
 		})
@@ -481,7 +481,7 @@ func hit2Parts() ([]burstParticle, float32) {
 			halfH:    (20 + 20*hash01(uint32(i), 15)) * sizeF / 2,
 			lifeMs:   burstFrames(10 + 20*hash01(uint32(i), 16)),
 			fadeInMs: burstFrames(8),
-			texture:  texture,
+			texture:  effectTexturePath + texture,
 			tint:     [3]float32{1, 1, 1},
 			additive: true,
 		})
@@ -551,7 +551,7 @@ func bashParts() ([]burstParticle, float32) {
 			fadeOutMs: burstFrames(runFrames / 3),
 			maxAlpha:  spikeAlpha,
 
-			texture: "alpha_center.tga",
+			texture: effectTexturePath + "alpha_center.tga",
 			tint:    [3]float32{1, 1, 1},
 		})
 	}
@@ -654,7 +654,7 @@ func boltParts(hits int, style boltStyle) burstSpec {
 			halfW:   style.halfLen,
 			halfH:   style.halfWid,
 			tint:    style.tint,
-			texture: style.texture,
+			texture: effectTexturePath + style.texture,
 
 			birthMs: burstFrames(boltSpawnFrames + boltPeriodFrames*float32(i)),
 			lifeMs:  burstFrames(boltTravelFrames()),
@@ -715,7 +715,7 @@ func frostDiverParts() burstSpec {
 		along := 1 - float32(i)/frostDiverSpikes
 
 		parts = append(parts, spikeParticle(uint32(i), along,
-			burstFrames(spikeStepFrames*float32(i)), 0.3, 0.6, 7, 10))
+			burstFrames(spikeStepFrames*float32(i)), 8, 13))
 	}
 
 	return burstSpec{
@@ -736,12 +736,12 @@ func frostDiver2Parts() burstSpec {
 
 	parts := make([]burstParticle, 0, spikes)
 	for i := 0; i < spikes; i++ {
-		part := spikeParticle(uint32(i)+100, 0, frostDiverReachMs(), 0.6, 1.4, 4, 6.5)
+		part := spikeParticle(uint32(i)+100, 0, frostDiverReachMs(), 11, 16)
 
 		// Around the target rather than along a line: a ring of a cell or so,
 		// spread by the same hash everything else here is spread by.
 		angle := 2 * math.Pi * float64(hash01(uint32(i), 41))
-		radius := 1.5 + 3.5*hash01(uint32(i), 42)
+		radius := 1.5 + 2.5*hash01(uint32(i), 42)
 
 		// A ring on the ground around it, not an oval on the screen.
 		part.jitter = [3]float32{
@@ -765,38 +765,42 @@ func frostDiverReachMs() float32 {
 	return burstFrames(spikeStepFrames * frostDiverSpikes)
 }
 
-// spikeParticle is one of them, sized within the ranges given in world units.
-func spikeParticle(seed uint32, along, birthMs, minWid, maxWid, minHigh, maxHigh float32) burstParticle {
-	halfWid := minWid + (maxWid-minWid)*hash01(seed, 43)
+// spikeParticle is one of them, a height within the range given in world
+// units, drawn from the frozen sprite's own art.
+//
+// Which frame is chosen by the seed rather than fixed, so a line of them is
+// five different shapes rather than one repeated — and each keeps the
+// proportions its art was drawn in.
+func spikeParticle(seed uint32, along, birthMs, minHigh, maxHigh float32) burstParticle {
 	height := minHigh + (maxHigh-minHigh)*hash01(seed, 44)
+	frame := frozenShard + int(hash01(seed, 46)*frozenShards)
+
+	p := frozenPart(min(frame, frozenShard+frozenShards-1), height)
+	p.atOther = along
 
 	// Up over the rise and no further. Half the growth each frame in size and
-	// half in position keeps the base still while the point climbs.
-	grow := height / 2 / spikeRiseFrames
+	// half in position keeps the base still while the point climbs, so it
+	// reads as ice breaking through rather than as a shard floating up.
+	grow := p.halfH / spikeRiseFrames
 
-	return burstParticle{
-		atOther: along,
+	// Width along with it, or the shard changes shape as it comes up.
+	p.growW = p.halfW / spikeRiseFrames
+	p.halfW /= spikeRiseFrames
 
-		// It starts as a sliver at ground level and is grown into: up by half
-		// of what it grows, so the base stays where it broke through.
-		halfW: halfWid,
-		halfH: height / 2 / spikeRiseFrames,
-		growH: grow,
-		vy:    grow,
+	p.halfH /= spikeRiseFrames
+	p.growH = grow
+	p.vy = grow
 
-		// A few degrees off upright, so a line of them is not a row of posts.
-		angle: (hash01(seed, 45) - 0.5) * 0.35,
+	// A few degrees off upright, so a line of them is not a row of posts.
+	p.angle = (hash01(seed, 45) - 0.5) * 0.35
 
-		birthMs:   birthMs,
-		lifeMs:    burstFrames(spikeRunFrames),
-		fadeInMs:  burstFrames(2),
-		fadeOutMs: burstFrames(spikeFadeFrames),
-		maxAlpha:  spikeAlpha,
+	p.birthMs = birthMs
+	p.lifeMs = burstFrames(spikeRunFrames)
+	p.fadeInMs = burstFrames(2)
+	p.fadeOutMs = burstFrames(spikeFadeFrames)
+	p.maxAlpha = spikeAlpha
 
-		texture:  "ice.tga",
-		tint:     [3]float32{0.78, 0.9, 1.0},
-		additive: true,
-	}
+	return p
 }
 
 // burstFor is the burst a named effect plays, and whether there is one.

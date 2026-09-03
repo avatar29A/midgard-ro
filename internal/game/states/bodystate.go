@@ -22,6 +22,11 @@ import (
 // client that guessed a duration would thaw a target the server still has
 // frozen.
 
+// frozenBlockHeight is how tall the ice stands, in world units. A little
+// over two cells, which puts a Poring well inside it and a player about
+// shoulder deep — the original seals a target rather than burying it.
+const frozenBlockHeight = float32(11)
+
 // handleStateChange is a unit's states changing.
 func (s *InGameState) handleStateChange(data []byte) error {
 	change, ok := packets.DecodeStateChange(data)
@@ -95,7 +100,12 @@ func (s *InGameState) IceQuads(viewportW, viewportH float32) []EffectQuad {
 		return nil
 	}
 
-	seal := frostDiver2Parts()
+	// The block the archive draws for exactly this, standing on the ground
+	// with the unit inside it. One quad rather than a ring of spikes: the
+	// sprite already is the shape, which is the whole reason to use it.
+	block := frozenPart(frozenBlock, frozenBlockHeight)
+	block.y = frozenBlockHeight / 2
+	block.lifeMs = 1
 
 	var out []EffectQuad
 	for _, id := range frozen {
@@ -104,13 +114,7 @@ func (s *InGameState) IceQuads(viewportW, viewportH float32) []EffectQuad {
 			continue
 		}
 
-		// Held at the moment the spikes have finished growing: past that they
-		// would begin to fade, and this ice is not going anywhere.
-		held := &activeBurst{
-			parts: seal.parts,
-			x:     x, y: y, z: z,
-			ageMs: frostDiverReachMs() + burstFrames(spikeRiseFrames),
-		}
+		held := &activeBurst{parts: []burstParticle{block}, x: x, y: y, z: z}
 
 		out = append(out, s.burstQuadsOf(held, viewportW, viewportH)...)
 	}

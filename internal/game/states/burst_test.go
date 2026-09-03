@@ -151,7 +151,7 @@ func TestBashRaysRadiateInEveryDirection(t *testing.T) {
 	rays := 0
 
 	for _, p := range parts {
-		if p.texture != "alpha_center.tga" {
+		if p.texture != effectTexturePath+"alpha_center.tga" {
 			continue
 		}
 
@@ -519,8 +519,8 @@ func TestAShotLiesAlongItsFall(t *testing.T) {
 // the fault this whole change was made to fix.
 func TestBothBoltsHaveArt(t *testing.T) {
 	for name, want := range map[string]string{
-		"EF_ICEARROW":  "icearrow.tga",
-		"EF_FIREARROW": "불화살1.tga",
+		"EF_ICEARROW":  effectTexturePath + "icearrow.tga",
+		"EF_FIREARROW": effectTexturePath + "불화살1.tga",
 	} {
 		spec, ok := burstFor(name, 1)
 		if !ok {
