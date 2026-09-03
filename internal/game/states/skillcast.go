@@ -206,6 +206,60 @@ func (s *InGameState) applySkillUse(use packets.SkillUse) {
 	}
 }
 
+// Ground skills leave a unit behind, and its blows are the caster's.
+//
+// Thunder Storm's lightning does not come from the mage: the skill puts a
+// unit on a cell and the unit does the damage, so every blow arrives from a
+// block id belonging to nobody the client has heard of. Remembering who put
+// it there is what lets a player's own Thunder Storm read as theirs rather
+// than as a stranger's fight across the field.
+
+// handleSkillUnit is one appearing.
+func (s *InGameState) handleSkillUnit(data []byte) error {
+	unit, ok := packets.DecodeSkillUnit(data)
+	if !ok {
+		logger.Warn("short skill unit packet", zap.Int("len", len(data)))
+
+		return nil
+	}
+
+	trace.Emit(trace.HUD, "skill-unit",
+		zap.Uint32("id", unit.ID), zap.Uint32("by", unit.CreatorID),
+		zap.Int("x", unit.X), zap.Int("y", unit.Y), zap.Int("level", unit.Level))
+
+	if s.skillUnits == nil {
+		s.skillUnits = map[uint32]uint32{}
+	}
+
+	s.skillUnits[unit.ID] = unit.CreatorID
+
+	return nil
+}
+
+// handleSkillUnitGone is one going away again.
+func (s *InGameState) handleSkillUnitGone(data []byte) error {
+	id, ok := packets.DecodeSkillUnitGone(data)
+	if !ok {
+		logger.Warn("short skill unit removal", zap.Int("len", len(data)))
+
+		return nil
+	}
+
+	delete(s.skillUnits, id)
+
+	return nil
+}
+
+// casterBehind is who a blow really came from: the unit itself for anything
+// that stands on the map, and whoever placed it for a ground skill.
+func (s *InGameState) casterBehind(id uint32) uint32 {
+	if by, ok := s.skillUnits[id]; ok {
+		return by
+	}
+
+	return id
+}
+
 // The battle log.
 //
 // The chat box has had a Battle tab and a color for its lines since it was
@@ -226,12 +280,21 @@ func (s *InGameState) reportSkill(use packets.SkillUse, self uint32) {
 		name = "A skill"
 	}
 
+	// A ground skill's blows come from the unit it left behind, not from the
+	// hand that placed it.
+	from := s.casterBehind(use.SourceID)
+
 	switch {
-	case use.SourceID == self:
-		// What it cost, out of the skill list. The server's own figure for
+	case from == self:
+		// What it cost, out of the skill list: the server's own figure for
 		// the level we hold it at, rather than a table of the client's that
 		// disagrees with it for twenty skills.
-		if skill, known := s.findSkill(use.SkillID); known && skill.SP > 0 {
+		//
+		// Only when the skill itself goes off. A ground skill is paid for
+		// once and then strikes for as long as it stands, and charging for
+		// every blow would fill the log with a cost nobody paid.
+		if skill, known := s.findSkill(use.SkillID); known && skill.SP > 0 &&
+			use.SourceID == self {
 			s.chat.AddLocal(ChatDamage, fmt.Sprintf("%s: %d SP.", name, skill.SP))
 		}
 
@@ -242,7 +305,7 @@ func (s *InGameState) reportSkill(use packets.SkillUse, self uint32) {
 
 	case use.TargetID == self && use.Damage > 0:
 		s.chat.AddLocal(ChatDamage, fmt.Sprintf("%s's %s on you: %s.",
-			s.unitName(use.SourceID, self), name, damageFigure(use.Damage, use.Hits)))
+			s.unitName(from, self), name, damageFigure(use.Damage, use.Hits)))
 	}
 }
 

@@ -677,3 +677,99 @@ func TestAShortCancelPacketIsRefused(t *testing.T) {
 		t.Error("a short packet stopped the cast")
 	}
 }
+
+// skillUnitAt builds the packet the server sends when a ground skill puts a
+// unit on a cell.
+func skillUnitAt(id, by uint32) []byte {
+	pkt := make([]byte, 23)
+	binary.LittleEndian.PutUint16(pkt, packets.ZC_SKILL_ENTRY)
+	binary.LittleEndian.PutUint16(pkt[2:], 23)
+	binary.LittleEndian.PutUint32(pkt[4:], id)
+	binary.LittleEndian.PutUint32(pkt[8:], by)
+
+	return pkt
+}
+
+// TestAGroundSkillsBlowsAreTheCastersOwn: Thunder Storm's lightning comes
+// from the unit it left on the ground, not from the mage, so every blow
+// arrives from a block id belonging to nobody. Read as it comes, a player's
+// own Thunder Storm is a stranger's fight and never reaches the log.
+func TestAGroundSkillsBlowsAreTheCastersOwn(t *testing.T) {
+	s, mob := withMob()
+	s.skills = []packets.Skill{{ID: 21, Level: 10, SP: 60}}
+
+	const self, unit = uint32(5000), uint32(2585)
+
+	if err := s.handleSkillUnit(skillUnitAt(unit, self)); err != nil {
+		t.Fatalf("handling the unit: %v", err)
+	}
+
+	// The placement itself, which is what the cost is paid for.
+	s.reportSkill(packets.SkillUse{SourceID: self, SkillID: 21, Ground: true}, self)
+
+	// And a blow from the unit standing there.
+	s.reportSkill(packets.SkillUse{
+		SourceID: unit, TargetID: mob.ID, SkillID: 21, Damage: 2200, Hits: 1,
+	}, self)
+
+	lines := s.chat.Lines()
+	if len(lines) != 2 {
+		t.Fatalf("%d lines, want the cost and the blow: %v", len(lines), lines)
+	}
+	if !strings.Contains(lines[0].Text, "60 SP") {
+		t.Errorf("the cost line reads %q", lines[0].Text)
+	}
+	if !strings.Contains(lines[1].Text, "2200 damage") {
+		t.Errorf("the blow reads %q", lines[1].Text)
+	}
+}
+
+// TestAGroundSkillIsPaidForOnce: it strikes for as long as it stands, and
+// charging for every blow fills the log with a cost nobody paid.
+func TestAGroundSkillIsPaidForOnce(t *testing.T) {
+	s, mob := withMob()
+	s.skills = []packets.Skill{{ID: 21, Level: 10, SP: 60}}
+
+	const self, unit = uint32(5000), uint32(2585)
+	if err := s.handleSkillUnit(skillUnitAt(unit, self)); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 3; i++ {
+		s.reportSkill(packets.SkillUse{
+			SourceID: unit, TargetID: mob.ID, SkillID: 21, Damage: 2200, Hits: 1,
+		}, self)
+	}
+
+	for _, line := range s.chat.Lines() {
+		if strings.Contains(line.Text, "SP") {
+			t.Errorf("a blow from the unit charged for the skill again: %q", line.Text)
+		}
+	}
+}
+
+// TestAUnitThatHasGoneIsForgotten: block ids come round again, and a stale
+// one would credit somebody else's skill to us.
+func TestAUnitThatHasGoneIsForgotten(t *testing.T) {
+	s, _ := withMob()
+
+	const self, unit = uint32(5000), uint32(2585)
+	if err := s.handleSkillUnit(skillUnitAt(unit, self)); err != nil {
+		t.Fatal(err)
+	}
+	if s.casterBehind(unit) != self {
+		t.Fatal("the unit was not remembered")
+	}
+
+	gone := make([]byte, 6)
+	binary.LittleEndian.PutUint16(gone, packets.ZC_SKILL_DISAPPEAR)
+	binary.LittleEndian.PutUint32(gone[2:], unit)
+
+	if err := s.handleSkillUnitGone(gone); err != nil {
+		t.Fatalf("handling the removal: %v", err)
+	}
+
+	if got := s.casterBehind(unit); got != unit {
+		t.Errorf("a unit that has gone still answers to %d", got)
+	}
+}

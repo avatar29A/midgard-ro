@@ -118,6 +118,10 @@ type InGameState struct {
 	// lands a while after the volley starts.
 	delayedEffects []delayedEffect
 
+	// skillUnits maps a ground skill's unit to whoever placed it. Its blows
+	// arrive from the unit rather than from the caster.
+	skillUnits map[uint32]uint32
+
 	// playerBodyState is the state the character being played is drawn in.
 	// Kept here rather than on an entity because the character is not in the
 	// registry — it is driven by its own prediction.
@@ -1412,6 +1416,8 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_NOTIFY_VANISH, s.handleEntityVanish)
 	s.client.RegisterHandler(packets.ZC_STATE_CHANGE, s.handleStateChange)
 	s.client.RegisterHandler(packets.ZC_DISPEL, s.handleCastCancelled)
+	s.client.RegisterHandler(packets.ZC_SKILL_ENTRY, s.handleSkillUnit)
+	s.client.RegisterHandler(packets.ZC_SKILL_DISAPPEAR, s.handleSkillUnitGone)
 	s.client.RegisterHandler(packets.ZC_NPCACK_MAPMOVE, s.handleMapChange)
 	s.client.RegisterHandler(packets.ZC_NPCACK_SERVERMOVE, s.handleServerMove)
 	s.client.RegisterHandler(packets.ZC_NOTIFY_PLAYERMOVE, s.handlePlayerMove)
