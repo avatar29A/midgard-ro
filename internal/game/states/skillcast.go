@@ -201,12 +201,14 @@ var healSkills = map[uint16]bool{
 const skillLabelLifeMs = 1400
 
 // floatingSkillName is a skill's name over the unit it was cast on.
+//
+// The unit rather than the place: the name belongs over somebody's head and
+// follows them, so a character buffed and then walking away carries it. Held
+// as an id and looked up each frame, which is also what makes it vanish with
+// whoever it was on.
 type floatingSkillName struct {
-	text string
-
-	// Where it sits, in world space. It does not move — it is a label, not a
-	// figure thrown up from a blow.
-	x, y, z float32
+	text   string
+	target uint32
 
 	ageMs float32
 }
@@ -214,26 +216,21 @@ type floatingSkillName struct {
 // addSkillLabel names a skill over whoever it was cast on.
 func (s *InGameState) addSkillLabel(targetID uint32, skillID uint16) {
 	name := skills.Name(skillID)
-	if name == "" {
+	if name == "" || s.bodyOf(targetID) == nil {
 		return
 	}
 
-	body := s.bodyOf(targetID)
-	if body == nil {
-		return
+	// One name at a time over the same head. Two buffs in a row would
+	// otherwise stack into an unreadable pile.
+	for i := range s.skillLabels {
+		if s.skillLabels[i].target == targetID {
+			s.skillLabels[i] = floatingSkillName{text: name, target: targetID}
+
+			return
+		}
 	}
 
-	top := body.RenderY
-	if e := s.entityOf(targetID); e != nil {
-		top = s.unitBox(e).Max[1]
-	}
-
-	s.skillLabels = append(s.skillLabels, floatingSkillName{
-		text: name,
-		x:    body.RenderX,
-		y:    top,
-		z:    body.RenderZ,
-	})
+	s.skillLabels = append(s.skillLabels, floatingSkillName{text: name, target: targetID})
 }
 
 // advanceSkillLabels ages the names out.
@@ -245,7 +242,10 @@ func (s *InGameState) advanceSkillLabels(deltaMs float32) {
 	kept := s.skillLabels[:0]
 	for _, label := range s.skillLabels {
 		label.ageMs += deltaMs
-		if label.ageMs < skillLabelLifeMs {
+
+		// Gone with whoever it was over: a name floating where a monster used
+		// to stand is worse than no name.
+		if label.ageMs < skillLabelLifeMs && s.bodyOf(label.target) != nil {
 			kept = append(kept, label)
 		}
 	}
@@ -261,7 +261,22 @@ func (s *InGameState) SkillLabels(viewportW, viewportH float32) []HoverLabel {
 
 	labels := make([]HoverLabel, 0, len(s.skillLabels))
 	for _, label := range s.skillLabels {
-		x, y := s.projectToScreen(label.x, label.y, label.z, viewportW, viewportH)
+		body := s.bodyOf(label.target)
+		if body == nil {
+			continue
+		}
+
+		// Over the head, wherever the head is now.
+		top := body.RenderY
+		if e := s.entityOf(label.target); e != nil {
+			top = s.unitBox(e).Max[1]
+		} else if s.playerRender != nil {
+			if _, height := s.playerRender.QuadSize(); height > 0 {
+				top = body.RenderY + height
+			}
+		}
+
+		x, y := s.projectToScreen(body.RenderX, top, body.RenderZ, viewportW, viewportH)
 		labels = append(labels, HoverLabel{Text: label.text, ScreenX: x, ScreenY: y})
 	}
 
