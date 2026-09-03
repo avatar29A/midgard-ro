@@ -127,10 +127,12 @@ type InGameState struct {
 	// each is complained about once rather than on every sighting.
 	unknownJobs map[int]bool
 
-	// placingSkill is a ground skill chosen and waiting for a cell, zero when
-	// none is, and placingLevel the level it will go off at.
-	placingSkill uint16
-	placingLevel int
+	// placingSkill is a skill chosen and waiting to be aimed, zero when none
+	// is, and placingLevel the level it will go off at. placingAtUnit says
+	// which it is waiting for: a unit, or a cell.
+	placingSkill  uint16
+	placingLevel  int
+	placingAtUnit bool
 
 	// The cast bar: which skill, how long it takes, and how much is left.
 	castSkill   uint16
@@ -2244,7 +2246,7 @@ func (s *InGameState) ClickWorld(mouseX, mouseY, viewportW, viewportH float32) {
 	// A skill waiting for a cell takes the click before anything else can:
 	// while one is held, clicking means "here" and not "walk there" or
 	// "attack that".
-	if s.placeHeldSkill() {
+	if s.placeHeldSkill(mouseX, mouseY, viewportW, viewportH) {
 		return
 	}
 

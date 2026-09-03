@@ -40,13 +40,13 @@ func TestCancelPlacingPutsItDown(t *testing.T) {
 func TestAClickWhileHoldingIsTakenByTheSkill(t *testing.T) {
 	s := &InGameState{}
 
-	if s.placeHeldSkill() {
+	if s.placeHeldSkill(0, 0, 0, 0) {
 		t.Error("a click was taken with nothing held")
 	}
 
 	s.BeginPlacing(80, 5)
 
-	if !s.placeHeldSkill() {
+	if !s.placeHeldSkill(0, 0, 0, 0) {
 		t.Error("a click was not taken while a skill was held")
 	}
 	if _, holding := s.Placing(); holding {
@@ -95,5 +95,46 @@ func TestAnInstantCastDrawsNoBar(t *testing.T) {
 
 	if _, _, casting := s.CastProgress(); casting {
 		t.Error("an instant cast started a bar")
+	}
+}
+
+// TestSupportSkillsWaitForSomebody: a skill that can go on anybody is held
+// until somebody is chosen. Casting it at the caster instead is what put half
+// of every support skill out of reach.
+func TestSupportSkillsWaitForSomebody(t *testing.T) {
+	s := &InGameState{}
+	s.BeginTargeting(28, 10)
+
+	skill, holding := s.Placing()
+	if !holding || skill != 28 {
+		t.Fatalf("the skill was not held: %d, %v", skill, holding)
+	}
+	if !s.placingAtUnit {
+		t.Error("a support skill is waiting for a cell rather than for somebody")
+	}
+}
+
+// TestPlacingAndTargetingAreTheSameHold: both are one skill waiting to be
+// aimed, and a cancel or a click has to end either.
+func TestPlacingAndTargetingAreTheSameHold(t *testing.T) {
+	s := &InGameState{}
+
+	s.BeginPlacing(80, 5)
+	if s.placingAtUnit {
+		t.Error("a ground skill is waiting for somebody rather than for a cell")
+	}
+
+	s.CancelPlacing()
+	if _, holding := s.Placing(); holding {
+		t.Error("cancel left a ground skill held")
+	}
+
+	s.BeginTargeting(28, 10)
+	s.CancelPlacing()
+	if _, holding := s.Placing(); holding {
+		t.Error("cancel left a support skill held")
+	}
+	if s.placingAtUnit {
+		t.Error("cancel left the hold pointed at a unit")
 	}
 }

@@ -143,6 +143,19 @@ func (s *InGameState) UseSkill(skillID uint16, level int) error {
 		return nil
 	}
 
+	if level <= 0 {
+		level = skill.Level
+	}
+
+	// A skill that can go on somebody else waits for that somebody. Casting
+	// it at the caster instead would put half of every support skill out of
+	// reach, which is what "no target" looked like.
+	if skill.Inf&packets.InfSupport != 0 && skill.Inf&packets.InfAttack == 0 {
+		s.BeginTargeting(skillID, level)
+
+		return nil
+	}
+
 	target := s.selfAID()
 	if skill.Inf&packets.InfAttack != 0 {
 		if s.targetID == 0 {
@@ -152,10 +165,6 @@ func (s *InGameState) UseSkill(skillID uint16, level int) error {
 		}
 
 		target = s.targetID
-	}
-
-	if level <= 0 {
-		level = skill.Level
 	}
 
 	trace.Emit(trace.HUD, "use-skill",

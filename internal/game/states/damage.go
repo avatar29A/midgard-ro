@@ -27,6 +27,12 @@ type floatingDamage struct {
 	miss     bool
 	critical bool
 
+	// heal marks a figure that is a gain rather than a loss. A skill that
+	// restores something says so with the same number in a different color,
+	// which is the only sign a heal ever gives — nothing else about it shows
+	// on screen.
+	heal bool
+
 	// Where it started, in world space. It rises on screen rather than in the
 	// world, so this does not move.
 	x, y, z float32
@@ -39,6 +45,9 @@ type DamageNumber struct {
 	Amount   int
 	Miss     bool
 	Critical bool
+
+	// Heal marks a gain rather than a loss.
+	Heal bool
 
 	ScreenX, ScreenY float32
 
@@ -75,6 +84,39 @@ func (s *InGameState) addDamageNumber(blow packets.Damage) {
 		x:        body.RenderX,
 		y:        top,
 		z:        body.RenderZ,
+	})
+}
+
+// addHealNumber floats what a skill restored over whoever it was restored to.
+//
+// The only sign a heal gives. A skill that hurts has a figure, a flinch and a
+// death to show for itself; one that heals has nothing at all, which is why a
+// working Heal read as a skill that did not fire.
+func (s *InGameState) addHealNumber(targetID uint32, amount int) {
+	if amount <= 0 {
+		return
+	}
+
+	body := s.bodyOf(targetID)
+	if body == nil {
+		return
+	}
+
+	top := body.RenderY
+	if e := s.entityOf(targetID); e != nil {
+		top = s.unitBox(e).Max[1]
+	}
+
+	if len(s.damageNumbers) >= damageMaxOnScreen {
+		s.damageNumbers = s.damageNumbers[1:]
+	}
+
+	s.damageNumbers = append(s.damageNumbers, floatingDamage{
+		amount: amount,
+		heal:   true,
+		x:      body.RenderX,
+		y:      top,
+		z:      body.RenderZ,
 	})
 }
 
@@ -121,6 +163,7 @@ func (s *InGameState) DamageNumbers(viewportW, viewportH float32) []DamageNumber
 			Amount:   d.amount,
 			Miss:     d.miss,
 			Critical: d.critical,
+			Heal:     d.heal,
 			ScreenX:  x,
 			ScreenY:  y,
 			Progress: d.ageMs / damageLifeMs,

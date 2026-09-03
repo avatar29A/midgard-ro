@@ -196,7 +196,13 @@ func (b *UI2DBackend) drawDamageNumber(n states.DamageNumber) {
 		return
 	}
 
+	// The digit art is white, so the color is the tint. A gain is green,
+	// which is what the original draws a heal in and the only thing that tells
+	// one from a blow at a glance.
 	tint := ui2d.Color{R: 1, G: 1, B: 1, A: alpha}
+	if n.Heal {
+		tint = ui2d.Color{R: 0.35, G: 1, B: 0.35, A: alpha}
+	}
 
 	// Up is negative on screen, so the arc is subtracted.
 	arc := damageLaunch*n.Progress - damageGravity*n.Progress*n.Progress
