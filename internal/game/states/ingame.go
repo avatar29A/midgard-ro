@@ -114,6 +114,10 @@ type InGameState struct {
 	// what this character is wearing.
 	showEquipment bool
 
+	// delayedEffects are the ones waiting for their moment — a bolt's shot
+	// lands a while after the volley starts.
+	delayedEffects []delayedEffect
+
 	// bursts are the particle effects playing — the ones the original draws
 	// in code rather than from a file.
 	bursts []*activeBurst
@@ -797,6 +801,7 @@ func (s *InGameState) Update(dt float64) error {
 		s.advanceCastAuras(deltaMs)
 		s.advancePendingSkill(deltaMs)
 		s.advanceBursts(deltaMs)
+		s.advanceDelayedEffects(deltaMs)
 		s.updateDamageNumbers(deltaMs)
 		s.updateEffects(deltaMs)
 		s.updateCelebrations(deltaMs)

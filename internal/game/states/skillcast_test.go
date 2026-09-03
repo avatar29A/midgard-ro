@@ -485,3 +485,81 @@ func TestTheBattleLogIgnoresOtherPeoplesFights(t *testing.T) {
 		t.Errorf("%d lines from somebody else's fight: %v", len(lines), lines)
 	}
 }
+
+// TestABoltSkillHitsOncePerShot: what a volley hits with is drawn as each shot
+// lands, not all at the start. Ten flashes at once on a target nothing has
+// reached yet is what made a bolt skill look like a single blow.
+func TestABoltSkillHitsOncePerShot(t *testing.T) {
+	s, mob := withMob()
+
+	s.playSkillUseEffects(packets.SkillUse{
+		SourceID: 5000, TargetID: mob.ID, SkillID: 14, Damage: 1374, Hits: 10,
+	})
+
+	if len(s.delayedEffects) != 10 {
+		t.Fatalf("%d hits scheduled for ten shots", len(s.delayedEffects))
+	}
+
+	for i := 1; i < len(s.delayedEffects); i++ {
+		if s.delayedEffects[i].delayMs <= s.delayedEffects[i-1].delayMs {
+			t.Errorf("hit %d is due at %v, no later than hit %d at %v",
+				i, s.delayedEffects[i].delayMs, i-1, s.delayedEffects[i-1].delayMs)
+		}
+	}
+
+	for _, waiting := range s.delayedEffects {
+		if waiting.effect != "EF_COLDHIT" {
+			t.Errorf("a shot hits with %q, want the skill's own EF_COLDHIT", waiting.effect)
+		}
+		if waiting.target != mob.ID {
+			t.Errorf("a hit is aimed at %d, not at what was shot at", waiting.target)
+		}
+	}
+}
+
+// TestASkillWithNoBoltsIsDrawnAtOnce: everything that is not a volley keeps
+// playing the moment the skill goes off.
+func TestASkillWithNoBoltsIsDrawnAtOnce(t *testing.T) {
+	s, mob := withMob()
+
+	s.playSkillUseEffects(packets.SkillUse{
+		SourceID: 5000, TargetID: mob.ID, SkillID: 28, Amount: 281, // AL_HEAL
+	})
+
+	if len(s.delayedEffects) != 0 {
+		t.Errorf("%d effects were made to wait for a shot that is not coming", len(s.delayedEffects))
+	}
+}
+
+// TestAWaitingHitGoesWithItsTarget: a flash where a monster used to stand is
+// worse than no flash, and a volley outlives what it kills.
+func TestAWaitingHitGoesWithItsTarget(t *testing.T) {
+	s, mob := withMob()
+	s.delayedEffects = []delayedEffect{{effect: "EF_COLDHIT", target: mob.ID, delayMs: 100}}
+
+	s.entityManager.Remove(mob.ID)
+	s.advanceDelayedEffects(200)
+
+	if len(s.delayedEffects) != 0 {
+		t.Errorf("%d hits still waiting for a target that has gone", len(s.delayedEffects))
+	}
+	if len(s.bursts) != 0 {
+		t.Error("a hit played on a target that has gone")
+	}
+}
+
+// TestAWaitingHitWaits: one that fired early would land before its shot.
+func TestAWaitingHitWaits(t *testing.T) {
+	s, mob := withMob()
+	s.delayedEffects = []delayedEffect{{effect: "EF_COLDHIT", target: mob.ID, delayMs: 500}}
+
+	s.advanceDelayedEffects(400)
+	if len(s.delayedEffects) != 1 {
+		t.Fatal("the hit went off before its shot landed")
+	}
+
+	s.advanceDelayedEffects(200)
+	if len(s.delayedEffects) != 0 {
+		t.Error("the hit never went off")
+	}
+}

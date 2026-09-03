@@ -967,15 +967,83 @@ func (s *InGameState) playSkillEffects(effects []string, x, y, z float32) {
 }
 
 // playSkillBursts starts the ones drawn in code rather than read from a file.
-func (s *InGameState) playSkillBursts(effects []string, x, y, z float32) {
+func (s *InGameState) playSkillBursts(effects []string, hits int, x, y, z float32) {
 	for _, effect := range effects {
-		parts, runMs, ok := burstFor(effect)
+		spec, ok := burstFor(effect, hits)
 		if !ok {
 			continue
 		}
 
-		s.playBurst(effect, parts, runMs, x, y, z)
+		s.playBurst(effect, spec, x, y, z)
 	}
+}
+
+// A volley's shots land one after another.
+//
+// A bolt skill arrives as one packet saying how much it did over how many
+// blows, and the client draws the blows. What each shot hits has to wait for
+// it to come down: played at the start, ten flashes go off on a target that
+// nothing has reached yet, which is what made a bolt skill look like one
+// blow with a large figure over it.
+
+// delayedEffect is something waiting to be drawn on a unit.
+type delayedEffect struct {
+	effect string
+	target uint32
+
+	delayMs float32
+}
+
+// advanceDelayedEffects plays the ones whose moment has come.
+func (s *InGameState) advanceDelayedEffects(deltaMs float32) {
+	if len(s.delayedEffects) == 0 {
+		return
+	}
+
+	kept := s.delayedEffects[:0]
+	for _, waiting := range s.delayedEffects {
+		waiting.delayMs -= deltaMs
+		if waiting.delayMs > 0 {
+			kept = append(kept, waiting)
+
+			continue
+		}
+
+		// Gone with whoever it was aimed at. A flash where a monster used to
+		// stand is worse than no flash.
+		x, y, z, ok := s.effectHeight(waiting.target)
+		if !ok {
+			continue
+		}
+
+		one := []string{waiting.effect}
+		s.playSkillEffects(one, x, y, z)
+		s.playSkillBursts(one, 1, x, y, z)
+	}
+
+	s.delayedEffects = kept
+}
+
+// boltEffects are the falling shots. What a skill lists beside one of these is
+// what its shots hit with, and is drawn once for each of them.
+var boltEffects = map[string]bool{
+	"EF_ICEARROW":  true,
+	"EF_FIREARROW": true,
+}
+
+// splitBolts separates a skill's shots from what they hit with.
+func splitBolts(effects []string) (bolts, onImpact []string) {
+	for _, effect := range effects {
+		if boltEffects[effect] {
+			bolts = append(bolts, effect)
+
+			continue
+		}
+
+		onImpact = append(onImpact, effect)
+	}
+
+	return bolts, onImpact
 }
 
 // playSkillSounds asks for what a list of effects sounds like.
@@ -1018,9 +1086,11 @@ func (s *InGameState) playSkillUseEffects(use packets.SkillUse) {
 		return
 	}
 
+	hits := max(use.Hits, 1)
+
 	if x, y, z, ok := s.effectHeight(use.SourceID); ok {
 		s.playSkillEffects(effects.OnCaster, x, y, z)
-		s.playSkillBursts(effects.OnCaster, x, y, z)
+		s.playSkillBursts(effects.OnCaster, hits, x, y, z)
 
 		// And the flash a skill starts with, for the ones that start here.
 		// A skill with a cast time shows that when the cast begins; every
@@ -1029,21 +1099,38 @@ func (s *InGameState) playSkillUseEffects(use packets.SkillUse) {
 		//
 		// Bursts only. The begin-cast effect that comes from a file is the
 		// casting circle, and beginCastAura owns that.
-		s.playSkillBursts(effects.BeginCast, x, y, z)
+		s.playSkillBursts(effects.BeginCast, hits, x, y, z)
 	}
 	s.playSkillSounds(effects.OnCaster)
 
 	if use.TargetID != 0 {
-		if x, y, z, ok := s.effectHeight(use.TargetID); ok {
+		bolts, onImpact := splitBolts(effects.OnTarget)
+
+		if len(bolts) > 0 {
+			// The volley now, and what its shots hit with as each one lands.
+			if x, y, z, ok := s.effectHeight(use.TargetID); ok {
+				s.playSkillBursts(bolts, hits, x, y, z)
+			}
+
+			for i := 0; i < min(hits, boltMax); i++ {
+				for _, effect := range onImpact {
+					s.delayedEffects = append(s.delayedEffects, delayedEffect{
+						effect: effect, target: use.TargetID, delayMs: boltImpactMs(i),
+					})
+				}
+			}
+		} else if x, y, z, ok := s.effectHeight(use.TargetID); ok {
 			s.playSkillEffects(effects.OnTarget, x, y, z)
-			s.playSkillBursts(effects.OnTarget, x, y, z)
+			s.playSkillBursts(effects.OnTarget, hits, x, y, z)
 		}
+
 		s.playSkillSounds(effects.OnTarget)
 	}
 
 	if use.Ground {
 		x, z := entity.CellToWorld(use.CellX, use.CellY)
 		s.playSkillEffects(effects.OnGround, x, s.terrainHeight(x, z), z)
+		s.playSkillBursts(effects.OnGround, hits, x, s.terrainHeight(x, z), z)
 		s.playSkillSounds(effects.OnGround)
 	}
 }
