@@ -476,8 +476,9 @@ func TestAShotArrivesWhereItWasAimed(t *testing.T) {
 	}
 }
 
-// TestAShotLiesAlongItsFall: drawn upright it reads as a shard hanging in the
-// air and sliding, rather than as something coming down.
+// TestAShotLiesAlongItsFall: the shard points the way it is going. Built tall
+// instead of wide it also came out stretched, because the art lies on its
+// side — a wide shape squeezed into a narrow quad is a smear.
 func TestAShotLiesAlongItsFall(t *testing.T) {
 	b := playing("EF_ICEARROW")
 	b.ageMs = b.parts[0].birthMs + b.parts[0].lifeMs/2
@@ -487,13 +488,15 @@ func TestAShotLiesAlongItsFall(t *testing.T) {
 		t.Fatalf("%d quads", len(quads))
 	}
 
-	// The long axis runs from the top pair of corners to the bottom pair.
+	// The long axis runs from the left pair of corners to the right pair: the
+	// shard in icearrow.tga lies on its side in the square it is drawn in, so
+	// the quad is built wide and turned onto its path.
 	long := [2]float32{
-		(quads[0].Corners[3][0] + quads[0].Corners[2][0]) / 2,
-		(quads[0].Corners[3][1] + quads[0].Corners[2][1]) / 2,
+		(quads[0].Corners[1][0] + quads[0].Corners[2][0]) / 2,
+		(quads[0].Corners[1][1] + quads[0].Corners[2][1]) / 2,
 	}
-	long[0] -= (quads[0].Corners[0][0] + quads[0].Corners[1][0]) / 2
-	long[1] -= (quads[0].Corners[0][1] + quads[0].Corners[1][1]) / 2
+	long[0] -= (quads[0].Corners[0][0] + quads[0].Corners[3][0]) / 2
+	long[1] -= (quads[0].Corners[0][1] + quads[0].Corners[3][1]) / 2
 
 	// The way it is going, through the same projection: from where the shot
 	// started, down onto the target.
