@@ -140,8 +140,10 @@ type InGameState struct {
 	castTotalMs float32
 	castLeftMs  float32
 
-	// castAuras are the rings under whoever is casting.
-	castAuras []castingAura
+	// castAuras are the rings under whoever is casting, and holdCastAura keeps
+	// one there for --cast-aura.
+	castAuras    []castingAura
+	holdCastAura bool
 
 	// skillLabels are skill names floating over whoever they were cast on.
 	skillLabels []floatingSkillName

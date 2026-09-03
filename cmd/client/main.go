@@ -76,6 +76,10 @@ func main() {
 		g.SetCastSkills(cast)
 	}
 
+	if config.HoldCastAura() {
+		g.SetHoldCastAura()
+	}
+
 	if slots := config.EquipSlots(); len(slots) > 0 {
 		g.SetEquipSlots(slots)
 	}

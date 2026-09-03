@@ -577,16 +577,23 @@ type CastBar struct {
 
 // CastingBar is the cast to draw this frame, and whether there is one.
 //
-// Under the caster's feet, where the original puts it and where the health
-// bars already are. There is nothing to draw for an instant skill, which is
-// most of them.
+// Over the caster's head rather than under its feet: the ring the cast draws on
+// the ground is already down there, and a bar in the same place is read as part
+// of it. There is nothing to draw for an instant skill, which is most of them.
 func (s *InGameState) CastingBar(viewportW, viewportH float32) (CastBar, bool) {
 	progress, skill, casting := s.CastProgress()
 	if !casting || s.player == nil {
 		return CastBar{}, false
 	}
 
-	x, y := s.projectToScreen(s.player.RenderX, s.player.RenderY, s.player.RenderZ,
+	top := s.player.RenderY
+	if s.playerRender != nil {
+		if _, height := s.playerRender.QuadSize(); height > 0 {
+			top += height
+		}
+	}
+
+	x, y := s.projectToScreen(s.player.RenderX, top, s.player.RenderZ,
 		viewportW, viewportH)
 
 	return CastBar{
@@ -668,8 +675,38 @@ func (s *InGameState) beginCastAura(cast packets.SkillCast) {
 // castAuraEffect is the effect name the table uses for the casting circle.
 const castAuraEffect = "EF_BEGINSPELL"
 
+// castAuraHoldLoopMs is how long one cycle of the held ring takes. The
+// original's is 56 frames at 60fps, which is what nostalro-client reads out of
+// it, so a held one repeats at the same rate rather than at a pace of its own.
+const castAuraHoldLoopMs = float32(56) / 60 * 1000
+
+// HoldCastAura keeps a ring under the character for as long as the client
+// runs, so the effect can be looked at rather than glimpsed.
+func (s *InGameState) HoldCastAura() {
+	s.holdCastAura = true
+}
+
 // advanceCastAuras runs the rings down.
 func (s *InGameState) advanceCastAuras(deltaMs float32) {
+	// Held for inspection: one ring under the character, never expiring, its
+	// growth looping so the whole of it can be seen.
+	if s.holdCastAura && s.player != nil {
+		if len(s.castAuras) == 0 {
+			s.castAuras = []castingAura{{
+				caster:  s.selfAID(),
+				totalMs: castAuraHoldLoopMs,
+				leftMs:  castAuraHoldLoopMs,
+			}}
+		}
+
+		s.castAuras[0].leftMs -= deltaMs
+		if s.castAuras[0].leftMs <= 0 {
+			s.castAuras[0].leftMs = castAuraHoldLoopMs
+		}
+
+		return
+	}
+
 	if len(s.castAuras) == 0 {
 		return
 	}
