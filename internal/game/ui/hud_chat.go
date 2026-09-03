@@ -718,6 +718,15 @@ func (b *UI2DBackend) drawChatLines(state InGameUIState, x, y, w, h float32) {
 	if maxOffset > 0 {
 		newOffset := b.scrollbar("hud_chat", x+w-chatScrollW, y,
 			h, offset, maxOffset, visible)
+
+		// The wheel over the box does the same as dragging the bar, and
+		// unpins it the same way: a box scrolled back stays where it was put
+		// until it is scrolled to the bottom again.
+		if in := b.ctx.Input(); in != nil && in.ScrollY != 0 &&
+			(ui2d.Rect{X: x, Y: y, W: w, H: h}).Contains(in.MouseX, in.MouseY) {
+			newOffset = min(max(offset-int(in.ScrollY), 0), maxOffset)
+		}
+
 		if newOffset != offset {
 			b.chatScroll = newOffset
 			b.chatPinned = newOffset >= maxOffset
