@@ -97,23 +97,22 @@ func (s *InGameState) IceQuads(viewportW, viewportH float32) []EffectQuad {
 
 	seal := frostDiver2Parts()
 
-	// Held at the moment the spikes have finished growing: past that they
-	// would begin to fade, and this ice is not going anywhere.
-	held := &activeBurst{parts: seal.parts, ageMs: frostDiverReachMs() + burstFrames(spikeRiseFrames)}
-
 	var out []EffectQuad
 	for _, id := range frozen {
-		x, y, z, ok := s.effectHeight(id)
+		x, y, z, ok := s.footingOf(id)
 		if !ok {
 			continue
 		}
 
-		originX, originY := s.projectToScreen(x, y, z, viewportW, viewportH)
-		if originX < 0 {
-			continue
+		// Held at the moment the spikes have finished growing: past that they
+		// would begin to fade, and this ice is not going anywhere.
+		held := &activeBurst{
+			parts: seal.parts,
+			x:     x, y: y, z: z,
+			ageMs: frostDiverReachMs() + burstFrames(spikeRiseFrames),
 		}
 
-		out = append(out, held.quadsAt(originX, originY, 0, 0)...)
+		out = append(out, s.burstQuadsOf(held, viewportW, viewportH)...)
 	}
 
 	return out

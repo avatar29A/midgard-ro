@@ -250,7 +250,7 @@ func quadsThrough(name string) (frames [][]EffectQuad) {
 
 	for step := 0; step < 10; step++ {
 		b.ageMs = b.runMs * float32(step) / 10
-		frames = append(frames, b.quadsAt(400, 300, boltFromPx[0], boltFromPx[1]))
+		frames = append(frames, b.quadsAt(flatView))
 	}
 
 	return frames
@@ -276,9 +276,15 @@ func playing(name string) *activeBurst {
 	}
 }
 
-// boltFromPx stands in for the projection: a shot comes down from up and to
-// one side, and the tests do not have a camera to work that out with.
-var boltFromPx = [2]float32{120, -300}
+// flatView stands in for the camera: an isometric-ish projection with a scale
+// that falls off with distance, so a test can tell a particle that moved from
+// one that only looks as though it did, and one that is further away from one
+// that is smaller.
+func flatView(x, y, z float32) (screenX, screenY, perUnit float32, ok bool) {
+	perUnit = 60 / (30 + z)
+
+	return 400 + (x-z)*2, 300 - y*2 + (x+z)/2, perUnit, true
+}
 
 // TestEveryBurstDrawsSomething: the whole point. A burst that lays out no
 // quads is an effect that plays and is not seen, which is what Cold Bolt did
@@ -338,7 +344,7 @@ func TestBurstsStayNearWhatTheyHit(t *testing.T) {
 		for step := 0; step < 10; step++ {
 			b.ageMs = b.runMs * float32(step) / 10
 
-			for _, q := range b.quadsAt(originX, originY, boltFromPx[0], boltFromPx[1]) {
+			for _, q := range b.quadsAt(flatView) {
 				for _, c := range q.Corners {
 					if dx := c[0] - originX; dx < -400 || dx > 400 {
 						t.Fatalf("%s reaches %v across at %vms", name, dx, b.ageMs)
@@ -359,10 +365,10 @@ func TestBurstParticlesMove(t *testing.T) {
 		b := playing(name)
 
 		b.ageMs = b.runMs * 0.3
-		early := b.quadsAt(400, 300, boltFromPx[0], boltFromPx[1])
+		early := b.quadsAt(flatView)
 
 		b.ageMs = b.runMs * 0.6
-		late := b.quadsAt(400, 300, boltFromPx[0], boltFromPx[1])
+		late := b.quadsAt(flatView)
 
 		if len(early) == 0 || len(late) == 0 {
 			t.Errorf("%s draws nothing in the middle of its run", name)
@@ -443,20 +449,22 @@ func TestAShotArrivesWhereItWasAimed(t *testing.T) {
 
 	// Just born, it is up by the fall.
 	b.ageMs = shot.birthMs + 1
-	quads := b.quadsAt(originX, originY, boltFromPx[0], boltFromPx[1])
+	quads := b.quadsAt(flatView)
 	if len(quads) != 1 {
 		t.Fatalf("%d quads for one shot just born", len(quads))
 	}
 
 	x, y := middle(quads)
-	if x < originX+50 || y > originY-100 {
-		t.Errorf("the shot starts at %v,%v, which is not up and off to one side of %v,%v",
-			x, y, originX, originY)
+	if y > originY-40 {
+		t.Errorf("the shot starts at %v, which is not above the target at %v", y, originY)
+	}
+	if x == originX {
+		t.Error("the shot starts straight overhead, which is not off to one side")
 	}
 
 	// About to land, it is on the target.
 	b.ageMs = shot.birthMs + shot.lifeMs*0.98
-	quads = b.quadsAt(originX, originY, boltFromPx[0], boltFromPx[1])
+	quads = b.quadsAt(flatView)
 	if len(quads) != 1 {
 		t.Fatalf("%d quads for one shot about to land", len(quads))
 	}
@@ -474,7 +482,7 @@ func TestAShotLiesAlongItsFall(t *testing.T) {
 	b := playing("EF_ICEARROW")
 	b.ageMs = b.parts[0].birthMs + b.parts[0].lifeMs/2
 
-	quads := b.quadsAt(400, 300, boltFromPx[0], boltFromPx[1])
+	quads := b.quadsAt(flatView)
 	if len(quads) != 1 {
 		t.Fatalf("%d quads", len(quads))
 	}
@@ -487,8 +495,11 @@ func TestAShotLiesAlongItsFall(t *testing.T) {
 	long[0] -= (quads[0].Corners[0][0] + quads[0].Corners[1][0]) / 2
 	long[1] -= (quads[0].Corners[0][1] + quads[0].Corners[1][1]) / 2
 
-	// The way it is going: from up and to one side, down onto the target.
-	fall := [2]float32{-boltFromPx[0], -boltFromPx[1]}
+	// The way it is going, through the same projection: from where the shot
+	// started, down onto the target.
+	startX, startY, _, _ := flatView(b.x+b.otherX, b.y+b.otherY, b.z+b.otherZ)
+	landX, landY, _, _ := flatView(b.x, b.y, b.z)
+	fall := [2]float32{landX - startX, landY - startY}
 
 	dot := long[0]*fall[0] + long[1]*fall[1]
 	lenLong := math.Hypot(float64(long[0]), float64(long[1]))
@@ -591,8 +602,8 @@ func TestASpikeGrowsOutOfTheGround(t *testing.T) {
 		}
 
 		// Up by half of what it grows: the top rises by the whole growth and
-		// the bottom stays put. Screen space, so up is negative.
-		if want := -p.growH; p.vy != want {
+		// the bottom stays put. World space, so up is positive.
+		if want := p.growH; p.vy != want {
 			t.Errorf("spike %d moves %v while growing %v, want %v so its base stays still",
 				i, p.vy, p.growH, want)
 		}
@@ -616,5 +627,76 @@ func TestSpikesStandUpright(t *testing.T) {
 		if len(angles) < 2 {
 			t.Errorf("%s stands every spike at the same angle, which is a fence", name)
 		}
+	}
+}
+
+// TestParticlesShrinkWithDistance: the point of putting them in the world.
+// Laid out around a single projected point, two spikes of the same height are
+// drawn the same size however far apart they are, and a line of them running
+// away from the camera comes out as a row of equal shapes.
+func TestParticlesShrinkWithDistance(t *testing.T) {
+	spec, _ := burstFor("EF_FROSTDIVER2", 1)
+
+	near := &activeBurst{parts: spec.parts, ageMs: burstFrames(spikeRiseFrames)}
+	far := &activeBurst{parts: spec.parts, z: 60, ageMs: burstFrames(spikeRiseFrames)}
+
+	nearQuads, farQuads := near.quadsAt(flatView), far.quadsAt(flatView)
+	if len(nearQuads) == 0 || len(nearQuads) != len(farQuads) {
+		t.Fatalf("%d spikes near and %d far", len(nearQuads), len(farQuads))
+	}
+
+	for i := range nearQuads {
+		_, high := quadSpan(nearQuads[i].Corners)
+		_, low := quadSpan(farQuads[i].Corners)
+
+		if low >= high {
+			t.Errorf("spike %d is %v tall up close and %v far away", i, high, low)
+		}
+	}
+}
+
+// TestTheSpikeLineIsSpreadOutInTheWorld: the spikes stand at their own places
+// on the ground, so the line reads as running away from the caster. Anchored
+// to one point they were a row at the same height, all the same size.
+func TestTheSpikeLineIsSpreadOutInTheWorld(t *testing.T) {
+	spec, _ := burstFor("EF_FROSTDIVER", 1)
+
+	// A caster five cells off. Not along the diagonal: the stand-in camera
+	// maps that direction onto a single screen column, and a test that used
+	// it would be measuring the projection rather than the layout.
+	b := &activeBurst{parts: spec.parts, otherX: 25, otherZ: 5, ageMs: spec.runMs / 2}
+
+	quads := b.quadsAt(flatView)
+	if len(quads) < 4 {
+		t.Fatalf("%d spikes standing halfway through the line", len(quads))
+	}
+
+	// The middles, not a corner: a corner moves with the size as well as with
+	// the place, and the sizes differ down the line.
+	var xs, ys []float32
+	for _, q := range quads {
+		var cx, cy float32
+		for _, c := range q.Corners {
+			cx, cy = cx+c[0]/4, cy+c[1]/4
+		}
+
+		xs, ys = append(xs, cx), append(ys, cy)
+	}
+
+	spread := func(v []float32) float32 {
+		lo, hi := v[0], v[0]
+		for _, f := range v[1:] {
+			lo, hi = min(lo, f), max(hi, f)
+		}
+
+		return hi - lo
+	}
+
+	if spread(xs) < 20 {
+		t.Errorf("the line covers %v across, which is a heap rather than a line", spread(xs))
+	}
+	if spread(ys) < 8 {
+		t.Errorf("the line covers %v up and down; spikes further off should sit higher",
+			spread(ys))
 	}
 }
