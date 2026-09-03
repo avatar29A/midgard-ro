@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"image"
 	gomath "math"
-	"strings"
 	"time"
 	"unsafe"
 
@@ -16,7 +15,6 @@ import (
 	"github.com/Faultbox/midgard-ro/internal/engine/scene/shaders"
 	"github.com/Faultbox/midgard-ro/internal/engine/shader"
 	"github.com/Faultbox/midgard-ro/internal/engine/shadow"
-	"github.com/Faultbox/midgard-ro/internal/engine/texture"
 	"github.com/Faultbox/midgard-ro/internal/trace"
 	"github.com/Faultbox/midgard-ro/pkg/formats"
 	"github.com/Faultbox/midgard-ro/pkg/math"
@@ -345,7 +343,7 @@ func (mr *ModelRenderer) buildMapModel(rsm *formats.RSM, ref *formats.RSWModel, 
 			modelTextures[i] = mr.fallbackTex
 			continue
 		}
-		img, err := mr.decodeTexture(data, texPath)
+		img, err := decodeMapTexture(data, texPath, true)
 		if err != nil {
 			modelTextures[i] = mr.fallbackTex
 			continue
@@ -559,21 +557,6 @@ func (mr *ModelRenderer) Advance(deltaMs float32) {
 		model.localCenter, model.localRadius = boundingSphere(mesh.Vertices)
 		mr.updateWorldBounds(model, offsetX, offsetZ)
 	}
-}
-
-func (mr *ModelRenderer) decodeTexture(data []byte, path string) (*image.RGBA, error) {
-	lowerPath := strings.ToLower(path)
-	var img image.Image
-	var err error
-	if strings.HasSuffix(lowerPath, ".tga") {
-		img, err = texture.DecodeTGA(data)
-	} else {
-		img, err = formats.DecodeImage(data)
-	}
-	if err != nil {
-		return nil, err
-	}
-	return texture.ImageToRGBA(img, true), nil
 }
 
 func (mr *ModelRenderer) uploadTexture(img *image.RGBA) uint32 {

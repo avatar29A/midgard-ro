@@ -9,7 +9,7 @@ import (
 
 	"github.com/Faultbox/midgard-ro/internal/engine/scene/shaders"
 	"github.com/Faultbox/midgard-ro/internal/engine/shader"
-	"github.com/Faultbox/midgard-ro/internal/engine/texture"
+	"github.com/Faultbox/midgard-ro/pkg/formats"
 	"github.com/Faultbox/midgard-ro/pkg/math"
 )
 
@@ -159,7 +159,7 @@ func (m *GroundMarker) LoadTexture(load func(string) ([]byte, error)) error {
 		return fmt.Errorf("ground quad texture %q: %w", m.texturePath, err)
 	}
 
-	img, err := texture.DecodeTGA(data)
+	img, err := formats.DecodeImage(data)
 	if err != nil {
 		return fmt.Errorf("decode %q: %w", m.texturePath, err)
 	}
