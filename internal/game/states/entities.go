@@ -77,6 +77,7 @@ func upsertUnit(m *entity.Manager, u *packets.Entity, path PathFunc, ground Grou
 	e.HP = int(u.HP)
 	e.MaxHP = int(u.MaxHP)
 	e.IsDead = u.MaxHP > 0 && u.HP <= 0
+	e.BodyState = u.BodyState
 
 	if e.Body == nil {
 		e.Body = newUnitBody(u)

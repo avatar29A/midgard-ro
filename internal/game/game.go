@@ -1133,7 +1133,9 @@ func (g *Game) renderUI() {
 			WorldLabels: append(
 				state.WorldLabels(viewportWidth, viewportHeight),
 				state.SkillLabels(viewportWidth, viewportHeight)...),
-			WorldEffects:    state.EffectQuads(viewportWidth, viewportHeight),
+			WorldEffects: append(
+				state.EffectQuads(viewportWidth, viewportHeight),
+				state.IceQuads(viewportWidth, viewportHeight)...),
 			TargetMarker:    targetMarker,
 			DamageNumbers:   state.DamageNumbers(viewportWidth, viewportHeight),
 			LevelUpButtons:  levelUpButtons,
