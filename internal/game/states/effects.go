@@ -159,7 +159,10 @@ func (s *InGameState) EffectQuads(viewportW, viewportH float32) []EffectQuad {
 
 		for _, quad := range effect.Frames(e.str, e.ageMs) {
 			placed := EffectQuad{
-				Texture:  quad.Texture,
+				// The whole path. A quad may draw a file out of the effect
+				// texture directory or a frame of a sprite, and the two are
+				// not in the same place.
+				Texture:  effectTexturePath + quad.Texture,
 				UV:       quad.UV,
 				Color:    quad.Color,
 				Additive: quad.Additive,
@@ -178,10 +181,6 @@ func (s *InGameState) EffectQuads(viewportW, viewportH float32) []EffectQuad {
 
 	return out
 }
-
-// EffectTexturePath is where an effect's textures live, for the interface to
-// load them from.
-func EffectTexturePath() string { return effectTexturePath }
 
 // Celebrating a level, which is an effect and a sound together.
 //

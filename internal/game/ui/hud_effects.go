@@ -29,7 +29,7 @@ func (b *UI2DBackend) drawWorldEffects(quads []states.EffectQuad) {
 	r := b.ctx.Renderer()
 
 	for _, quad := range quads {
-		tex, err := b.texCache.Load(states.EffectTexturePath() + quad.Texture)
+		tex, err := b.texCache.Load(quad.Texture)
 		if err != nil {
 			// Once per texture. An effect whose art will not load draws
 			// nothing at all, and silently: the skill fires, the trace says

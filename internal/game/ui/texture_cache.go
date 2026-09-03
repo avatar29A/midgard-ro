@@ -2,12 +2,14 @@ package ui
 
 import (
 	"fmt"
+	"image"
 	"strings"
 
 	"github.com/Faultbox/midgard-ro/pkg/formats"
 
 	"github.com/Faultbox/midgard-ro/internal/engine/texture"
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
+	"github.com/Faultbox/midgard-ro/internal/game/states"
 )
 
 // TextureInfo holds GPU texture metadata.
@@ -51,12 +53,24 @@ func (tc *TextureCache) Load(grfPath string) (*TextureInfo, error) {
 		return info, nil
 	}
 
+	sprPath, frame, isFrame := states.SpriteFrameOf(grfPath)
+	if isFrame {
+		grfPath = sprPath
+	}
+
 	data, err := tc.loadFunc(grfPath)
 	if err != nil {
 		return nil, fmt.Errorf("loading texture %s: %w", grfPath, err)
 	}
 
-	img, err := formats.DecodeImage(data)
+	var img image.Image
+
+	if isFrame {
+		img, err = spriteFrame(data, frame)
+	} else {
+		img, err = formats.DecodeImage(data)
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("decoding texture %s: %w", grfPath, err)
 	}
@@ -87,4 +101,27 @@ func (tc *TextureCache) Close() {
 		tc.renderer.DeleteTexture(info.ID)
 	}
 	tc.cache = nil
+}
+
+// spriteFrame is one frame of a sprite, as an image.
+//
+// The archive keeps some effects as sprites rather than as textures — the
+// jagged ice a frozen target is sealed in is seven frames of one — and a
+// frame of those is asked for the same way a file is, so everything that
+// draws through this cache can take either.
+func spriteFrame(data []byte, frame int) (image.Image, error) {
+	spr, err := formats.ParseSPR(data)
+	if err != nil {
+		return nil, err
+	}
+
+	if frame < 0 || frame >= len(spr.Images) {
+		return nil, fmt.Errorf("frame %d of %d", frame, len(spr.Images))
+	}
+
+	f := spr.Images[frame]
+	img := image.NewRGBA(image.Rect(0, 0, int(f.Width), int(f.Height)))
+	copy(img.Pix, f.Pixels)
+
+	return img, nil
 }
