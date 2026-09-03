@@ -110,10 +110,6 @@ type Game struct {
 	// castSkills is --cast, waiting for the skill list.
 	castSkills []int
 
-	// hadWindowFocus is whether the window had focus last frame, which is
-	// what says when the system cursor needs hiding again.
-	hadWindowFocus bool
-
 	// blankCursor is the empty cursor the system pointer is set to; held so
 	// it outlives the call that made it.
 	blankCursor *sdl.Cursor
@@ -699,52 +695,33 @@ func (g *Game) blankSystemCursor() {
 	sdl.SetCursor(cursor)
 }
 
-// hideSystemCursor keeps the system pointer hidden, which takes more than
-// hiding it once.
+// hideSystemCursor keeps the system pointer out of the way, every frame.
 //
-// The game draws RO's own cursor, so the system one is a second pointer beside
-// it. Hiding it at startup works and SDL goes on reporting it hidden — but
-// coming back to the window puts it on screen again, because on macOS the
-// hiding is AppKit's [NSCursor hide] and AppKit undoes it when the window is
-// activated. SDL never hears about that, so it thinks nothing has changed and
-// hiding it again does nothing: the call returns early on a state it believes
-// it is already in.
+// Once is not enough and neither is once per focus. On macOS SDL_ShowCursor
+// goes through AppKit's [NSCursor hide], and AppKit undoes it both when the
+// window is activated and when the mouse moves. SDL is never told, so it
+// believes the cursor is still hidden — measured: SDL reports hidden, reports
+// our own blank cursor as the active one, imgui carries NoMouseCursorChange
+// and draws none of its own, and the pointer is on screen regardless. Asking
+// SDL to hide it again does nothing, because it returns early on a state it
+// thinks it is already in.
 //
-// So on regaining focus it is shown and hidden again, which forces the hide
-// through. Watched by focus rather than by the cursor's reported state,
-// because the reported state is exactly what is wrong.
+// So the hide is forced through by toggling: shown, then hidden. That would
+// flicker if the cursor being shown were an arrow — which is the other half of
+// why the cursor is blank. Showing nothing for the part of a frame between the
+// two calls costs nothing to look at.
 func (g *Game) hideSystemCursor() {
-	// Keyboard focus, which is the window being active. Mouse focus is only
-	// the pointer being over it, and that stays true while another window is
-	// in front — so watching either would never see the window lose focus at
-	// all, and the moment this is for would never come.
-	focused := sdl.GetKeyboardFocus() != nil
-
-	if focused == g.hadWindowFocus {
-		return
-	}
-
-	g.hadWindowFocus = focused
-	if !focused {
-		return
-	}
-
-	// Both again: the blank cursor in case the window manager put its own
-	// back, and the hide forced through by a toggle, since asking for the
-	// state SDL thinks it is in does nothing.
-	if g.blankCursor != nil {
+	if g.blankCursor != nil && sdl.GetCursor() != g.blankCursor {
 		sdl.SetCursor(g.blankCursor)
 	}
 
 	if _, err := sdl.ShowCursor(sdl.ENABLE); err != nil {
-		logger.Warn("could not reset the system cursor", zap.Error(err))
-
 		return
 	}
 
-	if _, err := sdl.ShowCursor(sdl.DISABLE); err != nil {
-		logger.Warn("could not hide the system cursor", zap.Error(err))
-	}
+	//nolint:errcheck // A cosmetic failure, and warning about it every frame
+	// would be worse than the cursor.
+	sdl.ShowCursor(sdl.DISABLE)
 }
 
 // SetCastSkills records the skills --cast asked to be cast.
