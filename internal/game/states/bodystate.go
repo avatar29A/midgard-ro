@@ -22,10 +22,17 @@ import (
 // client that guessed a duration would thaw a target the server still has
 // frozen.
 
-// frozenBlockHeight is how tall the ice stands, in world units. A little
-// over two cells, which puts a Poring well inside it and a player about
-// shoulder deep — the original seals a target rather than burying it.
-const frozenBlockHeight = float32(11)
+// frozenBlockOver is how much taller than its target the ice stands.
+//
+// Measured against the unit rather than fixed, because the units are not one
+// size: a block that swallows a Poring leaves a Wolf standing out of it, and
+// one cut to the Wolf buries the Poring. The original seals whatever it is
+// cast on, whole.
+const frozenBlockOver = float32(1.35)
+
+// frozenBlockLeast is the floor on that, for a unit with no sprite measured
+// yet — better a block that is too big for a moment than a chip of ice.
+const frozenBlockLeast = float32(9)
 
 // handleStateChange is a unit's states changing.
 func (s *InGameState) handleStateChange(data []byte) error {
@@ -100,19 +107,23 @@ func (s *InGameState) IceQuads(viewportW, viewportH float32) []EffectQuad {
 		return nil
 	}
 
-	// The block the archive draws for exactly this, standing on the ground
-	// with the unit inside it. One quad rather than a ring of spikes: the
-	// sprite already is the shape, which is the whole reason to use it.
-	block := frozenPart(frozenBlock, frozenBlockHeight)
-	block.y = frozenBlockHeight / 2
-	block.lifeMs = 1
-
 	var out []EffectQuad
+
 	for _, id := range frozen {
 		x, y, z, ok := s.footingOf(id)
 		if !ok {
 			continue
 		}
+
+		// The block the archive draws for exactly this, standing on the
+		// ground with the unit inside it. One quad rather than a ring of
+		// spikes: the sprite already is the shape, which is the whole reason
+		// to use it.
+		height := max(s.unitHeight(id)*frozenBlockOver, frozenBlockLeast)
+
+		block := frozenPart(frozenBlock, height)
+		block.y = height / 2
+		block.lifeMs = 1
 
 		held := &activeBurst{parts: []burstParticle{block}, x: x, y: y, z: z}
 
@@ -120,4 +131,22 @@ func (s *InGameState) IceQuads(viewportW, viewportH float32) []EffectQuad {
 	}
 
 	return out
+}
+
+// unitHeight is how tall a unit's sprite stands, in world units, or zero when
+// nothing has measured it.
+func (s *InGameState) unitHeight(id uint32) float32 {
+	if e := s.entityOf(id); e != nil && e.Body != nil {
+		box := s.unitBox(e)
+
+		return box.Max[1] - box.Min[1]
+	}
+
+	if id == s.selfAID() && s.playerRender != nil {
+		if _, height := s.playerRender.QuadSize(); height > 0 {
+			return height
+		}
+	}
+
+	return 0
 }
