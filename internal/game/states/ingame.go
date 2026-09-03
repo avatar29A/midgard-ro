@@ -382,7 +382,7 @@ func (s *InGameState) loadPortalRenderer() {
 		logger.Warn("no click marker texture", zap.Error(err))
 	}
 
-	aura, err := scene.NewGroundQuad(scene.CastAuraTexture, scene.CastAuraTint)
+	aura, err := scene.NewTube(scene.CastAuraTexture, scene.CastAuraTint, scene.CastAuraSides)
 	if err != nil {
 		logger.Warn("no casting aura", zap.Error(err))
 

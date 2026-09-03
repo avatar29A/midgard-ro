@@ -613,14 +613,20 @@ func (s *InGameState) CastingBar(viewportW, viewportH float32) (CastBar, bool) {
 // The table says which skills call for it; this is the drawing.
 
 const (
-	// castAuraSizeFrom and castAuraSizeTo are how wide the ring is, in world
-	// units, at the start and end of a cast. Roughly two cells, growing by
-	// half of one — the original's emitters push outward as they rise.
-	castAuraSizeFrom = float32(9)
-	castAuraSizeTo   = float32(12)
+	// The aura stands around the caster rather than lying under it: in the
+	// original the character is inside it, and drawn flat it reads as the
+	// wrong thing entirely.
+	//
+	// Radius at the foot and at the top, and how tall. The original's four
+	// emitters start at 4.1 units out and lean from 80 degrees to 10 as they
+	// rise, which is a wall that starts near vertical and opens outward; a
+	// tube with a wider top is that shape without the four separate cones.
+	castAuraRadius    = float32(4.1)
+	castAuraFlare     = float32(1.6)
+	castAuraHeightMax = float32(20)
 
-	// castAuraFade is how much of the cast is spent fading out at the end,
-	// so the ring does not vanish mid-turn.
+	// castAuraFade is how much of the cast is spent fading out at the end, so
+	// the aura does not vanish mid-turn.
 	castAuraFade = float32(0.25)
 )
 
@@ -737,17 +743,20 @@ func (s *InGameState) drawCastAuras(viewProj math.Mat4) {
 		}
 
 		done := 1 - aura.leftMs/aura.totalMs
-		size := castAuraSizeFrom + (castAuraSizeTo-castAuraSizeFrom)*done
 
 		alpha := float32(1)
 		if done > 1-castAuraFade {
 			alpha = (1 - done) / castAuraFade
 		}
 
-		// Pulse zero: the ring is drawn at its own size rather than swelling
-		// the way a click marker does.
-		s.castAura.Render(viewProj,
+		// It rises over the cast and opens outward as it goes, which is the
+		// four leaning emitters the original builds it from, drawn as one
+		// wall.
+		height := castAuraHeightMax * done
+		top := castAuraRadius + (castAuraFlare-1)*castAuraRadius*done
+
+		s.castAura.RenderTube(viewProj,
 			body.RenderX, s.terrainHeight(body.RenderX, body.RenderZ), body.RenderZ,
-			size, 1, alpha)
+			castAuraRadius, top, height, alpha)
 	}
 }
