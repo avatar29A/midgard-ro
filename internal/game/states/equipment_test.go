@@ -231,9 +231,9 @@ func TestLevelUpCelebrationsPlayOneAtATime(t *testing.T) {
 // TestSoundRequestIsTakenOnce: the game plays what it is handed, and a request
 // left set would play the same sound every frame.
 func TestSoundRequestIsTakenOnce(t *testing.T) {
-	s := &InGameState{sounds: []string{"x.wav"}}
+	s := &InGameState{sounds: []Sound{{Path: "x.wav", Gain: 1}}}
 
-	if got := s.TakeSounds(); len(got) != 1 || got[0] != "x.wav" {
+	if got := s.TakeSounds(); len(got) != 1 || got[0].Path != "x.wav" {
 		t.Fatalf("TakeSounds = %v", got)
 	}
 	if len(s.TakeSounds()) != 0 {

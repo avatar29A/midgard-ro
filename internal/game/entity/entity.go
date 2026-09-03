@@ -97,6 +97,11 @@ type Entity struct {
 	AttackRange int    // Attack range
 	TargetID    uint32 // Current target
 
+	// SoundFrame is the animation frame this unit's last noise was made on,
+	// so a walk cycle sounds once a step rather than once a frame. Minus one
+	// when it is not making any.
+	SoundFrame int
+
 	// BodyState is rAthena's opt1: petrified, frozen, stunned or asleep, one
 	// at a time. These are drawn on the unit rather than shown as an icon,
 	// which is why it is here and not with the rest of the statuses.
