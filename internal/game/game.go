@@ -688,6 +688,16 @@ func (g *Game) runCast() {
 		return
 	}
 
+	// Every skill asked for has to be in the list, not merely some list. The
+	// character's own skills arrive at login and anything @allskill grants
+	// arrives later, so casting on the first list to turn up refuses half of
+	// what was asked for — which is what it did.
+	for _, skill := range g.castSkills {
+		if !state.HasSkill(uint16(skill)) {
+			return
+		}
+	}
+
 	for _, skill := range g.castSkills {
 		if err := state.UseSkill(uint16(skill), 0); err != nil {
 			logger.Warn("--cast request failed", zap.Int("skill", skill), zap.Error(err))

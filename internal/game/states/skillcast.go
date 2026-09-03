@@ -3,8 +3,12 @@ package states
 import (
 	"go.uber.org/zap"
 
+	"strings"
+
 	"github.com/Faultbox/midgard-ro/internal/engine/picking"
+	"github.com/Faultbox/midgard-ro/internal/game/entity"
 	"github.com/Faultbox/midgard-ro/internal/game/skills"
+
 	"github.com/Faultbox/midgard-ro/internal/logger"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
 	"github.com/Faultbox/midgard-ro/internal/trace"
@@ -144,6 +148,8 @@ func (s *InGameState) applySkillUse(use packets.SkillUse) {
 	if use.TargetID != 0 {
 		s.faceTowards(use.SourceID, use.TargetID)
 	}
+
+	s.playSkillUseEffects(use)
 
 	// A skill that hurt somebody is a blow, and is drawn like one.
 	if use.Damage > 0 && use.TargetID != 0 {
@@ -758,5 +764,84 @@ func (s *InGameState) drawCastAuras(viewProj math.Mat4) {
 		s.castAura.RenderTube(viewProj,
 			body.RenderX, s.terrainHeight(body.RenderX, body.RenderZ), body.RenderZ,
 			castAuraRadius, top, height, alpha)
+	}
+}
+
+// Playing a skill's effects.
+//
+// The ported table says which effect belongs where; this puts the ones the
+// archive has art for on screen. Thirty-five of the hundred and sixty-five it
+// names are STR animations sitting loose in the effect directory under the
+// name the table uses, which the client's existing player can already run —
+// the hit sparks among them, which is what shows in an ordinary fight.
+//
+// The rest are the ones the original draws in code rather than from a file.
+// They are named and not drawn, and the miss is logged once each, which makes
+// the log the list of what is left.
+
+// effectFileFor is the STR the archive files an effect under, from the name
+// the table uses: EF_FIREHIT is firehit.str.
+func effectFileFor(effect string) string {
+	if len(effect) <= 3 || effect[:3] != "EF_" {
+		return ""
+	}
+
+	return strings.ToLower(effect[3:]) + ".str"
+}
+
+// playSkillEffects puts a list of them over a world position.
+func (s *InGameState) playSkillEffects(effects []string, x, y, z float32) {
+	for _, effect := range effects {
+		file := effectFileFor(effect)
+		if file == "" {
+			continue
+		}
+
+		s.PlayEffectAt(file, x, y, z)
+	}
+}
+
+// effectHeight is where on a unit an effect plays: its middle, rather than the
+// ground it stands on. A spark at a monster's feet reads as a spark at the
+// ground beside it.
+func (s *InGameState) effectHeight(id uint32) (x, y, z float32, ok bool) {
+	body := s.bodyOf(id)
+	if body == nil {
+		return 0, 0, 0, false
+	}
+
+	middle := body.RenderY
+	if e := s.entityOf(id); e != nil {
+		box := s.unitBox(e)
+		middle = (box.Min[1] + box.Max[1]) / 2
+	} else if s.playerRender != nil {
+		if _, height := s.playerRender.QuadSize(); height > 0 {
+			middle = body.RenderY + height/2
+		}
+	}
+
+	return body.RenderX, middle, body.RenderZ, true
+}
+
+// playSkillUseEffects draws what a skill did, wherever it did it.
+func (s *InGameState) playSkillUseEffects(use packets.SkillUse) {
+	effects, known := skills.EffectsOf(use.SkillID)
+	if !known {
+		return
+	}
+
+	if x, y, z, ok := s.effectHeight(use.SourceID); ok {
+		s.playSkillEffects(effects.OnCaster, x, y, z)
+	}
+
+	if use.TargetID != 0 {
+		if x, y, z, ok := s.effectHeight(use.TargetID); ok {
+			s.playSkillEffects(effects.OnTarget, x, y, z)
+		}
+	}
+
+	if use.Ground {
+		x, z := entity.CellToWorld(use.CellX, use.CellY)
+		s.playSkillEffects(effects.OnGround, x, s.terrainHeight(x, z), z)
 	}
 }
