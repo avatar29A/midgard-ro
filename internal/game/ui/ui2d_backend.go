@@ -1015,6 +1015,10 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 	b.drawDamageNumbers(state.DamageNumbers)
 	b.drawTargetMarker(state.TargetMarker)
 
+	if state.CastingNow {
+		b.drawCastBar(state.CastBar)
+	}
+
 	for _, label := range state.WorldLabels {
 		b.drawWorldLabel(label)
 	}

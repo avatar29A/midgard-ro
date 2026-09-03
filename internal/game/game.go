@@ -1067,12 +1067,17 @@ func (g *Game) renderUI() {
 			mapCellsX, mapCellsY = int(gat.Width), int(gat.Height)
 		}
 
+		castBar, casting := state.CastingBar(viewportWidth, viewportHeight)
+
 		uiState := ui.InGameUIState{
 			MapName:    state.GetMapName(),
 			MapCellsX:  mapCellsX,
 			MapCellsY:  mapCellsY,
 			ChatLines:  state.ChatLines(),
 			EntityBars: state.EntityBars(viewportWidth, viewportHeight),
+			CastBar:    castBar,
+			CastingNow: casting,
+
 			WorldLabels: append(
 				state.WorldLabels(viewportWidth, viewportHeight),
 				state.SkillLabels(viewportWidth, viewportHeight)...),

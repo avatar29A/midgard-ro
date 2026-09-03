@@ -559,3 +559,37 @@ func (s *InGameState) pickedSelf(screenX, screenY, viewportW, viewportH float32)
 
 	return hit && t >= 0
 }
+
+// CastBar is the cast in progress, ready to draw.
+type CastBar struct {
+	// Progress runs 0 to 1 across the cast.
+	Progress float32
+
+	// ScreenX, ScreenY is where the caster's feet are, in viewport pixels.
+	ScreenX, ScreenY float32
+
+	// Name is the skill being cast, for whatever wants to say so.
+	Name string
+}
+
+// CastingBar is the cast to draw this frame, and whether there is one.
+//
+// Under the caster's feet, where the original puts it and where the health
+// bars already are. There is nothing to draw for an instant skill, which is
+// most of them.
+func (s *InGameState) CastingBar(viewportW, viewportH float32) (CastBar, bool) {
+	progress, skill, casting := s.CastProgress()
+	if !casting || s.player == nil {
+		return CastBar{}, false
+	}
+
+	x, y := s.projectToScreen(s.player.RenderX, s.player.RenderY, s.player.RenderZ,
+		viewportW, viewportH)
+
+	return CastBar{
+		Progress: progress,
+		ScreenX:  x,
+		ScreenY:  y,
+		Name:     skills.Name(skill),
+	}, true
+}
