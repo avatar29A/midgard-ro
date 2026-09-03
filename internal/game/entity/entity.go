@@ -97,6 +97,11 @@ type Entity struct {
 	AttackRange int    // Attack range
 	TargetID    uint32 // Current target
 
+	// BodyState is rAthena's opt1: petrified, frozen, stunned or asleep, one
+	// at a time. These are drawn on the unit rather than shown as an icon,
+	// which is why it is here and not with the rest of the statuses.
+	BodyState uint16
+
 	// Flags
 	IsVisible    bool
 	IsTargetable bool

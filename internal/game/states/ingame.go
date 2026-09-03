@@ -118,6 +118,11 @@ type InGameState struct {
 	// lands a while after the volley starts.
 	delayedEffects []delayedEffect
 
+	// playerBodyState is the state the character being played is drawn in.
+	// Kept here rather than on an entity because the character is not in the
+	// registry — it is driven by its own prediction.
+	playerBodyState uint16
+
 	// bursts are the particle effects playing — the ones the original draws
 	// in code rather than from a file.
 	bursts []*activeBurst
@@ -1405,6 +1410,7 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_NOTIFY_NEWENTRY, s.handleEntitySpawn)
 	s.client.RegisterHandler(packets.ZC_NOTIFY_MOVEENTRY, s.handleEntityMove)
 	s.client.RegisterHandler(packets.ZC_NOTIFY_VANISH, s.handleEntityVanish)
+	s.client.RegisterHandler(packets.ZC_STATE_CHANGE, s.handleStateChange)
 	s.client.RegisterHandler(packets.ZC_NPCACK_MAPMOVE, s.handleMapChange)
 	s.client.RegisterHandler(packets.ZC_NPCACK_SERVERMOVE, s.handleServerMove)
 	s.client.RegisterHandler(packets.ZC_NOTIFY_PLAYERMOVE, s.handlePlayerMove)
