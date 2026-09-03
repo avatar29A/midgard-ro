@@ -104,8 +104,7 @@ type InGameState struct {
 	effectCache map[string]*formats.STR
 
 	// celebrations are level-ups waiting to be shown, and celebrationWaitMs
-	// how long before the next may start. soundRequest is a sound the world
-	// wants played, which the game plays because the state has no audio.
+	// how long before the next may start.
 	// groundTraceMs counts frames for the ground trace's throttle, and
 	// gridTraced marks the one-off height grid as already printed.
 	groundTraceMs int
@@ -115,9 +114,11 @@ type InGameState struct {
 	// what this character is wearing.
 	showEquipment bool
 
+	// sounds are what the world wants played this frame.
+	sounds []string
+
 	celebrations      int
 	celebrationWaitMs float32
-	soundRequest      string
 
 	// pendingLevelUp and pendingJobLevelUp are levels reached and not yet
 	// acknowledged, which the buttons at the foot of the screen offer.

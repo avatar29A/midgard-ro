@@ -425,7 +425,7 @@ func (s *InGameState) landBlow(p pendingBlow) {
 	// The sprite names the sound on the frame the blow lands, which is the
 	// same frame as everything else here.
 	if sound := s.hitSound(blow.SourceID); sound != "" {
-		s.soundRequest = worldSoundDir + sound
+		s.playSound(worldSoundDir + sound)
 	}
 
 	if !blow.Missed() {

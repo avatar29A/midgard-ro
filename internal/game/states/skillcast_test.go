@@ -331,3 +331,40 @@ func TestAPendingCastGoesWithItsTarget(t *testing.T) {
 		t.Error("the cast is still waiting for a target that has gone")
 	}
 }
+
+// TestEffectSoundNames: the archive names an effect's sound after the effect,
+// not after the skill — ef_bash.wav, and no sm_bash.wav anywhere. Twenty-six
+// of the effects the table names have one.
+func TestEffectSoundNames(t *testing.T) {
+	for _, tc := range []struct{ effect, want string }{
+		{"EF_BASH", `data\wav\effect\ef_bash.wav`},
+		{"EF_BEGINSPELL", `data\wav\effect\ef_beginspell.wav`},
+		{"EF_FIREHIT", `data\wav\effect\ef_firehit.wav`},
+	} {
+		if got := effectSoundFor(tc.effect); got != tc.want {
+			t.Errorf("effectSoundFor(%q) = %q, want %q", tc.effect, got, tc.want)
+		}
+	}
+
+	if got := effectSoundFor("NOT_AN_EFFECT"); got != "" {
+		t.Errorf("effectSoundFor of a non-effect = %q, want nothing", got)
+	}
+}
+
+// TestASoundIsAskedForOnce: a skill that lands three blows in a frame should
+// not play its sound three times over itself.
+func TestASoundIsAskedForOnce(t *testing.T) {
+	var s InGameState
+
+	s.playSound("a.wav")
+	s.playSound("a.wav")
+	s.playSound("b.wav")
+
+	if got := s.TakeSounds(); len(got) != 2 {
+		t.Errorf("TakeSounds = %v, want two distinct sounds", got)
+	}
+
+	if got := s.TakeSounds(); got != nil {
+		t.Errorf("the queue was not cleared: %v", got)
+	}
+}
