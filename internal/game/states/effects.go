@@ -47,6 +47,15 @@ type activeEffect struct {
 	x, y, z float32
 
 	ageMs float32
+
+	// unit is the ground skill this belongs to, for one that stands until the
+	// server takes it away rather than until it has played out.
+	unit uint32
+
+	// loop starts it again when it reaches its end. A Safety Wall's animation
+	// is a second long and the wall stands for half a minute: played once it
+	// is a flash where a wall should be.
+	loop bool
 }
 
 // EffectQuad is one piece of an effect, projected and ready to draw.
@@ -130,7 +139,57 @@ func (s *InGameState) updateEffects(deltaMs float32) {
 	kept := s.effects[:0]
 	for _, e := range s.effects {
 		e.ageMs += deltaMs
-		if e.ageMs <= e.str.DurationMs() {
+
+		run := e.str.DurationMs()
+
+		if e.loop {
+			// Back to the start rather than dropped. Subtracted rather than
+			// reset to nought so a slow frame does not shift the animation:
+			// what is past the end belongs to the next time round.
+			if run > 0 && e.ageMs >= run {
+				e.ageMs -= run * float32(int(e.ageMs/run))
+			}
+
+			kept = append(kept, e)
+
+			continue
+		}
+
+		if e.ageMs <= run {
+			kept = append(kept, e)
+		}
+	}
+
+	s.effects = kept
+}
+
+// playUnitEffect draws a ground skill's unit as an STR animation, running
+// until the server takes the unit away.
+//
+// Which of the two players a unit goes to is not a choice — it is where the
+// archive keeps the art. A Fire Wall is a sprite under data/sprite/이팩트; a
+// Safety Wall is an STR under data/texture/effect, and there is no
+// safetywall.spr anywhere to draw instead.
+func (s *InGameState) playUnitEffect(name string, unit uint32, x, y, z float32) {
+	str := s.loadEffect(name)
+	if str == nil {
+		return
+	}
+
+	trace.Emit(trace.HUD, "unit-effect",
+		zap.String("effect", name), zap.Uint32("unit", unit))
+
+	s.effects = append(s.effects, &activeEffect{
+		str: str, x: x, y: y, z: z,
+		unit: unit, loop: true,
+	})
+}
+
+// hideUnitEffect takes away the animation a unit was drawn as.
+func (s *InGameState) hideUnitEffect(unit uint32) {
+	kept := s.effects[:0]
+	for _, e := range s.effects {
+		if e.unit != unit {
 			kept = append(kept, e)
 		}
 	}

@@ -121,3 +121,39 @@ func TestAWallGoesWhenItsUnitDoes(t *testing.T) {
 		}
 	}
 }
+
+// TestAUnitEffectLoopsUntilItsUnitGoes: a Safety Wall is an STR rather than a
+// sprite, and its animation is a second long where the wall stands for half a
+// minute. Played once it is a flash on a cell; dropped with the unit, it is a
+// wall that goes when the server says so.
+func TestAUnitEffectLoopsUntilItsUnitGoes(t *testing.T) {
+	const runMs = 1000
+
+	s := &InGameState{}
+	s.effects = []*activeEffect{
+		{str: &formats.STR{FPS: 60, MaxKey: 60}, unit: 20, loop: true},
+		{str: &formats.STR{FPS: 60, MaxKey: 60}, unit: 21, loop: true},
+		{str: &formats.STR{FPS: 60, MaxKey: 60}},
+	}
+
+	// Three times round and it is still there, at the age its own animation
+	// is up to rather than at three seconds.
+	for i := 0; i < 3; i++ {
+		s.updateEffects(runMs)
+	}
+
+	if len(s.effects) != 2 {
+		t.Fatalf("%d effects left after three seconds, want the two walls", len(s.effects))
+	}
+	for _, e := range s.effects {
+		if e.ageMs >= runMs {
+			t.Errorf("a looping effect is %vms old, past the end of its own animation", e.ageMs)
+		}
+	}
+
+	s.hideUnitEffect(20)
+
+	if len(s.effects) != 1 || s.effects[0].unit != 21 {
+		t.Fatalf("hiding unit 20 left %d effects, want only the other wall", len(s.effects))
+	}
+}
