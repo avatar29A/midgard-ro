@@ -110,6 +110,9 @@ type Game struct {
 	// castSkills is --cast, waiting for the skill list.
 	castSkills []int
 
+	// raiseSkills is --raise-skill, waiting for the same.
+	raiseSkills []int
+
 	// holdCastAura is --cast-aura, waiting for the map.
 	holdCastAura bool
 
@@ -578,6 +581,7 @@ func (g *Game) frame() {
 	g.runEquip()
 	g.runAttackNearest()
 	g.runCast()
+	g.runRaiseSkills()
 	g.runHoldCastAura()
 	g.runSay()
 
@@ -799,6 +803,35 @@ func (g *Game) runEquip() {
 	}
 
 	g.equipSlots = nil
+}
+
+// SetRaiseSkills records the skills --raise-skill asked to spend a point on.
+func (g *Game) SetRaiseSkills(skills []int) {
+	g.raiseSkills = skills
+}
+
+// runRaiseSkills spends the points once the skill list has arrived.
+//
+// Waits for the list rather than for the map: the server refuses a point spent
+// on a skill the character cannot reach, and asking before knowing what they
+// have is asking blind.
+func (g *Game) runRaiseSkills() {
+	if len(g.raiseSkills) == 0 {
+		return
+	}
+
+	state, ok := g.stateManager.Current().(*states.InGameState)
+	if !ok || !state.MapReady() || len(state.Skills()) == 0 {
+		return
+	}
+
+	for _, id := range g.raiseSkills {
+		if err := state.RaiseSkill(uint16(id)); err != nil {
+			logger.Warn("--raise-skill request failed", zap.Int("skill", id), zap.Error(err))
+		}
+	}
+
+	g.raiseSkills = nil
 }
 
 // runMouseAt moves the pointer for --mouse-at once the map is up. It goes

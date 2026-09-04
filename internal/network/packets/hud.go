@@ -169,6 +169,82 @@ func DecodeSkillList(data []byte) []Skill {
 	return list
 }
 
+// One skill changing, rather than the whole list again.
+//
+// The list arrives once, on entering the map, and everything after it is one
+// of these — a point spent, a skill granted, a skill taken away by a job
+// change. None of them were read, so the window showed whatever was true when
+// the map loaded and nothing since: a skill raised stayed at its old level
+// until the character logged in again.
+const (
+	// ZC_ADD_SKILL is a skill appearing in the tree. Its body is one list
+	// entry, the same fifteen bytes.
+	ZC_ADD_SKILL uint16 = 0x0B31
+
+	// ZC_SKILLINFO_UPDATE is a skill raised with a point:
+	// `<id>.W <level>.W <sp>.W <range>.W <upgradable>.B`, eleven bytes.
+	//
+	// Shorter than an entry because it carries no targeting: the server is
+	// answering a point spent on a skill the client already knows about, and
+	// what a skill targets does not change with its level.
+	ZC_SKILLINFO_UPDATE uint16 = 0x010E
+
+	// ZC_SKILLINFO_UPDATE2 is a skill's whole entry changing, which is what
+	// arrives when one becomes available. Its body is a list entry too.
+	ZC_SKILLINFO_UPDATE2 uint16 = 0x0B33
+
+	// ZC_SKILLINFO_DELETE is a skill going away: `<id>.W`, four bytes.
+	ZC_SKILLINFO_DELETE uint16 = 0x0441
+)
+
+// DecodeSkillEntry reads a packet whose body is a single list entry —
+// ZC_ADD_SKILL and ZC_SKILLINFO_UPDATE2, which differ only in what made the
+// server send them. Reports false when the packet is too short.
+func DecodeSkillEntry(data []byte) (Skill, bool) {
+	if len(data) < 2+skillEntryLen {
+		return Skill{}, false
+	}
+
+	return Skill{
+		ID:       readU16(data, 2),
+		Inf:      int(readU32(data, 4)),
+		Level:    int(readU16(data, 8)),
+		SP:       int(readU16(data, 10)),
+		Range:    int(readU16(data, 12)),
+		Raisable: data[14] != 0,
+	}, true
+}
+
+// DecodeSkillUpdate reads a skill raised with a point.
+//
+// The targeting comes back as zero because the packet does not carry it. The
+// caller keeps whatever it already had rather than writing that in: zero means
+// passive, and a Fire Bolt raised to level two is not a passive skill.
+func DecodeSkillUpdate(data []byte) (Skill, bool) {
+	const size = 11
+
+	if len(data) < size {
+		return Skill{}, false
+	}
+
+	return Skill{
+		ID:       readU16(data, 2),
+		Level:    int(readU16(data, 4)),
+		SP:       int(readU16(data, 6)),
+		Range:    int(readU16(data, 8)),
+		Raisable: data[10] != 0,
+	}, true
+}
+
+// DecodeSkillDelete reads which skill is going away.
+func DecodeSkillDelete(data []byte) (uint16, bool) {
+	if len(data) < 4 {
+		return 0, false
+	}
+
+	return readU16(data, 2), true
+}
+
 // The inventory.
 //
 // It arrives as two lists, because the client shows stackables and equipment
