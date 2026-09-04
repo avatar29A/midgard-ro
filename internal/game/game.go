@@ -498,10 +498,6 @@ func (g *Game) frame() {
 		g.fps = float64(g.frameCount)
 		g.frameCount = 0
 		g.fpsTimer = time.Now()
-
-		if g.config.Game.ShowFPS {
-			logger.Debug("fps", zap.Float64("count", g.fps))
-		}
 	}
 
 	// Escape opens the menu rather than quitting outright. Leaving used to
@@ -532,8 +528,13 @@ func (g *Game) frame() {
 	g.checkHotkeys()
 	g.checkSit()
 
-	// F3 toggles the in-game debug overlay (player/camera/scene/network).
-	if imgui.IsKeyPressedBoolV(imgui.KeyF3, false) {
+	// F10 toggles the in-game debug overlay (player/camera/scene/network).
+	//
+	// Not F3, where it used to be. The quick panel's first row is F1 to F9,
+	// as in the original, so every one of those keys belongs to whatever the
+	// player put on it — a skill on F3 fired and opened the debug panel at
+	// the same time.
+	if imgui.IsKeyPressedBoolV(imgui.KeyF10, false) {
 		g.showDebug = !g.showDebug
 	}
 
@@ -542,10 +543,14 @@ func (g *Game) frame() {
 	// form the panel is in belongs to the panel.
 	g.toggleBasicInfo = imgui.IsKeyChordPressed(imgui.KeyChord(imgui.ModCtrl | imgui.KeyV))
 
-	// F4 hides map objects, leaving bare terrain. Anything still wrong on
-	// screen with the models gone belongs to the terrain mesh — otherwise the
-	// two are hard to tell apart where objects sit flush against the ground.
-	if imgui.IsKeyPressedBoolV(imgui.KeyF4, false) {
+	// Ctrl+F10 hides map objects, leaving bare terrain. Anything still wrong
+	// on screen with the models gone belongs to the terrain mesh — otherwise
+	// the two are hard to tell apart where objects sit flush against the
+	// ground.
+	//
+	// Beside the overlay rather than on F4, for the same reason: F4 is a
+	// quick panel key.
+	if imgui.IsKeyChordPressed(imgui.KeyChord(imgui.ModCtrl | imgui.KeyF10)) {
 		if inGame, ok := g.stateManager.Current().(*states.InGameState); ok {
 			if sc := inGame.GetScene(); sc != nil {
 				sc.HideModels = !sc.HideModels
@@ -1329,11 +1334,6 @@ func (g *Game) renderUI() {
 			imgui.Text("Loading...")
 		}
 		imgui.End()
-	}
-
-	// Debug: Show FPS overlay
-	if g.config.Game.ShowFPS {
-		g.uiBackend.RenderFPSOverlay(g.fps, viewportWidth, viewportHeight)
 	}
 
 	// Screenshot notification (show for 3 seconds)

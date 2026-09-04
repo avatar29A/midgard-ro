@@ -51,7 +51,6 @@ type NetworkConfig struct {
 // GameConfig holds gameplay settings.
 type GameConfig struct {
 	Language string `yaml:"language"`
-	ShowFPS  bool   `yaml:"show_fps"`
 	ShowPing bool   `yaml:"show_ping"`
 }
 
@@ -83,7 +82,6 @@ func Default() *Config {
 		},
 		Game: GameConfig{
 			Language: "en",
-			ShowFPS:  false,
 			ShowPing: false,
 		},
 		Data: DataConfig{

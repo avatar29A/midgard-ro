@@ -117,9 +117,6 @@ type UIBackend interface {
 	// RenderInGameUI renders the in-game HUD.
 	RenderInGameUI(state InGameUIState, dt float64, width, height float32)
 
-	// RenderFPSOverlay renders an FPS counter (if enabled).
-	RenderFPSOverlay(fps float64, width, height float32)
-
 	// RenderScreenshotMessage renders a screenshot notification.
 	RenderScreenshotMessage(msg string, width, height float32)
 }
@@ -292,6 +289,11 @@ type InGameUIState struct {
 	PlayerName            string
 	PlayerClass           int
 	PlayerHP, PlayerMaxHP int
+
+	// PlayerDead is the character being at nought hit points, which is the
+	// whole of what the death window is shown on: it goes when the server
+	// says there are hit points again, whoever put them back.
+	PlayerDead            bool
 	PlayerSP, PlayerMaxSP int
 	PlayerLevel           int
 	PlayerJobLevel        int
