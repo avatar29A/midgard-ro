@@ -146,7 +146,14 @@ type UI2DBackend struct {
 	// the item the information window is showing — nought when it is shut.
 	itemMenu   itemMenu
 	itemInfoID uint32
-	itemTab    int
+
+	// itemInfoCards is what is in that copy's slots, and itemInfoSpecial
+	// marks the ones whose slots are a maker's name or a pet rather than
+	// cards. Both are empty when the window was opened on an item in the
+	// abstract rather than on one out of the bag.
+	itemInfoCards   [4]uint32
+	itemInfoSpecial bool
+	itemTab         int
 
 	// mapWorldView switches the Map window between this map and the world.
 	mapWorldView bool

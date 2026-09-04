@@ -6,6 +6,7 @@ import (
 
 	"github.com/Faultbox/midgard-ro/internal/engine/ui2d"
 	"github.com/Faultbox/midgard-ro/internal/game/items"
+	"github.com/Faultbox/midgard-ro/internal/network/packets"
 )
 
 // The window that says what an item is.
@@ -54,12 +55,27 @@ var (
 
 // ShowItemInfo opens the window on an item, or moves it to another one if it
 // is already open.
+//
+// By id, with nothing in its slots: this is the one a shop row would call,
+// where every copy is the same and none of them has been carded.
 func (b *UI2DBackend) ShowItemInfo(id uint32) {
+	b.showItemInfo(id, [4]uint32{}, false)
+}
+
+// ShowItemInfoOf opens it on one particular copy out of the bag, so what is in
+// its slots can be named.
+func (b *UI2DBackend) ShowItemInfoOf(item packets.InventoryItem) {
+	b.showItemInfo(item.ID, item.Cards, item.SpecialSlots())
+}
+
+func (b *UI2DBackend) showItemInfo(id uint32, cards [4]uint32, special bool) {
 	if id == 0 {
 		return
 	}
 
 	b.itemInfoID = id
+	b.itemInfoCards = cards
+	b.itemInfoSpecial = special
 
 	// Clearing the closed flag its own X set, or it opens once and never
 	// again. The nil check is for a backend built without a context, which
@@ -110,10 +126,7 @@ func (b *UI2DBackend) drawItemInfoBody(id uint32, x, bodyY float32) {
 
 	info, known := items.Lookup(id)
 
-	name := info.Name
-	if name == "" {
-		name = "Item #" + strconv.FormatUint(uint64(id), 10)
-	}
+	name := itemDisplayName(id)
 
 	artX := x + itemInfoPad
 	artY := bodyY + itemInfoPad
@@ -143,7 +156,7 @@ func (b *UI2DBackend) drawItemInfoBody(id uint32, x, bodyY float32) {
 		return w
 	}
 
-	for _, line := range itemInfoLines(id, info) {
+	for _, line := range b.itemInfoLines(id, info) {
 		if lineY+itemInfoLineH > bottom {
 			break
 		}
@@ -236,6 +249,26 @@ func (b *UI2DBackend) drawItemArt(resource string, x, y float32) {
 	}
 }
 
+// itemDisplayName is an item's name as the original writes it: the name, then
+// how many slots it has in brackets.
+//
+// Only for something that has any. A Sword [3] and a Sword are different
+// things to buy and to sell, and the count is how a player tells them apart at
+// a glance — which is why it belongs beside the name rather than only in the
+// window that has to be opened to see it.
+func itemDisplayName(id uint32) string {
+	name := items.Name(id)
+	if name == "" {
+		name = "Item #" + strconv.FormatUint(uint64(id), 10)
+	}
+
+	if detail, known := items.DetailOf(id); known && detail.Slots > 0 {
+		name += " [" + strconv.Itoa(detail.Slots) + "]"
+	}
+
+	return name
+}
+
 // itemInfoLine is one row of the window: what the figure is, and the figure.
 type itemInfoLine struct {
 	label string
@@ -245,7 +278,7 @@ type itemInfoLine struct {
 // itemInfoLines is everything worth saying about an item, in the order a
 // player reads it: what it is, then what it does, then what it costs to carry
 // and what it takes to use.
-func itemInfoLines(id uint32, info items.Info) []itemInfoLine {
+func (b *UI2DBackend) itemInfoLines(id uint32, info items.Info) []itemInfoLine {
 	detail, known := items.DetailOf(id)
 	if !known {
 		return []itemInfoLine{{label: "Class:", value: string(info.Category)}}
@@ -269,6 +302,12 @@ func itemInfoLines(id uint32, info items.Info) []itemInfoLine {
 	}
 	if detail.Slots > 0 {
 		lines = append(lines, itemInfoLine{"Slots:", strconv.Itoa(detail.Slots)})
+
+		// What is in them, when this is a particular copy out of the bag
+		// rather than an item in the abstract.
+		if cards := cardWords(b.itemInfoCards, detail.Slots, b.itemInfoSpecial); cards != "" {
+			lines = append(lines, itemInfoLine{"Cards:", cards})
+		}
 	}
 
 	if detail.Weight > 0 {
@@ -306,6 +345,54 @@ func itemInfoLines(id uint32, info items.Info) []itemInfoLine {
 	}
 
 	return lines
+}
+
+// cardWords names what is in an item's slots, and nothing at all when the
+// window is showing an item rather than a copy of one.
+//
+// An empty slot is said out loud. A three-slotted sword with one card in it is
+// a different thing from a one-slotted sword, and a list that only named the
+// card would read as the second.
+func cardWords(cards [4]uint32, slots int, special bool) string {
+	// A forged weapon or an egg puts a marker in the first slot and an id in
+	// the ones after it. Looked up as items those come out as whatever
+	// happens to sit at that number.
+	if special {
+		return ""
+	}
+
+	if slots > len(cards) {
+		slots = len(cards)
+	}
+
+	var (
+		named []string
+		any   bool
+	)
+
+	for i := 0; i < slots; i++ {
+		if cards[i] == 0 {
+			named = append(named, "empty")
+
+			continue
+		}
+
+		any = true
+
+		name := items.Name(cards[i])
+		if name == "" {
+			name = "Card #" + strconv.FormatUint(uint64(cards[i]), 10)
+		}
+
+		named = append(named, name)
+	}
+
+	// Nothing in any of them is what the slot count already said.
+	if !any {
+		return ""
+	}
+
+	return strings.Join(named, ", ")
 }
 
 // itemClassWords is what an item is, in as few words as say it.

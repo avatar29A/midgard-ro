@@ -537,7 +537,7 @@ func (b *UI2DBackend) drawItemCell(cell ui2d.Rect, shown []packets.InventoryItem
 	// rather than what is being carried.
 	if in := b.ctx.Input(); !b.itemDrag.active && cell.Contains(in.MouseX, in.MouseY) {
 		b.itemHover = itemHover{
-			text: items.Name(item.ID),
+			text: itemDisplayName(item.ID),
 			x:    cell.X + cell.W/2,
 			y:    cell.Y + cell.H,
 		}

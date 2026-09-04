@@ -39,6 +39,10 @@ type itemMenu struct {
 	// worn is whether it is already on, so the entry can offer to take it off.
 	worn bool
 
+	// item is the copy the menu was opened on, kept whole so the information
+	// window can name what is in its slots.
+	item packets.InventoryItem
+
 	x, y float32
 }
 
@@ -88,6 +92,7 @@ func (b *UI2DBackend) openItemMenu(item packets.InventoryItem, equip bool, atX, 
 		index: item.Index,
 		equip: equip,
 		worn:  item.Equipped,
+		item:  item,
 		x:     atX,
 		y:     atY,
 	}
@@ -134,7 +139,7 @@ func (b *UI2DBackend) drawItemMenu(screenW, screenH float32) {
 		}
 
 		if entry.info {
-			b.ShowItemInfo(b.itemMenu.id)
+			b.ShowItemInfoOf(b.itemMenu.item)
 		} else {
 			b.itemAction = ItemAction{Index: b.itemMenu.index, Equip: b.itemMenu.equip}
 		}
