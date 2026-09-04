@@ -91,12 +91,18 @@ type burstParticle struct {
 	// same line do not sit on top of each other.
 	jitter [3]float32
 
-	// across shifts it sideways from the burst's own line, in world units.
+	// across bows it out sideways from the burst's own line, in world units at
+	// the widest.
 	//
-	// Not a jitter, because which way sideways is is not known until the
-	// burst is played: the caster can stand anywhere around the target, and
-	// five bolts spread along the world's x axis fly abreast from one side
-	// and single file from another.
+	// A bow rather than a shift: nought at each end and widest halfway, so a
+	// bolt leaves where the burst starts and arrives where it is aimed
+	// however far out it went on the way. Shifted instead, five bolts appear
+	// out of the air in a fan beside the caster rather than out of the caster.
+	//
+	// Not a jitter either, because which way sideways is is not known until
+	// the burst is played: the caster can stand anywhere around the target,
+	// and bolts spread along the world's x axis fly abreast from one side and
+	// single file from another.
 	across float32
 }
 
@@ -311,11 +317,15 @@ func (b *activeBurst) quadsAt(to projection) []EffectQuad {
 		y := b.y + b.otherY*along + p.y + p.jitter[1] + p.vy*frames + 0.5*p.ay*frames*frames
 		z := b.z + b.otherZ*along + p.z + p.jitter[2] + p.vz*frames
 
-		// Sideways from the line, once there is a line to be sideways of.
+		// Bowed out from the line, once there is a line to bow out of. Widest
+		// halfway along it and nothing at either end, which is what keeps
+		// every bolt of a volley leaving the same point.
 		if p.across != 0 {
 			if run := float32(math.Hypot(float64(b.otherX), float64(b.otherZ))); run > 0 {
-				x += -b.otherZ / run * p.across
-				z += b.otherX / run * p.across
+				bow := 4 * along * (1 - along)
+
+				x += -b.otherZ / run * p.across * bow
+				z += b.otherX / run * p.across * bow
 			}
 		}
 
@@ -829,18 +839,26 @@ func spikeParticle(seed uint32, along, birthMs, minHigh, maxHigh float32) burstP
 //
 // The numbers are nostalro-client's, from effects/soul_strike.rs.
 const (
-	// soulSegments is how many quads make one bolt's tail. Twelve in the
-	// original; each is born a little after the one in front, so the tail
-	// strings out behind the head as it flies.
-	soulSegments = 12
+	// soulSegments is how many quads make one bolt's tail, each born a little
+	// after the one in front so the tail strings out behind the head as it
+	// flies. Fewer than the original's twelve, and further apart: the orbs
+	// are drawn big enough to read, and big enough to read is big enough that
+	// twelve of them at two frames apart run together into one smear.
+	soulSegments = 6
 
 	// soulTrailFrames is the gap between one segment and the next.
 	soulTrailFrames = 3
 
 	// soulSpawnFrames is the gap between one bolt and the next, and
 	// soulFlightFrames how long a bolt takes to arrive.
-	soulSpawnFrames  = 11
-	soulFlightFrames = 40
+	//
+	// Short: one leaves and the next is close behind it, which is the volley
+	// the original throws. What keeps that from being a heap of light is not
+	// the gap but the spread — five orbs down the same path at any spacing
+	// are one thick line, and five orbs on five arcs read as five however
+	// close together they leave.
+	soulSpawnFrames  = 14
+	soulFlightFrames = 26
 
 	// soulBoltsMax is the most a strike lands, which is a level ten one.
 	soulBoltsMax = 5
@@ -849,15 +867,26 @@ const (
 	// lofts on the way over, and soulSpread how far off the line the bolts
 	// are rolled from each other.
 	//
+	// The spread is wide — four cells off the line at the widest — because it
+	// is what tells the bolts apart. Rolled a little from each other they
+	// arrive as one stream from one direction; rolled this far they come at
+	// what they hit from over it, from each side and from along the ground,
+	// which is the volley the original throws.
+	//
 	// The orb is much smaller than its quad. particle1 is a glow that fades
 	// out to nothing over the whole sixty-four pixels, with a bright core
 	// about a sixth of that across, so a quad the size the orb should be
 	// draws a speck with a halo round it — and one big enough for the core to
 	// read is a quad whose halo swallows the rest of the tail. This is the
 	// size where the beads are still beads.
-	soulHalf   = 4.5
-	soulRise   = 10.0
-	soulSpread = 5.0
+	soulHalf   = 18.0
+	soulRise   = 16.0
+	soulSpread = 20.0
+
+	// soulFlashHalf is how wide the orb bursts when it lands, and
+	// soulFlashFrames how long that lasts.
+	soulFlashHalf   = 9.0
+	soulFlashFrames = 12
 
 	// soulFade is how much of a segment's life is spent leaving. The head of
 	// a tail is solid and the end of it is nearly gone, which is what makes
@@ -930,7 +959,7 @@ func soulStrikeParts(hits int) burstSpec {
 				lifeMs:  life,
 
 				fadeOutMs: life * soulFade,
-				maxAlpha:  0.8 - 0.45*back,
+				maxAlpha:  0.65 - 0.35*back,
 
 				texture:  spriteFrameKey(soulSprite, 0),
 				tint:     [3]float32{1, 1, 1},
@@ -942,12 +971,38 @@ func soulStrikeParts(hits int) burstSpec {
 				across:  across,
 			})
 		}
+
+		// The orb bursting on what it hit.
+		//
+		// Five blows arrive as one packet with one figure over the target,
+		// and without something for each of them a volley reads as one strike
+		// rather than as five.
+		parts = append(parts, burstParticle{
+			halfW: soulFlashHalf / 2,
+			halfH: soulFlashHalf / 2,
+			growW: soulFlashHalf / 2 / soulFlashFrames,
+			growH: soulFlashHalf / 2 / soulFlashFrames,
+
+			birthMs: burstFrames(float32(bolt*soulSpawnFrames) + soulFlightFrames),
+			lifeMs:  burstFrames(soulFlashFrames),
+
+			fadeInMs: burstFrames(2),
+			maxAlpha: 0.9,
+
+			texture:  spriteFrameKey(soulSprite, 0),
+			tint:     [3]float32{1, 1, 1},
+			additive: true,
+		})
 	}
+
+	// The last bolt lands here, and its tail and its flash finish after it.
+	last := float32((bolts-1)*soulSpawnFrames) + soulFlightFrames
 
 	return burstSpec{
 		parts: parts,
-		runMs: burstFrames(float32((bolts-1)*soulSpawnFrames+
-			(soulSegments-1)*soulTrailFrames+soulFlightFrames)) + life,
+		runMs: burstFrames(max(
+			last+float32((soulSegments-1)*soulTrailFrames),
+			last+soulFlashFrames)),
 		fromCaster: true,
 	}
 }

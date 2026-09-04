@@ -704,6 +704,17 @@ func TestTheSpikeLineIsSpreadOutInTheWorld(t *testing.T) {
 	}
 }
 
+// soulParts is a bolt's tail and the flash it lands with, which is how
+// soulStrikeParts lays each one out.
+const soulParts = soulSegments + 1
+
+// soulBolt is one bolt out of a volley: its tail, then its flash.
+func soulBolt(spec burstSpec, i int) ([]burstParticle, burstParticle) {
+	parts := spec.parts[i*soulParts : (i+1)*soulParts]
+
+	return parts[:soulSegments], parts[soulSegments]
+}
+
 // TestSoulStrikeThrowsOneBoltPerBlow: the strike lands as many blows as its
 // level buys and the volley is one orb for each of them. Drawn as a single
 // bolt however hard it hit, a level ten strike looks like a level one.
@@ -716,11 +727,11 @@ func TestSoulStrikeThrowsOneBoltPerBlow(t *testing.T) {
 	} {
 		spec := soulStrikeParts(tc.hits)
 
-		if got := len(spec.parts) / soulSegments; got != tc.bolts {
+		if got := len(spec.parts) / soulParts; got != tc.bolts {
 			t.Errorf("%d blows threw %d bolts, want %d", tc.hits, got, tc.bolts)
 		}
-		if len(spec.parts)%soulSegments != 0 {
-			t.Errorf("%d blows left %d parts, not a whole number of tails",
+		if len(spec.parts)%soulParts != 0 {
+			t.Errorf("%d blows left %d parts, not a whole number of bolts",
 				tc.hits, len(spec.parts))
 		}
 	}
@@ -736,22 +747,51 @@ func TestSoulStrikeBoltsArrive(t *testing.T) {
 		t.Error("the volley is not thrown from the caster")
 	}
 
+	for bolt := 0; bolt < 5; bolt++ {
+		tail, _ := soulBolt(spec, bolt)
+
+		for i, p := range tail {
+			if p.atOther != 1 || !p.fallsIn {
+				t.Fatalf("bolt %d segment %d starts at %v and fallsIn=%v, want 1 and true",
+					bolt, i, p.atOther, p.fallsIn)
+			}
+
+			// Up and back down over the flight: the loft has to come to
+			// nothing by the time the orb arrives, or it lands above what it
+			// was aimed at.
+			life := p.lifeMs / 1000 * burstFPS
+			if end := p.vy*life + 0.5*p.ay*life*life; end < -0.5 || end > 0.5 {
+				t.Errorf("bolt %d segment %d is %v units off the ground when it lands",
+					bolt, i, end)
+			}
+		}
+	}
+
 	for i, p := range spec.parts {
-		if p.atOther != 1 || !p.fallsIn {
-			t.Fatalf("part %d starts at %v and fallsIn=%v, want 1 and true",
-				i, p.atOther, p.fallsIn)
-		}
-
-		// Up and back down over the flight: the loft has to come to nothing
-		// by the time the orb arrives, or it lands above what it was aimed at.
-		life := p.lifeMs / 1000 * burstFPS
-		if end := p.vy*life + 0.5*p.ay*life*life; end < -0.5 || end > 0.5 {
-			t.Errorf("part %d is %v units off the ground when it lands", i, end)
-		}
-
 		if p.birthMs+p.lifeMs > spec.runMs {
-			t.Errorf("part %d is still flying at %vms when the burst ends at %v",
+			t.Errorf("part %d is still alight at %vms when the burst ends at %v",
 				i, p.birthMs+p.lifeMs, spec.runMs)
+		}
+	}
+}
+
+// TestSoulStrikeFlashesWhereEachOrbLands: five blows arrive as one figure over
+// the target, and without a flash for each of them the volley reads as one
+// strike. The flash goes off when its own orb gets there, not before.
+func TestSoulStrikeFlashesWhereEachOrbLands(t *testing.T) {
+	spec := soulStrikeParts(5)
+
+	for bolt := 0; bolt < 5; bolt++ {
+		tail, flash := soulBolt(spec, bolt)
+
+		if flash.fallsIn || flash.atOther != 0 {
+			t.Errorf("bolt %d flashes on its way in rather than at the target", bolt)
+		}
+
+		// The head of the tail arrives when its life is up.
+		arrives := tail[0].birthMs + tail[0].lifeMs
+		if diff := flash.birthMs - arrives; diff < -1 || diff > 1 {
+			t.Errorf("bolt %d lands at %vms and flashes at %v", bolt, arrives, flash.birthMs)
 		}
 	}
 }
@@ -762,9 +802,9 @@ func TestSoulStrikeBoltsFlyApart(t *testing.T) {
 	spec := soulStrikeParts(5)
 
 	seen := map[[2]float32]int{}
-	for i := 0; i < len(spec.parts); i += soulSegments {
-		p := spec.parts[i]
-		seen[[2]float32{p.across, p.vy}]++
+	for bolt := 0; bolt < 5; bolt++ {
+		tail, _ := soulBolt(spec, bolt)
+		seen[[2]float32{tail[0].across, tail[0].vy}]++
 	}
 
 	if len(seen) != 5 {
@@ -773,32 +813,71 @@ func TestSoulStrikeBoltsFlyApart(t *testing.T) {
 
 	// One bolt arcs up and over the line rather than out to one side, which
 	// is the roll the original gives it: a degree off nothing.
-	only := soulStrikeParts(1).parts[0]
-	if only.across < -0.5 || only.across > 0.5 {
+	only, _ := soulBolt(soulStrikeParts(1), 0)
+	if only[0].across < -0.5 || only[0].across > 0.5 {
 		t.Errorf("a single bolt flies %v units off the line, want it down the middle",
-			only.across)
+			only[0].across)
 	}
-	if only.vy <= 0 {
-		t.Errorf("a single bolt rises by %v, want it to arc over", only.vy)
+	if only[0].vy <= 0 {
+		t.Errorf("a single bolt rises by %v, want it to arc over", only[0].vy)
 	}
 }
 
-// TestSoulStrikeBoltsFollowOneAnother: the volley arrives as a stream, not all
-// at once, and each bolt's tail strings out behind its own head.
+// TestSoulStrikeBoltsComeFromDifferentSides: the bolts leave close together,
+// so what tells them apart is the arc each takes. Five orbs down one path at
+// any spacing are one thick line; on five arcs they read as five however close
+// together they left, which is what the original throws.
+func TestSoulStrikeBoltsComeFromDifferentSides(t *testing.T) {
+	spec := soulStrikeParts(5)
+
+	// Far enough apart to be told apart: a cell across or the best part of
+	// one in height.
+	const apart = 5
+
+	for a := 0; a < 5; a++ {
+		one, _ := soulBolt(spec, a)
+
+		for b := a + 1; b < 5; b++ {
+			other, _ := soulBolt(spec, b)
+
+			// The loft is a speed rather than a height, so it is compared as
+			// the height it reaches: a quarter of speed times flight.
+			side := one[0].across - other[0].across
+			high := (one[0].vy - other[0].vy) * soulFlightFrames / 4
+
+			if side*side+high*high < apart*apart {
+				t.Errorf("bolts %d and %d fly within %v across and %v high of each other",
+					a, b, side, high)
+			}
+		}
+	}
+
+	// And they leave one close behind the next rather than one at a time.
+	first, _ := soulBolt(spec, 0)
+	second, _ := soulBolt(spec, 1)
+
+	if second[0].birthMs >= first[0].birthMs+first[0].lifeMs {
+		t.Errorf("the second bolt leaves at %vms, after the first landed at %v",
+			second[0].birthMs, first[0].birthMs+first[0].lifeMs)
+	}
+}
+
+// TestSoulStrikeBoltsFollowOneAnother: the volley arrives as a stream, and
+// each bolt's tail strings out behind its own head.
 func TestSoulStrikeBoltsFollowOneAnother(t *testing.T) {
 	spec := soulStrikeParts(5)
 
 	heads := make([]float32, 0, 5)
 	for bolt := 0; bolt < 5; bolt++ {
-		parts := spec.parts[bolt*soulSegments : (bolt+1)*soulSegments]
+		tail, _ := soulBolt(spec, bolt)
 
-		heads = append(heads, parts[0].birthMs)
+		heads = append(heads, tail[0].birthMs)
 
-		for i := 1; i < len(parts); i++ {
-			if parts[i].birthMs <= parts[i-1].birthMs {
+		for i := 1; i < len(tail); i++ {
+			if tail[i].birthMs <= tail[i-1].birthMs {
 				t.Fatalf("bolt %d segment %d is born no later than the one in front", bolt, i)
 			}
-			if parts[i].halfW >= parts[i-1].halfW {
+			if tail[i].halfW >= tail[i-1].halfW {
 				t.Errorf("bolt %d segment %d is no smaller than the one in front", bolt, i)
 			}
 		}
