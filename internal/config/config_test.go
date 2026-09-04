@@ -44,9 +44,6 @@ func TestDefault(t *testing.T) {
 	if cfg.Game.Language != "en" {
 		t.Errorf("expected language 'en', got %s", cfg.Game.Language)
 	}
-	if cfg.Game.ShowFPS {
-		t.Error("expected show_fps to be false by default")
-	}
 
 	// Test logging defaults
 	if cfg.Logging.Level != "info" {
@@ -82,7 +79,7 @@ network:
 
 game:
   language: "ja"
-  show_fps: true
+  show_fps: true # dropped from the config, and still has to parse
   show_ping: true
 
 logging:
@@ -130,9 +127,6 @@ logging:
 
 	if cfg.Game.Language != "ja" {
 		t.Errorf("expected language 'ja', got %s", cfg.Game.Language)
-	}
-	if !cfg.Game.ShowFPS {
-		t.Error("expected show_fps to be true")
 	}
 
 	if cfg.Logging.Level != "debug" {
@@ -232,9 +226,6 @@ func TestApplyFlags(t *testing.T) {
 			verify: func(cfg *Config) error {
 				if cfg.Logging.Level != "debug" {
 					t.Errorf("expected log level 'debug', got %s", cfg.Logging.Level)
-				}
-				if !cfg.Game.ShowFPS {
-					t.Error("expected show_fps to be enabled with debug flag")
 				}
 				return nil
 			},

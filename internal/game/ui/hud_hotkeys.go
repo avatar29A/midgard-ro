@@ -720,13 +720,22 @@ func (b *UI2DBackend) hotkeyTooltipFor(state InGameUIState, row, col int) (title
 		// at. A skill can sit on the bar several times over at different
 		// levels, so the one on this key is worth saying.
 		if skill, known := findSkillIn(state.Skills, id); known {
-			lines = append(lines, "Lv "+strconv.Itoa(hotkeyCastLevel(held, skill))+
+			level := hotkeyCastLevel(held, skill)
+
+			lines = append(lines, "Lv "+strconv.Itoa(level)+
 				" of "+strconv.Itoa(skill.Level))
 
 			if skill.Inf == 0 {
 				lines = append(lines, "Passive")
 			} else {
 				lines = append(lines, "SP "+strconv.Itoa(skill.SP))
+			}
+
+			// The same account the skill window gives, at the level this key
+			// would cast at. A key is the thing a player is looking at when
+			// they want to know what it costs and how long it takes.
+			if info, has := skills.InfoOf(id); has {
+				lines = append(lines, skillInfoLines(info, level)...)
 			}
 		}
 	} else {

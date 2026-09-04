@@ -110,6 +110,9 @@ type Game struct {
 	// castSkills is --cast, waiting for the skill list.
 	castSkills []int
 
+	// raiseSkills is --raise-skill, waiting for the same.
+	raiseSkills []int
+
 	// holdCastAura is --cast-aura, waiting for the map.
 	holdCastAura bool
 
@@ -498,10 +501,6 @@ func (g *Game) frame() {
 		g.fps = float64(g.frameCount)
 		g.frameCount = 0
 		g.fpsTimer = time.Now()
-
-		if g.config.Game.ShowFPS {
-			logger.Debug("fps", zap.Float64("count", g.fps))
-		}
 	}
 
 	// Escape opens the menu rather than quitting outright. Leaving used to
@@ -530,10 +529,16 @@ func (g *Game) frame() {
 	g.checkTimedScreenshot()
 
 	g.checkHotkeys()
+	g.checkWindowKeys()
 	g.checkSit()
 
-	// F3 toggles the in-game debug overlay (player/camera/scene/network).
-	if imgui.IsKeyPressedBoolV(imgui.KeyF3, false) {
+	// F10 toggles the in-game debug overlay (player/camera/scene/network).
+	//
+	// Not F3, where it used to be. The quick panel's first row is F1 to F9,
+	// as in the original, so every one of those keys belongs to whatever the
+	// player put on it — a skill on F3 fired and opened the debug panel at
+	// the same time.
+	if imgui.IsKeyPressedBoolV(imgui.KeyF10, false) {
 		g.showDebug = !g.showDebug
 	}
 
@@ -542,10 +547,14 @@ func (g *Game) frame() {
 	// form the panel is in belongs to the panel.
 	g.toggleBasicInfo = imgui.IsKeyChordPressed(imgui.KeyChord(imgui.ModCtrl | imgui.KeyV))
 
-	// F4 hides map objects, leaving bare terrain. Anything still wrong on
-	// screen with the models gone belongs to the terrain mesh — otherwise the
-	// two are hard to tell apart where objects sit flush against the ground.
-	if imgui.IsKeyPressedBoolV(imgui.KeyF4, false) {
+	// Ctrl+F10 hides map objects, leaving bare terrain. Anything still wrong
+	// on screen with the models gone belongs to the terrain mesh — otherwise
+	// the two are hard to tell apart where objects sit flush against the
+	// ground.
+	//
+	// Beside the overlay rather than on F4, for the same reason: F4 is a
+	// quick panel key.
+	if imgui.IsKeyChordPressed(imgui.KeyChord(imgui.ModCtrl | imgui.KeyF10)) {
 		if inGame, ok := g.stateManager.Current().(*states.InGameState); ok {
 			if sc := inGame.GetScene(); sc != nil {
 				sc.HideModels = !sc.HideModels
@@ -572,6 +581,7 @@ func (g *Game) frame() {
 	g.runEquip()
 	g.runAttackNearest()
 	g.runCast()
+	g.runRaiseSkills()
 	g.runHoldCastAura()
 	g.runSay()
 
@@ -793,6 +803,35 @@ func (g *Game) runEquip() {
 	}
 
 	g.equipSlots = nil
+}
+
+// SetRaiseSkills records the skills --raise-skill asked to spend a point on.
+func (g *Game) SetRaiseSkills(skills []int) {
+	g.raiseSkills = skills
+}
+
+// runRaiseSkills spends the points once the skill list has arrived.
+//
+// Waits for the list rather than for the map: the server refuses a point spent
+// on a skill the character cannot reach, and asking before knowing what they
+// have is asking blind.
+func (g *Game) runRaiseSkills() {
+	if len(g.raiseSkills) == 0 {
+		return
+	}
+
+	state, ok := g.stateManager.Current().(*states.InGameState)
+	if !ok || !state.MapReady() || len(state.Skills()) == 0 {
+		return
+	}
+
+	for _, id := range g.raiseSkills {
+		if err := state.RaiseSkill(uint16(id)); err != nil {
+			logger.Warn("--raise-skill request failed", zap.Int("skill", id), zap.Error(err))
+		}
+	}
+
+	g.raiseSkills = nil
 }
 
 // runMouseAt moves the pointer for --mouse-at once the map is up. It goes
@@ -1133,9 +1172,7 @@ func (g *Game) renderUI() {
 			WorldLabels: append(
 				state.WorldLabels(viewportWidth, viewportHeight),
 				state.SkillLabels(viewportWidth, viewportHeight)...),
-			WorldEffects: append(
-				state.EffectQuads(viewportWidth, viewportHeight),
-				state.IceQuads(viewportWidth, viewportHeight)...),
+			WorldEffects:    worldEffects(state, viewportWidth, viewportHeight),
 			TargetMarker:    targetMarker,
 			DamageNumbers:   state.DamageNumbers(viewportWidth, viewportHeight),
 			LevelUpButtons:  levelUpButtons,
@@ -1174,6 +1211,7 @@ func (g *Game) renderUI() {
 			PlayerName:     ui.GetCharName(state.CharInfo()),
 			PlayerClass:    stats.Class,
 			PlayerHP:       stats.HP,
+			PlayerDead:     state.Dead(),
 			PlayerMaxHP:    stats.MaxHP,
 			PlayerSP:       stats.SP,
 			PlayerMaxSP:    stats.MaxSP,
@@ -1315,6 +1353,32 @@ func (g *Game) renderUI() {
 		case ui.EscNone:
 		}
 
+		// The same three ways out, from the window that comes up on dying.
+		// Respawning is its own request; the other two are the ones the ESC
+		// menu sends, and go out the same way.
+		switch g.uiBackend.TakeDeadAction() {
+		case ui.DeadRespawn:
+			if err := state.RequestRespawn(); err != nil {
+				logger.Warn("could not ask to respawn", zap.Error(err))
+			}
+		case ui.DeadCharSelect:
+			if err := state.RequestCharSelect(); err != nil {
+				logger.Warn("could not ask for character select", zap.Error(err))
+			}
+		case ui.DeadQuit:
+			state.SetQuitFunc(func() {
+				g.pendingAction = func() {
+					logger.Info("server released the session, exiting")
+					os.Exit(0)
+				}
+			})
+
+			if err := state.RequestQuit(); err != nil {
+				logger.Warn("could not ask to quit", zap.Error(err))
+			}
+		case ui.DeadNone:
+		}
+
 		// A line the player typed goes out here rather than from the widget:
 		// the interface has no client to send with, and whether a line is
 		// even sent depends on what kind of command it turns out to be.
@@ -1331,11 +1395,6 @@ func (g *Game) renderUI() {
 			imgui.Text("Loading...")
 		}
 		imgui.End()
-	}
-
-	// Debug: Show FPS overlay
-	if g.config.Game.ShowFPS {
-		g.uiBackend.RenderFPSOverlay(g.fps, viewportWidth, viewportHeight)
 	}
 
 	// Screenshot notification (show for 3 seconds)
@@ -1883,6 +1942,45 @@ var hotkeyRows = []hotkeyRowKeys{
 	{row: 3, alt: true},
 }
 
+// windowKeys are the keys that open a window, as the original has them.
+//
+// Alt and a letter rather than a bare one: a bare letter is a chat line being
+// typed, and the quick panel already owns the number rows.
+//
+// Stats has no window of its own to open. The modern client folds the status
+// block into the equipment window, which is where the info button leads too,
+// so Alt+A goes to the same place rather than to nothing.
+var windowKeys = []struct {
+	key    imgui.Key
+	window ui.HUDWindow
+}{
+	{imgui.KeyS, ui.WindowSkill},
+	{imgui.KeyA, ui.WindowEquip},
+	{imgui.KeyM, ui.WindowMap},
+	{imgui.KeyE, ui.WindowItem},
+}
+
+// checkWindowKeys opens and closes the menu windows from the keyboard.
+//
+// Nothing fires while a field has focus, for the same reason the quick panel
+// stays quiet: Alt+S in the middle of a chat line is somebody typing.
+func (g *Game) checkWindowKeys() {
+	if g.uiBackend == nil || g.uiBackend.TextEntryFocused() {
+		return
+	}
+
+	io := imgui.CurrentIO()
+	if !io.KeyAlt() || io.KeyCtrl() {
+		return
+	}
+
+	for _, binding := range windowKeys {
+		if imgui.IsKeyPressedBoolV(binding.key, false) {
+			g.uiBackend.ToggleWindow(binding.window)
+		}
+	}
+}
+
 // checkSit sits the character down and stands it back up, on Insert.
 //
 // One key for both, as the original has it. Nothing fires while a field has
@@ -1937,4 +2035,20 @@ func (g *Game) checkHotkeys() {
 			}
 		}
 	}
+}
+
+// worldEffects is everything drawn in the world this frame: what is playing,
+// and what is being held.
+//
+// The two are gathered separately because they are found differently. An
+// effect that is playing is on a list and ages off it; the ice over a frozen
+// unit and the aura around one that is sighting are neither started nor
+// stopped by the client — they are looked up from what the server last said
+// the unit's state was, every frame, for as long as it says it.
+func worldEffects(state *states.InGameState, viewportW, viewportH float32) []states.EffectQuad {
+	out := state.EffectQuads(viewportW, viewportH)
+	out = append(out, state.IceQuads(viewportW, viewportH)...)
+	out = append(out, state.SightQuads(viewportW, viewportH)...)
+
+	return out
 }

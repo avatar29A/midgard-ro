@@ -72,6 +72,9 @@ func main() {
 		g.SetAttackNearest(true)
 	}
 
+	if raise := config.RaiseSkills(); len(raise) > 0 {
+		g.SetRaiseSkills(raise)
+	}
 	if cast := config.CastSkills(); len(cast) > 0 {
 		g.SetCastSkills(cast)
 	}

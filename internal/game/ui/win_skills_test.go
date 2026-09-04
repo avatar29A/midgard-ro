@@ -1,8 +1,10 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/Faultbox/midgard-ro/internal/game/skills"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
 )
 
@@ -137,5 +139,108 @@ func TestASavedLevelComesBack(t *testing.T) {
 	}
 	if got := back.hotkeyItems[0][1].level; got != 0 {
 		t.Errorf("a cell with no level came back as %d", got)
+	}
+}
+
+// TestSkillInfoLinesReadInOrder: what a skill is, then what it takes, then
+// what it spends. A panel is read at a glance and the order is the whole of
+// how it reads.
+func TestSkillInfoLinesReadInOrder(t *testing.T) {
+	info, ok := skills.InfoOf(16) // Stone Curse
+	if !ok {
+		t.Skip("16 is not in this server's tree")
+	}
+
+	lines := skillInfoLines(info, 1)
+
+	want := []string{
+		"Magic, Earth",
+		"Cast 0.8s + 0.2s fixed",
+		"Needs Red Gemstone",
+	}
+
+	if len(lines) != len(want) {
+		t.Fatalf("got %d lines %q, want %d %q", len(lines), lines, len(want), want)
+	}
+	for i := range want {
+		if lines[i] != want[i] {
+			t.Errorf("line %d is %q, want %q", i, lines[i], want[i])
+		}
+	}
+}
+
+// TestSkillInfoLinesFollowTheLevel: half the figures change with the level the
+// picker is on, and a panel that showed the level-one ones whatever was chosen
+// would be wrong nine times in ten.
+func TestSkillInfoLinesFollowTheLevel(t *testing.T) {
+	info, ok := skills.InfoOf(13) // Soul Strike
+	if !ok {
+		t.Skip("13 is not in this server's tree")
+	}
+
+	first := strings.Join(skillInfoLines(info, 1), "\n")
+	tenth := strings.Join(skillInfoLines(info, 10), "\n")
+
+	// One blow at the first level, so nothing is said about the count; five
+	// at the tenth, which is worth saying.
+	if strings.Contains(first, "Hits") {
+		t.Errorf("a single blow is counted out loud: %q", first)
+	}
+	if !strings.Contains(tenth, "Hits 5") {
+		t.Errorf("level ten lands five blows and the panel says %q", tenth)
+	}
+}
+
+// TestSkillKindWordsLeaveOutWhatSaysNothing: Misc is rAthena's word for
+// neither of the other two, and a weapon element means "whatever is being
+// swung" — neither is a fact about the skill.
+func TestSkillKindWordsLeaveOutWhatSaysNothing(t *testing.T) {
+	for _, tc := range []struct {
+		info skills.Info
+		want string
+	}{
+		{skills.Info{Kind: "Magic", Element: []string{"Fire"}}, "Magic, Fire"},
+		{skills.Info{Kind: "Weapon", Element: []string{"Weapon"}}, "Weapon"},
+		{skills.Info{Kind: "Misc", Element: []string{"Neutral"}}, ""},
+		{skills.Info{Kind: "Misc", Element: []string{"Holy"}}, "Holy"},
+		{skills.Info{}, ""},
+	} {
+		if got := skillKindWords(tc.info, 1); got != tc.want {
+			t.Errorf("%+v reads as %q, want %q", tc.info, got, tc.want)
+		}
+	}
+}
+
+// TestSecondsReadsTheWayAPlayerCounts: tenths, and no trailing nought.
+func TestSecondsReadsTheWayAPlayerCounts(t *testing.T) {
+	for _, tc := range []struct {
+		ms   int
+		want string
+	}{
+		{400, "0.4s"},
+		{1400, "1.4s"},
+		{2000, "2s"},
+		{4500, "4.5s"},
+		{0, "0s"},
+	} {
+		if got := seconds(tc.ms); got != tc.want {
+			t.Errorf("seconds(%d) = %q, want %q", tc.ms, got, tc.want)
+		}
+	}
+}
+
+// TestSkillNeedLinesNameTheSkill: the requirement is held as an id, and an id
+// in a panel is no use to anybody.
+func TestSkillNeedLinesNameTheSkill(t *testing.T) {
+	lines := skillNeedLines(13) // Soul Strike, after Napalm Beat 4
+	if len(lines) == 0 {
+		t.Skip("13 has no prerequisites in this server's tree")
+	}
+
+	if !strings.Contains(lines[0], "Napalm Beat") {
+		t.Errorf("the prerequisite reads %q, want it named", lines[0])
+	}
+	if strings.Contains(lines[0], "#") {
+		t.Errorf("the prerequisite is shown as an id: %q", lines[0])
 	}
 }

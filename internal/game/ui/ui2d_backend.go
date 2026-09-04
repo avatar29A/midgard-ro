@@ -167,6 +167,12 @@ type UI2DBackend struct {
 	escOpen   bool
 	escAction EscAction
 
+	// deadAction is the button pressed on the window that comes up when the
+	// character dies. There is no open flag beside it: the window is shown
+	// exactly while the server says the character has no hit points, so a
+	// resurrection takes it away without anything having to notice.
+	deadAction DeadAction
+
 	soundOpen     bool
 	soundSeeded   bool
 	soundDirty    bool
@@ -1045,6 +1051,7 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 	b.drawLevelUpButtons(state.LevelUpButtons, width, height)
 
 	b.drawEscMenu(width, height)
+	b.drawDeadMenu(state, width, height)
 	b.drawSoundConfig(width, height)
 	b.drawSkillsWindow(state, width, height)
 	b.drawEquipWindow(state, width, height)
@@ -1083,6 +1090,12 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 		// content, so text past it draws outside the frame rather than
 		// growing it.
 		if b.ctx.BeginWindow("debug", 10, 10, 520, 320, "Debug") {
+			// The frame counter, which used to be printed on the game itself
+			// in the corner under the minimap. It is a number for whoever is
+			// working on the client and nobody else, and this is where the
+			// rest of those live.
+			b.ctx.Row(16)
+			b.ctx.Label(fmt.Sprintf("FPS: %.0f", state.FPS))
 			b.ctx.Row(16)
 			b.ctx.Label(fmt.Sprintf("Map: %s", state.MapName))
 			b.ctx.Row(16)
@@ -1189,27 +1202,6 @@ func describeDialog(state InGameUIState) string {
 	}
 
 	return line
-}
-
-// RenderFPSOverlay renders an FPS counter.
-func (b *UI2DBackend) RenderFPSOverlay(fps float64, width, height float32) {
-	scale := float32(1.0)
-	text := fmt.Sprintf("FPS: %.0f", fps)
-	textW, _ := b.ctx.Renderer().MeasureText(text, scale)
-
-	x := width - textW - 10
-	y := float32(5)
-
-	// The minimap owns the top-right corner, as it does in the original, so
-	// the counter drops below it — past its zoom buttons too, which sit under
-	// the map and were the second thing this printed over.
-	if b.minimapTex != nil {
-		y += minimapSize + minimapBtn + minimapMargin
-	}
-
-	// Semi-transparent background
-	b.ctx.Renderer().DrawRect(x-5, y-2, textW+10, 20, ui2d.ColorPanelBg.WithAlpha(0.5))
-	b.ctx.Renderer().DrawText(x, y, text, scale, ui2d.ColorTextOnDark)
 }
 
 // RenderScreenshotMessage renders a screenshot notification.

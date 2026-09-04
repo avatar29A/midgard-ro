@@ -49,6 +49,7 @@ func (s *InGameState) handleStateChange(data []byte) error {
 		// the registry, so its own states are kept beside it.
 		if change.AID == s.selfAID() {
 			s.playerBodyState = change.Body
+			s.playerOptions = change.Effect
 		}
 
 		return nil
@@ -61,6 +62,7 @@ func (s *InGameState) handleStateChange(data []byte) error {
 	}
 
 	e.BodyState = change.Body
+	e.Options = change.Effect
 
 	return nil
 }

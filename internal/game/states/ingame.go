@@ -118,9 +118,16 @@ type InGameState struct {
 	// lands a while after the volley starts.
 	delayedEffects []delayedEffect
 
-	// skillUnits maps a ground skill's unit to whoever placed it. Its blows
-	// arrive from the unit rather than from the caster.
-	skillUnits map[uint32]uint32
+	// skillUnits are the ground skills standing on the map, by the id their
+	// blows arrive from. What is kept is the packet: who placed it, for the
+	// battle log, and where and what it is, for drawing it.
+	skillUnits map[uint32]packets.SkillUnit
+
+	// spriteEffects are the ones the archive draws frame by frame, and the
+	// two caches are the art they are read from.
+	spriteEffects []*spriteEffect
+	effectACTs    map[string]*formats.ACT
+	effectSPRs    map[string]*formats.SPR
 
 	// ambient is the map's own sound sources, each counting down to its next
 	// turn.
@@ -130,6 +137,20 @@ type InGameState struct {
 	// Kept here rather than on an entity because the character is not in the
 	// registry — it is driven by its own prediction.
 	playerBodyState uint16
+
+	// playerOptions is their option word, kept the same way and for the same
+	// reason: the character being played is not in the registry.
+	playerOptions uint32
+
+	// sightMs is how far round the Sight aura has turned.
+	sightMs float32
+
+	// playerDead is the character lying down, which is what the window
+	// offering a way back is shown on.
+	//
+	// A flag rather than a reading of the hit points: rAthena leaves a corpse
+	// on one hit point rather than on nought, so the numbers never say it.
+	playerDead bool
 
 	// bursts are the particle effects playing — the ones the original draws
 	// in code rather than from a file.
@@ -820,6 +841,8 @@ func (s *InGameState) Update(dt float64) error {
 		s.advanceDelayedEffects(deltaMs)
 		s.advanceUnitSounds()
 		s.advanceAmbientSounds(deltaMs)
+		s.advanceSpriteEffects(deltaMs)
+		s.advanceSightAuras(deltaMs)
 		s.updateDamageNumbers(deltaMs)
 		s.updateEffects(deltaMs)
 		s.updateCelebrations(deltaMs)
@@ -1147,6 +1170,107 @@ func (s *InGameState) handleSkillList(data []byte) error {
 	return nil
 }
 
+// Keeping the list up to date afterwards.
+//
+// The list arrives once, on entering the map. Everything after it is one skill
+// changing, and none of those were read: a point spent on a skill left the
+// window showing the old level, and a skill granted did not appear at all,
+// until the character logged in again and the list came round afresh.
+
+// handleSkillAdded is a skill appearing in the tree, or its whole entry
+// changing — the same fifteen bytes either way.
+func (s *InGameState) handleSkillAdded(data []byte) error {
+	skill, ok := packets.DecodeSkillEntry(data)
+	if !ok {
+		logger.Warn("short skill entry packet", zap.Int("len", len(data)))
+
+		return nil
+	}
+
+	s.putSkill(skill, "entry")
+
+	return nil
+}
+
+// handleSkillRaised is a skill leveled with a point.
+//
+// The packet carries no targeting, so what the skill is aimed at is kept from
+// what was already known. Writing the packet's zero in would turn every skill
+// raised into a passive one.
+func (s *InGameState) handleSkillRaised(data []byte) error {
+	raised, ok := packets.DecodeSkillUpdate(data)
+	if !ok {
+		logger.Warn("short skill update packet", zap.Int("len", len(data)))
+
+		return nil
+	}
+
+	for _, known := range s.skills {
+		if known.ID == raised.ID {
+			raised.Inf = known.Inf
+
+			break
+		}
+	}
+
+	s.putSkill(raised, "raised")
+
+	return nil
+}
+
+// handleSkillRemoved is a skill going away, which a job change does.
+func (s *InGameState) handleSkillRemoved(data []byte) error {
+	id, ok := packets.DecodeSkillDelete(data)
+	if !ok {
+		logger.Warn("short skill delete packet", zap.Int("len", len(data)))
+
+		return nil
+	}
+
+	kept := s.skills[:0]
+	for _, skill := range s.skills {
+		if skill.ID != id {
+			kept = append(kept, skill)
+		}
+	}
+
+	if len(kept) == len(s.skills) {
+		return nil
+	}
+
+	s.skills = kept
+
+	trace.Emit(trace.HUD, "skill-gone",
+		zap.Uint16("skill", id), zap.Int("count", len(s.skills)))
+
+	return nil
+}
+
+// putSkill replaces a skill in the list, or adds it if it is new.
+//
+// In place rather than appended and sorted: the window draws the list in the
+// order the server sent it, and a skill that jumped to the bottom on being
+// raised would be a row moving under the pointer that raised it.
+func (s *InGameState) putSkill(skill packets.Skill, why string) {
+	for i, known := range s.skills {
+		if known.ID == skill.ID {
+			s.skills[i] = skill
+
+			trace.Emit(trace.HUD, "skill-changed",
+				zap.String("why", why), zap.Uint16("skill", skill.ID),
+				zap.Int("level", skill.Level), zap.Int("sp", skill.SP))
+
+			return
+		}
+	}
+
+	s.skills = append(s.skills, skill)
+
+	trace.Emit(trace.HUD, "skill-added",
+		zap.String("why", why), zap.Uint16("skill", skill.ID),
+		zap.Int("level", skill.Level), zap.Int("count", len(s.skills)))
+}
+
 // handleInventoryNormal takes the stackable half of the inventory.
 func (s *InGameState) handleInventoryNormal(data []byte) error {
 	return s.takeInventory(data, packets.NormalItemLen, "normal", packets.DecodeInventoryNormal)
@@ -1439,10 +1563,15 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_WHISPER, s.handleWhisper)
 	s.client.RegisterHandler(packets.ZC_ACK_WHISPER, s.handleWhisperAck)
 	s.client.RegisterHandler(packets.ZC_RESTART_ACK, s.handleRestartAck)
+	s.client.RegisterHandler(packets.ZC_RESURRECTION, s.handleResurrection)
 	s.client.RegisterHandler(packets.ZC_ACK_REQ_DISCONNECT, s.handleDisconnectAck)
 	s.client.RegisterHandler(packets.ZC_PAR_CHANGE, s.handleStatusChange)
 	s.client.RegisterHandler(packets.ZC_STATUS, s.handleStatus)
 	s.client.RegisterHandler(packets.ZC_SKILLINFO_LIST, s.handleSkillList)
+	s.client.RegisterHandler(packets.ZC_ADD_SKILL, s.handleSkillAdded)
+	s.client.RegisterHandler(packets.ZC_SKILLINFO_UPDATE2, s.handleSkillAdded)
+	s.client.RegisterHandler(packets.ZC_SKILLINFO_UPDATE, s.handleSkillRaised)
+	s.client.RegisterHandler(packets.ZC_SKILLINFO_DELETE, s.handleSkillRemoved)
 	s.client.RegisterHandler(packets.ZC_ACK_TOUSESKILL, s.handleSkillFail)
 	s.client.RegisterHandler(packets.ZC_USESKILL_ACK, s.handleSkillCast)
 	s.client.RegisterHandler(packets.ZC_USE_SKILL, s.handleSkillUse)
@@ -1658,8 +1787,13 @@ func (s *InGameState) handleEntityVanish(data []byte) error {
 		// only note it — and, when it was death, lie down.
 		trace.Emit(trace.Net, "vanish-self", zap.Uint8("reason", reason))
 
-		if reason == packets.VanishDied && s.player != nil {
-			s.player.Die()
+		if reason == packets.VanishDied {
+			s.playerDead = true
+
+			if s.player != nil {
+				s.player.Die()
+			}
+
 			s.forgetAttack()
 			s.forgetPendingPickup()
 			s.forgetPendingBlows()
@@ -2113,6 +2247,18 @@ func (s *InGameState) handleMapChange(data []byte) error {
 	default:
 		s.beginMapLoad(mc.MapName, at, "warp")
 	}
+
+	// Wherever the character has been put, they are standing there. This is
+	// how a respawn at the save point ends: the server does not resurrect
+	// anybody, it moves them, and the window has to go with the corpse.
+	if !same || s.MapLoaded {
+		s.playerDead = false
+
+		if s.player != nil {
+			s.player.Revive()
+		}
+	}
+
 	return nil
 }
 
