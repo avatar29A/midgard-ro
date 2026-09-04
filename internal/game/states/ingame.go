@@ -1597,6 +1597,7 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_INVENTORY_ITEMLIST_NORMAL, s.handleInventoryNormal)
 	s.client.RegisterHandler(packets.ZC_INVENTORY_ITEMLIST_EQUIP, s.handleInventoryEquip)
 	s.client.RegisterHandler(packets.ZC_USE_ITEM_ACK, s.handleUseItemAck)
+	s.client.RegisterHandler(packets.ZC_AUTORUN_SKILL, s.handleAutorunSkill)
 	s.client.RegisterHandler(packets.ZC_REQ_WEAR_EQUIP_ACK, s.handleEquipAck)
 	s.client.RegisterHandler(packets.ZC_REQ_TAKEOFF_EQUIP_ACK, s.handleUnequipAck)
 	s.client.RegisterHandler(packets.ZC_CONFIG_NOTIFY, s.handleConfigNotify)
