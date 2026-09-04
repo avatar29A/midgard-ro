@@ -36,6 +36,7 @@ var (
 	flagRaiseSkill = flag.String("raise-skill", "", "Once in game, spend a skill point on these skills by id, e.g. 19,19 (QA aid)")
 	flagItemInfo   = flag.String("item-info", "", "Once in game, open the item information window on this item id (QA aid)")
 	flagCardView   = flag.String("card-view", "", "Once in game, open the card drawing window on this card id (QA aid)")
+	flagUseItem    = flag.String("use-item", "", "Once in game, use the items with these ids, e.g. 601 (QA aid)")
 
 	flagSay sayLines
 )
@@ -130,6 +131,11 @@ func ItemInfo() int {
 	}
 
 	return ids[0]
+}
+
+// UseItems returns the item ids --use-item asked to use, in order.
+func UseItems() []int {
+	return intList(*flagUseItem)
 }
 
 // CardView returns the card --card-view asked to show the drawing of, or
