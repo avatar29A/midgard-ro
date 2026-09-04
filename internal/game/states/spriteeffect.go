@@ -37,7 +37,7 @@ var effectScales = map[string][2]float32{
 	// bonfire however big it is made, which is the wall being tall but its
 	// flames still short. Wide enough that the cells run together, tall
 	// enough to stand over a character.
-	"firewall": {1.3, 3.0},
+	"firewall": {3.1, 4.0},
 }
 
 // effectScaleOf is that, or its own size for an effect with nothing said
