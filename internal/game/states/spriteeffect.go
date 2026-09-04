@@ -201,6 +201,8 @@ func (s *InGameState) playUnitSprite(name string, unit uint32, x, y, z float32) 
 // hideSkillUnit takes away what a ground skill was drawing, because the
 // server has taken the unit away.
 func (s *InGameState) hideSkillUnit(unit uint32) {
+	s.hideUnitEffect(unit)
+
 	kept := s.spriteEffects[:0]
 	for _, effect := range s.spriteEffects {
 		if effect.unit != unit {

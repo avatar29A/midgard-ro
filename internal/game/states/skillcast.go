@@ -245,8 +245,12 @@ func (s *InGameState) handleSkillUnit(data []byte) error {
 // By what the unit is rather than by which skill made it: the server says so
 // in the packet, and it is the same answer for a wall however it got there.
 var unitSprites = map[uint32]string{
-	packets.UnitFireWall:   "firewall",
-	packets.UnitSafetyWall: "safetywall",
+	packets.UnitFireWall: "firewall",
+}
+
+// unitEffects are the units the archive keeps as STR animations instead.
+var unitEffects = map[uint32]string{
+	packets.UnitSafetyWall: "safetywall.str",
 }
 
 // showSkillUnit draws the thing a ground skill left standing.
@@ -255,14 +259,20 @@ var unitSprites = map[uint32]string{
 // until the server takes the unit away. A Fire Wall burns until it is spent
 // and the client is not the one counting.
 func (s *InGameState) showSkillUnit(unit packets.SkillUnit) {
-	sprite, drawn := unitSprites[unit.Kind]
-	if !drawn || !unit.Visible {
+	if !unit.Visible {
 		return
 	}
 
 	x, z := entity.CellToWorld(unit.X, unit.Y)
+	y := s.terrainHeight(x, z)
 
-	s.playUnitSprite(sprite, unit.ID, x, s.terrainHeight(x, z), z)
+	if sprite, drawn := unitSprites[unit.Kind]; drawn {
+		s.playUnitSprite(sprite, unit.ID, x, y, z)
+	}
+
+	if effect, drawn := unitEffects[unit.Kind]; drawn {
+		s.playUnitEffect(effect, unit.ID, x, y, z)
+	}
 }
 
 // handleSkillUnitGone is one going away again.
