@@ -339,16 +339,25 @@ func parseTrueColorImage(r *bytes.Reader) (SPRImage, error) {
 		return SPRImage{}, fmt.Errorf("%w: reading ABGR data", ErrTruncatedSPRData)
 	}
 
-	// Convert ABGR to RGBA
+	// These are stored bottom-up — the last row in the file is the top of the
+	// picture — as well as a channel the other way round. Read straight
+	// through, a true-color sprite comes out upside down.
+	//
+	// Which is why it went unnoticed for so long: every sprite a character, a
+	// monster or a piece of gear is made of is palette-indexed and stored the
+	// right way up. Only the effects are true color, so a fire wall burning
+	// upside down was the first sign of it.
 	pixels := make([]byte, pixelCount*4)
-	for i := 0; i < pixelCount; i++ {
-		srcOffset := i * 4
-		dstOffset := i * 4
-		// ABGR -> RGBA
-		pixels[dstOffset] = abgr[srcOffset+3]   // R <- A position? No, ABGR means A,B,G,R
-		pixels[dstOffset+1] = abgr[srcOffset+2] // G
-		pixels[dstOffset+2] = abgr[srcOffset+1] // B
-		pixels[dstOffset+3] = abgr[srcOffset]   // A
+	for y := 0; y < int(height); y++ {
+		for x := 0; x < int(width); x++ {
+			src := (y*int(width) + x) * 4
+			dst := ((int(height)-y-1)*int(width) + x) * 4
+
+			pixels[dst] = abgr[src+3]   // R
+			pixels[dst+1] = abgr[src+2] // G
+			pixels[dst+2] = abgr[src+1] // B
+			pixels[dst+3] = abgr[src]   // A
+		}
 	}
 
 	return SPRImage{

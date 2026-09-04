@@ -190,9 +190,11 @@ func TestParseSPR_GeneratedFile(t *testing.T) {
 		if img.Width != 2 || img.Height != 2 {
 			t.Errorf("third image: expected 2x2, got %dx%d", img.Width, img.Height)
 		}
-		// Check first pixel is red (RGBA: 255, 0, 0, 255)
-		if img.Pixels[0] != 255 || img.Pixels[1] != 0 || img.Pixels[2] != 0 || img.Pixels[3] != 255 {
-			t.Errorf("first pixel should be red, got RGBA(%d,%d,%d,%d)",
+		// The generated image is red, green, blue, grey in file order, and the
+		// file's rows run bottom-up: its last row is the top of the picture,
+		// so the top-left pixel is the blue one.
+		if img.Pixels[0] != 0 || img.Pixels[1] != 0 || img.Pixels[2] != 255 || img.Pixels[3] != 255 {
+			t.Errorf("first pixel should be blue, got RGBA(%d,%d,%d,%d)",
 				img.Pixels[0], img.Pixels[1], img.Pixels[2], img.Pixels[3])
 		}
 	}
@@ -350,5 +352,64 @@ func TestParsePALRefusesShortData(t *testing.T) {
 func TestParsePALIgnoresTrailingBytes(t *testing.T) {
 	if _, err := ParsePAL(append(palBytes(), 1, 2, 3)); err != nil {
 		t.Errorf("ParsePAL with padding: %v", err)
+	}
+}
+
+// TestTrueColorImagesAreStoredBottomUp: a true-color frame's rows run the
+// other way round from an indexed one's — the last row in the file is the top
+// of the picture. Read straight through it is upside down, which for a long
+// while nothing noticed: characters, monsters and gear are all palette
+// sprites. The effects are the true-color ones, and a fire wall burning
+// upside down is what it looks like when this is wrong.
+func TestTrueColorImagesAreStoredBottomUp(t *testing.T) {
+	spr, err := ParseSPR(buildSyntheticSPR(2, 0, 0, 1, false))
+	if err != nil {
+		t.Fatalf("parsing: %v", err)
+	}
+
+	if len(spr.Images) != 1 {
+		t.Fatalf("got %d images, want 1", len(spr.Images))
+	}
+
+	// The builder writes red, green, blue, grey; flipped, the bottom row
+	// comes first, so the picture reads blue, grey, red, green.
+	want := [][4]byte{
+		{0, 0, 255, 255},
+		{128, 128, 128, 128},
+		{255, 0, 0, 255},
+		{0, 255, 0, 255},
+	}
+
+	for i, w := range want {
+		got := [4]byte(spr.Images[0].Pixels[i*4 : i*4+4])
+		if got != w {
+			t.Errorf("pixel %d is RGBA%v, want RGBA%v", i, got, w)
+		}
+	}
+}
+
+// TestIndexedImagesAreNotFlipped: the palette sprites are stored the right way
+// up, and flipping those as well would turn every character in the game on its
+// head to fix the effects.
+func TestIndexedImagesAreNotFlipped(t *testing.T) {
+	spr, err := ParseSPR(buildSyntheticSPR(2, 0, 1, 0, false))
+	if err != nil {
+		t.Fatalf("parsing: %v", err)
+	}
+
+	// The builder writes palette indices 0, 1, 2, 3 — transparent, red,
+	// green, blue — in that order, top row first.
+	want := [][4]byte{
+		{0, 0, 0, 0},
+		{255, 0, 0, 255},
+		{0, 255, 0, 255},
+		{0, 0, 255, 255},
+	}
+
+	for i, w := range want {
+		got := [4]byte(spr.Images[0].Pixels[i*4 : i*4+4])
+		if got != w {
+			t.Errorf("pixel %d is RGBA%v, want RGBA%v", i, got, w)
+		}
 	}
 }
