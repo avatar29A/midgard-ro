@@ -27,7 +27,7 @@ const itemInfoWindowID = "hud_item_info"
 
 const (
 	itemInfoW float32 = 244
-	itemInfoH float32 = 344
+	itemInfoH float32 = 380
 
 	itemInfoPad float32 = 8
 
@@ -41,6 +41,22 @@ const (
 	itemInfoTitleScale float32 = 0.8
 	itemInfoTextScale  float32 = 0.65
 	itemInfoLineH      float32 = 15
+
+	// The row of card slots along the bottom, as the original draws it: four
+	// diamonds whatever the item's capacity, since four is the most anything
+	// takes and a row that changed length would move under the pointer.
+	itemInfoSlots            = 4
+	itemInfoSlot     float32 = 24
+	itemInfoSlotGap  float32 = 4
+	itemInfoSlotRowH float32 = itemInfoSlot + 2*itemInfoPad
+)
+
+// The archive's own art for a slot. An outline for one that is there and
+// empty, a filled shape for one the item does not have; a slot with a card in
+// it is drawn as the card, which is what the original puts there.
+const (
+	itemInfoSlotEmpty    = basicInterfacePath + `comparison_empty_card_slot.bmp`
+	itemInfoSlotDisabled = basicInterfacePath + `comparison_disable_card_slot.bmp`
 )
 
 // itemInfoCollectionPath is where the archive keeps the drawings. Under the
@@ -147,7 +163,14 @@ func (b *UI2DBackend) drawItemInfoBody(id uint32, x, bodyY float32) {
 		return
 	}
 
-	bottom := bodyY + itemInfoH - ui2d.FrameTitleH - itemInfoPad
+	// The slot row is anchored to the bottom of the window rather than laid
+	// out after the text: a Sword's job list runs long and would otherwise
+	// push the slots off the end of the very window that is meant to show
+	// them.
+	slotsY := bodyY + itemInfoH - ui2d.FrameTitleH - itemInfoSlotRowH + itemInfoPad
+	b.drawItemSlots(artX, slotsY, id)
+
+	bottom := slotsY - itemInfoPad
 	width := itemInfoW - 2*itemInfoPad
 
 	measure := func(text string) float32 {
@@ -218,6 +241,92 @@ func wrapValue(value string, measure func(string) float32, first, rest float32) 
 	}
 
 	return append(lines, line)
+}
+
+// drawItemSlots draws the row of card slots along the bottom.
+//
+// Four of them whatever the item takes, which is what the original does: four
+// is the most anything has, and a row that grew and shrank with the item would
+// move under the pointer between one item and the next. The ones past what
+// this item has are drawn as the shape that says there is no slot there.
+func (b *UI2DBackend) drawItemSlots(x, y float32, id uint32) {
+	slots := 0
+	if detail, known := items.DetailOf(id); known {
+		slots = detail.Slots
+	}
+
+	for i := 0; i < itemInfoSlots; i++ {
+		at := x + float32(i)*(itemInfoSlot+itemInfoSlotGap)
+
+		switch card := slotCard(i, slots, b.itemInfoCards, b.itemInfoSpecial); card {
+		case slotNone:
+			b.drawSlotArt(itemInfoSlotDisabled, at, y)
+		case slotEmpty:
+			b.drawSlotArt(itemInfoSlotEmpty, at, y)
+		default:
+			b.drawCardInSlot(card, at, y)
+		}
+	}
+}
+
+// What a slot holds, for the two cases that are not a card.
+const (
+	// slotNone is a place in the row the item has no slot for.
+	slotNone uint32 = 0
+
+	// slotEmpty is a slot the item has with nothing in it. Not nought,
+	// because nought is what the packet puts in a place there is no slot for
+	// and the two are drawn differently.
+	slotEmpty uint32 = 1
+)
+
+// slotCard is what to draw in one place of the row: nothing, an empty slot, or
+// the card that is in it.
+func slotCard(at, slots int, cards [4]uint32, special bool) uint32 {
+	if at >= slots || at >= len(cards) {
+		return slotNone
+	}
+
+	// A forged weapon or an egg puts a marker in the first slot and an id in
+	// the ones after it. Drawn as cards those are whatever icon happens to
+	// sit at that number, so the slots are shown as the empty ones they are.
+	if special || cards[at] == 0 {
+		return slotEmpty
+	}
+
+	return cards[at]
+}
+
+// drawCardInSlot draws a card's own icon in its place in the row, or the empty
+// shape when the archive has no icon for it.
+func (b *UI2DBackend) drawCardInSlot(card uint32, x, y float32) {
+	info, known := items.Lookup(card)
+	if !known || info.Resource == "" {
+		b.drawSlotArt(itemInfoSlotEmpty, x, y)
+
+		return
+	}
+
+	tex, err := b.texCache.Load(itemIconPath + info.Resource + ".bmp")
+	if err != nil {
+		b.drawSlotArt(itemInfoSlotEmpty, x, y)
+
+		return
+	}
+
+	b.ctx.Renderer().DrawImage(tex.ID, x, y, itemInfoSlot, itemInfoSlot, ui2d.ColorWhite)
+}
+
+// drawSlotArt draws one of the two slot shapes, or a flat mark where the
+// archive has neither.
+func (b *UI2DBackend) drawSlotArt(path string, x, y float32) {
+	if tex, err := b.texCache.Load(path); err == nil {
+		b.ctx.Renderer().DrawImage(tex.ID, x, y, itemInfoSlot, itemInfoSlot, ui2d.ColorWhite)
+
+		return
+	}
+
+	b.ctx.Renderer().DrawRect(x, y, itemInfoSlot, itemInfoSlot, itemsCellBg)
 }
 
 // drawItemArt draws the item's own picture, falling back to its icon.
