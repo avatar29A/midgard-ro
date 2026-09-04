@@ -37,10 +37,16 @@ const (
 	offSpeed      = 13
 
 	// The three status words rAthena calls bodyState, healthState and
-	// effectState — its opt1, opt2 and option. Only the first is read: it is
-	// the one that says a unit is petrified, frozen, stunned or asleep, and
-	// those are the states drawn on the unit rather than as an icon.
+	// effectState — its opt1, opt2 and option. Two of the three are read.
+	//
+	// bodyState says a unit is petrified, frozen, stunned or asleep, which
+	// are drawn on the unit rather than as an icon; effectState carries the
+	// bits that put something around one, of which Sight is the first. Both
+	// arrive with the unit, so a monster frozen or a mage already sighting
+	// when they come into view are drawn that way rather than at the next
+	// change.
 	offBodyState = 15
+	offOption    = 19
 
 	offJob    = 23
 	offHead   = 25
@@ -170,6 +176,11 @@ type Entity struct {
 	// it comes into view is drawn frozen.
 	BodyState uint16
 
+	// Options is rAthena's option word — a set of bits rather than one state,
+	// carrying what is drawn around a unit: sighting, hidden, cloaked, on a
+	// cart or a mount.
+	Options uint32
+
 	// X, Y is where the unit is. Dir is its facing, in server directions.
 	X, Y int
 	Dir  int
@@ -281,6 +292,7 @@ func decodeEntityPrefix(data []byte) *Entity {
 		GID:       readU32(data, offGID),
 		SpeedMs:   int16(readU16(data, offSpeed)),
 		BodyState: readU16(data, offBodyState),
+		Options:   readU32(data, offOption),
 		Job:       int16(readU16(data, offJob)),
 		HairStyle: readU16(data, offHead),
 		Weapon:    readU32(data, offWeapon),
