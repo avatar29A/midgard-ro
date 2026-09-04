@@ -45,6 +45,10 @@ type UIBackend interface {
 	// OpenWindow opens one of the HUD windows.
 	OpenWindow(window HUDWindow)
 
+	// ToggleWindow opens a closed menu window or closes an open one, which is
+	// what a key that opens a window does: the same key puts it away.
+	ToggleWindow(window HUDWindow) bool
+
 	// PressHotkey asks for the item in a quick-panel cell to be used.
 	PressHotkey(row, col int)
 
