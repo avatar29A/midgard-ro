@@ -1178,6 +1178,7 @@ func (g *Game) renderUI() {
 			PlayerName:     ui.GetCharName(state.CharInfo()),
 			PlayerClass:    stats.Class,
 			PlayerHP:       stats.HP,
+			PlayerDead:     state.Dead(),
 			PlayerMaxHP:    stats.MaxHP,
 			PlayerSP:       stats.SP,
 			PlayerMaxSP:    stats.MaxSP,
@@ -1317,6 +1318,32 @@ func (g *Game) renderUI() {
 				logger.Warn("could not ask to quit", zap.Error(err))
 			}
 		case ui.EscNone:
+		}
+
+		// The same three ways out, from the window that comes up on dying.
+		// Respawning is its own request; the other two are the ones the ESC
+		// menu sends, and go out the same way.
+		switch g.uiBackend.TakeDeadAction() {
+		case ui.DeadRespawn:
+			if err := state.RequestRespawn(); err != nil {
+				logger.Warn("could not ask to respawn", zap.Error(err))
+			}
+		case ui.DeadCharSelect:
+			if err := state.RequestCharSelect(); err != nil {
+				logger.Warn("could not ask for character select", zap.Error(err))
+			}
+		case ui.DeadQuit:
+			state.SetQuitFunc(func() {
+				g.pendingAction = func() {
+					logger.Info("server released the session, exiting")
+					os.Exit(0)
+				}
+			})
+
+			if err := state.RequestQuit(); err != nil {
+				logger.Warn("could not ask to quit", zap.Error(err))
+			}
+		case ui.DeadNone:
 		}
 
 		// A line the player typed goes out here rather than from the widget:

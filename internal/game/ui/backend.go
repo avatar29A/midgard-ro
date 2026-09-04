@@ -42,6 +42,9 @@ type UIBackend interface {
 	// TakeLevelUpAction returns a level-up button the player pressed.
 	TakeLevelUpAction() (LevelUpAction, bool)
 
+	// TakeDeadAction returns the button pressed on the death window.
+	TakeDeadAction() DeadAction
+
 	// OpenWindow opens one of the HUD windows.
 	OpenWindow(window HUDWindow)
 
