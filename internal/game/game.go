@@ -526,6 +526,7 @@ func (g *Game) frame() {
 	g.checkTimedScreenshot()
 
 	g.checkHotkeys()
+	g.checkWindowKeys()
 	g.checkSit()
 
 	// F10 toggles the in-game debug overlay (player/camera/scene/network).
@@ -1874,6 +1875,45 @@ var hotkeyRows = []hotkeyRowKeys{
 	{row: 1},
 	{row: 2, ctrl: true},
 	{row: 3, alt: true},
+}
+
+// windowKeys are the keys that open a window, as the original has them.
+//
+// Alt and a letter rather than a bare one: a bare letter is a chat line being
+// typed, and the quick panel already owns the number rows.
+//
+// Stats has no window of its own to open. The modern client folds the status
+// block into the equipment window, which is where the info button leads too,
+// so Alt+A goes to the same place rather than to nothing.
+var windowKeys = []struct {
+	key    imgui.Key
+	window ui.HUDWindow
+}{
+	{imgui.KeyS, ui.WindowSkill},
+	{imgui.KeyA, ui.WindowEquip},
+	{imgui.KeyM, ui.WindowMap},
+	{imgui.KeyE, ui.WindowItem},
+}
+
+// checkWindowKeys opens and closes the menu windows from the keyboard.
+//
+// Nothing fires while a field has focus, for the same reason the quick panel
+// stays quiet: Alt+S in the middle of a chat line is somebody typing.
+func (g *Game) checkWindowKeys() {
+	if g.uiBackend == nil || g.uiBackend.TextEntryFocused() {
+		return
+	}
+
+	io := imgui.CurrentIO()
+	if !io.KeyAlt() || io.KeyCtrl() {
+		return
+	}
+
+	for _, binding := range windowKeys {
+		if imgui.IsKeyPressedBoolV(binding.key, false) {
+			g.uiBackend.ToggleWindow(binding.window)
+		}
+	}
 }
 
 // checkSit sits the character down and stands it back up, on Insert.
