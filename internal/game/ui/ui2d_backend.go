@@ -167,6 +167,12 @@ type UI2DBackend struct {
 	escOpen   bool
 	escAction EscAction
 
+	// deadAction is the button pressed on the window that comes up when the
+	// character dies. There is no open flag beside it: the window is shown
+	// exactly while the server says the character has no hit points, so a
+	// resurrection takes it away without anything having to notice.
+	deadAction DeadAction
+
 	soundOpen     bool
 	soundSeeded   bool
 	soundDirty    bool
@@ -1045,6 +1051,7 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 	b.drawLevelUpButtons(state.LevelUpButtons, width, height)
 
 	b.drawEscMenu(width, height)
+	b.drawDeadMenu(state, width, height)
 	b.drawSoundConfig(width, height)
 	b.drawSkillsWindow(state, width, height)
 	b.drawEquipWindow(state, width, height)

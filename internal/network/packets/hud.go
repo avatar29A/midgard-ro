@@ -25,6 +25,24 @@ const (
 	ZC_ACK_REQ_DISCONNECT uint16 = 0x018B
 )
 
+// ZC_RESURRECTION is the server standing a dead unit back up: `<gid>.L
+// <type>.W`, eight bytes.
+//
+// Which is the only thing that says a character is alive again. Hit points do
+// not: rAthena leaves a corpse on one rather than nought, so a client reading
+// death off the numbers never sees a death at all.
+const ZC_RESURRECTION uint16 = 0x0148
+
+// DecodeResurrection reads whose. Reports false when the packet is too short
+// to say.
+func DecodeResurrection(data []byte) (uint32, bool) {
+	if len(data) < 6 {
+		return 0, false
+	}
+
+	return binary.LittleEndian.Uint32(data[2:]), true
+}
+
 // Restart types, from rAthena's clif_parse_Restart.
 const (
 	// RestartRespawn returns you to the save point after dying.

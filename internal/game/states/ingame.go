@@ -145,6 +145,13 @@ type InGameState struct {
 	// sightMs is how far round the Sight aura has turned.
 	sightMs float32
 
+	// playerDead is the character lying down, which is what the window
+	// offering a way back is shown on.
+	//
+	// A flag rather than a reading of the hit points: rAthena leaves a corpse
+	// on one hit point rather than on nought, so the numbers never say it.
+	playerDead bool
+
 	// bursts are the particle effects playing — the ones the original draws
 	// in code rather than from a file.
 	bursts []*activeBurst
@@ -1455,6 +1462,7 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_WHISPER, s.handleWhisper)
 	s.client.RegisterHandler(packets.ZC_ACK_WHISPER, s.handleWhisperAck)
 	s.client.RegisterHandler(packets.ZC_RESTART_ACK, s.handleRestartAck)
+	s.client.RegisterHandler(packets.ZC_RESURRECTION, s.handleResurrection)
 	s.client.RegisterHandler(packets.ZC_ACK_REQ_DISCONNECT, s.handleDisconnectAck)
 	s.client.RegisterHandler(packets.ZC_PAR_CHANGE, s.handleStatusChange)
 	s.client.RegisterHandler(packets.ZC_STATUS, s.handleStatus)
@@ -1674,8 +1682,13 @@ func (s *InGameState) handleEntityVanish(data []byte) error {
 		// only note it — and, when it was death, lie down.
 		trace.Emit(trace.Net, "vanish-self", zap.Uint8("reason", reason))
 
-		if reason == packets.VanishDied && s.player != nil {
-			s.player.Die()
+		if reason == packets.VanishDied {
+			s.playerDead = true
+
+			if s.player != nil {
+				s.player.Die()
+			}
+
 			s.forgetAttack()
 			s.forgetPendingPickup()
 			s.forgetPendingBlows()
@@ -2129,6 +2142,18 @@ func (s *InGameState) handleMapChange(data []byte) error {
 	default:
 		s.beginMapLoad(mc.MapName, at, "warp")
 	}
+
+	// Wherever the character has been put, they are standing there. This is
+	// how a respawn at the save point ends: the server does not resurrect
+	// anybody, it moves them, and the window has to go with the corpse.
+	if !same || s.MapLoaded {
+		s.playerDead = false
+
+		if s.player != nil {
+			s.player.Revive()
+		}
+	}
+
 	return nil
 }
 

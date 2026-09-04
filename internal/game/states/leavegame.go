@@ -33,6 +33,55 @@ func (s *InGameState) RequestCharSelect() error {
 	return s.client.Send(packets.EncodeRestart(packets.RestartCharSelect))
 }
 
+// RequestRespawn asks to be put back at the save point after dying.
+//
+// The same packet as a return to character select with a different byte, and
+// the server answers it the same way: with a fresh map, at whichever Kafra
+// the character last registered with. Nothing here has to know where that is.
+func (s *InGameState) RequestRespawn() error {
+	trace.Emit(trace.HUD, "leave-request", zap.String("to", "respawn"))
+
+	return s.client.Send(packets.EncodeRestart(packets.RestartRespawn))
+}
+
+// Dead reports whether the character is lying down.
+//
+// Not read off the hit points, which was the first thing tried and does not
+// work: rAthena leaves a corpse on one hit point rather than on nought, so a
+// character who has just died looks like one with a sliver left, and one who
+// logs in dead looks perfectly well. The server says so in its own packet
+// instead — the same ZC_NOTIFY_VANISH it clears a dead monster with, sent for
+// the character being played.
+func (s *InGameState) Dead() bool {
+	return s.playerDead
+}
+
+// handleResurrection is somebody being stood back up.
+//
+// Only the character being played matters here; a priest raising somebody
+// else changes nothing about this screen. There is nothing to undo besides
+// the flag: the sprite stands up from the same packet the entity layer reads.
+func (s *InGameState) handleResurrection(data []byte) error {
+	aid, ok := packets.DecodeResurrection(data)
+	if !ok {
+		return nil
+	}
+
+	if aid != s.selfAID() {
+		return nil
+	}
+
+	trace.Emit(trace.HUD, "resurrected", zap.Uint32("aid", aid))
+
+	s.playerDead = false
+
+	if s.player != nil {
+		s.player.Revive()
+	}
+
+	return nil
+}
+
 // RequestQuit asks to leave the game.
 func (s *InGameState) RequestQuit() error {
 	trace.Emit(trace.HUD, "leave-request", zap.String("to", "quit"))
