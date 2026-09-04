@@ -91,3 +91,70 @@ func TestOpeningTheMenuRemembersTheSlot(t *testing.T) {
 			b.itemMenu.x, b.itemMenu.y)
 	}
 }
+
+// TestTheMenuAsksForTheRightThing: three different requests, not two. Taking a
+// worn item off is its own — an equip for something already worn asks the
+// server to put a thing where it already is, which it answers by doing
+// nothing, and the entry said "Unequip" while the request said the opposite.
+func TestTheMenuAsksForTheRightThing(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		menu itemMenu
+		want ItemAction
+	}{
+		{
+			"a potion is used",
+			itemMenu{id: 501, index: 4},
+			ItemAction{Index: 4},
+		},
+		{
+			"a sword in the bag is worn",
+			itemMenu{id: 1101, index: 5, equip: true},
+			ItemAction{Index: 5, Equip: true},
+		},
+		{
+			"a sword already worn comes off",
+			itemMenu{id: 1101, index: 5, equip: true, worn: true},
+			ItemAction{Index: 5, Unequip: true},
+		},
+	} {
+		if got := tc.menu.action(); got != tc.want {
+			t.Errorf("%s: %+v, want %+v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestTheMenusActionMatchesItsLabel: whatever the first entry says it will do
+// is what the request asks for. They disagreed, which is the whole of why the
+// menu appeared to do nothing.
+func TestTheMenusActionMatchesItsLabel(t *testing.T) {
+	for _, menu := range []itemMenu{
+		{id: 501, index: 2},
+		{id: 1101, index: 3, equip: true},
+		{id: 1101, index: 3, equip: true, worn: true},
+	} {
+		entries := menu.entries()
+		if len(entries) < 2 {
+			continue
+		}
+
+		action := menu.action()
+
+		switch entries[0].label {
+		case "Use":
+			if action.Equip || action.Unequip {
+				t.Errorf("%q asks for %+v", entries[0].label, action)
+			}
+		case "Equip":
+			if !action.Equip || action.Unequip {
+				t.Errorf("%q asks for %+v", entries[0].label, action)
+			}
+		case "Unequip":
+			if !action.Unequip || action.Equip {
+				t.Errorf("%q asks for %+v", entries[0].label, action)
+			}
+		default:
+			t.Errorf("an entry nobody has a request for: %q", entries[0].label)
+		}
+	}
+}

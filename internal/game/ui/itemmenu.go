@@ -77,6 +77,23 @@ func (m itemMenu) entries() []itemMenuEntry {
 	return append(out, itemMenuEntry{id: "item_menu_info", label: "Item Info", info: true})
 }
 
+// action is what the first entry asks for.
+//
+// Three different requests, not two: taking a worn item off is its own, and
+// sending an equip for something already worn — which is what the label said
+// and the request did not — asks the server to put a thing where it already
+// is, which it answers by doing nothing at all.
+func (m itemMenu) action() ItemAction {
+	switch {
+	case m.equip && m.worn:
+		return ItemAction{Index: m.index, Unequip: true}
+	case m.equip:
+		return ItemAction{Index: m.index, Equip: true}
+	}
+
+	return ItemAction{Index: m.index}
+}
+
 // height is however tall its entries make it.
 func (m itemMenu) height() float32 {
 	rows := float32(len(m.entries()))
@@ -141,7 +158,7 @@ func (b *UI2DBackend) drawItemMenu(screenW, screenH float32) {
 		if entry.info {
 			b.ShowItemInfoOf(b.itemMenu.item)
 		} else {
-			b.itemAction = ItemAction{Index: b.itemMenu.index, Equip: b.itemMenu.equip}
+			b.itemAction = b.itemMenu.action()
 		}
 
 		b.itemMenu.open = false

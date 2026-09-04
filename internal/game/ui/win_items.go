@@ -529,6 +529,22 @@ func (b *UI2DBackend) drawItemCell(cell ui2d.Rect, shown []packets.InventoryItem
 		r.DrawRect(cell.X+1, cell.Y+1, 4, 4, statsBonusUp)
 	}
 
+	// A right click opens the menu on it, which is where asking what an item
+	// is lives. The double click that uses or wears one is still there; this
+	// is the rest of what a cell can be asked.
+	if in := b.ctx.Input(); in.MouseRightPressed && cell.Contains(in.MouseX, in.MouseY) {
+		b.openItemMenu(item, itemTabs[b.itemTab].category == items.CategoryEquip,
+			in.MouseX, in.MouseY)
+	}
+
+	// While the menu is up it owns the pointer, and the cells under it take
+	// nothing. The menu opens over the cell it belongs to, so without this a
+	// press on its first entry also began a drag of the item underneath —
+	// which, released outside the window, dropped it on the ground.
+	if b.itemMenu.open {
+		return
+	}
+
 	// The name, once the grid is done: what is in a cell is an icon and a
 	// count, and neither says what the thing is called.
 	//
@@ -548,14 +564,6 @@ func (b *UI2DBackend) drawItemCell(cell ui2d.Rect, shown []packets.InventoryItem
 	// the original, and there is nothing to select for.
 	if b.ctx.DoubleClickedIn("hud_item_cell_"+strconv.Itoa(index), cell) {
 		b.itemAction = ItemAction{Index: item.Index, Equip: itemTabs[b.itemTab].category == items.CategoryEquip}
-	}
-
-	// A right click opens the menu on it, which is where asking what an item
-	// is lives. The double click that uses or wears one is still there; this
-	// is the rest of what a cell can be asked.
-	if in := b.ctx.Input(); in.MouseRightPressed && cell.Contains(in.MouseX, in.MouseY) {
-		b.openItemMenu(item, itemTabs[b.itemTab].category == items.CategoryEquip,
-			in.MouseX, in.MouseY)
 	}
 
 	// Pressing on a cell begins a drag. Whether it becomes a drop is decided
