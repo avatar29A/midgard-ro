@@ -11,6 +11,10 @@ they built. Only the instructions a data file uses are implemented: loading
 constants, making tables, reading and writing their fields, and the array
 writes. Anything else leaves a register unknown, which reads back as None
 rather than as a wrong value.
+
+Both bytecode versions the archive ships are run. They agree on the numbers of
+every instruction here but one — the array write — and on that one they
+disagree over its number, its block size and how a block is addressed.
 """
 
 import lub
@@ -25,10 +29,22 @@ OP_GETTABLE = 6
 OP_SETGLOBAL = 7
 OP_SETTABLE = 9
 OP_NEWTABLE = 10
-OP_SETLIST = 34
 
-# How many array elements one SETLIST block carries, from lopcodes.h.
-FIELDS_PER_FLUSH = 50
+# SETLIST is the one instruction read here that the two versions do not agree
+# on, and they disagree three ways over: its number, how many elements a block
+# carries, and how the block is addressed.
+#
+# 5.1 numbers it 34 and gives it B elements with C numbering the block; 5.0
+# numbers it 31 and packs both into Bx, where the low five bits are one less
+# than the count and the rest is the index the block ends at. Read with the
+# other version's rules it writes nothing at all, which is a table of strings
+# that comes back empty.
+OP_SETLIST_50 = 31
+OP_SETLIST_51 = 34
+
+# How many array elements one block carries, from each version's lopcodes.h.
+FIELDS_PER_FLUSH_50 = 32
+FIELDS_PER_FLUSH_51 = 50
 
 
 class Table(dict):
@@ -100,7 +116,7 @@ def run(path, seed=None):
                     key = value(b)
                     if key is not None:
                         table[key] = value(c)
-            elif op == OP_SETLIST:
+            elif op == OP_SETLIST_51 and version == lub.VERSION_51:
                 table = registers.get(a)
                 if not isinstance(table, dict):
                     continue
@@ -110,6 +126,19 @@ def run(path, seed=None):
                 # list never uses. C numbers the block of fifty.
                 block = (c - 1) if c > 0 else 0
                 for i in range(1, b + 1):
-                    table[block * FIELDS_PER_FLUSH + i] = registers.get(a + i)
+                    table[block * FIELDS_PER_FLUSH_51 + i] = registers.get(a + i)
+            elif op == OP_SETLIST_50 and version == lub.VERSION_50:
+                table = registers.get(a)
+                if not isinstance(table, dict):
+                    continue
+
+                # Bx holds both: the low bits are the count less one, and
+                # clearing them leaves the index the block starts from.
+                index = lub.bx(instruction, version)
+                count = (index & (FIELDS_PER_FLUSH_50 - 1)) + 1
+                base = index & ~(FIELDS_PER_FLUSH_50 - 1)
+
+                for i in range(1, count + 1):
+                    table[base + i] = registers.get(a + i)
 
     return globals_
