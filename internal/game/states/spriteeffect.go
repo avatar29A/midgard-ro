@@ -3,6 +3,7 @@ package states
 import (
 	"go.uber.org/zap"
 
+	"github.com/Faultbox/midgard-ro/internal/engine/playerrender"
 	"github.com/Faultbox/midgard-ro/internal/logger"
 	"github.com/Faultbox/midgard-ro/internal/trace"
 	"github.com/Faultbox/midgard-ro/pkg/formats"
@@ -18,6 +19,29 @@ import (
 // The frames come through the same texture cache the ice does — a frame of a
 // sprite is nameable the way a file is — and come out as the same quads
 // everything else in this file ends as, so no new renderer is involved.
+
+// effectScales is how big an effect is drawn against its own art, where one
+// is the size a character's sheet is drawn at.
+//
+// The frame is the art rather than the size. A Fire Wall's frames are 64
+// pixels square where a Mage's body is 61 by 88, so drawn at the same scale
+// the wall comes out shorter than the caster — and a wall a monster steps
+// over is not a wall. The original draws it taller than a character, which is
+// what this is for.
+//
+// Anything not named here is drawn at its own size.
+var effectScales = map[string]float32{
+	"firewall": 1.6,
+}
+
+// effectScaleOf is that, or one for an effect with nothing said about it.
+func effectScaleOf(name string) float32 {
+	if scale, set := effectScales[name]; set {
+		return scale
+	}
+
+	return 1
+}
 
 // effectSpriteDir is where the archive keeps them. A handful live beside the
 // items instead, which is why the path is per effect rather than fixed.
@@ -236,19 +260,37 @@ func (s *InGameState) spriteEffectQuads(viewportW, viewportH float32) []EffectQu
 			continue
 		}
 
+		// The sprite's pixels are a size in the world, not on the screen, and
+		// the world is what decides how big they come out. Drawn a pixel to a
+		// pixel a Fire Wall stood a third the height of the mage who cast it,
+		// and it stayed that size however near the camera came.
+		//
+		// The same scale a character's own sheet is drawn at, so an effect
+		// and the units standing in it agree, and the same measure of what a
+		// world unit is worth here that the particle bursts use, so it
+		// shrinks with distance along with everything else.
+		perUnit := s.pixelsPerUnit(x, y, z, screenX, screenY, viewportW, viewportH)
+		if perUnit <= 0 {
+			continue
+		}
+
+		scale := playerrender.SpriteScale * effectScaleOf(effect.name) * perUnit
+
+		w, h := size[0]*scale, size[1]*scale
+
 		// The frame's own offset is where its middle goes, which is what the
 		// ACT means by it: an effect is drawn around a point rather than
 		// standing on one.
-		left := screenX + at.offX - size[0]/2
-		top := screenY + at.offY - size[1]/2
+		left := screenX + at.offX*scale - w/2
+		top := screenY + at.offY*scale - h/2
 
 		out = append(out, EffectQuad{
 			Texture: spriteFrameKey(effectSpriteDir+effect.name+".spr", at.frame),
 			Corners: [4][2]float32{
 				{left, top},
-				{left + size[0], top},
-				{left + size[0], top + size[1]},
-				{left, top + size[1]},
+				{left + w, top},
+				{left + w, top + h},
+				{left, top + h},
 			},
 			UV:       [4][2]float32{{0, 0}, {1, 0}, {1, 1}, {0, 1}},
 			Color:    [4]float32{1, 1, 1, 1},
