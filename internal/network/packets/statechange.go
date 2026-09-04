@@ -40,6 +40,23 @@ const (
 	BodyImprison  uint16 = 8
 )
 
+// Option bits, rAthena's e_option. Only the ones that are drawn are named.
+const (
+	// OptionSight is Sight and Ruwach: the spell that lights up what is
+	// hiding nearby. The client draws it as an aura around the caster rather
+	// than being told to play an effect — there is no skill effect for Sight
+	// at all, and the state is what says it is running.
+	OptionSight uint32 = 0x00000001
+
+	// OptionRuwach is the Acolyte's version of the same thing.
+	OptionRuwach uint32 = 0x00002000
+)
+
+// Sighting reports whether the unit has Sight or Ruwach running.
+func (s StateChange) Sighting() bool {
+	return s.Effect&(OptionSight|OptionRuwach) != 0
+}
+
 // StateChange is a unit's states changing.
 type StateChange struct {
 	AID uint32

@@ -1133,9 +1133,7 @@ func (g *Game) renderUI() {
 			WorldLabels: append(
 				state.WorldLabels(viewportWidth, viewportHeight),
 				state.SkillLabels(viewportWidth, viewportHeight)...),
-			WorldEffects: append(
-				state.EffectQuads(viewportWidth, viewportHeight),
-				state.IceQuads(viewportWidth, viewportHeight)...),
+			WorldEffects:    worldEffects(state, viewportWidth, viewportHeight),
 			TargetMarker:    targetMarker,
 			DamageNumbers:   state.DamageNumbers(viewportWidth, viewportHeight),
 			LevelUpButtons:  levelUpButtons,
@@ -1932,4 +1930,20 @@ func (g *Game) checkHotkeys() {
 			}
 		}
 	}
+}
+
+// worldEffects is everything drawn in the world this frame: what is playing,
+// and what is being held.
+//
+// The two are gathered separately because they are found differently. An
+// effect that is playing is on a list and ages off it; the ice over a frozen
+// unit and the aura around one that is sighting are neither started nor
+// stopped by the client — they are looked up from what the server last said
+// the unit's state was, every frame, for as long as it says it.
+func worldEffects(state *states.InGameState, viewportW, viewportH float32) []states.EffectQuad {
+	out := state.EffectQuads(viewportW, viewportH)
+	out = append(out, state.IceQuads(viewportW, viewportH)...)
+	out = append(out, state.SightQuads(viewportW, viewportH)...)
+
+	return out
 }

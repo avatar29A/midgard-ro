@@ -107,6 +107,10 @@ type Entity struct {
 	// which is why it is here and not with the rest of the statuses.
 	BodyState uint16
 
+	// Options is rAthena's option word, the set of bits that says what is
+	// drawn around a unit rather than on it. Sight is the one read.
+	Options uint32
+
 	// Flags
 	IsVisible    bool
 	IsTargetable bool

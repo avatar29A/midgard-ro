@@ -138,6 +138,13 @@ type InGameState struct {
 	// registry — it is driven by its own prediction.
 	playerBodyState uint16
 
+	// playerOptions is their option word, kept the same way and for the same
+	// reason: the character being played is not in the registry.
+	playerOptions uint32
+
+	// sightMs is how far round the Sight aura has turned.
+	sightMs float32
+
 	// bursts are the particle effects playing — the ones the original draws
 	// in code rather than from a file.
 	bursts []*activeBurst
@@ -828,6 +835,7 @@ func (s *InGameState) Update(dt float64) error {
 		s.advanceUnitSounds()
 		s.advanceAmbientSounds(deltaMs)
 		s.advanceSpriteEffects(deltaMs)
+		s.advanceSightAuras(deltaMs)
 		s.updateDamageNumbers(deltaMs)
 		s.updateEffects(deltaMs)
 		s.updateCelebrations(deltaMs)
