@@ -90,6 +90,20 @@ type burstParticle struct {
 	// jitter shifts where it starts, in world units, so ten of them along the
 	// same line do not sit on top of each other.
 	jitter [3]float32
+
+	// across bows it out sideways from the burst's own line, in world units at
+	// the widest.
+	//
+	// A bow rather than a shift: nought at each end and widest halfway, so a
+	// bolt leaves where the burst starts and arrives where it is aimed
+	// however far out it went on the way. Shifted instead, five bolts appear
+	// out of the air in a fan beside the caster rather than out of the caster.
+	//
+	// Not a jitter either, because which way sideways is is not known until
+	// the burst is played: the caster can stand anywhere around the target,
+	// and bolts spread along the world's x axis fly abreast from one side and
+	// single file from another.
+	across float32
 }
 
 // alphaAt is how strongly the particle draws at an age, and zero once it has
@@ -302,6 +316,18 @@ func (b *activeBurst) quadsAt(to projection) []EffectQuad {
 		x := b.x + b.otherX*along + p.x + p.jitter[0] + p.vx*frames
 		y := b.y + b.otherY*along + p.y + p.jitter[1] + p.vy*frames + 0.5*p.ay*frames*frames
 		z := b.z + b.otherZ*along + p.z + p.jitter[2] + p.vz*frames
+
+		// Bowed out from the line, once there is a line to bow out of. Widest
+		// halfway along it and nothing at either end, which is what keeps
+		// every bolt of a volley leaving the same point.
+		if p.across != 0 {
+			if run := float32(math.Hypot(float64(b.otherX), float64(b.otherZ))); run > 0 {
+				bow := 4 * along * (1 - along)
+
+				x += -b.otherZ / run * p.across * bow
+				z += b.otherX / run * p.across * bow
+			}
+		}
 
 		// A world unit in pixels comes back with the point, measured there
 		// rather than assumed: it is what makes something further away
@@ -803,6 +829,184 @@ func spikeParticle(seed uint32, along, birthMs, minHigh, maxHigh float32) burstP
 	return p
 }
 
+// Soul Strike, which the archive has no file for at all.
+//
+// There is no soulstrike.str and never was: the original draws it in code,
+// and roBrowser's table marks it FUNC with sprite/이팩트/particle1 named in a
+// comment beside it. What it draws is a volley of glowing orbs, one per blow
+// the strike lands, each arcing out of the caster and into whoever was hit,
+// dragging a tail behind it.
+//
+// The numbers are nostalro-client's, from effects/soul_strike.rs.
+const (
+	// soulSegments is how many quads make one bolt's tail, each born a little
+	// after the one in front so the tail strings out behind the head as it
+	// flies. Fewer than the original's twelve, and further apart: the orbs
+	// are drawn big enough to read, and big enough to read is big enough that
+	// twelve of them at two frames apart run together into one smear.
+	soulSegments = 6
+
+	// soulTrailFrames is the gap between one segment and the next.
+	soulTrailFrames = 3
+
+	// soulSpawnFrames is the gap between one bolt and the next, and
+	// soulFlightFrames how long a bolt takes to arrive.
+	//
+	// Short: one leaves and the next is close behind it, which is the volley
+	// the original throws. What keeps that from being a heap of light is not
+	// the gap but the spread — five orbs down the same path at any spacing
+	// are one thick line, and five orbs on five arcs read as five however
+	// close together they leave.
+	soulSpawnFrames  = 14
+	soulFlightFrames = 26
+
+	// soulBoltsMax is the most a strike lands, which is a level ten one.
+	soulBoltsMax = 5
+
+	// soulHalf is an orb's half-size in world units, soulRise how far a bolt
+	// lofts on the way over, and soulSpread how far off the line the bolts
+	// are rolled from each other.
+	//
+	// The spread is wide — four cells off the line at the widest — because it
+	// is what tells the bolts apart. Rolled a little from each other they
+	// arrive as one stream from one direction; rolled this far they come at
+	// what they hit from over it, from each side and from along the ground,
+	// which is the volley the original throws.
+	//
+	// The orb is much smaller than its quad. particle1 is a glow that fades
+	// out to nothing over the whole sixty-four pixels, with a bright core
+	// about a sixth of that across, so a quad the size the orb should be
+	// draws a speck with a halo round it — and one big enough for the core to
+	// read is a quad whose halo swallows the rest of the tail. This is the
+	// size where the beads are still beads.
+	soulHalf   = 18.0
+	soulRise   = 16.0
+	soulSpread = 20.0
+
+	// soulFlashHalf is how wide the orb bursts when it lands, and
+	// soulFlashFrames how long that lasts.
+	soulFlashHalf   = 9.0
+	soulFlashFrames = 12
+
+	// soulFade is how much of a segment's life is spent leaving. The head of
+	// a tail is solid and the end of it is nearly gone, which is what makes
+	// it read as a tail rather than as a string of beads.
+	soulFade = 0.55
+)
+
+// soulSprite is the orb. One frame, sixty-four pixels square, and the same
+// one Napalm Beat and half a dozen other effects are built from.
+const soulSprite = `data\sprite\이팩트\particle1.spr`
+
+// soulRollDegrees is the angle a bolt is rolled to around the line it flies
+// along, which is what keeps five of them from flying down the same path.
+//
+// The original's own table: one bolt goes straight down the middle, and the
+// more there are the tighter the fan they are spread into.
+func soulRollDegrees(bolts, i int) float32 {
+	start, step := float32(-90), float32(45)
+
+	switch bolts {
+	case 1:
+		start, step = 0, 1
+	case 2:
+		step = 180
+	case 3:
+		step = 90
+	case 4:
+		step = 60
+	}
+
+	return start + float32(i+1)*step
+}
+
+// soulStrikeParts is the volley.
+func soulStrikeParts(hits int) burstSpec {
+	bolts := min(max(hits, 1), soulBoltsMax)
+
+	// A segment lives exactly as long as the flight, so every one of them
+	// arrives rather than fading out somewhere over the field.
+	life := burstFrames(soulFlightFrames)
+
+	parts := make([]burstParticle, 0, bolts*soulSegments)
+
+	for bolt := 0; bolt < bolts; bolt++ {
+		roll := float64(soulRollDegrees(bolts, bolt)) * math.Pi / 180
+
+		// The roll turns around the line it is flying down, and the two ways
+		// perpendicular to a line along the ground are up and sideways. No
+		// roll is straight up and over, which is what a single bolt does; a
+		// quarter turn is all the way out to one side.
+		across := soulSpread * float32(math.Sin(roll))
+		rise := soulRise + soulSpread*float32(math.Cos(roll))
+
+		// Up and back down over the flight, so the bolt arrives at the height
+		// it was aimed at rather than above it.
+		vy := 4 * rise / soulFlightFrames
+		ay := -2 * vy / soulFlightFrames
+
+		for seg := 0; seg < soulSegments; seg++ {
+			// The tail thins as it goes back, which is the segment nearest
+			// the caster being the faintest and the smallest.
+			back := float32(seg) / soulSegments
+
+			parts = append(parts, burstParticle{
+				vy: vy, ay: ay,
+				halfW: soulHalf * (1 - 0.6*back),
+				halfH: soulHalf * (1 - 0.6*back),
+
+				birthMs: burstFrames(float32(bolt*soulSpawnFrames + seg*soulTrailFrames)),
+				lifeMs:  life,
+
+				fadeOutMs: life * soulFade,
+				maxAlpha:  0.65 - 0.35*back,
+
+				texture:  spriteFrameKey(soulSprite, 0),
+				tint:     [3]float32{1, 1, 1},
+				additive: true,
+
+				// Thrown from the caster and traveling the whole way in.
+				atOther: 1,
+				fallsIn: true,
+				across:  across,
+			})
+		}
+
+		// The orb bursting on what it hit.
+		//
+		// Five blows arrive as one packet with one figure over the target,
+		// and without something for each of them a volley reads as one strike
+		// rather than as five.
+		parts = append(parts, burstParticle{
+			halfW: soulFlashHalf / 2,
+			halfH: soulFlashHalf / 2,
+			growW: soulFlashHalf / 2 / soulFlashFrames,
+			growH: soulFlashHalf / 2 / soulFlashFrames,
+
+			birthMs: burstFrames(float32(bolt*soulSpawnFrames) + soulFlightFrames),
+			lifeMs:  burstFrames(soulFlashFrames),
+
+			fadeInMs: burstFrames(2),
+			maxAlpha: 0.9,
+
+			texture:  spriteFrameKey(soulSprite, 0),
+			tint:     [3]float32{1, 1, 1},
+			additive: true,
+		})
+	}
+
+	// The last bolt lands here, and its tail and its flash finish after it.
+	last := float32((bolts-1)*soulSpawnFrames) + soulFlightFrames
+
+	return burstSpec{
+		parts: parts,
+		runMs: burstFrames(max(
+			last+float32((soulSegments-1)*soulTrailFrames),
+			last+soulFlashFrames)),
+		fromCaster: true,
+	}
+}
+
 // burstFor is the burst a named effect plays, and whether there is one.
 //
 // hits is how many blows the skill landed, which the bolt skills draw one shot
@@ -835,6 +1039,9 @@ func burstFor(effect string, hits int) (burstSpec, bool) {
 
 	case "EF_FROSTDIVER2":
 		return frostDiver2Parts(), true
+
+	case "EF_SOULSTRIKE":
+		return soulStrikeParts(hits), true
 	}
 
 	return burstSpec{}, false

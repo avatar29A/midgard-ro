@@ -228,12 +228,51 @@ func (s *InGameState) handleSkillUnit(data []byte) error {
 		zap.Int("x", unit.X), zap.Int("y", unit.Y), zap.Int("level", unit.Level))
 
 	if s.skillUnits == nil {
-		s.skillUnits = map[uint32]uint32{}
+		s.skillUnits = map[uint32]packets.SkillUnit{}
 	}
 
-	s.skillUnits[unit.ID] = unit.CreatorID
+	if _, already := s.skillUnits[unit.ID]; !already {
+		s.showSkillUnit(unit)
+	}
+
+	s.skillUnits[unit.ID] = unit
 
 	return nil
+}
+
+// unitSprites are the effect sprites a ground skill's unit is drawn as.
+//
+// By what the unit is rather than by which skill made it: the server says so
+// in the packet, and it is the same answer for a wall however it got there.
+var unitSprites = map[uint32]string{
+	packets.UnitFireWall: "firewall",
+}
+
+// unitEffects are the units the archive keeps as STR animations instead.
+var unitEffects = map[uint32]string{
+	packets.UnitSafetyWall: "safetywall.str",
+}
+
+// showSkillUnit draws the thing a ground skill left standing.
+//
+// For as long as it stands: no duration is given here, so the effect plays
+// until the server takes the unit away. A Fire Wall burns until it is spent
+// and the client is not the one counting.
+func (s *InGameState) showSkillUnit(unit packets.SkillUnit) {
+	if !unit.Visible {
+		return
+	}
+
+	x, z := entity.CellToWorld(unit.X, unit.Y)
+	y := s.terrainHeight(x, z)
+
+	if sprite, drawn := unitSprites[unit.Kind]; drawn {
+		s.playUnitSprite(sprite, unit.ID, x, y, z)
+	}
+
+	if effect, drawn := unitEffects[unit.Kind]; drawn {
+		s.playUnitEffect(effect, unit.ID, x, y, z)
+	}
 }
 
 // handleSkillUnitGone is one going away again.
@@ -245,6 +284,7 @@ func (s *InGameState) handleSkillUnitGone(data []byte) error {
 		return nil
 	}
 
+	s.hideSkillUnit(id)
 	delete(s.skillUnits, id)
 
 	return nil
@@ -253,8 +293,8 @@ func (s *InGameState) handleSkillUnitGone(data []byte) error {
 // casterBehind is who a blow really came from: the unit itself for anything
 // that stands on the map, and whoever placed it for a ground skill.
 func (s *InGameState) casterBehind(id uint32) uint32 {
-	if by, ok := s.skillUnits[id]; ok {
-		return by
+	if unit, ok := s.skillUnits[id]; ok {
+		return unit.CreatorID
 	}
 
 	return id

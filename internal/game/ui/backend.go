@@ -42,8 +42,15 @@ type UIBackend interface {
 	// TakeLevelUpAction returns a level-up button the player pressed.
 	TakeLevelUpAction() (LevelUpAction, bool)
 
+	// TakeDeadAction returns the button pressed on the death window.
+	TakeDeadAction() DeadAction
+
 	// OpenWindow opens one of the HUD windows.
 	OpenWindow(window HUDWindow)
+
+	// ToggleWindow opens a closed menu window or closes an open one, which is
+	// what a key that opens a window does: the same key puts it away.
+	ToggleWindow(window HUDWindow) bool
 
 	// PressHotkey asks for the item in a quick-panel cell to be used.
 	PressHotkey(row, col int)
@@ -116,9 +123,6 @@ type UIBackend interface {
 
 	// RenderInGameUI renders the in-game HUD.
 	RenderInGameUI(state InGameUIState, dt float64, width, height float32)
-
-	// RenderFPSOverlay renders an FPS counter (if enabled).
-	RenderFPSOverlay(fps float64, width, height float32)
 
 	// RenderScreenshotMessage renders a screenshot notification.
 	RenderScreenshotMessage(msg string, width, height float32)
@@ -292,6 +296,11 @@ type InGameUIState struct {
 	PlayerName            string
 	PlayerClass           int
 	PlayerHP, PlayerMaxHP int
+
+	// PlayerDead is the character being at nought hit points, which is the
+	// whole of what the death window is shown on: it goes when the server
+	// says there are hit points again, whoever put them back.
+	PlayerDead            bool
 	PlayerSP, PlayerMaxSP int
 	PlayerLevel           int
 	PlayerJobLevel        int
