@@ -533,25 +533,163 @@ func (b *UI2DBackend) castSkillFromWindow(skill packets.Skill) {
 }
 
 // setSkillTooltip says what a row is.
+//
+// The packet carries five things — the id, the level, the SP, the range and
+// the targeting bits — and a panel built from those alone tells a player that
+// Stone Curse is active, costs SP and reaches two cells. What it is made of,
+// how long it takes and what it spends come from the server's own database,
+// which is what the rest of this reads.
+//
+// At the level the picker is on rather than the level learned: the figures are
+// what would happen if the skill were cast now, and half of them change with
+// the level chosen.
 func (b *UI2DBackend) setSkillTooltip(skill packets.Skill, atX, atY float32) {
 	name := skills.Name(skill.ID)
 	if name == "" {
 		name = "Skill #" + strconv.Itoa(int(skill.ID))
 	}
 
-	lines := []string{"Lv " + strconv.Itoa(b.skillCastLevel(skill)) +
-		" of " + strconv.Itoa(skill.Level)}
+	level := b.skillCastLevel(skill)
+
+	lines := []string{"Lv " + strconv.Itoa(level) + " of " + strconv.Itoa(skill.Level)}
+
+	info, known := skills.InfoOf(skill.ID)
 
 	if skill.Inf == 0 {
 		lines = append(lines, "Passive")
 	} else {
 		lines = append(lines,
 			"Active — "+skillTargetWords(skill.Inf),
-			"SP "+strconv.Itoa(skill.SP),
-			"Range "+strconv.Itoa(skill.Range))
+			"SP "+strconv.Itoa(skill.SP)+"   Range "+strconv.Itoa(skill.Range))
 	}
 
+	if known {
+		lines = append(lines, skillInfoLines(info, level)...)
+	}
+
+	lines = append(lines, skillNeedLines(skill.ID)...)
+
 	b.setTooltip(name, lines, atX, atY)
+}
+
+// skillInfoLines is what the database says, in the order a player reads it:
+// what the skill is, then what it takes to use, then what it costs.
+func skillInfoLines(info skills.Info, level int) []string {
+	var lines []string
+
+	// Magic, Fire. The element is named beside the kind rather than on a line
+	// of its own — together they are one fact about the skill, and a panel is
+	// read at a glance.
+	if kind := skillKindWords(info, level); kind != "" {
+		lines = append(lines, kind)
+	}
+
+	if hits, ok := skills.At(info.Hits, level); ok && hits > 1 {
+		lines = append(lines, "Hits "+strconv.Itoa(hits))
+	}
+
+	if cast := skillCastWords(info, level); cast != "" {
+		lines = append(lines, cast)
+	}
+
+	// The two waits. Named apart because they are: one is how long until any
+	// skill may be used again and the other how long until this one may.
+	if delay, ok := skills.At(info.DelayMs, level); ok && delay > 0 {
+		lines = append(lines, "Delay "+seconds(delay))
+	}
+	if cool, ok := skills.At(info.CooldownMs, level); ok && cool > 0 {
+		lines = append(lines, "Cooldown "+seconds(cool))
+	}
+
+	for _, cost := range info.Catalyst {
+		amount := ""
+		if cost.Amount > 1 {
+			amount = " ×" + strconv.Itoa(cost.Amount)
+		}
+
+		lines = append(lines, "Needs "+cost.Item+amount)
+	}
+
+	return lines
+}
+
+// skillKindWords is what the skill is: Magic, Weapon or Misc, and the element
+// it hits with where that is worth saying.
+//
+// Weapon element is not: it means the skill hits with whatever is being
+// swung, which is not a fact about the skill at all.
+func skillKindWords(info skills.Info, level int) string {
+	kind := info.Kind
+	if kind == "Misc" {
+		// Which is rAthena's word for "neither of the other two", and says
+		// nothing to a player.
+		kind = ""
+	}
+
+	element := skills.ElementAt(info.Element, level)
+	if element == "Weapon" || element == "Neutral" {
+		element = ""
+	}
+
+	switch {
+	case kind != "" && element != "":
+		return kind + ", " + element
+	case kind != "":
+		return kind
+	case element != "":
+		return element
+	}
+
+	return ""
+}
+
+// skillCastWords is how long it takes to get off.
+//
+// The fixed part is named separately because nothing shortens it: a Wizard
+// with every cast reduction there is still waits that long, and a panel that
+// added the two together would promise a cast that can be reached and cannot.
+func skillCastWords(info skills.Info, level int) string {
+	cast, _ := skills.At(info.CastMs, level)
+	fixed, _ := skills.At(info.FixedMs, level)
+
+	switch {
+	case cast > 0 && fixed > 0:
+		return "Cast " + seconds(cast) + " + " + seconds(fixed) + " fixed"
+	case cast > 0:
+		return "Cast " + seconds(cast)
+	case fixed > 0:
+		return "Cast " + seconds(fixed) + " fixed"
+	}
+
+	return ""
+}
+
+// skillNeedLines is what a skill has to be learned after.
+func skillNeedLines(id uint16) []string {
+	var lines []string
+
+	for _, need := range skills.Needs(id) {
+		name := skills.Name(need.Skill)
+		if name == "" {
+			name = "Skill #" + strconv.Itoa(int(need.Skill))
+		}
+
+		lines = append(lines, "After "+name+" Lv "+strconv.Itoa(int(need.Level)))
+	}
+
+	return lines
+}
+
+// seconds writes a duration in milliseconds the way a player counts it.
+func seconds(ms int) string {
+	whole := ms / 1000
+	tenths := (ms % 1000) / 100
+
+	if tenths == 0 {
+		return strconv.Itoa(whole) + "s"
+	}
+
+	return strconv.Itoa(whole) + "." + strconv.Itoa(tenths) + "s"
 }
 
 // skillTargetWords says what a skill is aimed at, from the server's own
