@@ -27,21 +27,27 @@ import (
 // pixels square where a Mage's body is 61 by 88, so drawn at the same scale
 // the wall stands three quarters of the caster's height — and a wall a
 // monster steps over is not a wall. In the original it stands about twice a
-// character and is wide enough that the flames of neighboring cells run
-// together into one sheet of fire, which is what the number is set from.
+// character, and its flames are columns rather than blobs, which is what
+// these are set from.
 //
 // Anything not named here is drawn at its own size.
-var effectScales = map[string]float32{
-	"firewall": 2.6,
+var effectScales = map[string][2]float32{
+	// Across and up, and not the same. The art is a square tile and a Fire
+	// Wall is a column of flame: stretched evenly it comes out as a squat
+	// bonfire however big it is made, which is the wall being tall but its
+	// flames still short. Wide enough that the cells run together, tall
+	// enough to stand over a character.
+	"firewall": {1.3, 3.0},
 }
 
-// effectScaleOf is that, or one for an effect with nothing said about it.
-func effectScaleOf(name string) float32 {
+// effectScaleOf is that, or its own size for an effect with nothing said
+// about it.
+func effectScaleOf(name string) [2]float32 {
 	if scale, set := effectScales[name]; set {
 		return scale
 	}
 
-	return 1
+	return [2]float32{1, 1}
 }
 
 // effectSpriteDir is where the archive keeps them. A handful live beside the
@@ -275,9 +281,10 @@ func (s *InGameState) spriteEffectQuads(viewportW, viewportH float32) []EffectQu
 			continue
 		}
 
-		scale := playerrender.SpriteScale * effectScaleOf(effect.name) * perUnit
+		stretch := effectScaleOf(effect.name)
+		scale := playerrender.SpriteScale * perUnit
 
-		w, h := size[0]*scale, size[1]*scale
+		w, h := size[0]*stretch[0]*scale, size[1]*stretch[1]*scale
 
 		// Standing on the point rather than centered over it. A Fire Wall
 		// rises out of the ground it was placed on; centered, half of it is
@@ -287,8 +294,8 @@ func (s *InGameState) spriteEffectQuads(viewportW, viewportH float32) []EffectQu
 		// The frame's own offset is added on top, for the effects whose ACT
 		// does move them about. These do not: the wall's frames sit at
 		// nought, and the art is drawn where it stands.
-		left := screenX + at.offX*scale - w/2
-		top := screenY + at.offY*scale - h
+		left := screenX + at.offX*stretch[0]*scale - w/2
+		top := screenY + at.offY*stretch[1]*scale - h
 
 		out = append(out, EffectQuad{
 			Texture: spriteFrameKey(effectSpriteDir+effect.name+".spr", at.frame),
