@@ -1064,12 +1064,15 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 
 	b.drawEscMenu(width, height)
 	b.drawDeadMenu(state, width, height)
-	b.drawItemInfo(width, height)
 	b.drawSoundConfig(width, height)
 	b.drawSkillsWindow(state, width, height)
 	b.drawEquipWindow(state, width, height)
 	b.drawItemsWindow(state, width, height)
 	b.drawMapWindow(state, width, height)
+
+	// After the windows, because it is opened from one of them: drawn
+	// before, the inventory it was asked from paints straight over it.
+	b.drawItemInfo(width, height)
 
 	// After every window that a drag can start in or end on, so one release
 	// is resolved once and against all of them.

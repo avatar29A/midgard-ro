@@ -226,3 +226,50 @@ func TestItemDisplayNameCountsTheSlots(t *testing.T) {
 		t.Error("an unknown item has no name at all")
 	}
 }
+
+// TestSlotCardTellsTheThreeCasesApart: the row is always four wide, so a place
+// the item has no slot for, a slot with nothing in it and a slot with a card
+// in it all have to be told apart — and nought means two of those in the
+// packet, which is what makes it worth a function.
+func TestSlotCardTellsTheThreeCasesApart(t *testing.T) {
+	cards := [4]uint32{4001, 0, 0, 0}
+
+	for _, tc := range []struct {
+		name  string
+		at    int
+		slots int
+		want  uint32
+	}{
+		{"the card in the first slot", 0, 3, 4001},
+		{"the second, empty", 1, 3, slotEmpty},
+		{"the third, empty", 2, 3, slotEmpty},
+		{"the fourth, which the item has no slot for", 3, 3, slotNone},
+		{"an item with no slots at all", 0, 0, slotNone},
+	} {
+		if got := slotCard(tc.at, tc.slots, cards, false); got != tc.want {
+			t.Errorf("%s: slotCard = %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestSlotCardLeavesSpecialSlotsEmpty: a forged weapon's slots hold an account
+// id, and drawn as cards those are whatever icon sits at that number.
+func TestSlotCardLeavesSpecialSlotsEmpty(t *testing.T) {
+	forged := [4]uint32{packets.CardForged, 12345, 6789, 0}
+
+	for at := 0; at < 3; at++ {
+		if got := slotCard(at, 3, forged, true); got != slotEmpty {
+			t.Errorf("slot %d of a forged weapon draws %d, want it empty", at, got)
+		}
+	}
+}
+
+// TestSlotCardStaysInsideTheRow: an item claiming more slots than the packet
+// carries cards for is read to the end of the cards rather than past it.
+func TestSlotCardStaysInsideTheRow(t *testing.T) {
+	cards := [4]uint32{4001, 4001, 4001, 4001}
+
+	if got := slotCard(4, 6, cards, false); got != slotNone {
+		t.Errorf("the fifth place draws %d, want nothing", got)
+	}
+}
