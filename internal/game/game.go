@@ -1403,8 +1403,13 @@ func (g *Game) captureScreenshot() {
 		return
 	}
 
-	g.screenshotMsg = fmt.Sprintf("Saved: %s", name)
-	g.screenshotMsgTime = time.Now()
+	// The toast is for a person who pressed the key. An interval capture has
+	// nobody to read it, and it would land in every frame after the first,
+	// which is the one thing a run that captures the interface cannot have.
+	if g.shotEvery == 0 {
+		g.screenshotMsg = fmt.Sprintf("Saved: %s", name)
+		g.screenshotMsgTime = time.Now()
+	}
 }
 
 // handleInGameInput handles camera and movement input when in game.
