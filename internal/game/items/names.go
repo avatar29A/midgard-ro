@@ -39,6 +39,14 @@ type Info struct {
 	// everything old enough to have one. Empty when the archive's table has
 	// no entry, which is most of what has been added since.
 	Resource string
+
+	// CardArt is the drawing on a card, which needs its own name: every card
+	// in the game shares one icon — a blank card back filed under "nameless
+	// card" — and the drawing is filed under the card's own name instead.
+	//
+	// Empty for everything that is not a card, and for the cards the
+	// archive has no drawing for.
+	CardArt string
 }
 
 var (
@@ -53,7 +61,7 @@ func load() {
 
 	for line := range strings.Lines(namesData) {
 		fields := strings.Split(strings.TrimSuffix(line, "\n"), "\t")
-		if len(fields) < 4 {
+		if len(fields) < 5 {
 			continue
 		}
 
@@ -66,6 +74,7 @@ func load() {
 			Name:     fields[1],
 			Category: Category(fields[2]),
 			Resource: fields[3],
+			CardArt:  fields[4],
 		}
 	}
 }

@@ -153,7 +153,11 @@ type UI2DBackend struct {
 	// abstract rather than on one out of the bag.
 	itemInfoCards   [4]uint32
 	itemInfoSpecial bool
-	itemTab         int
+
+	// cardViewID is the card whose drawing is being looked at, nought when
+	// that window is shut.
+	cardViewID uint32
+	itemTab    int
 
 	// mapWorldView switches the Map window between this map and the world.
 	mapWorldView bool
@@ -1073,6 +1077,7 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 	// After the windows, because it is opened from one of them: drawn
 	// before, the inventory it was asked from paints straight over it.
 	b.drawItemInfo(width, height)
+	b.drawCardView(width, height)
 
 	// After every window that a drag can start in or end on, so one release
 	// is resolved once and against all of them.

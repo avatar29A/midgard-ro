@@ -78,6 +78,9 @@ func main() {
 	if id := config.ItemInfo(); id > 0 {
 		g.SetItemInfo(uint32(id))
 	}
+	if id := config.CardView(); id > 0 {
+		g.SetCardView(uint32(id))
+	}
 	if cast := config.CastSkills(); len(cast) > 0 {
 		g.SetCastSkills(cast)
 	}

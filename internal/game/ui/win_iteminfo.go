@@ -42,6 +42,10 @@ const (
 	itemInfoTextScale  float32 = 0.65
 	itemInfoLineH      float32 = 15
 
+	// itemInfoViewW is the button under the picture that opens a card's own
+	// drawing.
+	itemInfoViewW float32 = 60
+
 	// The row of card slots along the bottom, as the original draws it: four
 	// diamonds whatever the item's capacity, since four is the most anything
 	// takes and a row that changed length would move under the pointer.
@@ -154,7 +158,29 @@ func (b *UI2DBackend) drawItemInfoBody(id uint32, x, bodyY float32) {
 	nameX := artX + itemInfoArtW + itemInfoPad
 	r.DrawText(nameX, artY+2, name, itemInfoTitleScale, itemInfoName)
 
+	// A card's icon is a blank card back, shared by every card in the game,
+	// so the picture above says nothing about this one. The button opens the
+	// drawing, which is the card.
+	if _, has := CardArtOf(id); has {
+		view := ui2d.Rect{
+			X: artX,
+			Y: artY + itemInfoArtH + 2,
+			W: itemInfoViewW,
+			H: escBtnH,
+		}
+
+		b.drawFlatButton(view, "View", false)
+
+		if b.ctx.InvisibleButtonAt("item_info_view", view.X, view.Y, view.W, view.H) {
+			b.ShowCardView(id)
+		}
+	}
+
 	lineY := artY + itemInfoArtH + itemInfoPad
+
+	if _, has := CardArtOf(id); has {
+		lineY += escBtnH
+	}
 
 	if !known {
 		r.DrawText(artX, lineY, "Nothing known about this item.",
@@ -265,6 +291,7 @@ func (b *UI2DBackend) drawItemSlots(x, y float32, id uint32) {
 			b.drawSlotArt(itemInfoSlotEmpty, at, y)
 		default:
 			b.drawCardInSlot(card, at, y)
+			b.cardSlotInput(card, i, at, y)
 		}
 	}
 }
@@ -315,6 +342,31 @@ func (b *UI2DBackend) drawCardInSlot(card uint32, x, y float32) {
 	}
 
 	b.ctx.Renderer().DrawImage(tex.ID, x, y, itemInfoSlot, itemInfoSlot, ui2d.ColorWhite)
+}
+
+// cardSlotInput names the card under the pointer and opens its drawing when
+// it is clicked.
+//
+// A card's icon is a blank card back — every one of them shares it — so a slot
+// with something in it says nothing about what that something is. The name is
+// the least of it and the drawing is the rest.
+func (b *UI2DBackend) cardSlotInput(card uint32, at int, x, y float32) {
+	slot := ui2d.Rect{X: x, Y: y, W: itemInfoSlot, H: itemInfoSlot}
+
+	in := b.ctx.Input()
+	if !slot.Contains(in.MouseX, in.MouseY) {
+		return
+	}
+
+	b.itemHover = itemHover{
+		text: itemDisplayName(card),
+		x:    x + itemInfoSlot/2,
+		y:    y + itemInfoSlot,
+	}
+
+	if b.ctx.InvisibleButtonAt("card_slot_"+strconv.Itoa(at), x, y, itemInfoSlot, itemInfoSlot) {
+		b.ShowCardView(card)
+	}
 }
 
 // drawSlotArt draws one of the two slot shapes, or a flat mark where the
@@ -424,7 +476,14 @@ func (b *UI2DBackend) itemInfoLines(id uint32, info items.Info) []itemInfoLine {
 	}
 
 	if len(detail.Locations) > 0 {
-		lines = append(lines, itemInfoLine{"Worn:", prettyWords(detail.Locations)})
+		// A card is not worn anywhere: those places are what it may be put
+		// into, which is a different sentence.
+		label := "Worn:"
+		if detail.Type == "Card" {
+			label = "Fits:"
+		}
+
+		lines = append(lines, itemInfoLine{label, prettyWords(detail.Locations)})
 	}
 
 	if detail.Level > 0 {
@@ -435,8 +494,10 @@ func (b *UI2DBackend) itemInfoLines(id uint32, info items.Info) []itemInfoLine {
 	}
 
 	// Only worth saying of something worn, and only worth saying when it is
-	// false: a sword that can be refined is the ordinary case.
-	if detail.Worn() && !detail.Refineable {
+	// false: a sword that can be refined is the ordinary case. Never of a
+	// card — nothing refines a card, so saying so of every one of them is a
+	// line that carries no information.
+	if detail.Worn() && !detail.Refineable && detail.Type != "Card" {
 		lines = append(lines, itemInfoLine{"Refineable:", "no"})
 	}
 

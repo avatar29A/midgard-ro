@@ -273,3 +273,29 @@ func TestSlotCardStaysInsideTheRow(t *testing.T) {
 		t.Errorf("the fifth place draws %d, want nothing", got)
 	}
 }
+
+// TestACardIsNotWornAnywhere: the places a card lists are what it may be put
+// into, which is a different sentence from where a hat goes. And nothing
+// refines a card, so saying so of every one of them is a line carrying no
+// information.
+func TestACardIsNotWornAnywhere(t *testing.T) {
+	lines := (&UI2DBackend{}).itemInfoLines(4005, items.Info{Name: "Santa Poring Card"})
+
+	labels := map[string]string{}
+	for _, line := range lines {
+		labels[line.label] = line.value
+	}
+
+	if labels["Class:"] != "Card" {
+		t.Errorf("a card's class reads %q", labels["Class:"])
+	}
+	if _, worn := labels["Worn:"]; worn {
+		t.Errorf("a card says it is worn: %+v", lines)
+	}
+	if _, fits := labels["Fits:"]; !fits {
+		t.Errorf("a card does not say what it fits: %+v", lines)
+	}
+	if _, refine := labels["Refineable:"]; refine {
+		t.Errorf("a card says whether it refines: %+v", lines)
+	}
+}

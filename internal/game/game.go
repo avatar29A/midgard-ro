@@ -116,6 +116,9 @@ type Game struct {
 	// itemInfo is --item-info, waiting for the bag.
 	itemInfo uint32
 
+	// cardView is --card-view, waiting for the same.
+	cardView uint32
+
 	// holdCastAura is --cast-aura, waiting for the map.
 	holdCastAura bool
 
@@ -586,6 +589,7 @@ func (g *Game) frame() {
 	g.runCast()
 	g.runRaiseSkills()
 	g.runItemInfo()
+	g.runCardView()
 	g.runHoldCastAura()
 	g.runSay()
 
@@ -860,6 +864,26 @@ func (g *Game) runItemInfo() {
 
 	g.uiBackend.ShowItemInfo(g.itemInfo)
 	g.itemInfo = 0
+}
+
+// SetCardView records the card --card-view asked to show.
+func (g *Game) SetCardView(id uint32) {
+	g.cardView = id
+}
+
+// runCardView opens the card drawing once the map is up.
+func (g *Game) runCardView() {
+	if g.cardView == 0 || g.uiBackend == nil {
+		return
+	}
+
+	state, ok := g.stateManager.Current().(*states.InGameState)
+	if !ok || !state.MapReady() {
+		return
+	}
+
+	g.uiBackend.ShowCardView(g.cardView)
+	g.cardView = 0
 }
 
 // runMouseAt moves the pointer for --mouse-at once the map is up. It goes
