@@ -48,6 +48,9 @@ type UIBackend interface {
 	// OpenWindow opens one of the HUD windows.
 	OpenWindow(window HUDWindow)
 
+	// ShowItemInfo opens the item information window on an item id.
+	ShowItemInfo(id uint32)
+
 	// ToggleWindow opens a closed menu window or closes an open one, which is
 	// what a key that opens a window does: the same key puts it away.
 	ToggleWindow(window HUDWindow) bool

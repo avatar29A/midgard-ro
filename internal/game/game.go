@@ -113,6 +113,9 @@ type Game struct {
 	// raiseSkills is --raise-skill, waiting for the same.
 	raiseSkills []int
 
+	// itemInfo is --item-info, waiting for the bag.
+	itemInfo uint32
+
 	// holdCastAura is --cast-aura, waiting for the map.
 	holdCastAura bool
 
@@ -582,6 +585,7 @@ func (g *Game) frame() {
 	g.runAttackNearest()
 	g.runCast()
 	g.runRaiseSkills()
+	g.runItemInfo()
 	g.runHoldCastAura()
 	g.runSay()
 
@@ -832,6 +836,30 @@ func (g *Game) runRaiseSkills() {
 	}
 
 	g.raiseSkills = nil
+}
+
+// SetItemInfo records the item --item-info asked about.
+func (g *Game) SetItemInfo(id uint32) {
+	g.itemInfo = id
+}
+
+// runItemInfo opens the information window once the map is up.
+//
+// Straight to the backend, the same way --open-window goes: the window is
+// opened by item id rather than from a cell, which is the whole point of it —
+// anything that can name an item can ask about one.
+func (g *Game) runItemInfo() {
+	if g.itemInfo == 0 || g.uiBackend == nil {
+		return
+	}
+
+	state, ok := g.stateManager.Current().(*states.InGameState)
+	if !ok || !state.MapReady() {
+		return
+	}
+
+	g.uiBackend.ShowItemInfo(g.itemInfo)
+	g.itemInfo = 0
 }
 
 // runMouseAt moves the pointer for --mouse-at once the map is up. It goes

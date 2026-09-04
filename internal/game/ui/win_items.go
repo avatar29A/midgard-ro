@@ -550,6 +550,14 @@ func (b *UI2DBackend) drawItemCell(cell ui2d.Rect, shown []packets.InventoryItem
 		b.itemAction = ItemAction{Index: item.Index, Equip: itemTabs[b.itemTab].category == items.CategoryEquip}
 	}
 
+	// A right click opens the menu on it, which is where asking what an item
+	// is lives. The double click that uses or wears one is still there; this
+	// is the rest of what a cell can be asked.
+	if in := b.ctx.Input(); in.MouseRightPressed && cell.Contains(in.MouseX, in.MouseY) {
+		b.openItemMenu(item, itemTabs[b.itemTab].category == items.CategoryEquip,
+			in.MouseX, in.MouseY)
+	}
+
 	// Pressing on a cell begins a drag. Whether it becomes a drop is decided
 	// on release, in drawItemsWindow, by where the pointer ended up — a press
 	// that goes nowhere is also how a double click starts.
