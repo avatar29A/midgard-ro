@@ -26,6 +26,11 @@ const (
 	itemsCellGap float32 = 4
 	itemsCols            = 6
 
+	// itemsScrollW is the bar down the right when there are more rows than
+	// fit. Six columns of thirty-six leave twenty-two pixels between the last
+	// cell and the window's edge, which is where it goes.
+	itemsScrollW float32 = 14
+
 	// The slot mark inside a cell: a flat oval, inset from the cell's sides
 	// and shorter than it is wide.
 	itemsSlotInset float32 = 4
@@ -409,14 +414,40 @@ func (b *UI2DBackend) drawTabLabel(box ui2d.Rect, label string, open bool) {
 		label, itemsTabScale, color)
 }
 
-// drawItemGrid draws the cells and whatever is in them.
+// drawItemGrid draws the cells and whatever is in them, scrolled to wherever
+// the bar is.
+//
+// A bag holds far more than the two dozen cells that fit, and until this the
+// window drew the first twenty-four and nothing else: an item past them was
+// carried, weighed, and could not be reached.
 func (b *UI2DBackend) drawItemGrid(state InGameUIState, x, bodyY float32) {
 	gridX := x + itemsTabW + itemsPad
 	gridY := bodyY + itemsPad
 	gridH := itemsH - ui2d.FrameTitleH - itemsFooterH - 2*itemsPad
-	rows := int(gridH / (itemsCell + itemsCellGap))
+	gridW := itemsCols*(itemsCell+itemsCellGap) - itemsCellGap
+
+	rows := max(int(gridH/(itemsCell+itemsCellGap)), 1)
 
 	shown := b.itemsOnTab(state)
+
+	// Scrolled by the row rather than by the item: the cells are a grid, and
+	// a bag that moved one item at a time would shuffle everything sideways
+	// under the pointer.
+	filled := itemRowsFor(len(shown))
+	maxOffset := max(0, filled-rows)
+
+	offset := min(b.itemScroll, maxOffset)
+
+	if maxOffset > 0 {
+		b.itemScroll = b.scrollbar("hud_items",
+			x+itemsW-itemsPad-itemsScrollW, gridY, gridH, offset, maxOffset, rows)
+		offset = b.itemScroll
+	} else {
+		// Nothing to scroll: the bar goes, and so does any offset left over
+		// from when there was more in the bag.
+		b.itemScroll = 0
+		offset = 0
+	}
 
 	for i := 0; i < rows*itemsCols; i++ {
 		col := float32(i % itemsCols)
@@ -429,8 +460,35 @@ func (b *UI2DBackend) drawItemGrid(state InGameUIState, x, bodyY float32) {
 			H: itemsCell,
 		}
 
-		b.drawItemCell(cell, shown, i)
+		b.drawItemCell(cell, shown, offset*itemsCols+i)
 	}
+
+	b.scrollItems(gridX, gridY, gridW, gridH, filled, rows)
+}
+
+// itemRowsFor is how many rows a bag fills, counting a part-filled last row:
+// twenty-five items in sixes are five rows, not four.
+func itemRowsFor(count int) int {
+	return (count + itemsCols - 1) / itemsCols
+}
+
+// scrollItems moves the grid under the wheel.
+//
+// Over the grid rather than over the window, the same way the skill list does
+// it: the wheel belongs to what is under it, and a bag that scrolled while the
+// pointer was on the tabs would move under a tab being aimed at.
+func (b *UI2DBackend) scrollItems(gridX, gridY, gridW, gridH float32, filled, rows int) {
+	in := b.ctx.Input()
+	if in == nil || in.ScrollY == 0 {
+		return
+	}
+
+	if !(ui2d.Rect{X: gridX, Y: gridY, W: gridW, H: gridH}).Contains(in.MouseX, in.MouseY) {
+		return
+	}
+
+	maxOffset := max(0, filled-rows)
+	b.itemScroll = min(max(b.itemScroll-int(in.ScrollY), 0), maxOffset)
 }
 
 // drawItemCell draws one cell of the grid, empty or occupied.
