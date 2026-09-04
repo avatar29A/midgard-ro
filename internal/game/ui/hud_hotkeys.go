@@ -739,7 +739,7 @@ func (b *UI2DBackend) hotkeyTooltipFor(state InGameUIState, row, col int) (title
 			}
 		}
 	} else {
-		title = items.Name(held.id)
+		title = itemDisplayName(held.id)
 		if title == "" {
 			title = "Item #" + strconv.Itoa(int(held.id))
 		}
