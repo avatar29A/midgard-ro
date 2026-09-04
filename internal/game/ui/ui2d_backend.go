@@ -141,7 +141,12 @@ type UI2DBackend struct {
 
 	skillScroll int
 	itemScroll  int
-	itemTab     int
+
+	// itemMenu is the menu a right click on an item opened, and itemInfoID
+	// the item the information window is showing — nought when it is shut.
+	itemMenu   itemMenu
+	itemInfoID uint32
+	itemTab    int
 
 	// mapWorldView switches the Map window between this map and the world.
 	mapWorldView bool
@@ -1052,6 +1057,7 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 
 	b.drawEscMenu(width, height)
 	b.drawDeadMenu(state, width, height)
+	b.drawItemInfo(width, height)
 	b.drawSoundConfig(width, height)
 	b.drawSkillsWindow(state, width, height)
 	b.drawEquipWindow(state, width, height)
@@ -1065,6 +1071,11 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 	// After the inventory, which is what it belongs to: drawn before it, the
 	// window it was dragged out of covered it.
 	b.drawDropQuantity(width, height)
+
+	// Over the windows, since it is opened from one and has to lie on top of
+	// it, and before the dragged icon and the tooltip for the same reason
+	// they are last.
+	b.drawItemMenu(width, height)
 
 	// Last: whatever is being dragged rides over everything it might be
 	// dropped on.
