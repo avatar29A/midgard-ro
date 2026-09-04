@@ -9,7 +9,7 @@ Unlike skills there are tens of thousands of these, so they are written as a
 data file the package embeds rather than as Go source — a map literal that
 size is a megabyte of code for a reviewer to scroll past.
 
-Three fields per item, from two sources:
+Four fields per item, from three sources:
 
   name      rAthena's item_db Name — English, which the archive is not.
   category  its Type, folded to the three tabs the inventory window has.
@@ -17,9 +17,15 @@ Three fields per item, from two sources:
             idnum2itemresnametable.txt. Those are EUC-KR and the icon files
             are named with the same bytes, so they are decoded here and
             re-encoded when the texture is loaded.
+  cardart   the drawing on a card, from num2cardillustnametable.txt.
 
-    python3 tools/itemnames/gen.py <resnametable.txt> <rathena>/db/re/item_db_*.yml \
-        > internal/game/items/names.txt
+The last needs its own table because the icon table cannot answer it: every
+card in the game shares one icon, a blank card back filed under
+이름없는카드 — "nameless card" — and the drawing is filed under the card's own
+name instead.
+
+    python3 tools/itemnames/gen.py <resnametable.txt> <cardillustnametable.txt> \
+        <rathena>/db/re/item_db_*.yml > internal/game/items/names.txt
 """
 
 import re
@@ -61,16 +67,17 @@ def read_resources(path: str) -> dict:
 
 
 def main() -> int:
-    if len(sys.argv) < 3:
+    if len(sys.argv) < 4:
         print(__doc__, file=sys.stderr)
         return 2
 
     resources = read_resources(sys.argv[1])
+    cardart = read_resources(sys.argv[2])
 
     entries = {}
     types = {}
 
-    for path in sys.argv[2:]:
+    for path in sys.argv[3:]:
         item_id = None
 
         with open(path, encoding="utf-8") as handle:
@@ -97,15 +104,18 @@ def main() -> int:
         return 1
 
     for item_id in sorted(entries):
-        print("%d\t%s\t%s\t%s" % (
+        print("%d\t%s\t%s\t%s\t%s" % (
             item_id,
             entries[item_id],
             category(types.get(item_id, "Etc")),
             resources.get(item_id, "").replace("\t", " "),
+            cardart.get(item_id, "").replace("\t", " "),
         ))
 
-    print("generated %d items, %d with an icon" % (
-        len(entries), sum(1 for i in entries if resources.get(i))), file=sys.stderr)
+    print("generated %d items, %d with an icon, %d with a card drawing" % (
+        len(entries),
+        sum(1 for i in entries if resources.get(i)),
+        sum(1 for i in entries if cardart.get(i))), file=sys.stderr)
 
     return 0
 

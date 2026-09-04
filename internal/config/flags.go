@@ -35,6 +35,7 @@ var (
 	flagCastAura   = flag.Bool("cast-aura", false, "Keep the casting ring under the character, to look at it (QA aid)")
 	flagRaiseSkill = flag.String("raise-skill", "", "Once in game, spend a skill point on these skills by id, e.g. 19,19 (QA aid)")
 	flagItemInfo   = flag.String("item-info", "", "Once in game, open the item information window on this item id (QA aid)")
+	flagCardView   = flag.String("card-view", "", "Once in game, open the card drawing window on this card id (QA aid)")
 
 	flagSay sayLines
 )
@@ -124,6 +125,17 @@ func RaiseSkills() []int {
 // on, or nought.
 func ItemInfo() int {
 	ids := intList(*flagItemInfo)
+	if len(ids) == 0 {
+		return 0
+	}
+
+	return ids[0]
+}
+
+// CardView returns the card --card-view asked to show the drawing of, or
+// nought.
+func CardView() int {
+	ids := intList(*flagCardView)
 	if len(ids) == 0 {
 		return 0
 	}
