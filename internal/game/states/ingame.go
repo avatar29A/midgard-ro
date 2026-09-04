@@ -118,9 +118,16 @@ type InGameState struct {
 	// lands a while after the volley starts.
 	delayedEffects []delayedEffect
 
-	// skillUnits maps a ground skill's unit to whoever placed it. Its blows
-	// arrive from the unit rather than from the caster.
-	skillUnits map[uint32]uint32
+	// skillUnits are the ground skills standing on the map, by the id their
+	// blows arrive from. What is kept is the packet: who placed it, for the
+	// battle log, and where and what it is, for drawing it.
+	skillUnits map[uint32]packets.SkillUnit
+
+	// spriteEffects are the ones the archive draws frame by frame, and the
+	// two caches are the art they are read from.
+	spriteEffects []*spriteEffect
+	effectACTs    map[string]*formats.ACT
+	effectSPRs    map[string]*formats.SPR
 
 	// ambient is the map's own sound sources, each counting down to its next
 	// turn.
@@ -820,6 +827,7 @@ func (s *InGameState) Update(dt float64) error {
 		s.advanceDelayedEffects(deltaMs)
 		s.advanceUnitSounds()
 		s.advanceAmbientSounds(deltaMs)
+		s.advanceSpriteEffects(deltaMs)
 		s.updateDamageNumbers(deltaMs)
 		s.updateEffects(deltaMs)
 		s.updateCelebrations(deltaMs)

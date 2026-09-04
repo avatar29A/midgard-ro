@@ -17,6 +17,15 @@ const ZC_SKILL_ENTRY uint16 = 0x09CA
 // ZC_SKILL_DISAPPEAR is `<id>.L`, six bytes: the unit is gone.
 const ZC_SKILL_DISAPPEAR uint16 = 0x0120
 
+// What a unit is, from rAthena's e_skill_unit_id. Only the ones this client
+// draws something for; the rest are left as whatever the server sent, and the
+// commonest of all is Dummyskill, which is the marker for "show nothing".
+const (
+	UnitSafetyWall uint32 = 0x7e
+	UnitFireWall   uint32 = 0x7f
+	UnitDummy      uint32 = 0x86
+)
+
 // SkillUnit is one of them standing on a cell.
 type SkillUnit struct {
 	// ID is the unit's own block id, which is what its damage says it came
