@@ -298,6 +298,40 @@ type InventoryItem struct {
 	// working it out, so a client that invents one equips the wrong slot or
 	// nothing at all.
 	EquipPositions uint32
+
+	// Cards is what is in this one's slots, and a nought is an empty slot.
+	//
+	// Four whatever the item's capacity is: the packet always carries four,
+	// and how many of them are really slots is a fact about the item rather
+	// than about this copy of it.
+	//
+	// They are not always cards. A forged weapon puts a marker in the first
+	// and the smith's account id in the two after it, and an egg puts one
+	// there and the pet's id — see SpecialSlots.
+	Cards [4]uint32
+}
+
+// The markers that mean the slots are not holding cards, from rAthena's
+// itemdb: a forged weapon, something made by a skill, and a pet's egg.
+const (
+	CardForged  uint32 = 0x00FF
+	CardCreated uint32 = 0x00FE
+	CardPet     uint32 = 0x0100
+)
+
+// SpecialSlots reports whether an item's slots carry something other than
+// cards — a maker's name or a pet.
+//
+// Worth asking before naming them: the numbers in those slots are an account
+// id split in half, and looked up as item ids they come out as whatever
+// happens to sit at that number.
+func (i InventoryItem) SpecialSlots() bool {
+	switch i.Cards[0] {
+	case CardForged, CardCreated, CardPet:
+		return true
+	}
+
+	return false
 }
 
 // ItemListRemainder reports how many bytes are left over when a list's body
@@ -335,6 +369,8 @@ func DecodeInventoryNormal(data []byte) []InventoryItem {
 			Index: int(readU16(entry, 0)),
 			ID:    readU32(entry, 2),
 			Count: int(int16(readU16(entry, 7))),
+			// After the wear state, which is four bytes from here.
+			Cards: readCards(entry, 13),
 		}
 	})
 }
@@ -352,8 +388,24 @@ func DecodeInventoryEquip(data []byte) []InventoryItem {
 			EquipPositions: readU32(entry, 7),
 			WearState:      readU32(entry, 11),
 			Equipped:       readU32(entry, 11) != 0,
+			Cards:          readCards(entry, 15),
 		}
 	})
+}
+
+// readCards reads the four slots an entry carries.
+//
+// Four uint32 at this packetver rather than the four uint16 older ones have —
+// item ids outgrew sixteen bits, and reading the old width here takes the top
+// half of the first card for the whole of the second.
+func readCards(entry []byte, at int) [4]uint32 {
+	var cards [4]uint32
+
+	for i := range cards {
+		cards[i] = readU32(entry, at+4*i)
+	}
+
+	return cards
 }
 
 // decodeItemList walks the entries a list packet carries.
