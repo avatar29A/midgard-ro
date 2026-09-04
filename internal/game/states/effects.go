@@ -145,9 +145,11 @@ func (s *InGameState) EffectQuads(viewportW, viewportH float32) []EffectQuad {
 		return nil
 	}
 
-	// The bursts drawn in code go through the same path as the ones read from
-	// a file: both end as quads around a projected point.
+	// The bursts drawn in code and the sprites drawn frame by frame go
+	// through the same path as the ones read from a file: all three end as
+	// quads around a projected point.
 	out := s.burstQuads(viewportW, viewportH)
+	out = append(out, s.spriteEffectQuads(viewportW, viewportH)...)
 
 	if len(s.effects) == 0 {
 		return out
