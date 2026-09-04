@@ -8,16 +8,10 @@ uniform vec2 uSpriteSize;
 uniform vec3 uCamRight;  // Camera right vector for billboard
 uniform vec3 uCamUp;     // Camera up vector for billboard
 
-// How far toward the camera the whole sprite is depth-tested, in world units.
-//
-// Zero leaves every corner at its own depth, which is what a flat quad lying
-// on the ground wants. Anything above zero tests the whole sprite at the
-// depth of the point it stands on instead — see below.
+// How far toward the camera the sprite is moved before its depth is measured,
+// in world units. Zero leaves every corner at its own depth, which is what a
+// flat quad lying on the ground wants.
 uniform float uDepthLift;
-
-// Where the unit actually stands, for the depth above. Not uWorldPos: that is
-// the quad's corner, which is placed so the sprite's origin lands here.
-uniform vec3 uDepthAnchor;
 
 out vec2 vTexCoord;
 
@@ -32,21 +26,35 @@ void main() {
 
     vec4 corner = uViewProj * vec4(pos, 1.0);
 
-    // A unit is at one place — where it stands — and whether something hides
-    // it is a question about that place, not about each pixel of the quad
-    // drawn for it. Tested per corner, a sprite standing on rising ground has
-    // its lower half fail against the very slope it is standing on, and it
-    // sinks into the hill.
+    // Depth: one value for the whole sprite, taken where it stands and moved
+    // toward the camera before it is measured.
     //
-    // So the depth comes from the foot of the sprite, lifted a little toward
-    // the camera because otherwise it ties with the ground it rests on and
-    // loses. Terrain in front of that point still hides the unit, which is
-    // what standing behind a hill should do.
+    // One value because a unit is somewhere. It is in front of the barrel or
+    // behind it, not both. Measured per corner instead, the quad's own lean
+    // decides: it leans back to face the camera and leans further the further
+    // it is from the middle of the screen, so a sprite's head comes out
+    // deeper than its feet by however far off centre it happens to be, and a
+    // barrel behind it is drawn over the head while the body stays in front.
+    // Reading up the sprite's world column is no better — a head really is
+    // further from a camera looking down than the feet are, so measured there
+    // a sprite loses to whatever the camera can see over it, which is
+    // everything.
+    //
+    // Where it stands is the middle of the bottom edge rather than the middle
+    // of the quad: the sprite reaches the ground there, and taken any higher
+    // the ground in front wins and cuts the sprite off in a straight line.
+    //
+    // And the shift is what stops it losing to the ground it rests on, which
+    // is at exactly its own depth. In world units rather than in depth, so
+    // the projection scales it and one number holds both close up, where a
+    // hair of depth is a long way, and far off, where it is nothing.
     if (uDepthLift > 0.0) {
         vec3 toCamera = normalize(cross(uCamUp, uCamRight));
-        vec4 anchor = uViewProj * vec4(uDepthAnchor + toCamera * uDepthLift, 1.0);
+        vec3 foot = uWorldPos + uCamRight * (0.5 * uSpriteSize.x);
 
-        corner.z = anchor.z / anchor.w * corner.w;
+        vec4 shifted = uViewProj * vec4(foot + toCamera * uDepthLift, 1.0);
+
+        corner.z = shifted.z / shifted.w * corner.w;
     }
 
     gl_Position = corner;
