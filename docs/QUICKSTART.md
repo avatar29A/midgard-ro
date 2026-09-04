@@ -3,9 +3,9 @@
 End-to-end path from a clean checkout to walking around Prontera against
 your own rAthena server. Fully validated on macOS Apple Silicon with colima.
 
-> Note: as of 2026-04-25 the client reaches Prontera and renders the map,
-> but movement, NPCs, music, and combat are not yet wired (RFC #49 Tracks
-> B–F). The map server will time you out after ~30 s — expected.
+> As of 2026-09 the client plays: walking, NPCs, monsters, combat, skills,
+> music and the HUD all work against this stack. What is and is not there is
+> listed in the [README](../README.md).
 
 ---
 

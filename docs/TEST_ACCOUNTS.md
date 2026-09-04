@@ -10,15 +10,33 @@ Server: `127.0.0.1:6900` (login) — see [QUICKSTART.md](QUICKSTART.md).
 
 | Login | Password | Job | Character | Sex | Level | Spawn |
 |---|---|---|---|---|---|---|
-| `midgard-test` | `midgard-test` | Novice (class 0) | `MidgardTest` | M | 1 / 1 | prontera (156, 191) |
+| `midgard-test` | `midgard-test` | Novice (class 0), GM | `MidgardTest` | M | 1 / 1 | prontera (156, 191) |
 | `midgard-sword` | `midgard-sword` | Swordman (class 1) | `MidgardSword` | M | 10 / 10 | prontera (152, 191) |
-| `midgard-mage` | `midgard-mage` | Mage (class 2) | `MidgardMage` | F | 10 / 10 | prontera (160, 191) |
+| `midgard-mage` | `midgard-mage` | Mage (class 2), GM | `MidgardMage` | F | 10 / 10 | prontera (160, 191) |
 
 Each account has one pre-created character on slot 0 and 9 character slots
-free for manual creation. All are normal players (`group_id` 0 — no GM
-commands). "Spawn" is the seeded save point; once you play a character the
-server moves its save point with it, and re-applying the seed does not reset
-that (see [When the seed applies](#when-the-seed-applies)).
+free for manual creation. "Spawn" is the seeded save point; once you play a
+character the server moves its save point with it, and re-applying the seed
+does not reset that (see [When the seed applies](#when-the-seed-applies)).
+
+`midgard-test` is seeded as a GM (group 99, all `@` commands). `midgard-sword`
+is an ordinary player (group 0). `midgard-mage` is seeded as a player but was
+made a GM on the shared stack for screenshots and skill testing, and
+`MidgardMage` has been levelled by hand:
+
+| | seeded | on the shared stack (2026-09-04) |
+|---|---|---|
+| group | 0 | 99 (GM) |
+| base / job level | 10 / 10 | 70 / 50 |
+| AGI / VIT / INT / DEX | 6 / 5 / 14 / 8 | 36 / 45 / 74 / 58 |
+| skills | none | every Mage skill at max (`@allskill`) |
+
+That is the character to use when a screenshot or a test needs a working
+caster: Frost Diver (skill 15) and Thunderstorm (21) both show their effects.
+To make it again on a fresh DB, log in as `midgard-mage` after
+`MIDGARD_ACCOUNT=midgard-mage make server-gm` and say `@blvl 60`, `@jlvl 40`,
+`@allskill`, `@int 60`, `@dex 50`, `@vit 40`, `@agi 30` — or pass the same
+lines as `--say` flags (see below).
 
 The seeded HP/SP values are cosmetic — rAthena recalculates both from job,
 level and VIT/INT when the character logs in, so `MidgardSword` shows 136 HP
