@@ -76,7 +76,7 @@ const (
 // on, which is at exactly its depth. Half a world unit is a twentieth of a
 // cell, far too little to let a unit show through a wall it is behind, and
 // enough that it never loses to the floor.
-const spriteDepthLift = 0.5
+const spriteDepthLift = 2.0
 
 // Renderer owns the GL state for drawing the local player as a billboard.
 type Renderer struct {
@@ -504,7 +504,22 @@ func (r *Renderer) draw(viewProj math.Mat4, char *entity.Character, camPosX, cam
 
 	gl.UniformMatrix4fv(r.locViewProj, 1, false, &viewProj[0])
 	gl.Uniform3f(r.locWorldPos, worldX, worldY, worldZ)
-	gl.Uniform3f(r.locDepthAnchor, char.RenderX, char.RenderY, char.RenderZ)
+
+	// The depth comes from the bottom of the sprite rather than from the cell
+	// the unit stands on. The art hangs below that point — a Poring is a ball
+	// with its middle on its cell, so most of it does — and everything below
+	// it is drawn in front of ground that is nearer the camera than the feet
+	// are. Tested at the feet, that part lost to the very ground the unit was
+	// standing on and the sprite came away cut off in a straight line: a
+	// Poporing sliced through the middle, sitting in the grass.
+	//
+	// The bottom edge is where the sprite actually reaches, and originY is
+	// already how far below the standing point that is.
+	gl.Uniform3f(r.locDepthAnchor,
+		char.RenderX-up[0]*originY,
+		char.RenderY-up[1]*originY,
+		char.RenderZ-up[2]*originY)
+
 	gl.Uniform2f(r.locSpriteSize, spriteW, spriteH)
 	gl.Uniform4f(r.locTint, 1.0, 1.0, 1.0, alpha)
 	gl.Uniform3f(r.locCamRight, right[0], right[1], right[2])
