@@ -130,5 +130,5 @@ func encodePNG(enc *png.Encoder, path string, img image.Image) error {
 
 // screenshotName is the file a capture taken now is saved as.
 func screenshotName(now time.Time) string {
-	return fmt.Sprintf("screenshot-%s.png", now.Format("20060102-150405"))
+	return fmt.Sprintf("screenshot-%s.png", now.Format("20060102-150405.000"))
 }
