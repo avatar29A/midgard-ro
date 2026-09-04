@@ -25,13 +25,14 @@ import (
 //
 // The frame is the art rather than the size. A Fire Wall's frames are 64
 // pixels square where a Mage's body is 61 by 88, so drawn at the same scale
-// the wall comes out shorter than the caster — and a wall a monster steps
-// over is not a wall. The original draws it taller than a character, which is
-// what this is for.
+// the wall stands three quarters of the caster's height — and a wall a
+// monster steps over is not a wall. In the original it stands about twice a
+// character and is wide enough that the flames of neighboring cells run
+// together into one sheet of fire, which is what the number is set from.
 //
 // Anything not named here is drawn at its own size.
 var effectScales = map[string]float32{
-	"firewall": 1.6,
+	"firewall": 2.6,
 }
 
 // effectScaleOf is that, or one for an effect with nothing said about it.
@@ -278,11 +279,16 @@ func (s *InGameState) spriteEffectQuads(viewportW, viewportH float32) []EffectQu
 
 		w, h := size[0]*scale, size[1]*scale
 
-		// The frame's own offset is where its middle goes, which is what the
-		// ACT means by it: an effect is drawn around a point rather than
-		// standing on one.
+		// Standing on the point rather than centered over it. A Fire Wall
+		// rises out of the ground it was placed on; centered, half of it is
+		// under the grass and what is left reads as a puff of flame floating
+		// at knee height, which is what it looked like.
+		//
+		// The frame's own offset is added on top, for the effects whose ACT
+		// does move them about. These do not: the wall's frames sit at
+		// nought, and the art is drawn where it stands.
 		left := screenX + at.offX*scale - w/2
-		top := screenY + at.offY*scale - h/2
+		top := screenY + at.offY*scale - h
 
 		out = append(out, EffectQuad{
 			Texture: spriteFrameKey(effectSpriteDir+effect.name+".spr", at.frame),
