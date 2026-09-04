@@ -72,11 +72,15 @@ const (
 // spriteDepthLift is how far toward the camera a unit is depth-tested, in
 // world units.
 //
-// Small: it only has to break the tie with the ground the unit is standing
-// on, which is at exactly its depth. Half a world unit is a twentieth of a
-// cell, far too little to let a unit show through a wall it is behind, and
-// enough that it never loses to the floor.
-const spriteDepthLift = 2.0
+// It has to clear two things. The ground the unit rests on, which is at
+// exactly its own depth; and whatever it is standing against — a wall, a
+// barrel — which is a cell away at most and would otherwise be drawn over it
+// from some camera angles and not others.
+//
+// A cell is five units, so this is one of them: enough for both, and short
+// enough that a unit properly behind a building stays behind it, which is
+// what the value has to stay under.
+const spriteDepthLift = 5.0
 
 // Renderer owns the GL state for drawing the local player as a billboard.
 type Renderer struct {
@@ -87,16 +91,15 @@ type Renderer struct {
 
 	// Shader program + uniform locations (mirror scene.SpriteRenderer's setup,
 	// kept independent so we can render with our own VAO/draw pattern).
-	program        uint32
-	locViewProj    int32
-	locWorldPos    int32
-	locSpriteSize  int32
-	locCamRight    int32
-	locCamUp       int32
-	locTexture     int32
-	locTint        int32
-	locDepthLift   int32
-	locDepthAnchor int32
+	program       uint32
+	locViewProj   int32
+	locWorldPos   int32
+	locSpriteSize int32
+	locCamRight   int32
+	locCamUp      int32
+	locTexture    int32
+	locTint       int32
+	locDepthLift  int32
 
 	// Billboard quad — 4 verts, drawn as TRIANGLE_STRIP.
 	vao uint32
@@ -139,7 +142,6 @@ func New() (*Renderer, error) {
 	r.locCamRight = shader.GetUniform(prog, "uCamRight")
 	r.locCamUp = shader.GetUniform(prog, "uCamUp")
 	r.locDepthLift = shader.GetUniform(prog, "uDepthLift")
-	r.locDepthAnchor = shader.GetUniform(prog, "uDepthAnchor")
 	r.locTexture = shader.GetUniform(prog, "uTexture")
 	r.locTint = shader.GetUniform(prog, "uTint")
 
@@ -505,21 +507,6 @@ func (r *Renderer) draw(viewProj math.Mat4, char *entity.Character, camPosX, cam
 	gl.UniformMatrix4fv(r.locViewProj, 1, false, &viewProj[0])
 	gl.Uniform3f(r.locWorldPos, worldX, worldY, worldZ)
 
-	// The depth comes from the bottom of the sprite rather than from the cell
-	// the unit stands on. The art hangs below that point — a Poring is a ball
-	// with its middle on its cell, so most of it does — and everything below
-	// it is drawn in front of ground that is nearer the camera than the feet
-	// are. Tested at the feet, that part lost to the very ground the unit was
-	// standing on and the sprite came away cut off in a straight line: a
-	// Poporing sliced through the middle, sitting in the grass.
-	//
-	// The bottom edge is where the sprite actually reaches, and originY is
-	// already how far below the standing point that is.
-	gl.Uniform3f(r.locDepthAnchor,
-		char.RenderX-up[0]*originY,
-		char.RenderY-up[1]*originY,
-		char.RenderZ-up[2]*originY)
-
 	gl.Uniform2f(r.locSpriteSize, spriteW, spriteH)
 	gl.Uniform4f(r.locTint, 1.0, 1.0, 1.0, alpha)
 	gl.Uniform3f(r.locCamRight, right[0], right[1], right[2])
@@ -613,11 +600,10 @@ func (r *Renderer) renderShadow(viewProj math.Mat4, char *entity.Character, spri
 	gl.UniformMatrix4fv(r.locViewProj, 1, false, &viewProj[0])
 
 	// The shadow lies on the ground rather than standing on it, so it keeps
-	// its own depth per corner; taking the middle's would let it fall across
+	// its own depth per corner; shifted toward the camera it would slide over
 	// whatever is in front of it.
 	gl.Uniform1f(r.locDepthLift, 0)
 	gl.Uniform3f(r.locWorldPos, char.RenderX, char.RenderY+shadowLift, char.RenderZ)
-	gl.Uniform3f(r.locDepthAnchor, char.RenderX, char.RenderY, char.RenderZ)
 	gl.Uniform2f(r.locSpriteSize, size, size)
 	// Fades with the unit above it: a shadow that stayed solid while its owner
 	// faded in would arrive on the ground before anything stood on it.
