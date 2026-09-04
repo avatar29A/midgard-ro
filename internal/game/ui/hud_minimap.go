@@ -26,9 +26,6 @@ const (
 	// minimapDotSize is the marker drawn where the player stands.
 	minimapDotSize = 5.0
 
-	// minimapBtn is the size of the zoom buttons under the map.
-	minimapBtn = 16.0
-
 	// minimapEdgeInset keeps the buttons off the map image's own border.
 	minimapEdgeInset = 10.0
 )

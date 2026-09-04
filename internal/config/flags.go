@@ -297,7 +297,6 @@ func ConfigPath() string {
 func applyFlags(cfg *Config) {
 	if *flagDebug {
 		cfg.Logging.Level = "debug"
-		cfg.Game.ShowFPS = true
 	}
 	if *flagServer != "" {
 		cfg.Network.LoginServer = *flagServer
