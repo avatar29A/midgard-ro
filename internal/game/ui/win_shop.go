@@ -96,39 +96,24 @@ func (a shopActionState) asked() bool {
 
 // drawShop draws whichever side of the counter is open.
 func (b *UI2DBackend) drawShop(state InGameUIState, screenW, screenH float32) {
-	b.openShopWindows(state.Shop.Open())
-
+	// Whichever panel is not showing is told so: the two are alternatives, and
+	// the one that shows next clears its remembered flags on the way in only
+	// if it counts as having left.
 	switch state.Shop.Mode {
 	case states.ShopChoosing:
+		b.shopWindow.hide()
 		b.drawShopAsk(screenW, screenH)
 	case states.ShopBuying, states.ShopSelling:
+		b.shopAskWindow.hide()
 		b.drawShopList(state, screenW, screenH)
 	default:
+		b.shopAskWindow.hide()
+		b.shopWindow.hide()
+
 		// Nothing open: forget whatever was in the basket, so the next shop
 		// does not open with the last one's order still in it.
 		b.shopOrder = nil
 	}
-}
-
-// openShopWindows clears the frames' closed flags when a counter opens.
-//
-// They outlive the window: closed from its own X once, BeginWindow returns
-// false for good, and the false return is read as the player closing it — so
-// the next shop shut itself the moment it opened and no shop could be opened
-// again. Only on the way in, so that closing one stays closed.
-func (b *UI2DBackend) openShopWindows(open bool) {
-	if open == b.shopWasOpen {
-		return
-	}
-
-	b.shopWasOpen = open
-
-	if !open || b.ctx == nil {
-		return
-	}
-
-	b.ctx.OpenWindow(shopWindowID)
-	b.ctx.OpenWindow(shopAskWindowID)
 }
 
 // drawShopAsk is the two buttons a shopkeeper who does both asks from.
@@ -136,19 +121,18 @@ func (b *UI2DBackend) drawShopAsk(screenW, screenH float32) {
 	openX := (screenW - shopAskW) / 2
 	openY := (screenH - shopAskH) / 2
 
-	if !b.ctx.BeginWindowEx(shopAskWindowID, openX, openY, shopAskW, shopAskH,
-		"Shop", ui2d.WindowOptions{Closable: true}) {
-		if b.ctx.WindowClosed(shopAskWindowID) {
-			b.shopAction = shopActionState{close: true}
-		}
+	draw, closed := b.shopAskWindow.begin(b.ctx, true,
+		openX, openY, shopAskW, shopAskH, "Shop", ui2d.WindowOptions{Closable: true})
 
+	if closed {
+		b.shopAction = shopActionState{close: true}
+	}
+
+	if !draw {
 		return
 	}
 
-	x, y := openX, openY
-	if rect, ok := b.ctx.WindowRect(shopAskWindowID); ok {
-		x, y = rect.X, rect.Y
-	}
+	x, y := b.shopAskWindow.rect(b.ctx, openX, openY)
 
 	btnY := y + ui2d.FrameTitleH + escPad
 
@@ -198,19 +182,18 @@ func (b *UI2DBackend) drawShopList(state InGameUIState, screenW, screenH float32
 	openX := (screenW - shopW) / 2
 	openY := (screenH - shopH) / 2
 
-	if !b.ctx.BeginWindowEx(shopWindowID, openX, openY, shopW, shopH,
-		title, ui2d.WindowOptions{Closable: true}) {
-		if b.ctx.WindowClosed(shopWindowID) {
-			b.shopAction = shopActionState{close: true}
-		}
+	draw, closed := b.shopWindow.begin(b.ctx, true,
+		openX, openY, shopW, shopH, title, ui2d.WindowOptions{Closable: true})
 
+	if closed {
+		b.shopAction = shopActionState{close: true}
+	}
+
+	if !draw {
 		return
 	}
 
-	x, y := openX, openY
-	if rect, ok := b.ctx.WindowRect(shopWindowID); ok {
-		x, y = rect.X, rect.Y
-	}
+	x, y := b.shopWindow.rect(b.ctx, openX, openY)
 
 	rows := shopRows(state, selling)
 

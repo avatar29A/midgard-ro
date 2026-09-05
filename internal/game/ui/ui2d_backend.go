@@ -166,9 +166,14 @@ type UI2DBackend struct {
 	// shopAction is what the counter was asked for, waiting to be sent.
 	shopAction shopActionState
 
-	// shopWasOpen is whether a counter was open last frame, so the frames'
-	// closed flags are cleared on the way in and only then.
-	shopWasOpen bool
+	// The two panels of a counter, whose remembered flags a shopkeeper has to
+	// clear on the way in: nobody presses a button to open a shop.
+	shopWindow    hostedWindow
+	shopAskWindow hostedWindow
+
+	// The item's own two, opened by asking about one rather than by a button.
+	itemInfoWin hostedWindow
+	cardViewWin hostedWindow
 	itemTab     int
 
 	// mapWorldView switches the Map window between this map and the world.
@@ -239,6 +244,11 @@ func NewUI2DBackend(width, height int) (*UI2DBackend, error) {
 		ctx:           ctx,
 		charSelectIdx: -1,
 		skillLevels:   map[uint16]int{},
+
+		shopWindow:    newHostedWindow(shopWindowID),
+		shopAskWindow: newHostedWindow(shopAskWindowID),
+		itemInfoWin:   newHostedWindow(itemInfoWindowID),
+		cardViewWin:   newHostedWindow(cardViewWindowID),
 	}, nil
 }
 

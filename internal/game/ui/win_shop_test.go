@@ -162,37 +162,3 @@ func TestTakeShopActionClears(t *testing.T) {
 		t.Error("the action was still there on the second read")
 	}
 }
-
-// TestAShopReopensAfterBeingClosed: the frame's closed flag outlives the
-// window, so closing one from its own X shut every shop after it — the next
-// one opened, was told it was closed, and reported that as the player closing
-// it before a single frame had been drawn.
-func TestAShopReopensAfterBeingClosed(t *testing.T) {
-	b := &UI2DBackend{}
-
-	// Nothing open: nothing to clear, and nothing claimed.
-	b.openShopWindows(false)
-	if b.shopWasOpen {
-		t.Error("a closed counter reads as open")
-	}
-
-	// One opens. With no context the flags cannot be cleared, but the
-	// crossing is still noticed — which is the part that decides whether they
-	// are cleared at all.
-	b.openShopWindows(true)
-	if !b.shopWasOpen {
-		t.Error("an open counter reads as closed")
-	}
-
-	// Still open the next frame is not a fresh opening: clearing the flags
-	// every frame would undo the player closing the window.
-	b.openShopWindows(true)
-	if !b.shopWasOpen {
-		t.Error("a counter that stayed open reads as closed")
-	}
-
-	b.openShopWindows(false)
-	if b.shopWasOpen {
-		t.Error("a counter that closed still reads as open")
-	}
-}
