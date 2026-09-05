@@ -1874,6 +1874,8 @@ func (s *InGameState) handleEntityVanish(data []byte) error {
 				s.player.Die()
 			}
 
+			s.playDeadGhost()
+
 			s.forgetAttack()
 			s.forgetPendingPickup()
 			s.forgetPendingSkill()
@@ -2333,11 +2335,7 @@ func (s *InGameState) handleMapChange(data []byte) error {
 	// how a respawn at the save point ends: the server does not resurrect
 	// anybody, it moves them, and the window has to go with the corpse.
 	if !same || s.MapLoaded {
-		s.playerDead = false
-
-		if s.player != nil {
-			s.player.Revive()
-		}
+		s.standUp()
 	}
 
 	return nil

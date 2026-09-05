@@ -73,11 +73,7 @@ func (s *InGameState) handleResurrection(data []byte) error {
 
 	trace.Emit(trace.HUD, "resurrected", zap.Uint32("aid", aid))
 
-	s.playerDead = false
-
-	if s.player != nil {
-		s.player.Revive()
-	}
+	s.standUp()
 
 	return nil
 }
