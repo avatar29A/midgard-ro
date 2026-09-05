@@ -42,9 +42,6 @@ const (
 	escBtnG float32 = 4
 	escPad  float32 = 8
 
-	// escLabelScale keeps the label inside a 20px button.
-	escLabelScale float32 = 0.8
-
 	escMenuW = escBtnW + 2*escPad
 )
 
@@ -55,9 +52,6 @@ var (
 
 	escBorder   = ui2d.Color{R: 0.694, G: 0.694, B: 0.694, A: 1}
 	escFace     = ui2d.Color{R: 0.953, G: 0.953, B: 0.953, A: 1}
-	escFaceHot  = ui2d.Color{R: 0.855, G: 0.894, B: 0.969, A: 1}
-	escFaceOff  = ui2d.Color{R: 0.898, G: 0.898, B: 0.898, A: 1}
-	escLabel    = ui2d.Color{R: 0.192, G: 0.192, B: 0.192, A: 1}
 	escLabelOff = ui2d.Color{R: 0.6, G: 0.6, B: 0.6, A: 1}
 )
 
@@ -188,35 +182,6 @@ func (b *UI2DBackend) drawEscMenu(screenW, screenH float32) {
 	}
 
 	b.ctx.EndWindow()
-}
-
-// drawFlatButton draws a button in the original's style: a pale face inside a
-// thin grey border, washed blue under the pointer, with its label centered in
-// near-black.
-//
-// Used wherever a button needs an English label. The archive's own button
-// bitmaps carry their text baked in, and all of them say 확인 — fine in a
-// Korean client, wrong in this one, and not something a label drawn on top can
-// cover. This is the shape of those buttons without the glyph.
-func (b *UI2DBackend) drawFlatButton(box ui2d.Rect, label string, disabled bool) {
-	r := b.ctx.Renderer()
-
-	face, text := escFace, escLabel
-	switch {
-	case disabled:
-		face, text = escFaceOff, escLabelOff
-	case box.Contains(b.ctx.Input().MouseX, b.ctx.Input().MouseY):
-		face = escFaceHot
-	}
-
-	r.DrawRect(box.X, box.Y, box.W, box.H, face)
-	r.DrawRect(box.X, box.Y, box.W, 1, escBorder)
-	r.DrawRect(box.X, box.Y+box.H-1, box.W, 1, escBorder)
-	r.DrawRect(box.X, box.Y, 1, box.H, escBorder)
-	r.DrawRect(box.X+box.W-1, box.Y, 1, box.H, escBorder)
-
-	capW, capH := r.MeasureText(label, escLabelScale)
-	r.DrawText(box.X+(box.W-capW)/2, box.Y+(box.H-capH)/2, label, escLabelScale, text)
 }
 
 // closeOnClickOutside shuts the menu when the pointer is pressed away from it.
