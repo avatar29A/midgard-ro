@@ -84,8 +84,11 @@ func main() {
 	if ids := config.UseItems(); len(ids) > 0 {
 		g.SetUseItems(ids)
 	}
-	if name := config.TalkTo(); name != "" {
-		g.SetTalkTo(name)
+	if names := config.TalkTo(); len(names) > 0 {
+		g.SetTalkTo(names)
+	}
+	if config.ShopClose() {
+		g.SetShopClose(true)
 	}
 	if deal := config.ShopDeal(); deal != "" {
 		g.SetShopDeal(deal)

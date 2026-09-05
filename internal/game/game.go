@@ -124,7 +124,10 @@ type Game struct {
 	useItems []int
 
 	// talkTo is --talk-to, waiting for the NPCs to arrive.
-	talkTo string
+	talkTo []string
+
+	// shopClose is --shop-close, waiting for a counter to open.
+	shopClose bool
 
 	// shopDeal is --shop-deal, waiting for a shop to ask.
 	shopDeal string
@@ -607,6 +610,7 @@ func (g *Game) frame() {
 	g.runTalkTo()
 	g.runShopDeal()
 	g.runShopBuys()
+	g.runShopClose()
 	g.runHoldCastAura()
 	g.runSay()
 
@@ -883,9 +887,30 @@ func (g *Game) runItemInfo() {
 	g.itemInfo = 0
 }
 
-// SetTalkTo records the NPC --talk-to asked to talk to.
-func (g *Game) SetTalkTo(name string) {
-	g.talkTo = name
+// SetTalkTo records the NPCs --talk-to asked to talk to.
+func (g *Game) SetTalkTo(names []string) {
+	g.talkTo = names
+}
+
+// SetShopClose records that --shop-close asked for the first shop to be shut.
+func (g *Game) SetShopClose(on bool) {
+	g.shopClose = on
+}
+
+// runShopClose shuts the first counter that opens.
+func (g *Game) runShopClose() {
+	if !g.shopClose {
+		return
+	}
+
+	state, ok := g.stateManager.Current().(*states.InGameState)
+	if !ok || !state.Shop().Open() {
+		return
+	}
+
+	state.CloseShop()
+
+	g.shopClose = false
 }
 
 // runTalkTo starts the conversation once the map and its NPCs are up.
@@ -894,7 +919,7 @@ func (g *Game) SetTalkTo(name string) {
 // the map does, a few packets behind, and the first frame that has a map has
 // nobody standing on it.
 func (g *Game) runTalkTo() {
-	if g.talkTo == "" {
+	if len(g.talkTo) == 0 {
 		return
 	}
 
@@ -903,14 +928,21 @@ func (g *Game) runTalkTo() {
 		return
 	}
 
-	if !state.TalkToNamed(g.talkTo) {
+	// One at a time, and not while a counter is still open: the server
+	// refuses a second conversation while one is in hand, which is the very
+	// thing a second --talk-to is there to check.
+	if state.Shop().Open() {
+		return
+	}
+
+	if !state.TalkToNamed(g.talkTo[0]) {
 		return
 	}
 
 	logger.Info("talking to the NPC asked for on the command line",
-		zap.String("name", g.talkTo))
+		zap.String("name", g.talkTo[0]))
 
-	g.talkTo = ""
+	g.talkTo = g.talkTo[1:]
 }
 
 // SetShopDeal records which side of the counter --shop-deal asked for.

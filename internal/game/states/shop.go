@@ -148,19 +148,38 @@ func (s *InGameState) Sell(order []packets.ShopOrder) error {
 	return s.client.Send(packets.EncodeSell(order))
 }
 
-// CloseShop puts the counter away.
+// CloseShop puts the counter away and tells the server the conversation is
+// over.
 //
-// Nothing is sent. The original tells the server it has finished with an NPC,
-// but a shop is not a conversation and the server holds nothing open for it:
-// walking away is the whole of closing one.
+// It has to be told. A shop is a conversation as far as the server is
+// concerned — npc_click refuses to start another while one is open, and says
+// so in its log — so a counter closed without a word leaves the shopkeeper
+// holding it and every click on them afterwards does nothing at all.
+//
+// Whoever opened it: the question names the shopkeeper, and a shop that does
+// not ask which way round names nobody, so the one we walked up to is kept.
 func (s *InGameState) CloseShop() {
 	if !s.shop.Open() {
 		return
 	}
 
-	trace.Emit(trace.HUD, "shop-close", zap.Int("mode", int(s.shop.Mode)))
+	npc := s.shop.NPC
+	if npc == 0 {
+		npc = s.talkingTo
+	}
+
+	trace.Emit(trace.HUD, "shop-close",
+		zap.Int("mode", int(s.shop.Mode)), zap.Uint32("npc", npc))
 
 	s.shop = Shop{}
+
+	if s.client == nil || npc == 0 {
+		return
+	}
+
+	if err := s.client.Send(packets.CloseDialogPacket(npc)); err != nil {
+		logger.Warn("could not tell the shop we had finished", zap.Error(err))
+	}
 }
 
 // handleBuyResult and handleSellResult report what became of an order.

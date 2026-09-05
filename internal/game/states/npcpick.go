@@ -287,5 +287,9 @@ func (s *InGameState) ContactNPC(e *entity.Entity) {
 		return
 	}
 
+	// Remembered because a shop that opens without asking carries no id, and
+	// closing one has to name whoever opened it.
+	s.talkingTo = e.ID
+
 	trace.Emit(trace.NPC, "contact", zap.Uint32("npcID", e.ID), zap.String("name", e.Name))
 }

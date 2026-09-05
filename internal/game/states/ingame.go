@@ -145,8 +145,10 @@ type InGameState struct {
 	// sightMs is how far round the Sight aura has turned.
 	sightMs float32
 
-	// shop is the counter that is open, if any.
-	shop Shop
+	// shop is the counter that is open, if any, and talkingTo whoever opened
+	// it — a shop that does not ask which way round carries no id of its own.
+	shop      Shop
+	talkingTo uint32
 
 	// playerDead is the character lying down, which is what the window
 	// offering a way back is shown on.
