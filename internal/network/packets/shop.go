@@ -40,7 +40,24 @@ const (
 	// three bytes. Nought is the sale going through.
 	ZC_PC_PURCHASE_RESULT uint16 = 0x00CA
 	ZC_PC_SELL_RESULT     uint16 = 0x00CB
+
+	// CZ_NPC_TRADE_QUIT says we are done at the counter. Two bytes, no
+	// payload.
+	//
+	// This rather than the dialog's close, which was the first guess and
+	// wrong: a plain shop never sets the server's npc_id, so the dialog close
+	// returns at its first line and does nothing at all. What the shop leaves
+	// behind is npc_shopid, and this is the only thing that clears it.
+	CZ_NPC_TRADE_QUIT uint16 = 0x09D4
 )
+
+// EncodeShopQuit says we have finished at the counter.
+func EncodeShopQuit() []byte {
+	pkt := make([]byte, 2)
+	binary.LittleEndian.PutUint16(pkt, CZ_NPC_TRADE_QUIT)
+
+	return pkt
+}
 
 // Which side of the counter, for CZ_ACK_SELECT_DEALTYPE.
 const (
