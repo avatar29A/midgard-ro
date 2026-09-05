@@ -20,7 +20,10 @@ import (
 // opened it, so there is no button that brings it back and nothing to
 // remember: closing it is done with it.
 
-const shopWindowID = "hud_win_shop"
+const (
+	shopWindowID    = "hud_win_shop"
+	shopAskWindowID = "hud_shop_ask"
+)
 
 const (
 	shopW float32 = 300
@@ -93,6 +96,8 @@ func (a shopActionState) asked() bool {
 
 // drawShop draws whichever side of the counter is open.
 func (b *UI2DBackend) drawShop(state InGameUIState, screenW, screenH float32) {
+	b.openShopWindows(state.Shop.Open())
+
 	switch state.Shop.Mode {
 	case states.ShopChoosing:
 		b.drawShopAsk(screenW, screenH)
@@ -105,14 +110,35 @@ func (b *UI2DBackend) drawShop(state InGameUIState, screenW, screenH float32) {
 	}
 }
 
+// openShopWindows clears the frames' closed flags when a counter opens.
+//
+// They outlive the window: closed from its own X once, BeginWindow returns
+// false for good, and the false return is read as the player closing it — so
+// the next shop shut itself the moment it opened and no shop could be opened
+// again. Only on the way in, so that closing one stays closed.
+func (b *UI2DBackend) openShopWindows(open bool) {
+	if open == b.shopWasOpen {
+		return
+	}
+
+	b.shopWasOpen = open
+
+	if !open || b.ctx == nil {
+		return
+	}
+
+	b.ctx.OpenWindow(shopWindowID)
+	b.ctx.OpenWindow(shopAskWindowID)
+}
+
 // drawShopAsk is the two buttons a shopkeeper who does both asks from.
 func (b *UI2DBackend) drawShopAsk(screenW, screenH float32) {
 	openX := (screenW - shopAskW) / 2
 	openY := (screenH - shopAskH) / 2
 
-	if !b.ctx.BeginWindowEx("hud_shop_ask", openX, openY, shopAskW, shopAskH,
+	if !b.ctx.BeginWindowEx(shopAskWindowID, openX, openY, shopAskW, shopAskH,
 		"Shop", ui2d.WindowOptions{Closable: true}) {
-		if b.ctx.WindowClosed("hud_shop_ask") {
+		if b.ctx.WindowClosed(shopAskWindowID) {
 			b.shopAction = shopActionState{close: true}
 		}
 
@@ -120,7 +146,7 @@ func (b *UI2DBackend) drawShopAsk(screenW, screenH float32) {
 	}
 
 	x, y := openX, openY
-	if rect, ok := b.ctx.WindowRect("hud_shop_ask"); ok {
+	if rect, ok := b.ctx.WindowRect(shopAskWindowID); ok {
 		x, y = rect.X, rect.Y
 	}
 
