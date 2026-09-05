@@ -145,6 +145,9 @@ type InGameState struct {
 	// sightMs is how far round the Sight aura has turned.
 	sightMs float32
 
+	// shop is the counter that is open, if any.
+	shop Shop
+
 	// playerDead is the character lying down, which is what the window
 	// offering a way back is shown on.
 	//
@@ -1598,6 +1601,11 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_INVENTORY_ITEMLIST_EQUIP, s.handleInventoryEquip)
 	s.client.RegisterHandler(packets.ZC_USE_ITEM_ACK, s.handleUseItemAck)
 	s.client.RegisterHandler(packets.ZC_AUTORUN_SKILL, s.handleAutorunSkill)
+	s.client.RegisterHandler(packets.ZC_SELECT_DEALTYPE, s.handleDealType)
+	s.client.RegisterHandler(packets.ZC_PC_PURCHASE_ITEMLIST, s.handleShopItems)
+	s.client.RegisterHandler(packets.ZC_PC_SELL_ITEMLIST, s.handleSellItems)
+	s.client.RegisterHandler(packets.ZC_PC_PURCHASE_RESULT, s.handleBuyResult)
+	s.client.RegisterHandler(packets.ZC_PC_SELL_RESULT, s.handleSellResult)
 	s.client.RegisterHandler(packets.ZC_REQ_WEAR_EQUIP_ACK, s.handleEquipAck)
 	s.client.RegisterHandler(packets.ZC_REQ_TAKEOFF_EQUIP_ACK, s.handleUnequipAck)
 	s.client.RegisterHandler(packets.ZC_CONFIG_NOTIFY, s.handleConfigNotify)

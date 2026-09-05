@@ -37,6 +37,9 @@ var (
 	flagItemInfo   = flag.String("item-info", "", "Once in game, open the item information window on this item id (QA aid)")
 	flagCardView   = flag.String("card-view", "", "Once in game, open the card drawing window on this card id (QA aid)")
 	flagUseItem    = flag.String("use-item", "", "Once in game, use the items with these ids, e.g. 601 (QA aid)")
+	flagTalkTo     = flag.String("talk-to", "", "Once in game, talk to the nearest NPC whose name contains this, e.g. Tool (QA aid)")
+	flagShopDeal   = flag.String("shop-deal", "", "When a shop asks, answer buy or sell (QA aid)")
+	flagShopBuy    = flag.String("shop-buy", "", "Once a shop is open, buy one of each of these item ids (QA aid)")
 
 	flagSay sayLines
 )
@@ -131,6 +134,21 @@ func ItemInfo() int {
 	}
 
 	return ids[0]
+}
+
+// TalkTo returns the NPC name --talk-to asked to start a conversation with.
+func TalkTo() string {
+	return *flagTalkTo
+}
+
+// ShopDeal returns which side of the counter --shop-deal asked for.
+func ShopDeal() string {
+	return *flagShopDeal
+}
+
+// ShopBuys returns the item ids --shop-buy asked to buy.
+func ShopBuys() []int {
+	return intList(*flagShopBuy)
 }
 
 // UseItems returns the item ids --use-item asked to use, in order.

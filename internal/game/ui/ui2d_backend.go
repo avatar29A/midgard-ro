@@ -157,6 +157,14 @@ type UI2DBackend struct {
 	// cardViewID is the card whose drawing is being looked at, nought when
 	// that window is shut.
 	cardViewID uint32
+
+	// shopOrder is what is in the basket, by item id when buying and by
+	// inventory slot when selling, and shopScroll how far down the shelf is.
+	shopOrder  map[int]int
+	shopScroll int
+
+	// shopAction is what the counter was asked for, waiting to be sent.
+	shopAction shopActionState
 	itemTab    int
 
 	// mapWorldView switches the Map window between this map and the world.
@@ -1076,6 +1084,10 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 
 	// After the windows, because it is opened from one of them: drawn
 	// before, the inventory it was asked from paints straight over it.
+	// Before the item windows, so the information window opened from a shop
+	// row lies over the shop rather than under it.
+	b.drawShop(state, width, height)
+
 	b.drawItemInfo(width, height)
 	b.drawCardView(width, height)
 
