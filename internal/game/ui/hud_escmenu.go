@@ -87,6 +87,15 @@ var escMenuH = ui2d.FrameTitleH + escPad +
 // ToggleEscMenu opens the menu, or closes it if it is already open.
 func (b *UI2DBackend) ToggleEscMenu() {
 	b.escOpen = !b.escOpen
+
+	// Clearing the frame's own closed and minimized flags. They outlive the
+	// window: set once, BeginWindow returns false for good, and since the
+	// backdrop is painted before that call the menu became a screen that went
+	// dark with nothing on it. The nil check is for a backend built without a
+	// context, which the window state's own tests do.
+	if b.escOpen && b.ctx != nil {
+		b.ctx.OpenWindow(escWindowID)
+	}
 }
 
 // EscMenuOpen reports whether the menu is showing.
@@ -120,7 +129,12 @@ func (b *UI2DBackend) drawEscMenu(screenW, screenH float32) {
 	openX := (screenW - escMenuW) / 2
 	openY := (screenH - escMenuH) / 2
 
-	if !b.ctx.BeginWindow(escWindowID, openX, openY, escMenuW, escMenuH, "Game setting window") {
+	// No system buttons: the menu has "Return to game" of its own and closes
+	// on a click outside, so an X and a minimize on the title bar are two more
+	// ways to reach the same place — and one of them left the screen dark with
+	// nothing on it.
+	if !b.ctx.BeginWindowEx(escWindowID, openX, openY, escMenuW, escMenuH,
+		"Game setting window", ui2d.WindowOptions{}) {
 		return
 	}
 

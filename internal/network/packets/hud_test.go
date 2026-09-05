@@ -240,3 +240,105 @@ func TestDecodeUseItemAckShort(t *testing.T) {
 		t.Error("a 14-byte ack decoded, but the packet is 15")
 	}
 }
+
+// itemListPacket wraps entries in the header a list packet carries: the id,
+// the length, and which inventory it is.
+func itemListPacket(id uint16, entries ...[]byte) []byte {
+	body := []byte{}
+	for _, entry := range entries {
+		body = append(body, entry...)
+	}
+
+	pkt := make([]byte, 5, 5+len(body))
+	binary.LittleEndian.PutUint16(pkt, id)
+	binary.LittleEndian.PutUint16(pkt[2:], uint16(5+len(body)))
+
+	return append(pkt, body...)
+}
+
+// normalEntry builds one NORMALITEM_INFO the way the server lays it out at
+// this packetver: index, id, type, count, wear state, then the four slots.
+func normalEntry(index int, id uint32, count int, cards [4]uint32) []byte {
+	entry := make([]byte, NormalItemLen)
+	binary.LittleEndian.PutUint16(entry, uint16(index))
+	binary.LittleEndian.PutUint32(entry[2:], id)
+	entry[6] = 3 // type
+	binary.LittleEndian.PutUint16(entry[7:], uint16(count))
+
+	for i, card := range cards {
+		binary.LittleEndian.PutUint32(entry[13+4*i:], card)
+	}
+
+	return entry
+}
+
+// equipEntry builds one EQUIPITEM_INFO: index, id, type, location, wear
+// state, then the four slots.
+func equipEntry(index int, id uint32, location, worn uint32, cards [4]uint32) []byte {
+	entry := make([]byte, EquipItemLen)
+	binary.LittleEndian.PutUint16(entry, uint16(index))
+	binary.LittleEndian.PutUint32(entry[2:], id)
+	entry[6] = 4 // type
+	binary.LittleEndian.PutUint32(entry[7:], location)
+	binary.LittleEndian.PutUint32(entry[11:], worn)
+
+	for i, card := range cards {
+		binary.LittleEndian.PutUint32(entry[15+4*i:], card)
+	}
+
+	return entry
+}
+
+// TestInventoryCarriesItsCards: the slots are read from a different place in
+// each of the two lists, and reading either at the other's offset takes the
+// hire-expiry date or the wear state for a card.
+func TestInventoryCarriesItsCards(t *testing.T) {
+	cards := [4]uint32{4001, 0, 4002, 0}
+
+	normal := DecodeInventoryNormal(itemListPacket(ZC_INVENTORY_ITEMLIST_NORMAL,
+		normalEntry(3, 501, 7, cards)))
+
+	if len(normal) != 1 {
+		t.Fatalf("one stackable decoded as %d items", len(normal))
+	}
+	if normal[0].Index != 3 || normal[0].ID != 501 || normal[0].Count != 7 {
+		t.Fatalf("the stackable came out as %+v", normal[0])
+	}
+	if normal[0].Cards != cards {
+		t.Errorf("its slots read %v, want %v", normal[0].Cards, cards)
+	}
+
+	equip := DecodeInventoryEquip(itemListPacket(ZC_INVENTORY_ITEMLIST_EQUIP,
+		equipEntry(5, 1101, EQP_HAND_R, EQP_HAND_R, cards)))
+
+	if len(equip) != 1 {
+		t.Fatalf("one worn item decoded as %d items", len(equip))
+	}
+	if equip[0].Index != 5 || equip[0].ID != 1101 || !equip[0].Equipped {
+		t.Fatalf("the worn item came out as %+v", equip[0])
+	}
+	if equip[0].Cards != cards {
+		t.Errorf("its slots read %v, want %v", equip[0].Cards, cards)
+	}
+}
+
+// TestCardsAreFourBytesEach: item ids outgrew sixteen bits, and reading the
+// old width takes the top half of one card for the whole of the next.
+func TestCardsAreFourBytesEach(t *testing.T) {
+	// An id past what fits in sixteen bits, which is where the old width
+	// silently went wrong.
+	const big = 100000
+
+	equip := DecodeInventoryEquip(itemListPacket(ZC_INVENTORY_ITEMLIST_EQUIP,
+		equipEntry(1, 1101, EQP_HAND_R, 0, [4]uint32{big, 4001, 0, 0})))
+
+	if len(equip) != 1 {
+		t.Fatal("the entry did not decode")
+	}
+	if equip[0].Cards[0] != big {
+		t.Errorf("a large card id read back as %d", equip[0].Cards[0])
+	}
+	if equip[0].Cards[1] != 4001 {
+		t.Errorf("the card after it read back as %d", equip[0].Cards[1])
+	}
+}

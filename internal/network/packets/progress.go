@@ -116,6 +116,46 @@ const (
 	InfTrap    = 0x20
 )
 
+// An item asking the client to use a skill.
+//
+// A Fly Wing does not teleport anybody. Its script is `itemskill
+// "AL_TELEPORT",1`, and what that does is tell the client to cast Teleport —
+// the server then waits to be asked. Nothing happens until the client asks,
+// which is why using one did nothing at all.
+//
+// The packet carries the skill's own targeting and level because the
+// character need not have the skill: a Mage with a Fly Wing is being handed a
+// Teleport that is nowhere in their skill list, so nothing about it can be
+// looked up.
+
+// ZC_AUTORUN_SKILL is `<skill id>.W <type>.L <level>.W <sp>.W <range>.W
+// <name>.24B <upgradable>.B`, thirty-nine bytes.
+const ZC_AUTORUN_SKILL uint16 = 0x0147
+
+// AutorunSkill is one of those.
+type AutorunSkill struct {
+	SkillID uint16
+	Level   int
+
+	// Inf is what the skill is aimed at, in the same bits the skill list uses.
+	Inf int
+}
+
+// DecodeAutorunSkill reads one. Reports false when the packet is too short.
+func DecodeAutorunSkill(data []byte) (AutorunSkill, bool) {
+	const size = 14
+
+	if len(data) < size {
+		return AutorunSkill{}, false
+	}
+
+	return AutorunSkill{
+		SkillID: readU16(data, 2),
+		Inf:     int(readU32(data, 4)),
+		Level:   int(readU16(data, 8)),
+	}, true
+}
+
 // EncodeUseSkill asks to cast a skill at a unit.
 //
 // The target is a unit id, and for a self-cast skill that is our own: rAthena

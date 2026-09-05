@@ -1271,6 +1271,21 @@ func (s *InGameState) putSkill(skill packets.Skill, why string) {
 		zap.Int("level", skill.Level), zap.Int("count", len(s.skills)))
 }
 
+// traceCards reports what is in each item's slots, for checking the offsets
+// the two lists put them at against a real server.
+func traceCards(list []packets.InventoryItem) {
+	for _, item := range list {
+		if item.Cards == ([4]uint32{}) {
+			continue
+		}
+
+		trace.Emit(trace.HUD, "item-cards",
+			zap.Uint32("id", item.ID), zap.Int("index", item.Index),
+			zap.Uint32s("cards", item.Cards[:]),
+			zap.Bool("special", item.SpecialSlots()))
+	}
+}
+
 // handleInventoryNormal takes the stackable half of the inventory.
 func (s *InGameState) handleInventoryNormal(data []byte) error {
 	return s.takeInventory(data, packets.NormalItemLen, "normal", packets.DecodeInventoryNormal)
@@ -1390,6 +1405,8 @@ func (s *InGameState) takeInventory(
 	}
 
 	items := decode(data)
+	traceCards(items)
+
 	added, replaced := s.mergeInventory(items)
 
 	trace.Emit(trace.HUD, "inventory",
@@ -1580,6 +1597,7 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_INVENTORY_ITEMLIST_NORMAL, s.handleInventoryNormal)
 	s.client.RegisterHandler(packets.ZC_INVENTORY_ITEMLIST_EQUIP, s.handleInventoryEquip)
 	s.client.RegisterHandler(packets.ZC_USE_ITEM_ACK, s.handleUseItemAck)
+	s.client.RegisterHandler(packets.ZC_AUTORUN_SKILL, s.handleAutorunSkill)
 	s.client.RegisterHandler(packets.ZC_REQ_WEAR_EQUIP_ACK, s.handleEquipAck)
 	s.client.RegisterHandler(packets.ZC_REQ_TAKEOFF_EQUIP_ACK, s.handleUnequipAck)
 	s.client.RegisterHandler(packets.ZC_CONFIG_NOTIFY, s.handleConfigNotify)

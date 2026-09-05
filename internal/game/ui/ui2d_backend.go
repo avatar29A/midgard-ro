@@ -141,7 +141,23 @@ type UI2DBackend struct {
 
 	skillScroll int
 	itemScroll  int
-	itemTab     int
+
+	// itemMenu is the menu a right click on an item opened, and itemInfoID
+	// the item the information window is showing — nought when it is shut.
+	itemMenu   itemMenu
+	itemInfoID uint32
+
+	// itemInfoCards is what is in that copy's slots, and itemInfoSpecial
+	// marks the ones whose slots are a maker's name or a pet rather than
+	// cards. Both are empty when the window was opened on an item in the
+	// abstract rather than on one out of the bag.
+	itemInfoCards   [4]uint32
+	itemInfoSpecial bool
+
+	// cardViewID is the card whose drawing is being looked at, nought when
+	// that window is shut.
+	cardViewID uint32
+	itemTab    int
 
 	// mapWorldView switches the Map window between this map and the world.
 	mapWorldView bool
@@ -1058,6 +1074,11 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 	b.drawItemsWindow(state, width, height)
 	b.drawMapWindow(state, width, height)
 
+	// After the windows, because it is opened from one of them: drawn
+	// before, the inventory it was asked from paints straight over it.
+	b.drawItemInfo(width, height)
+	b.drawCardView(width, height)
+
 	// After every window that a drag can start in or end on, so one release
 	// is resolved once and against all of them.
 	b.finishItemDrag()
@@ -1065,6 +1086,11 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 	// After the inventory, which is what it belongs to: drawn before it, the
 	// window it was dragged out of covered it.
 	b.drawDropQuantity(width, height)
+
+	// Over the windows, since it is opened from one and has to lie on top of
+	// it, and before the dragged icon and the tooltip for the same reason
+	// they are last.
+	b.drawItemMenu(width, height)
 
 	// Last: whatever is being dragged rides over everything it might be
 	// dropped on.
