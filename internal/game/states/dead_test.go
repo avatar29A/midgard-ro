@@ -78,3 +78,44 @@ func TestResurrectionRejectsShortPackets(t *testing.T) {
 		t.Error("a short packet stood us up")
 	}
 }
+
+// TestACorpseDoesNotWalk is the fault this was written for.
+//
+// Everything a click can mean is refused by the server for a dead character,
+// but the walk is not refused visibly: the client starts one on its own, and
+// the body slid across the map in its death pose, past the window offering to
+// put it back at the save point.
+func TestACorpseDoesNotWalk(t *testing.T) {
+	s := &InGameState{playerDead: true, destCellX: 4, destCellY: 4, hasDest: true}
+
+	if err := s.RequestMove(90, 90); err != nil {
+		t.Fatalf("asking a corpse to walk: %v", err)
+	}
+
+	if s.destCellX != 4 || s.destCellY != 4 {
+		t.Errorf("the corpse is walking to %d,%d", s.destCellX, s.destCellY)
+	}
+}
+
+// TestACorpseDoesNothingElseEither: a hotkey is not a click, and reaches the
+// commands without passing the world's own gate.
+func TestACorpseDoesNothingElseEither(t *testing.T) {
+	s := &InGameState{playerDead: true}
+
+	if err := s.UseItem(3); err != nil {
+		t.Errorf("using an item while dead: %v", err)
+	}
+	if err := s.UseSkill(28, 1); err != nil {
+		t.Errorf("casting while dead: %v", err)
+	}
+	if err := s.UseSkillAt(80, 1, 5, 5); err != nil {
+		t.Errorf("placing a skill while dead: %v", err)
+	}
+
+	// Nothing was sent, since there is no client to send it with: what is
+	// being checked is that none of them tried, which a nil client would have
+	// turned into a panic on the way out.
+	if lines := s.chat.Lines(); len(lines) != 0 {
+		t.Errorf("the chat says %+v, want nothing", lines)
+	}
+}
