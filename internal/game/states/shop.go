@@ -93,8 +93,24 @@ func (s *InGameState) ChooseDeal(deal uint8) error {
 	return s.client.Send(packets.EncodeDealType(s.shop.NPC, deal))
 }
 
+// atTheCounter reports whether a shop list belongs to us.
+//
+// A list that arrives after the counter was shut reopens it, which is a shop
+// coming back on its own a moment after being closed. It happens whenever the
+// closing and the answer cross in the post, and the answer always loses: we
+// are the ones who said we had finished.
+func (s *InGameState) atTheCounter() bool {
+	return s.talkingTo != 0
+}
+
 // handleShopItems takes what a shop sells.
 func (s *InGameState) handleShopItems(data []byte) error {
+	if !s.atTheCounter() {
+		trace.Emit(trace.HUD, "shop-list-late", zap.String("side", "buy"))
+
+		return nil
+	}
+
 	items := packets.DecodeShopItems(data)
 
 	trace.Emit(trace.HUD, "shop-buy-list", zap.Int("count", len(items)))
@@ -113,6 +129,12 @@ func (s *InGameState) handleShopItems(data []byte) error {
 
 // handleSellItems takes what a shop will buy from us.
 func (s *InGameState) handleSellItems(data []byte) error {
+	if !s.atTheCounter() {
+		trace.Emit(trace.HUD, "shop-list-late", zap.String("side", "sell"))
+
+		return nil
+	}
+
 	items := packets.DecodeSellItems(data)
 
 	trace.Emit(trace.HUD, "shop-sell-list", zap.Int("count", len(items)))
@@ -148,36 +170,32 @@ func (s *InGameState) Sell(order []packets.ShopOrder) error {
 	return s.client.Send(packets.EncodeSell(order))
 }
 
-// CloseShop puts the counter away and tells the server the conversation is
-// over.
+// CloseShop puts the counter away and tells the server we are done with it.
 //
-// It has to be told. A shop is a conversation as far as the server is
-// concerned — npc_click refuses to start another while one is open, and says
-// so in its log — so a counter closed without a word leaves the shopkeeper
-// holding it and every click on them afterwards does nothing at all.
+// It has to be told: the shop leaves npc_shopid set on the session, and
+// CZ_NPC_TRADE_QUIT is the only thing that clears it.
 //
-// Whoever opened it: the question names the shopkeeper, and a shop that does
-// not ask which way round names nobody, so the one we walked up to is kept.
+// Not the dialog's close, which was the first guess and wrong. A plain shop
+// never sets the server's npc_id — npc_click only sets that for a script — so
+// the dialog close returns at its first line and does nothing whatever.
 func (s *InGameState) CloseShop() {
 	if !s.shop.Open() {
 		return
 	}
 
-	npc := s.shop.NPC
-	if npc == 0 {
-		npc = s.talkingTo
-	}
-
-	trace.Emit(trace.HUD, "shop-close",
-		zap.Int("mode", int(s.shop.Mode)), zap.Uint32("npc", npc))
+	trace.Emit(trace.HUD, "shop-close", zap.Int("mode", int(s.shop.Mode)))
 
 	s.shop = Shop{}
 
-	if s.client == nil || npc == 0 {
+	// Done talking to them. A list still on its way belongs to a counter that
+	// no longer exists, and is dropped rather than reopening it.
+	s.talkingTo = 0
+
+	if s.client == nil {
 		return
 	}
 
-	if err := s.client.Send(packets.CloseDialogPacket(npc)); err != nil {
+	if err := s.client.Send(packets.EncodeShopQuit()); err != nil {
 		logger.Warn("could not tell the shop we had finished", zap.Error(err))
 	}
 }

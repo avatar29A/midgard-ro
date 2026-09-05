@@ -79,7 +79,8 @@ func TestClosingForgetsBothSides(t *testing.T) {
 // so a shop asked for both ways round does not draw the first one's rows
 // under the second one's title.
 func TestOnlyOneSideAtATime(t *testing.T) {
-	s := &InGameState{}
+	// Talking to somebody, since a list that belongs to nobody is dropped.
+	s := &InGameState{talkingTo: 110001763}
 
 	buy := make([]byte, 4+19)
 	binary.LittleEndian.PutUint16(buy, packets.ZC_PC_PURCHASE_ITEMLIST)
@@ -107,5 +108,31 @@ func TestOnlyOneSideAtATime(t *testing.T) {
 	}
 	if len(s.shop.Buying) != 0 {
 		t.Errorf("the buy list is still there under the sell one: %+v", s.shop.Buying)
+	}
+}
+
+// TestALateListDoesNotReopenTheCounter: closing and the shop's answer cross in
+// the post whenever the two are close together, and the answer would reopen a
+// counter the player has just shut. We are the ones who said we had finished.
+func TestALateListDoesNotReopenTheCounter(t *testing.T) {
+	s := &InGameState{talkingTo: 110001763, shop: Shop{Mode: ShopChoosing, NPC: 110001763}}
+
+	s.CloseShop()
+
+	if s.talkingTo != 0 {
+		t.Errorf("still talking to %d after closing", s.talkingTo)
+	}
+
+	buy := make([]byte, 4+19)
+	binary.LittleEndian.PutUint16(buy, packets.ZC_PC_PURCHASE_ITEMLIST)
+	binary.LittleEndian.PutUint16(buy[2:], uint16(len(buy)))
+	binary.LittleEndian.PutUint32(buy[4:], 501)
+
+	if err := s.handleShopItems(buy); err != nil {
+		t.Fatalf("handling a late list: %v", err)
+	}
+
+	if s.shop.Open() {
+		t.Errorf("a list that arrived late reopened the counter: %+v", s.shop)
 	}
 }
