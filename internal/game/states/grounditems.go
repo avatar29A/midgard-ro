@@ -391,18 +391,7 @@ func (s *InGameState) handleDropAck(data []byte) error {
 		return nil
 	}
 
-	for i := range s.inventory {
-		if s.inventory[i].Index != ack.Index {
-			continue
-		}
-
-		s.inventory[i].Count -= ack.Count
-		if s.inventory[i].Count <= 0 {
-			s.inventory = append(s.inventory[:i], s.inventory[i+1:]...)
-		}
-
-		break
-	}
+	s.takeFromBag(ack.Index, ack.Count)
 
 	trace.Emit(trace.HUD, "drop-ack",
 		zap.Int("index", ack.Index), zap.Int("count", ack.Count))
