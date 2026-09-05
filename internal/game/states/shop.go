@@ -200,7 +200,14 @@ func (s *InGameState) CloseShop() {
 	}
 }
 
-// handleBuyResult and handleSellResult report what became of an order.
+// handleBuyResult and handleSellResult report what became of an order, and
+// close the counter.
+//
+// Closing either way, which is what the original does: one deal is what the
+// window is for, and it goes away whether the deal went through or was
+// refused. The refusal is said in the chat, where the rest of what a shop
+// says to us is said, rather than by a window left standing with no sign on
+// it of what happened.
 //
 // The list is not asked for again. A sale that went through leaves the shelf
 // as it was — an NPC's stock does not run down — and the bag arrives on its
@@ -226,7 +233,14 @@ func (s *InGameState) shopResult(data []byte, what string) error {
 
 	if refusal := packets.ShopRefusal(result); refusal != "" {
 		s.chat.AddLocal(ChatError, refusal)
+	} else {
+		s.chat.AddLocal(ChatNotice, "Deal successfully completed.")
 	}
+
+	// And the counter is done with, the same way pressing its own cancel
+	// would be: the window goes and the server is told, since a shop leaves
+	// npc_shopid set on the session until something clears it.
+	s.CloseShop()
 
 	return nil
 }

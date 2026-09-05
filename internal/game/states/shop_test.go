@@ -136,3 +136,57 @@ func TestALateListDoesNotReopenTheCounter(t *testing.T) {
 		t.Errorf("a list that arrived late reopened the counter: %+v", s.shop)
 	}
 }
+
+// shopResultPacket builds a ZC_PC_SELL_RESULT the way the server does.
+func shopResultPacket(result uint8) []byte {
+	pkt := make([]byte, 3)
+	binary.LittleEndian.PutUint16(pkt, packets.ZC_PC_SELL_RESULT)
+	pkt[2] = result
+
+	return pkt
+}
+
+// TestADealClosesTheCounter: one deal is what the window is for. The original
+// takes it away as soon as the server answers, and a window left standing
+// after a sale reads as a sale that did not happen.
+func TestADealClosesTheCounter(t *testing.T) {
+	s := &InGameState{shop: Shop{Mode: ShopSelling, NPC: 7}, talkingTo: 7}
+
+	if err := s.handleSellResult(shopResultPacket(packets.ShopOK)); err != nil {
+		t.Fatalf("handling the result: %v", err)
+	}
+
+	if s.shop.Open() {
+		t.Errorf("the counter is still open in mode %d", s.shop.Mode)
+	}
+	if s.talkingTo != 0 {
+		t.Errorf("still talking to %d", s.talkingTo)
+	}
+
+	lines := s.chat.Lines()
+	if len(lines) != 1 || lines[0].Kind != ChatNotice {
+		t.Fatalf("the chat says %+v, want one notice", lines)
+	}
+}
+
+// TestARefusalClosesItToo, and says why.
+//
+// The same as the original, which does not tell the two apart: what went
+// wrong is said in the chat, where everything else a shop says to us is said,
+// rather than by a window left up with no sign on it of what happened.
+func TestARefusalClosesItToo(t *testing.T) {
+	s := &InGameState{shop: Shop{Mode: ShopSelling, NPC: 7}, talkingTo: 7}
+
+	if err := s.handleSellResult(shopResultPacket(packets.ShopNoZeny)); err != nil {
+		t.Fatalf("handling the result: %v", err)
+	}
+
+	if s.shop.Open() {
+		t.Error("the counter is still open after a refusal")
+	}
+
+	lines := s.chat.Lines()
+	if len(lines) != 1 || lines[0].Kind != ChatError {
+		t.Fatalf("the chat says %+v, want one error", lines)
+	}
+}
