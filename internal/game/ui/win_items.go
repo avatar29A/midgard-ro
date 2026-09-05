@@ -692,6 +692,15 @@ func (b *UI2DBackend) finishItemDrag() {
 		return
 	}
 
+	// Onto the counter's list: sell it. The shop names what it will take, so
+	// something it did not name is carried back rather than dropped on the
+	// ground for having been let go over the wrong window.
+	if b.shopCartRect().Contains(in.MouseX, in.MouseY) {
+		b.sellDragged(dragged)
+
+		return
+	}
+
 	if row, col, ok := b.hotkeyCellAt(in.MouseX, in.MouseY); ok {
 		b.AssignHotkey(row, col, hotkeyCell{id: dragged.itemID})
 
