@@ -113,6 +113,15 @@ type Game struct {
 	// raiseSkills is --raise-skill, waiting for the same.
 	raiseSkills []int
 
+	// itemInfo is --item-info, waiting for the bag.
+	itemInfo uint32
+
+	// cardView is --card-view, waiting for the same.
+	cardView uint32
+
+	// useItems is --use-item, waiting for the bag.
+	useItems []int
+
 	// holdCastAura is --cast-aura, waiting for the map.
 	holdCastAura bool
 
@@ -582,6 +591,9 @@ func (g *Game) frame() {
 	g.runAttackNearest()
 	g.runCast()
 	g.runRaiseSkills()
+	g.runItemInfo()
+	g.runCardView()
+	g.runUseItems()
 	g.runHoldCastAura()
 	g.runSay()
 
@@ -832,6 +844,94 @@ func (g *Game) runRaiseSkills() {
 	}
 
 	g.raiseSkills = nil
+}
+
+// SetItemInfo records the item --item-info asked about.
+func (g *Game) SetItemInfo(id uint32) {
+	g.itemInfo = id
+}
+
+// runItemInfo opens the information window once the map is up.
+//
+// Straight to the backend, the same way --open-window goes: the window is
+// opened by item id rather than from a cell, which is the whole point of it —
+// anything that can name an item can ask about one.
+func (g *Game) runItemInfo() {
+	if g.itemInfo == 0 || g.uiBackend == nil {
+		return
+	}
+
+	state, ok := g.stateManager.Current().(*states.InGameState)
+	if !ok || !state.MapReady() {
+		return
+	}
+
+	g.uiBackend.ShowItemInfo(g.itemInfo)
+	g.itemInfo = 0
+}
+
+// SetUseItems records the items --use-item asked to use.
+func (g *Game) SetUseItems(ids []int) {
+	g.useItems = ids
+}
+
+// runUseItems uses them once the bag has arrived.
+//
+// By item id rather than by slot, since which slot a thing lands in is the
+// server's business and not knowable from the command line.
+func (g *Game) runUseItems() {
+	if len(g.useItems) == 0 {
+		return
+	}
+
+	state, ok := g.stateManager.Current().(*states.InGameState)
+	if !ok || !state.MapReady() || len(state.Inventory()) == 0 {
+		return
+	}
+
+	for _, id := range g.useItems {
+		index, found := 0, false
+
+		for _, item := range state.Inventory() {
+			if item.ID == uint32(id) {
+				index, found = item.Index, true
+
+				break
+			}
+		}
+
+		if !found {
+			logger.Warn("--use-item names something not in the bag", zap.Int("item", id))
+
+			continue
+		}
+
+		if err := state.UseItem(index); err != nil {
+			logger.Warn("--use-item request failed", zap.Int("item", id), zap.Error(err))
+		}
+	}
+
+	g.useItems = nil
+}
+
+// SetCardView records the card --card-view asked to show.
+func (g *Game) SetCardView(id uint32) {
+	g.cardView = id
+}
+
+// runCardView opens the card drawing once the map is up.
+func (g *Game) runCardView() {
+	if g.cardView == 0 || g.uiBackend == nil {
+		return
+	}
+
+	state, ok := g.stateManager.Current().(*states.InGameState)
+	if !ok || !state.MapReady() {
+		return
+	}
+
+	g.uiBackend.ShowCardView(g.cardView)
+	g.cardView = 0
 }
 
 // runMouseAt moves the pointer for --mouse-at once the map is up. It goes

@@ -537,6 +537,51 @@ func (s *InGameState) UseSkillAt(skillID uint16, level, cellX, cellY int) error 
 // is a state of its own — the next click means "here" rather than "walk there"
 // or "attack that".
 
+// handleAutorunSkill is an item asking for a skill to be used.
+//
+// The character need not have the skill — a Fly Wing hands a Mage a Teleport
+// that is nowhere in their skill list — so nothing about it is looked up.
+// Everything needed is in the packet: what it is, what level, and what it is
+// aimed at.
+//
+// Aimed at nobody, which is what a wing is, it goes straight out. Anything
+// else is held the same way a skill chosen from the window is held, and waits
+// for the player to say where or on whom.
+func (s *InGameState) handleAutorunSkill(data []byte) error {
+	use, ok := packets.DecodeAutorunSkill(data)
+	if !ok {
+		logger.Warn("short autorun skill packet", zap.Int("len", len(data)))
+
+		return nil
+	}
+
+	level := max(use.Level, 1)
+
+	trace.Emit(trace.HUD, "autorun-skill",
+		zap.Uint16("skill", use.SkillID), zap.Int("level", level),
+		zap.Int("inf", use.Inf))
+
+	switch {
+	case use.Inf&packets.InfSelf != 0 || use.Inf == 0:
+		// On ourselves, now. An Inf of nothing is treated the same: the
+		// server sends what the skill database says, and an item handing over
+		// a skill with no targeting at all still means "do it".
+		if s.client == nil {
+			return nil
+		}
+
+		return s.client.Send(packets.EncodeUseSkill(use.SkillID, level, s.selfAID()))
+
+	case use.Inf&packets.InfGround != 0:
+		s.BeginPlacing(use.SkillID, level)
+
+	default:
+		s.BeginTargeting(use.SkillID, level)
+	}
+
+	return nil
+}
+
 // BeginPlacing holds a skill until a cell is chosen for it.
 func (s *InGameState) BeginPlacing(skillID uint16, level int) {
 	s.beginHolding(skillID, level, false, "choose where to place it")

@@ -75,6 +75,15 @@ func main() {
 	if raise := config.RaiseSkills(); len(raise) > 0 {
 		g.SetRaiseSkills(raise)
 	}
+	if id := config.ItemInfo(); id > 0 {
+		g.SetItemInfo(uint32(id))
+	}
+	if id := config.CardView(); id > 0 {
+		g.SetCardView(uint32(id))
+	}
+	if ids := config.UseItems(); len(ids) > 0 {
+		g.SetUseItems(ids)
+	}
 	if cast := config.CastSkills(); len(cast) > 0 {
 		g.SetCastSkills(cast)
 	}

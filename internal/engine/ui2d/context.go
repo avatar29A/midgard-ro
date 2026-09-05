@@ -14,6 +14,16 @@ type Context struct {
 	hotWidget    string
 	activeWidget string
 
+	// focusWidget is what the keyboard is typing into.
+	//
+	// Kept apart from activeWidget, which the two were not: a text field held
+	// the pointer's claim as its focus, so from the first click in the chat
+	// box onward everything that asks whether the pointer is free was told it
+	// was taken — and the box could not be dragged again. They are different
+	// things. A claim is a button being held; focus is where letters go, and
+	// it outlives every press.
+	focusWidget string
+
 	// selectAll names the text field whose whole value is selected, and
 	// focusNext is a Tab looking for the next field to land on.
 	selectAll string
@@ -165,9 +175,67 @@ func (c *Context) SetDefaultInputSkin(skin *NineSlice) {
 // Begin starts a new UI frame.
 func (c *Context) Begin() {
 	c.input.Update()
+
+	// A press claim that outlived the press is dropped here.
+	//
+	// Every widget clears its own on release, and every widget can only do
+	// that while it is being drawn — so a claim made by something that then
+	// stopped being drawn was held for good, and anything asking whether the
+	// pointer was free got "no" for the rest of the session. The chat box
+	// could not be moved again; nothing else could be dragged either.
+	//
+	// It happens most easily when the release is never delivered at all,
+	// which is what a live window resize does on macOS: the run loop stops
+	// while the edge is dragged, and the button can come up inside that.
+	//
+	// Not on the frame of the release itself — that is the frame the widget
+	// resolves its own click on, and clearing first would mean a button that
+	// is never pressed.
+	c.dropStaleClaim()
+
+	// A press lands somewhere new, so whatever was being typed into stops
+	// being typed into unless it takes the press itself. Fields are drawn
+	// later in this same frame and claim it back if it was theirs.
+	if c.input.MouseLeftPressed {
+		c.focusWidget = ""
+	}
+
 	c.mouseCaptured = false
 	c.overResizeGrip = false
 	c.renderer.Begin()
+}
+
+// takeFocus is what a text field does with a press, and reports whether the
+// field is the one being typed into.
+//
+// Focused and claimed both: focused so the letters keep coming after the
+// button is up, claimed so nothing else takes the same press. The two are not
+// the same thing — a claim is a button being held — and holding focus as a
+// claim is what left the chat box unmovable from the first click in it.
+//
+// Shared by the three fields because they had drifted apart once already: two
+// asking the focus and one asking the claim is a field that loses what is
+// being typed into it the moment the button comes up.
+func (c *Context) takeFocus(id string, hovered bool) bool {
+	if hovered && c.input.MouseLeftPressed {
+		c.focusWidget = id
+		c.activeWidget = id
+	}
+
+	return c.focusWidget == id
+}
+
+// dropStaleClaim releases a press claim that outlived the press.
+//
+// Not on the frame of the release itself: that is the frame a widget resolves
+// its own click on, and clearing first would mean a button that is never
+// pressed.
+func (c *Context) dropStaleClaim() {
+	if c.input.MouseLeftDown || c.input.MouseLeftReleased {
+		return
+	}
+
+	c.activeWidget = ""
 }
 
 // CaptureMouse claims the pointer for the interface while it is inside rect.
@@ -199,7 +267,7 @@ func (c *Context) OverResizeGrip() bool {
 // Focused reports whether the widget owns keyboard focus, so a caller drawing
 // its own chrome can show which of several fields the typing goes to.
 func (c *Context) Focused(id string) bool {
-	return c.activeWidget == id
+	return c.focusWidget == id
 }
 
 // DoubleClickedIn reports a double click inside rect, attributed to id.
@@ -485,13 +553,9 @@ func (c *Context) TextInput(id string, width float32, value string) (string, boo
 
 	// Check interaction
 	hovered := rect.Contains(c.input.MouseX, c.input.MouseY)
-	focused := c.activeWidget == fullID
+	focused := c.takeFocus(fullID, hovered)
 	changed := false
 	submitted := false
-
-	if hovered && c.input.MouseLeftPressed {
-		c.activeWidget = fullID
-	}
 
 	// Handle text input when focused
 	if focused {
@@ -664,13 +728,9 @@ func (c *Context) PasswordInput(id string, width float32, value string) (string,
 
 	// Check interaction
 	hovered := rect.Contains(c.input.MouseX, c.input.MouseY)
-	focused := c.activeWidget == fullID
+	focused := c.takeFocus(fullID, hovered)
 	changed := false
 	submitted := false
-
-	if hovered && c.input.MouseLeftPressed {
-		c.activeWidget = fullID
-	}
 
 	// Handle text input when focused
 	if focused {

@@ -34,6 +34,9 @@ var (
 	flagCast       = flag.String("cast", "", "Once in game, cast these skills by id, e.g. 5,28 (QA aid)")
 	flagCastAura   = flag.Bool("cast-aura", false, "Keep the casting ring under the character, to look at it (QA aid)")
 	flagRaiseSkill = flag.String("raise-skill", "", "Once in game, spend a skill point on these skills by id, e.g. 19,19 (QA aid)")
+	flagItemInfo   = flag.String("item-info", "", "Once in game, open the item information window on this item id (QA aid)")
+	flagCardView   = flag.String("card-view", "", "Once in game, open the card drawing window on this card id (QA aid)")
+	flagUseItem    = flag.String("use-item", "", "Once in game, use the items with these ids, e.g. 601 (QA aid)")
 
 	flagSay sayLines
 )
@@ -117,6 +120,33 @@ func CastSkills() []int {
 // order. Repeats are allowed: two of the same id is two points.
 func RaiseSkills() []int {
 	return intList(*flagRaiseSkill)
+}
+
+// ItemInfo returns the item --item-info asked to open the information window
+// on, or nought.
+func ItemInfo() int {
+	ids := intList(*flagItemInfo)
+	if len(ids) == 0 {
+		return 0
+	}
+
+	return ids[0]
+}
+
+// UseItems returns the item ids --use-item asked to use, in order.
+func UseItems() []int {
+	return intList(*flagUseItem)
+}
+
+// CardView returns the card --card-view asked to show the drawing of, or
+// nought.
+func CardView() int {
+	ids := intList(*flagCardView)
+	if len(ids) == 0 {
+		return 0
+	}
+
+	return ids[0]
 }
 
 // HoldCastAura reports whether --cast-aura asked for the casting ring to stay.

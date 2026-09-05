@@ -408,7 +408,7 @@ func (b *UI2DBackend) drawEquipSlot(state InGameUIState, slot uint32, cell ui2d.
 	in := b.ctx.Input()
 	if !b.itemDrag.active && cell.Contains(in.MouseX, in.MouseY) {
 		b.itemHover = itemHover{
-			text: items.Name(item.ID),
+			text: itemDisplayName(item.ID),
 			x:    cell.X + cell.W/2,
 			y:    cell.Y + cell.H,
 		}
