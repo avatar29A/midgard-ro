@@ -2483,6 +2483,15 @@ func (s *InGameState) ClickWorld(mouseX, mouseY, viewportW, viewportH float32) {
 		return
 	}
 
+	// A shop holds the world still. The counter is a conversation with
+	// somebody standing in front of you, and walking off mid-purchase leaves
+	// the window open over a character halfway across the map — and the
+	// server refuses the order for being too far away, which reads as the
+	// shop being broken rather than as having walked away from it.
+	if s.shop.Open() {
+		return
+	}
+
 	// A skill waiting for a cell takes the click before anything else can:
 	// while one is held, clicking means "here" and not "walk there" or
 	// "attack that".

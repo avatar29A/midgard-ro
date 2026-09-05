@@ -165,7 +165,11 @@ type UI2DBackend struct {
 
 	// shopAction is what the counter was asked for, waiting to be sent.
 	shopAction shopActionState
-	itemTab    int
+
+	// shopWasOpen is whether a counter was open last frame, so the frames'
+	// closed flags are cleared on the way in and only then.
+	shopWasOpen bool
+	itemTab     int
 
 	// mapWorldView switches the Map window between this map and the world.
 	mapWorldView bool
