@@ -499,6 +499,31 @@ func (c *Context) WindowRect(id string) (Rect, bool) {
 	return Rect{X: ws.X, Y: ws.Y, W: ws.W, H: ws.H}, true
 }
 
+// MoveWindow puts a window somewhere, overriding a position the player has
+// dragged it to.
+//
+// For windows that come up as a pair and have to be usable together — a
+// selling list and the bag things are carried out of — where one of them
+// already is may be on top of the other. Nothing else should call this: a
+// window the player has placed is theirs.
+//
+// A window that has never been drawn has no state to move, and its caller's
+// opening position is what places it anyway.
+func (c *Context) MoveWindow(id string, x, y float32) {
+	ws, ok := c.windows[id]
+	if !ok {
+		return
+	}
+
+	ws.X, ws.Y = x, y
+
+	// Pinned there, the same way a window the player has dragged is. Without
+	// this the caller's opening position — passed every frame, and an initial
+	// hint only until something has been placed — would put it straight back
+	// the next time round.
+	ws.Dragged = true
+}
+
 // OpenWindow reopens a window that was closed or minimized from its own
 // title bar.
 //
