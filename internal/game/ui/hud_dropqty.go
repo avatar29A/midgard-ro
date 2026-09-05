@@ -52,6 +52,15 @@ type dropPrompt struct {
 	// opened marks the frame the dialog appeared on, so the click that
 	// finished the drag is not also read as a click outside it.
 	opened bool
+
+	// forShop marks the one a counter asked for. The same dialog serves
+	// both, but what happens on OK is not the same thing and neither is what
+	// it opens with: a stack dropped whole by accident is a worse mistake
+	// than one dropped singly, and a stack half sold is a nuisance.
+	forShop bool
+
+	// sell says which side of the counter the shop one belongs to.
+	sell bool
 }
 
 // beginDropPrompt asks how many to drop.
@@ -73,6 +82,44 @@ func (b *UI2DBackend) beginDropPrompt(index int, itemID uint32, count int) {
 	b.ctx.OpenWindow(dropQtyWindowID)
 }
 
+// beginShopPrompt asks how many to buy or sell.
+//
+// Selling opens with the whole stack: something is being carried out of the
+// bag and all of it is what is usually meant, so the number is there to be
+// cut down rather than typed out.
+//
+// Buying opens with one. There is no stack behind a shelf to mean "all of it"
+// — the most is only the most the server will take in a line — and a list
+// opening at that would put a hundred thousand zeny on the order for one
+// click on a name.
+func (b *UI2DBackend) beginShopPrompt(key int, itemID uint32, most int, sell bool) {
+	if most <= 1 {
+		b.addShopLine(key, 1)
+
+		return
+	}
+
+	amount := "1"
+	if sell {
+		amount = strconv.Itoa(most)
+	}
+
+	b.dropPrompt = dropPrompt{
+		open:    true,
+		index:   key,
+		itemID:  itemID,
+		max:     most,
+		opened:  true,
+		forShop: true,
+		sell:    sell,
+		text:    amount,
+	}
+
+	if b.ctx != nil {
+		b.ctx.OpenWindow(dropQtyWindowID)
+	}
+}
+
 // cancelDropPrompt puts the dialog away without dropping anything.
 func (b *UI2DBackend) cancelDropPrompt() {
 	b.dropPrompt = dropPrompt{}
@@ -91,9 +138,19 @@ func (b *UI2DBackend) dropPromptAmount() int {
 	return amount
 }
 
-// commitDropPrompt turns what was typed into a drop.
+// commitDropPrompt turns what was typed into a drop, or into a line on an
+// order — the same dialog asks for both.
 func (b *UI2DBackend) commitDropPrompt() {
-	b.dropAction = DropAction{Index: b.dropPrompt.index, Amount: b.dropPromptAmount()}
+	amount := b.dropPromptAmount()
+
+	if b.dropPrompt.forShop {
+		b.addShopLine(b.dropPrompt.index, amount)
+		b.dropPrompt = dropPrompt{}
+
+		return
+	}
+
+	b.dropAction = DropAction{Index: b.dropPrompt.index, Amount: amount}
 	b.dropPrompt = dropPrompt{}
 }
 
@@ -125,11 +182,21 @@ func (b *UI2DBackend) dropQtyLayout(screenW, screenH float32) (x, y, w, h, field
 	w = dropQtyPad + fieldW + dropQtySpinW + dropQtyGap + dropQtyOKW + dropQtyPad
 	h = ui2d.FrameTitleH + dropQtyPad + dropQtyRowH + dropQtyPad
 
-	// Beside the inventory it came from, so the two are readable together and
+	// Beside the window it came from, so the two are readable together and
 	// the dialog never lands on the item you were looking at. Falls back to
 	// the middle of the screen if that window is not up.
+	//
+	// At a counter that is the list rather than the bag. Both sides put the
+	// thing being asked about into the list, and on the selling side the bag
+	// is what it was just carried out of — anchoring to that would land the
+	// dialog on the list every time.
+	anchor := itemsWindowID
+	if b.dropPrompt.forShop {
+		anchor = shopCartWindowID
+	}
+
 	x, y = (screenW-w)/2, (screenH-h)/2
-	if rect, ok := b.ctx.WindowRect(itemsWindowID); ok {
+	if rect, ok := b.ctx.WindowRect(anchor); ok {
 		x, y = rect.X+rect.W+dropQtyNear, rect.Y
 
 		// Off the right edge: put it on the other side instead.
@@ -158,7 +225,14 @@ func (b *UI2DBackend) drawDropQuantity(screenW, screenH float32) {
 
 	// The title carries what is being dropped and how many there are, which
 	// is the whole caption this dialog would otherwise need a row for.
-	title := fmt.Sprintf("%s (%d)", items.Name(b.dropPrompt.itemID), b.dropPrompt.max)
+	//
+	// Buying, the count is left off: what bounds it is the most the server
+	// will take in one line, not a number of things that exist anywhere, and
+	// naming it beside a shopkeeper's item reads as the stock on the shelf.
+	title := items.Name(b.dropPrompt.itemID)
+	if !b.dropPrompt.forShop || b.dropPrompt.sell {
+		title = fmt.Sprintf("%s (%d)", title, b.dropPrompt.max)
+	}
 
 	// Closable but not minimizable: a one-row dialog that can be rolled up to
 	// its own title bar is a joke the interface does not need to tell.
