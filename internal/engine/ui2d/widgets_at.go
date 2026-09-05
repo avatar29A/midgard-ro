@@ -230,17 +230,14 @@ func (c *Context) textFieldAt(id string, x, y, w, h float32, value string, maske
 	// away. Fields drawn in call order are the tab order; a Tab from the last
 	// one survives into the next frame and wraps onto the first.
 	if c.focusNext {
-		c.activeWidget = id
+		c.focusWidget = id
 		c.focusNext = false
 		c.selectAll = ""
 	}
-	focused := c.activeWidget == id
+	focused := c.takeFocus(id, hovered)
 
 	if c.input.MouseLeftPressed {
-		switch {
-		case hovered:
-			c.activeWidget = id
-			focused = true
+		if focused {
 			// A double click selects the whole value, which is the only way
 			// to clear a field in one gesture without a caret to drag.
 			if c.DoubleClickedIn(id, rect) {
@@ -248,9 +245,9 @@ func (c *Context) textFieldAt(id string, x, y, w, h float32, value string, maske
 			} else {
 				c.selectAll = ""
 			}
-		case focused:
-			c.activeWidget = ""
-			focused = false
+		} else {
+			// The press went somewhere else, so nothing here is selected any
+			// more. The focus itself was dropped at the top of the frame.
 			c.selectAll = ""
 		}
 	}
@@ -283,11 +280,11 @@ func (c *Context) textFieldAt(id string, x, y, w, h float32, value string, maske
 			submitted = true
 		}
 		if c.input.KeyEscapePressed {
-			c.activeWidget = ""
+			c.focusWidget = ""
 			c.selectAll = ""
 		}
 		if c.input.KeyTabPressed {
-			c.activeWidget = ""
+			c.focusWidget = ""
 			c.selectAll = ""
 			c.focusNext = true
 			focused = false
