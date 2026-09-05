@@ -37,10 +37,6 @@ const (
 
 	shopIcon      float32 = 22
 	shopTextScale float32 = 0.65
-
-	// shopAskW is the little panel a shopkeeper who does both asks from.
-	shopAskW float32 = escBtnW + 2*escPad
-	shopAskH         = ui2d.FrameTitleH + escPad + 2*(escBtnH+escBtnG) - escBtnG + escPad
 )
 
 var (
@@ -116,45 +112,27 @@ func (b *UI2DBackend) drawShop(state InGameUIState, screenW, screenH float32) {
 	}
 }
 
-// drawShopAsk is the two buttons a shopkeeper who does both asks from.
+// drawShopAsk is the question a shopkeeper who does both asks first.
+//
+// The original's message window, and not the shop's own: the same one asks
+// whether to accept a trade from another player, so it is handed the words
+// and the choices rather than knowing them.
 func (b *UI2DBackend) drawShopAsk(screenW, screenH float32) {
-	openX := (screenW - shopAskW) / 2
-	openY := (screenH - shopAskH) / 2
+	pressed, closed := b.drawMessageBox(&b.shopAskWindow, screenW, screenH,
+		"message", "Please select a Deal Type.", []msgButton{
+			{id: "shop_ask_buy", label: "buy"},
+			{id: "shop_ask_sell", label: "sell"},
+			{id: "shop_ask_cancel", label: "cancel"},
+		})
 
-	draw, closed := b.shopAskWindow.begin(b.ctx, true,
-		openX, openY, shopAskW, shopAskH, "Shop", ui2d.WindowOptions{Closable: true})
-
-	if closed {
+	switch {
+	case closed, pressed == "shop_ask_cancel":
 		b.shopAction = shopActionState{close: true}
+	case pressed == "shop_ask_buy":
+		b.shopAction = shopActionState{ask: true, deal: packets.DealBuy}
+	case pressed == "shop_ask_sell":
+		b.shopAction = shopActionState{ask: true, deal: packets.DealSell}
 	}
-
-	if !draw {
-		return
-	}
-
-	x, y := b.shopAskWindow.rect(b.ctx, openX, openY)
-
-	btnY := y + ui2d.FrameTitleH + escPad
-
-	for _, choice := range []struct {
-		id    string
-		label string
-		deal  uint8
-	}{
-		{"shop_ask_buy", "Buy", packets.DealBuy},
-		{"shop_ask_sell", "Sell", packets.DealSell},
-	} {
-		box := ui2d.Rect{X: x + escPad, Y: btnY, W: escBtnW, H: escBtnH}
-		btnY += escBtnH + escBtnG
-
-		b.drawFlatButton(box, choice.label, false)
-
-		if b.ctx.InvisibleButtonAt(choice.id, box.X, box.Y, box.W, box.H) {
-			b.shopAction = shopActionState{ask: true, deal: choice.deal}
-		}
-	}
-
-	b.ctx.EndWindow()
 }
 
 // shopRow is one line of either list, flattened so both sides draw the same.
