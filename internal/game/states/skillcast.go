@@ -508,6 +508,12 @@ func (s *InGameState) UseSkillAt(skillID uint16, level, cellX, cellY int) error 
 		return nil
 	}
 
+	// A corpse casts nothing. The skill it was holding is dropped on dying,
+	// so this is only reached by whatever was already in the air.
+	if s.playerDead {
+		return nil
+	}
+
 	skill, known := s.findSkill(skillID)
 	if !known {
 		return nil

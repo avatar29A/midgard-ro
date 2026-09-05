@@ -1472,6 +1472,13 @@ func (s *InGameState) takeInventory(
 // new count, and acting before it does would show a potion drunk that the
 // server refused.
 func (s *InGameState) UseItem(index int) error {
+	// Nothing in the bag helps a corpse. The server refuses it, and a potion
+	// that appears to be drunk and does nothing is worse than a hotkey that
+	// does nothing.
+	if s.playerDead {
+		return nil
+	}
+
 	trace.Emit(trace.HUD, "use-item", zap.Int("index", index))
 
 	return s.client.Send(packets.EncodeUseItem(index))
@@ -1869,6 +1876,7 @@ func (s *InGameState) handleEntityVanish(data []byte) error {
 
 			s.forgetAttack()
 			s.forgetPendingPickup()
+			s.forgetPendingSkill()
 			s.forgetPendingBlows()
 		}
 
@@ -2539,6 +2547,19 @@ func (s *InGameState) ClickWorld(mouseX, mouseY, viewportW, viewportH float32) {
 		return
 	}
 
+	// A corpse does not take orders. Everything a click can mean here — walk,
+	// attack, pick that up, talk to them — is refused by the server for a
+	// character who is dead, but the walk is not refused visibly: the client
+	// starts it on its own and the body slid across the map in its death
+	// pose, past the window offering to put it back at the save point.
+	//
+	// The original does nothing at all with a click while you are dead, and
+	// that is the whole of it: the three buttons are the only thing left to
+	// press.
+	if s.playerDead {
+		return
+	}
+
 	// A skill waiting for a cell takes the click before anything else can:
 	// while one is held, clicking means "here" and not "walk there" or
 	// "attack that".
@@ -2644,6 +2665,16 @@ func (s *InGameState) RequestMove(tileX, tileY int) error {
 	if s.Casting() {
 		s.faceCell(tileX, tileY)
 
+		return nil
+	}
+
+	// Nor a corpse, and it does not turn to look either: unit_can_move is
+	// false while dead, so the server refuses the walk, and a body that
+	// swivels to face the pointer is not what the original leaves lying on
+	// the ground. This is the last gate rather than the only one — the click
+	// is already dropped in ClickWorld — so that nothing else reaching here
+	// can walk a dead character.
+	if s.playerDead {
 		return nil
 	}
 
