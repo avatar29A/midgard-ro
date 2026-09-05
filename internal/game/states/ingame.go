@@ -1346,6 +1346,49 @@ func (s *InGameState) handleUseItemAck(data []byte) error {
 	return nil
 }
 
+// takeFromBag subtracts from a slot, and takes the line out altogether when
+// nothing is left in it.
+//
+// The count is how many left the bag rather than how many remain, which is how
+// both the drop acknowledgement and the deletion packet report it.
+func (s *InGameState) takeFromBag(index, count int) {
+	for i := range s.inventory {
+		if s.inventory[i].Index != index {
+			continue
+		}
+
+		s.inventory[i].Count -= count
+		if s.inventory[i].Count <= 0 {
+			s.inventory = append(s.inventory[:i], s.inventory[i+1:]...)
+		}
+
+		return
+	}
+}
+
+// handleItemDeleted takes out what the server says has left the bag.
+//
+// Everything that removes an item without dropping it arrives here: sold at a
+// counter, put in storage or a cart, spent on a skill, burnt by a refine that
+// failed. Without it the bag goes on showing what the character no longer
+// has, until something else makes the server send the whole list again.
+func (s *InGameState) handleItemDeleted(data []byte) error {
+	gone, ok := packets.DecodeItemDeleted(data)
+	if !ok {
+		logger.Warn("short item deletion", zap.Int("len", len(data)))
+
+		return nil
+	}
+
+	s.takeFromBag(gone.Index, gone.Count)
+
+	trace.Emit(trace.HUD, "item-deleted",
+		zap.Int("index", gone.Index), zap.Int("count", gone.Count),
+		zap.Uint16("reason", gone.Reason))
+
+	return nil
+}
+
 // handleInventoryEquip takes the worn half.
 func (s *InGameState) handleInventoryEquip(data []byte) error {
 	return s.takeInventory(data, packets.EquipItemLen, "equip", packets.DecodeInventoryEquip)
@@ -1618,6 +1661,7 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_ITEM_DISAPPEAR, s.handleGroundItemGone)
 	s.client.RegisterHandler(packets.ZC_ITEM_PICKUP_ACK, s.handlePickupAck)
 	s.client.RegisterHandler(packets.ZC_ITEM_THROW_ACK, s.handleDropAck)
+	s.client.RegisterHandler(packets.ZC_DELETE_ITEM_FROM_BODY, s.handleItemDeleted)
 	s.client.RegisterHandler(packets.ZC_NOTIFY_ACT, s.handleDamage)
 	s.client.RegisterHandler(packets.ZC_MONSTER_HP_INFO, s.handleMonsterHP)
 	s.client.RegisterHandler(packets.ZC_ATTACK_RANGE, s.handleAttackRange)
