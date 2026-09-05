@@ -30,6 +30,17 @@ const (
 	msgBoxFooterH float32 = msgBoxBtnH + 2*msgBoxPad
 
 	msgBoxTextScale float32 = 0.85
+
+	// buttonTextScale is the label on a button, which is smaller than the
+	// text around it.
+	//
+	// Its own rather than the body's: a button is twenty pixels tall and the
+	// word inside it was set at the same size as a sentence in a window,
+	// which left it touching both edges and reading as text that had been
+	// squeezed into a button rather than a button with a word on it. Two
+	// points down is where it sits inside the art the way the original's
+	// does.
+	buttonTextScale float32 = 0.72
 )
 
 var (
@@ -171,11 +182,11 @@ func (b *UI2DBackend) drawFlatButton(box ui2d.Rect, label string, disabled bool)
 		r.DrawRectOutline(box.X, box.Y, box.W, box.H, 1, msgBoxBtnBorder)
 	}
 
-	textW, _ := r.MeasureText(label, msgBoxTextScale)
-	ascent := r.FontAscent(msgBoxTextScale)
+	textW, _ := r.MeasureText(label, buttonTextScale)
+	ascent := r.FontAscent(buttonTextScale)
 
 	r.DrawText(box.X+(box.W-textW)/2, box.Y+(box.H-ascent)/2, label,
-		msgBoxTextScale, text)
+		buttonTextScale, text)
 }
 
 // drawRoButton draws the art in three pieces, and reports whether it could.
