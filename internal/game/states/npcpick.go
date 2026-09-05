@@ -1,6 +1,8 @@
 package states
 
 import (
+	"strings"
+
 	"go.uber.org/zap"
 
 	"github.com/Faultbox/midgard-ro/internal/engine/picking"
@@ -228,6 +230,48 @@ func (s *InGameState) WarpApproach(warpX, warpY int) (x, y int, ok bool) {
 	}
 
 	return 0, 0, false
+}
+
+// TalkToNamed starts a conversation with the nearest NPC whose name contains
+// the text given, and reports whether one was found.
+//
+// By name because that is what a shop is known by from outside the client: a
+// tool dealer is a tool dealer on every map, and the ids are the server's and
+// change every restart.
+func (s *InGameState) TalkToNamed(name string) bool {
+	if s == nil || s.entityManager == nil || s.player == nil {
+		return false
+	}
+
+	var (
+		found *entity.Entity
+		best  float32
+	)
+
+	for _, e := range s.entityManager.All() {
+		if e.Type != entity.TypeNPC || e.Body == nil {
+			continue
+		}
+		if !strings.Contains(strings.ToLower(e.Name), strings.ToLower(name)) {
+			continue
+		}
+
+		dx := e.Body.RenderX - s.player.RenderX
+		dz := e.Body.RenderZ - s.player.RenderZ
+		away := dx*dx + dz*dz
+
+		if found == nil || away < best {
+			found, best = e, away
+		}
+	}
+
+	if found == nil {
+		return false
+	}
+
+	s.ContactNPC(found)
+
+	return true
 }
 
 // ContactNPC asks the server to start a conversation.
