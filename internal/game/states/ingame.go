@@ -254,12 +254,11 @@ type InGameState struct {
 	unitTraceAt time.Time
 
 	// Network timing
-	lastMoveTick    uint32
-	lastMoveSent    time.Time
-	lastWalkEnded   time.Time
-	wasWalking      bool
-	keepAliveSentAt time.Time
-	pingMs          float64
+	lastMoveTick  uint32
+	lastMoveSent  time.Time
+	lastWalkEnded time.Time
+	wasWalking    bool
+	pingMs        float64
 
 	// Click-to-move destination. The server will only path a limited distance
 	// per request, so a far click is walked in stages toward this.
@@ -274,7 +273,6 @@ type InGameState struct {
 	hasPrediction                bool
 	predictions, predictionHits  int
 	moveTickRate                 time.Duration
-	lastKeepAlive                time.Time
 	keepAliveInterval            time.Duration
 	enterTime                    time.Time // Used as the local epoch for ClientTick
 
@@ -373,7 +371,20 @@ func (s *InGameState) Enter() error {
 	// Mark entry time — used as the local epoch for ClientTick and as the
 	// gate for the keep-alive ticker (only run after we're actually in-game).
 	s.enterTime = time.Now()
-	s.lastKeepAlive = s.enterTime
+
+	// Arm the keep-alive off the game loop, so a stalled render thread — a
+	// display asleep, a screen recording holding the buffer swap — cannot let
+	// the map server time the session out. The tick it carries is measured
+	// from entry, captured here so the goroutine needs nothing of ours.
+	enter := s.enterTime
+	s.client.ArmKeepAlive(s.keepAliveInterval, func() []byte {
+		pkt := &packets.TickSend{
+			PacketID:   packets.CZ_REQUEST_TIME,
+			ClientTick: uint32(time.Since(enter).Milliseconds()),
+		}
+
+		return pkt.Encode()
+	})
 
 	// The load starts before the handlers exist: registering them delivers
 	// whatever was held for us, and the login-time ZC_NPCACK_MAPMOVE is in
@@ -800,13 +811,6 @@ func (s *InGameState) Update(dt float64) error {
 	// Process network
 	if err := s.client.Process(); err != nil {
 		s.ErrorMsg = fmt.Sprintf("Network error: %v", err)
-	}
-
-	// Keep-alive: rAthena's map server drops the session after a few seconds
-	// of silence. Send CZ_REQUEST_TIME at keepAliveInterval cadence.
-	if !s.enterTime.IsZero() && time.Since(s.lastKeepAlive) >= s.keepAliveInterval {
-		s.sendKeepAlive()
-		s.lastKeepAlive = time.Now()
 	}
 
 	// Bring the map in, a phase or a few models per frame. Nothing else
@@ -1694,27 +1698,16 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_MENU_LIST, s.handleMenuList)
 }
 
-// sendKeepAlive sends CZ_REQUEST_TIME so the map server doesn't time us out.
-func (s *InGameState) sendKeepAlive() {
-	pkt := &packets.TickSend{
-		PacketID:   packets.CZ_REQUEST_TIME,
-		ClientTick: uint32(time.Since(s.enterTime).Milliseconds()),
-	}
-	s.keepAliveSentAt = time.Now()
-	if err := s.client.Send(pkt.Encode()); err != nil {
-		logger.Warn("keep-alive send failed", zap.Error(err))
-	}
-}
-
 // handleServerTick measures the round trip on ZC_NOTIFY_TIME. The keep-alive
 // is the only exchange with an unambiguous request/response pairing, so it is
 // the honest place to measure latency — walk acknowledgements can't be matched
 // to their request when several are in flight.
 func (s *InGameState) handleServerTick(_ []byte) error {
-	if s.keepAliveSentAt.IsZero() {
+	sentAt := s.client.LastKeepAliveAt()
+	if sentAt.IsZero() {
 		return nil
 	}
-	rtt := float64(time.Since(s.keepAliveSentAt).Microseconds()) / 1000
+	rtt := float64(time.Since(sentAt).Microseconds()) / 1000
 	s.pingMs = rtt
 	trace.Emit(trace.Move, "ping", zap.Float64("rttMs", rtt))
 	return nil
