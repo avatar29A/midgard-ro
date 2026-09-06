@@ -1259,6 +1259,83 @@ type delayedEffect struct {
 	delayMs float32
 }
 
+// delayedSound is a sound waiting for the blow it belongs to.
+//
+// Its own list rather than a field on delayedEffect: a volley's shots are
+// drawn by one burst that already knows how to lay them out over time, so
+// there is nothing to draw at each blow — only something to hear.
+type delayedSound struct {
+	path    string
+	delayMs float32
+}
+
+// playSoundIn asks for a sound a while from now.
+func (s *InGameState) playSoundIn(path string, delayMs float32) {
+	if path == "" {
+		return
+	}
+
+	if delayMs <= 0 {
+		s.playSound(path)
+
+		return
+	}
+
+	s.delayedSounds = append(s.delayedSounds, delayedSound{path: path, delayMs: delayMs})
+}
+
+// advanceDelayedSounds plays the ones whose moment has come.
+func (s *InGameState) advanceDelayedSounds(deltaMs float32) {
+	if len(s.delayedSounds) == 0 {
+		return
+	}
+
+	kept := s.delayedSounds[:0]
+	for _, waiting := range s.delayedSounds {
+		waiting.delayMs -= deltaMs
+		if waiting.delayMs > 0 {
+			kept = append(kept, waiting)
+
+			continue
+		}
+
+		s.playSound(waiting.path)
+	}
+
+	s.delayedSounds = kept
+}
+
+// playImpactSounds makes a list of effects heard.
+//
+// A skill that lands ten blows made one sound: the whole list was played the
+// moment the packet arrived, before the first shot of the volley had left the
+// caster. What the archive keeps says otherwise — ef_firearrow, ef_icearrow
+// and ef_lightbolt each ship with three numbered variants beside them, which
+// is a sound meant to be heard over and over rather than once.
+//
+// So an effect that lands its blows one after another is heard once for each
+// of them, at the moment that one lands. Everything else is heard once, as
+// before.
+func (s *InGameState) playImpactSounds(effects []string, hits int) {
+	for _, effect := range effects {
+		sound := effectSoundFor(effect)
+		if sound == "" {
+			continue
+		}
+
+		times := blowTimes(effect, hits)
+		if len(times) == 0 {
+			s.playSound(sound)
+
+			continue
+		}
+
+		for _, at := range times {
+			s.playSoundIn(sound, at)
+		}
+	}
+}
+
 // advanceDelayedEffects plays the ones whose moment has come.
 func (s *InGameState) advanceDelayedEffects(deltaMs float32) {
 	if len(s.delayedEffects) == 0 {
@@ -1284,6 +1361,10 @@ func (s *InGameState) advanceDelayedEffects(deltaMs float32) {
 		one := []string{waiting.effect}
 		s.playSkillEffects(one, x, y, z)
 		s.playSkillBursts(one, 1, s.casterAt(waiting.caster), [3]float32{x, y, z})
+
+		// And what it sounds like, here rather than when the skill arrived:
+		// this is a blow landing, and the sound of a blow belongs to it.
+		s.playSkillSounds(one)
 	}
 
 	s.delayedEffects = kept
@@ -1398,12 +1479,16 @@ func (s *InGameState) playSkillUseEffects(use packets.SkillUse) {
 					})
 				}
 			}
+			// The volley's own sound, once for every shot in it. What the
+			// shots hit with is heard as each one lands, from the delayed
+			// effects queued above.
+			s.playImpactSounds(bolts, hits)
 		} else if x, y, z, ok := s.effectHeight(use.TargetID); ok {
 			s.playSkillEffects(effects.OnTarget, x, y, z)
 			s.playSkillBursts(effects.OnTarget, hits, from, [3]float32{x, y, z})
-		}
 
-		s.playSkillSounds(effects.OnTarget)
+			s.playImpactSounds(effects.OnTarget, hits)
+		}
 	}
 
 	if use.Ground {

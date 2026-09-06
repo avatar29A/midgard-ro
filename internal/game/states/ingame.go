@@ -118,6 +118,10 @@ type InGameState struct {
 	// lands a while after the volley starts.
 	delayedEffects []delayedEffect
 
+	// delayedSounds are the ones waiting for the blow they belong to, which
+	// is how a volley is heard as the several blows it is rather than as one.
+	delayedSounds []delayedSound
+
 	// skillUnits are the ground skills standing on the map, by the id their
 	// blows arrive from. What is kept is the packet: who placed it, for the
 	// battle log, and where and what it is, for drawing it.
@@ -844,6 +848,7 @@ func (s *InGameState) Update(dt float64) error {
 		s.advancePendingSkill(deltaMs)
 		s.advanceBursts(deltaMs)
 		s.advanceDelayedEffects(deltaMs)
+		s.advanceDelayedSounds(deltaMs)
 		s.advanceUnitSounds()
 		s.advanceAmbientSounds(deltaMs)
 		s.advanceSpriteEffects(deltaMs)
