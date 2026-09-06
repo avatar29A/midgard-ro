@@ -190,8 +190,9 @@ func (b *UI2DBackend) drawMinimap(state InGameUIState, screenW float32) {
 		state.MapCellsX, state.MapCellsY, zoom, state.PlayerTileX, state.PlayerTileY)
 
 	// Centered on the cell rather than starting at it, so the marker sits on
-	// the player instead of below and to the right of them.
-	b.drawMinimapArrow(x+px, y+py, state.PlayerDirection)
+	// the player instead of below and to the right of them. The facing is the
+	// camera's, not the character's, so the arrow agrees with the screen.
+	b.drawMinimapArrow(x+px, y+py, state.MinimapArrowDir)
 }
 
 // drawMinimapArrow marks the player, pointing where they face.
