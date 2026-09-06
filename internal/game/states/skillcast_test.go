@@ -540,9 +540,9 @@ func TestASkillWithNoBoltsIsDrawnAtOnce(t *testing.T) {
 	}
 }
 
-// TestAWaitingHitGoesWithItsTarget: a flash where a monster used to stand is
-// worse than no flash, and a volley outlives what it kills.
-func TestAWaitingHitGoesWithItsTarget(t *testing.T) {
+// TestAWaitingHitGoesWithItsTargetWhenItWasNeverAimed: nothing was written
+// down about where the blow was going, so there is nowhere to land it.
+func TestAWaitingHitGoesWithItsTargetWhenItWasNeverAimed(t *testing.T) {
 	s, mob := withMob()
 	s.delayedEffects = []delayedEffect{{effect: "EF_COLDHIT", target: mob.ID, delayMs: 100}}
 
@@ -553,7 +553,30 @@ func TestAWaitingHitGoesWithItsTarget(t *testing.T) {
 		t.Errorf("%d hits still waiting for a target that has gone", len(s.delayedEffects))
 	}
 	if len(s.bursts) != 0 {
-		t.Error("a hit played on a target that has gone")
+		t.Error("a hit played on a target with nowhere to play it")
+	}
+}
+
+// TestAVolleyFinishesOverWhatItKilled: a blow that has left is going to land
+// whether or not what it was aimed at is still standing.
+//
+// The shots of a volley are drawn by one burst and fall however the fight
+// goes, so dropping the flashes alone left ten shots coming down on nothing.
+func TestAVolleyFinishesOverWhatItKilled(t *testing.T) {
+	s, mob := withMob()
+	s.delayedEffects = []delayedEffect{{
+		effect: "EF_COLDHIT", target: mob.ID,
+		at: [3]float32{10, 20, 30}, delayMs: 100,
+	}}
+
+	s.entityManager.Remove(mob.ID)
+	s.advanceDelayedEffects(200)
+
+	if len(s.delayedEffects) != 0 {
+		t.Errorf("%d hits are still waiting", len(s.delayedEffects))
+	}
+	if len(s.bursts) != 1 {
+		t.Fatalf("%d hits landed, want the one that was aimed", len(s.bursts))
 	}
 }
 
@@ -875,5 +898,58 @@ func TestAWaitingSoundIsHeardWhenItsMomentComes(t *testing.T) {
 	}
 	if len(s.delayedSounds) != 0 {
 		t.Errorf("it is still waiting: %+v", s.delayedSounds)
+	}
+}
+
+// TestLightningIsFiledUnderTheStrikeItDraws is the fault this was written for:
+// there is no lightbolt.str in the archive, so Lightning Bolt asked for a file
+// that has never existed and drew nothing whatever.
+func TestLightningIsFiledUnderTheStrikeItDraws(t *testing.T) {
+	if got := effectFileFor("EF_LIGHTBOLT"); got != "lightning.str" {
+		t.Errorf("EF_LIGHTBOLT is drawn from %q", got)
+	}
+
+	// And the ordinary case is untouched: the name is the file.
+	if got := effectFileFor("EF_FIREHIT"); got != "firehit.str" {
+		t.Errorf("EF_FIREHIT is drawn from %q", got)
+	}
+	if got := effectFileFor("NOT_AN_EFFECT"); got != "" {
+		t.Errorf("a name that is not an effect gave %q", got)
+	}
+}
+
+// TestOnlyLightningStrikesPerBlow: the volley rule is on the effect, not on
+// having several hits, or every skill in the game would strike ten times.
+func TestOnlyLightningStrikesPerBlow(t *testing.T) {
+	if !volleyed([]string{"EF_LIGHTBOLT", "EF_WINDHIT"}) {
+		t.Error("Lightning Bolt does not read as a volley")
+	}
+
+	// The whole list goes with it: the strike and the spark it makes are two
+	// halves of one blow.
+	if volleyed([]string{"EF_FIREARROW", "EF_FIREHIT"}) {
+		t.Error("a bolt volley reads as a strike volley, and would be drawn twice")
+	}
+	if volleyed([]string{"EF_HEAL"}) || volleyed(nil) {
+		t.Error("something that lands one blow reads as a volley")
+	}
+}
+
+// TestStrikesKeepTheVolleyCadence: the same skill at the same level, so the
+// same spacing the bolts keep — without the flight, since a strike arrives
+// where it is aimed.
+func TestStrikesKeepTheVolleyCadence(t *testing.T) {
+	if got := strikeMs(0); got != 0 {
+		t.Errorf("the first strike waits %v, want none", got)
+	}
+
+	first, second := strikeMs(1), strikeMs(2)
+	if first <= 0 || second-first != first {
+		t.Errorf("the strikes fall at 0, %v, %v — want an even cadence", first, second)
+	}
+	// The same cadence a shot keeps, to within what subtracting two larger
+	// numbers costs.
+	if gap := boltImpactMs(1) - boltImpactMs(0); gap < first-0.01 || gap > first+0.01 {
+		t.Errorf("a strike waits %v between blows, a shot %v", first, gap)
 	}
 }
