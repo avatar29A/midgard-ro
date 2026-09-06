@@ -1911,10 +1911,12 @@ func (s *InGameState) handleEntityVanish(data []byte) error {
 	}
 
 	if reason == packets.VanishDied {
+		// Laid down rather than taken away: the fade begins when the death
+		// animation has finished, not when the packet says it started.
 		s.killUnit(aid)
+	} else {
+		removeUnit(s.entityManager, aid)
 	}
-
-	removeUnit(s.entityManager, aid)
 	trace.Emit(trace.Net, "vanish",
 		zap.Uint32("aid", aid),
 		zap.Uint8("reason", reason),
@@ -1924,19 +1926,28 @@ func (s *InGameState) handleEntityVanish(data []byte) error {
 
 // killUnit lays a unit down where it stands.
 //
-// It is taken off the map when the fade finishes rather than blinking out
-// mid-blow, which is what removeUnit begins.
+// The body stays. It plays its death animation, lies there a moment, and only
+// then begins to fade — updateUnits counts that out from the sprite's own
+// figures. Fading from the packet instead, as this did, gave every monster in
+// the game a fifth of a second to fall over in, which is two frames of an
+// animation nobody ever saw.
+//
+// A unit with nothing to draw has no animation to wait for and goes at once.
 func (s *InGameState) killUnit(aid uint32) {
 	if s.entityManager == nil {
 		return
 	}
 
-	if e := s.entityManager.Get(aid); e != nil && e.Body != nil {
-		e.IsDead = true
-		e.Body.Die()
+	e := s.entityManager.Get(aid)
+	if e == nil || e.Body == nil {
+		removeUnit(s.entityManager, aid)
+
+		return
 	}
 
-	removeUnit(s.entityManager, aid)
+	e.IsDead = true
+	e.DeadMs = 0
+	e.Body.Die()
 }
 
 // warnIfUndrawable says so when a unit arrives that nothing can draw.

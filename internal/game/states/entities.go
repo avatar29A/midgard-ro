@@ -240,6 +240,15 @@ func removeUnit(m *entity.Manager, aid uint32) {
 	}
 }
 
+// corpseLingerMs is how long a body lies still after its death animation has
+// finished, before it begins to fade.
+//
+// The animation is most of what is watched and every monster's is its own
+// length, so the wait is the animation plus this rather than a figure picked
+// for all of them. Long enough to read the pose it ends on; short enough that
+// a field cleared of porings does not stay carpeted with them.
+const corpseLingerMs = 400
+
 // UnitAnimFunc reports how a unit's sprite animates for an action and facing:
 // how many frames it has, so the loop is the right length, and how long each
 // is held, so it runs at the rate its own ACT specifies.
@@ -282,6 +291,11 @@ func updateUnits(m *entity.Manager, deltaMs float32, anim UnitAnimFunc) {
 		e.Body.UpdateRenderPosition(deltaMs)
 
 		idle, walk, once, standby := 0, 0, 0, 0
+
+		// Kept out here: how long the animation being played runs is what
+		// says how long a corpse lies there, which is decided below.
+		onceMs := float32(0)
+
 		if anim != nil {
 			var idleMs, walkMs float32
 			idle, idleMs = anim(e, entity.ActionIdle, e.Body.Direction)
@@ -302,7 +316,6 @@ func updateUnits(m *entity.Manager, deltaMs float32, anim UnitAnimFunc) {
 			// Asking for every action every frame would bake a sheet's worth
 			// of animations the first time anything walked into view.
 			if playing := e.Body.PlayingAction(); playing >= 0 {
-				var onceMs float32
 				once, onceMs = anim(e, playing, e.Body.Direction)
 				e.Body.AnimIntervalMs[playing] = onceMs
 			}
@@ -311,5 +324,21 @@ func updateUnits(m *entity.Manager, deltaMs float32, anim UnitAnimFunc) {
 		// count. Other players will, once ZC_NOTIFY_ACT's sit is applied to
 		// them too rather than only to us.
 		e.Body.AdvanceAnimation(deltaMs, idle, walk, once, standby, 0)
+
+		// A body lies where it fell for as long as its own death animation
+		// runs, and only then starts to fade.
+		//
+		// It used to begin fading on the packet that reported the death, and
+		// the fade is a fifth of a second: every monster in the game blinked
+		// out two frames into falling over. The count comes from the sprite,
+		// which is already being asked how long the animation it is playing
+		// is — and the animation it is playing is the death.
+		if e.IsDead && !e.Leaving {
+			e.DeadMs += deltaMs
+
+			if e.DeadMs >= float32(once)*onceMs+corpseLingerMs {
+				e.BeginLeaving()
+			}
+		}
 	}
 }

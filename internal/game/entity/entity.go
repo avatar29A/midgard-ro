@@ -116,6 +116,11 @@ type Entity struct {
 	IsTargetable bool
 	IsDead       bool
 
+	// DeadMs is how long a killed unit has been lying where it fell. A corpse
+	// keeps its own death animation before it starts to fade, and this is
+	// what counts that out.
+	DeadMs float32
+
 	// Leaving marks a unit the server has removed but which is still fading
 	// out, and FadeMs is how far through the current fade it is.
 	Leaving bool
