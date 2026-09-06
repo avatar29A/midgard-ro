@@ -59,6 +59,19 @@ type Client struct {
 	rxErr  chan error
 	rxStop chan struct{}
 
+	// keepAliveStop ends the background keep-alive goroutine, and
+	// keepAliveAt is when it last sent — read back to measure the round trip.
+	//
+	// The keep-alive runs off the game loop on purpose. rAthena drops a
+	// session after about thirty seconds of silence, and the loop that used
+	// to send it stalls whenever macOS holds the GL buffer swap — a display
+	// asleep, or a screen recording running. The loop stops, the packet stops
+	// with it, and the server times the session out while the client sits
+	// there thinking it is still connected. Off-thread, the socket is fed
+	// whether or not a frame is ever drawn.
+	keepAliveStop chan struct{}
+	keepAliveAt   time.Time
+
 	// Connection state
 	connected  bool
 	serverType ServerType
@@ -215,6 +228,10 @@ func (c *Client) Disconnect() {
 
 	// Signal first, then close: the reader is parked in Read, and closing the
 	// socket is what wakes it up.
+	if c.keepAliveStop != nil {
+		close(c.keepAliveStop)
+		c.keepAliveStop = nil
+	}
 	if c.rxStop != nil {
 		close(c.rxStop)
 		c.rxStop = nil
@@ -313,6 +330,64 @@ func (c *Client) deliverHeld(packetID uint16, handler PacketHandler) {
 func (c *Client) dropHeld() {
 	c.held = nil
 	c.heldCount = 0
+}
+
+// ArmKeepAlive starts sending build() every `every` from a background
+// goroutine, replacing any keep-alive already running.
+//
+// It is deliberately not driven by the game loop: see the field comment. The
+// caller hands a builder rather than a fixed packet because the keep-alive
+// carries a client tick that has to be fresh each time it is sent.
+func (c *Client) ArmKeepAlive(every time.Duration, build func() []byte) {
+	if every <= 0 || build == nil {
+		return
+	}
+
+	c.mu.Lock()
+	if c.keepAliveStop != nil {
+		close(c.keepAliveStop)
+	}
+	stop := make(chan struct{})
+	c.keepAliveStop = stop
+	c.mu.Unlock()
+
+	go c.keepAliveLoop(every, build, stop)
+}
+
+// keepAliveLoop sends on a ticker until it is stopped.
+func (c *Client) keepAliveLoop(every time.Duration, build func() []byte, stop chan struct{}) {
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			pkt := build()
+			if pkt == nil {
+				continue
+			}
+
+			c.mu.Lock()
+			c.keepAliveAt = time.Now()
+			c.mu.Unlock()
+
+			// A failed send means the connection is already going; the read
+			// loop reports the real reason. Nothing to do but wait to be
+			// stopped.
+			_ = c.Send(pkt)
+		}
+	}
+}
+
+// LastKeepAliveAt is when the background keep-alive last went out, for the
+// round-trip measured against its reply. Zero before the first one.
+func (c *Client) LastKeepAliveAt() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.keepAliveAt
 }
 
 // Send sends a packet to the server.
