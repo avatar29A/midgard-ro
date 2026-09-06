@@ -284,9 +284,14 @@ type InGameUIState struct {
 	PlayerX, PlayerY, PlayerZ float32
 	PlayerTileX, PlayerTileY  int
 	PlayerDirection           uint8
-	PlayerHasDest             bool
-	PlayerDestX, PlayerDestZ  float32
-	PlayerIsMoving            bool
+
+	// MinimapArrowDir is which of the eight facings the minimap arrow points,
+	// taken from the camera rather than the character: the map is north-up and
+	// the arrow should say where the camera looks, not where the body faces.
+	MinimapArrowDir          uint8
+	PlayerHasDest            bool
+	PlayerDestX, PlayerDestZ float32
+	PlayerIsMoving           bool
 
 	// Camera (debug)
 	CamX, CamY, CamZ float32
