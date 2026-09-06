@@ -58,6 +58,16 @@ func (s *InGameState) Shop() Shop {
 	return s.shop
 }
 
+// WorldHeld reports whether the world is refusing the pointer.
+//
+// The same two reasons ClickWorld turns a click away: a counter is open, or
+// the character is dead. The cursor asks so it can stop promising what a
+// click would do — hovering a warp through the shop window turned the pointer
+// into the door cursor for a door no click was going to take.
+func (s *InGameState) WorldHeld() bool {
+	return s.shop.Open() || s.playerDead
+}
+
 // handleDealType is a shopkeeper asking whether we mean to buy or to sell.
 func (s *InGameState) handleDealType(data []byte) error {
 	npc, ok := packets.DecodeDealType(data)
