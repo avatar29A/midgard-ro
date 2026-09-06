@@ -425,11 +425,23 @@ type Assets struct {
 }
 
 // FrameCount returns how many frames the given action/direction has.
+//
+// The action is logical — what the game wants played — and is mapped through
+// this appearance's own set, the way everything else here takes one. Keyed by
+// the ACT index instead, as it was, it answered for whichever set happened to
+// share the number: a player's death is logical action 5 and ACT set 7, so
+// asking how long the death animation was returned the length of the swing.
 func (s *Sheet) FrameCount(action, direction int) int {
-	if s == nil {
+	if s == nil || action < 0 || action >= LogicalActions {
 		return 0
 	}
-	return len(s.Frames[action*Directions+direction])
+
+	index := s.Actions[action]
+	if index < 0 {
+		return 0
+	}
+
+	return len(s.Frames[index*Directions+direction])
 }
 
 // Load resolves the sprite paths for spec, reads them from the archives and

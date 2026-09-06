@@ -540,9 +540,9 @@ func TestASkillWithNoBoltsIsDrawnAtOnce(t *testing.T) {
 	}
 }
 
-// TestAWaitingHitGoesWithItsTarget: a flash where a monster used to stand is
-// worse than no flash, and a volley outlives what it kills.
-func TestAWaitingHitGoesWithItsTarget(t *testing.T) {
+// TestAWaitingHitGoesWithItsTargetWhenItWasNeverAimed: nothing was written
+// down about where the blow was going, so there is nowhere to land it.
+func TestAWaitingHitGoesWithItsTargetWhenItWasNeverAimed(t *testing.T) {
 	s, mob := withMob()
 	s.delayedEffects = []delayedEffect{{effect: "EF_COLDHIT", target: mob.ID, delayMs: 100}}
 
@@ -553,7 +553,30 @@ func TestAWaitingHitGoesWithItsTarget(t *testing.T) {
 		t.Errorf("%d hits still waiting for a target that has gone", len(s.delayedEffects))
 	}
 	if len(s.bursts) != 0 {
-		t.Error("a hit played on a target that has gone")
+		t.Error("a hit played on a target with nowhere to play it")
+	}
+}
+
+// TestAVolleyFinishesOverWhatItKilled: a blow that has left is going to land
+// whether or not what it was aimed at is still standing.
+//
+// The shots of a volley are drawn by one burst and fall however the fight
+// goes, so dropping the flashes alone left ten shots coming down on nothing.
+func TestAVolleyFinishesOverWhatItKilled(t *testing.T) {
+	s, mob := withMob()
+	s.delayedEffects = []delayedEffect{{
+		effect: "EF_COLDHIT", target: mob.ID,
+		at: [3]float32{10, 20, 30}, delayMs: 100,
+	}}
+
+	s.entityManager.Remove(mob.ID)
+	s.advanceDelayedEffects(200)
+
+	if len(s.delayedEffects) != 0 {
+		t.Errorf("%d hits are still waiting", len(s.delayedEffects))
+	}
+	if len(s.bursts) != 1 {
+		t.Fatalf("%d hits landed, want the one that was aimed", len(s.bursts))
 	}
 }
 
@@ -811,5 +834,155 @@ func TestAGroundSkillWithNowhereToGo(t *testing.T) {
 
 	if _, _, ok := s.groundAimFor(0, 0, 0, 0); ok {
 		t.Error("a placement off the map was accepted")
+	}
+}
+
+// TestAVolleyIsHeardOncePerShot is the fault this was written for: a level
+// ten bolt made one sound, played the moment the packet arrived — before the
+// first shot had left the caster.
+func TestAVolleyIsHeardOncePerShot(t *testing.T) {
+	s := &InGameState{}
+
+	s.playImpactSounds([]string{"EF_FIREARROW"}, 4)
+
+	if len(s.sounds) != 0 {
+		t.Errorf("something was heard before the first shot landed: %+v", s.sounds)
+	}
+	if len(s.delayedSounds) != 4 {
+		t.Fatalf("%d sounds are waiting, want one per shot", len(s.delayedSounds))
+	}
+
+	// Each at its own shot's moment, and each the volley's own sound.
+	for i, waiting := range s.delayedSounds {
+		if waiting.delayMs != boltImpactMs(i) {
+			t.Errorf("shot %d is heard at %v, want %v", i, waiting.delayMs, boltImpactMs(i))
+		}
+		if waiting.path != effectSoundFor("EF_FIREARROW") {
+			t.Errorf("shot %d sounds like %q", i, waiting.path)
+		}
+	}
+}
+
+// TestASingleBlowIsStillHeardAtOnce: nothing waits for a skill that lands one.
+func TestASingleBlowIsStillHeardAtOnce(t *testing.T) {
+	s := &InGameState{}
+
+	s.playImpactSounds([]string{"EF_HEAL"}, 1)
+
+	if len(s.delayedSounds) != 0 {
+		t.Errorf("a single blow was made to wait: %+v", s.delayedSounds)
+	}
+	if len(s.sounds) != 1 {
+		t.Fatalf("%d sounds played, want one", len(s.sounds))
+	}
+	if s.sounds[0].Path != effectSoundFor("EF_HEAL") {
+		t.Errorf("it sounded like %q", s.sounds[0].Path)
+	}
+}
+
+// TestAWaitingSoundIsHeardWhenItsMomentComes, once, and is then gone.
+func TestAWaitingSoundIsHeardWhenItsMomentComes(t *testing.T) {
+	s := &InGameState{}
+	s.playSoundIn("a.wav", 100)
+
+	s.advanceDelayedSounds(40)
+
+	if len(s.sounds) != 0 {
+		t.Errorf("heard early: %+v", s.sounds)
+	}
+
+	s.advanceDelayedSounds(80)
+
+	if len(s.sounds) != 1 || s.sounds[0].Path != "a.wav" {
+		t.Errorf("the sounds are %+v, want the one", s.sounds)
+	}
+	if len(s.delayedSounds) != 0 {
+		t.Errorf("it is still waiting: %+v", s.delayedSounds)
+	}
+}
+
+// TestLightningIsFiledUnderTheStrikeItDraws is the fault this was written for:
+// there is no lightbolt.str in the archive, so Lightning Bolt asked for a file
+// that has never existed and drew nothing whatever.
+func TestLightningIsFiledUnderTheStrikeItDraws(t *testing.T) {
+	if got := effectFileFor("EF_LIGHTBOLT"); got != "lightning.str" {
+		t.Errorf("EF_LIGHTBOLT is drawn from %q", got)
+	}
+
+	// And the ordinary case is untouched: the name is the file.
+	if got := effectFileFor("EF_FIREHIT"); got != "firehit.str" {
+		t.Errorf("EF_FIREHIT is drawn from %q", got)
+	}
+	if got := effectFileFor("NOT_AN_EFFECT"); got != "" {
+		t.Errorf("a name that is not an effect gave %q", got)
+	}
+}
+
+// TestOnlyLightningStrikesPerBlow: the volley rule is on the effect, not on
+// having several hits, or every skill in the game would strike ten times.
+func TestOnlyLightningStrikesPerBlow(t *testing.T) {
+	if !volleyed([]string{"EF_LIGHTBOLT", "EF_WINDHIT"}) {
+		t.Error("Lightning Bolt does not read as a volley")
+	}
+
+	// The whole list goes with it: the strike and the spark it makes are two
+	// halves of one blow.
+	if volleyed([]string{"EF_FIREARROW", "EF_FIREHIT"}) {
+		t.Error("a bolt volley reads as a strike volley, and would be drawn twice")
+	}
+	if volleyed([]string{"EF_HEAL"}) || volleyed(nil) {
+		t.Error("something that lands one blow reads as a volley")
+	}
+}
+
+// TestStrikesKeepTheVolleyCadence: the same skill at the same level, so the
+// same spacing the bolts keep — without the flight, since a strike arrives
+// where it is aimed.
+func TestStrikesKeepTheVolleyCadence(t *testing.T) {
+	if got := strikeMs(0); got != 0 {
+		t.Errorf("the first strike waits %v, want none", got)
+	}
+
+	first, second := strikeMs(1), strikeMs(2)
+	if first <= 0 || second-first != first {
+		t.Errorf("the strikes fall at 0, %v, %v — want an even cadence", first, second)
+	}
+	// The same cadence a shot keeps, to within what subtracting two larger
+	// numbers costs.
+	if gap := boltImpactMs(1) - boltImpactMs(0); gap < first-0.01 || gap > first+0.01 {
+		t.Errorf("a strike waits %v between blows, a shot %v", first, gap)
+	}
+}
+
+// TestTheBlowWaitsForTheBoltToCrack is the fault this was written for: the
+// figure and the flinch went up on the caster's own motion, and lightning.str
+// draws nothing for most of a second, so the damage happened before the spell
+// did.
+func TestTheBlowWaitsForTheBoltToCrack(t *testing.T) {
+	lead := strikeLeadMs([]string{"EF_LIGHTBOLT", "EF_WINDHIT"})
+
+	if want := burstFrames(53); lead != want {
+		t.Errorf("the blow waits %v, want the %v the bolt takes to crack", lead, want)
+	}
+
+	// Long enough to matter: a swing's own hit frame is a fraction of this.
+	if lead < 500 {
+		t.Errorf("the lead is %v, which would not have been the fault", lead)
+	}
+}
+
+// TestAnEffectThatStartsWithItsBlowMakesNobodyWait: nearly all of them are the
+// flash of the hit itself, and delaying those would put every blow in the game
+// behind its own picture.
+func TestAnEffectThatStartsWithItsBlowMakesNobodyWait(t *testing.T) {
+	for _, effects := range [][]string{
+		{"EF_FIREARROW", "EF_FIREHIT"},
+		{"EF_ICEARROW", "EF_COLDHIT"},
+		{"EF_SOULSTRIKE"},
+		nil,
+	} {
+		if lead := strikeLeadMs(effects); lead != 0 {
+			t.Errorf("%v makes its blow wait %v", effects, lead)
+		}
 	}
 }

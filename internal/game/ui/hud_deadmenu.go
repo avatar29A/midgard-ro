@@ -35,6 +35,11 @@ const deadWindowID = "hud_dead_menu"
 
 const deadMenuW = escBtnW + 2*escPad
 
+// deadMenuHeightOnScreen is how far down the screen the window opens, as a
+// fraction of its height. Far enough above the middle to leave the corpse and
+// the ghost over it in the clear, near enough to still read as the middle of things.
+const deadMenuHeightOnScreen = 0.36
+
 // deadMenuItems are its buttons, in the order the original lists them.
 var deadMenuItems = []struct {
 	id     string
@@ -71,8 +76,13 @@ func (b *UI2DBackend) drawDeadMenu(state InGameUIState, screenW, screenH float32
 	}
 
 	// Only where it opens: once dragged, the window keeps its own position.
+	//
+	// Above the middle rather than on it. The camera holds the character at
+	// the center of the screen, so a window centered there covers the body it
+	// is about — and with it the ghost the archive hangs over a corpse, which
+	// is the one thing on screen that says what has happened.
 	openX := (screenW - deadMenuW) / 2
-	openY := (screenH - deadMenuH) / 2
+	openY := screenH*deadMenuHeightOnScreen - deadMenuH/2
 
 	// A zero WindowOptions is a window with no system buttons: it cannot be
 	// closed or minimized, which is the point of it.

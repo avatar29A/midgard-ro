@@ -24,6 +24,7 @@ import (
 	"github.com/Faultbox/midgard-ro/internal/game/ui"
 	"github.com/Faultbox/midgard-ro/internal/logger"
 	"github.com/Faultbox/midgard-ro/internal/network"
+	"github.com/Faultbox/midgard-ro/internal/network/packets"
 	"github.com/Faultbox/midgard-ro/internal/trace"
 )
 
@@ -121,6 +122,18 @@ type Game struct {
 
 	// useItems is --use-item, waiting for the bag.
 	useItems []int
+
+	// talkTo is --talk-to, waiting for the NPCs to arrive.
+	talkTo []string
+
+	// shopClose is --shop-close, waiting for a counter to open.
+	shopClose bool
+
+	// shopDeal is --shop-deal, waiting for a shop to ask.
+	shopDeal string
+
+	// shopBuys is --shop-buy, waiting for a shop to open.
+	shopBuys []int
 
 	// holdCastAura is --cast-aura, waiting for the map.
 	holdCastAura bool
@@ -594,6 +607,10 @@ func (g *Game) frame() {
 	g.runItemInfo()
 	g.runCardView()
 	g.runUseItems()
+	g.runTalkTo()
+	g.runShopDeal()
+	g.runShopBuys()
+	g.runShopClose()
 	g.runHoldCastAura()
 	g.runSay()
 
@@ -868,6 +885,120 @@ func (g *Game) runItemInfo() {
 
 	g.uiBackend.ShowItemInfo(g.itemInfo)
 	g.itemInfo = 0
+}
+
+// SetTalkTo records the NPCs --talk-to asked to talk to.
+func (g *Game) SetTalkTo(names []string) {
+	g.talkTo = names
+}
+
+// SetShopClose records that --shop-close asked for the first shop to be shut.
+func (g *Game) SetShopClose(on bool) {
+	g.shopClose = on
+}
+
+// runShopClose shuts the first counter that opens.
+func (g *Game) runShopClose() {
+	if !g.shopClose {
+		return
+	}
+
+	state, ok := g.stateManager.Current().(*states.InGameState)
+	if !ok || !state.Shop().Open() {
+		return
+	}
+
+	state.CloseShop()
+
+	g.shopClose = false
+}
+
+// runTalkTo starts the conversation once the map and its NPCs are up.
+//
+// Retried until one is found rather than given up on: the NPCs arrive after
+// the map does, a few packets behind, and the first frame that has a map has
+// nobody standing on it.
+func (g *Game) runTalkTo() {
+	if len(g.talkTo) == 0 {
+		return
+	}
+
+	state, ok := g.stateManager.Current().(*states.InGameState)
+	if !ok || !state.MapReady() {
+		return
+	}
+
+	// One at a time, and not while a counter is still open: the server
+	// refuses a second conversation while one is in hand, which is the very
+	// thing a second --talk-to is there to check.
+	if state.Shop().Open() {
+		return
+	}
+
+	if !state.TalkToNamed(g.talkTo[0]) {
+		return
+	}
+
+	logger.Info("talking to the NPC asked for on the command line",
+		zap.String("name", g.talkTo[0]))
+
+	g.talkTo = g.talkTo[1:]
+}
+
+// SetShopDeal records which side of the counter --shop-deal asked for.
+func (g *Game) SetShopDeal(deal string) {
+	g.shopDeal = deal
+}
+
+// runShopDeal answers the buy-or-sell question when a shop asks it.
+func (g *Game) runShopDeal() {
+	if g.shopDeal == "" {
+		return
+	}
+
+	state, ok := g.stateManager.Current().(*states.InGameState)
+	if !ok || state.Shop().Mode != states.ShopChoosing {
+		return
+	}
+
+	deal := packets.DealBuy
+	if g.shopDeal == "sell" {
+		deal = packets.DealSell
+	}
+
+	if err := state.ChooseDeal(deal); err != nil {
+		logger.Warn("--shop-deal request failed", zap.Error(err))
+	}
+
+	g.shopDeal = ""
+}
+
+// SetShopBuys records what --shop-buy asked to buy.
+func (g *Game) SetShopBuys(ids []int) {
+	g.shopBuys = ids
+}
+
+// runShopBuys places the order once the shelf is up.
+func (g *Game) runShopBuys() {
+	if len(g.shopBuys) == 0 {
+		return
+	}
+
+	state, ok := g.stateManager.Current().(*states.InGameState)
+	if !ok || state.Shop().Mode != states.ShopBuying {
+		return
+	}
+
+	order := make([]packets.ShopOrder, 0, len(g.shopBuys))
+	for _, id := range g.shopBuys {
+		order = append(order, packets.ShopOrder{ID: uint32(id), Amount: 1})
+	}
+
+	if err := state.Buy(order); err != nil {
+		logger.Warn("--shop-buy request failed", zap.Error(err))
+	}
+
+	g.shopBuys = nil
 }
 
 // SetUseItems records the items --use-item asked to use.
@@ -1330,6 +1461,7 @@ func (g *Game) renderUI() {
 
 			Skills:        state.Skills(),
 			Inventory:     state.Inventory(),
+			Shop:          state.Shop(),
 			Equipment:     state.Equipment(),
 			ShowEquipment: state.ShowEquipmentOn(),
 
@@ -1451,6 +1583,27 @@ func (g *Game) renderUI() {
 				logger.Warn("could not ask to quit", zap.Error(err))
 			}
 		case ui.EscNone:
+		}
+
+		// What the counter was asked for. Buying and selling go out; the
+		// buy-or-sell answer is its own packet; closing needs none at all.
+		if shop, ok := g.uiBackend.TakeShopAction(); ok {
+			var err error
+
+			switch {
+			case shop.Ask:
+				err = state.ChooseDeal(shop.Deal)
+			case shop.Close:
+				state.CloseShop()
+			case shop.Sell:
+				err = state.Sell(shop.Order)
+			default:
+				err = state.Buy(shop.Order)
+			}
+
+			if err != nil {
+				logger.Warn("could not act on the shop", zap.Error(err))
+			}
 		}
 
 		// The same three ways out, from the window that comes up on dying.

@@ -37,8 +37,12 @@ var (
 	flagItemInfo   = flag.String("item-info", "", "Once in game, open the item information window on this item id (QA aid)")
 	flagCardView   = flag.String("card-view", "", "Once in game, open the card drawing window on this card id (QA aid)")
 	flagUseItem    = flag.String("use-item", "", "Once in game, use the items with these ids, e.g. 601 (QA aid)")
+	flagShopDeal   = flag.String("shop-deal", "", "When a shop asks, answer buy or sell (QA aid)")
+	flagShopBuy    = flag.String("shop-buy", "", "Once a shop is open, buy one of each of these item ids (QA aid)")
+	flagShopClose  = flag.Bool("shop-close", false, "Close the first shop that opens, to test opening one twice (QA aid)")
 
-	flagSay sayLines
+	flagSay    sayLines
+	flagTalkTo sayLines
 )
 
 // sayLines collects every --say, in the order they were given.
@@ -53,6 +57,10 @@ func (s *sayLines) Set(v string) error {
 }
 
 func init() {
+	flag.Var(&flagTalkTo, "talk-to",
+		"Once in game, talk to the nearest NPC whose name contains this. "+
+			"Repeatable; each waits for the one before it to be done with (QA aid)")
+
 	flag.Var(&flagSay, "say",
 		"Once in game, type this line into the chat box and send it. Repeatable; "+
 			"lines go in order, e.g. --say \"@commands\" --say \"/where\" (QA aid)")
@@ -131,6 +139,26 @@ func ItemInfo() int {
 	}
 
 	return ids[0]
+}
+
+// TalkTo returns the NPC names --talk-to asked to talk to, in order.
+func TalkTo() []string {
+	return flagTalkTo
+}
+
+// ShopDeal returns which side of the counter --shop-deal asked for.
+func ShopDeal() string {
+	return *flagShopDeal
+}
+
+// ShopClose reports whether --shop-close asked for the first shop to be shut.
+func ShopClose() bool {
+	return *flagShopClose
+}
+
+// ShopBuys returns the item ids --shop-buy asked to buy.
+func ShopBuys() []int {
+	return intList(*flagShopBuy)
 }
 
 // UseItems returns the item ids --use-item asked to use, in order.

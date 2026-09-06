@@ -1,6 +1,7 @@
 package states
 
 import (
+	"encoding/binary"
 	"testing"
 
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
@@ -67,4 +68,60 @@ func TestInventoryMergeReportsWhatItDid(t *testing.T) {
 	if added != 0 || replaced != 1 {
 		t.Errorf("repeat delivery reported added=%d replaced=%d, want 0 and 1", added, replaced)
 	}
+}
+
+// TestASoldItemLeavesTheBag: the server says what has gone with its own
+// packet, and a client that does not listen for it goes on drawing what the
+// character no longer has. Selling three of a stack of five leaves two.
+func TestASoldItemLeavesTheBag(t *testing.T) {
+	s := &InGameState{inventory: []packets.InventoryItem{
+		{Index: 3, ID: 507, Count: 5},
+		{Index: 4, ID: 501, Count: 1},
+	}}
+
+	if err := s.handleItemDeleted(itemDeletedPacket(3, 3, packets.ItemDeletedSold)); err != nil {
+		t.Fatalf("handling the deletion: %v", err)
+	}
+
+	if len(s.inventory) != 2 {
+		t.Fatalf("the bag holds %d rows, want both still there: %+v", len(s.inventory), s.inventory)
+	}
+	if s.inventory[0].Count != 2 {
+		t.Errorf("the stack is %d, want the two that were not sold", s.inventory[0].Count)
+	}
+
+	// And the whole of a stack takes the row with it, rather than leaving a
+	// line with nought against it.
+	if err := s.handleItemDeleted(itemDeletedPacket(3, 2, packets.ItemDeletedSold)); err != nil {
+		t.Fatalf("handling the deletion: %v", err)
+	}
+
+	if len(s.inventory) != 1 || s.inventory[0].Index != 4 {
+		t.Errorf("the bag holds %+v, want only the other slot", s.inventory)
+	}
+}
+
+// TestADeletionForASlotWeDoNotHoldIsIgnored: a packet for a slot the bag has
+// never heard of changes nothing, rather than taking out whatever is first.
+func TestADeletionForASlotWeDoNotHoldIsIgnored(t *testing.T) {
+	s := &InGameState{inventory: []packets.InventoryItem{{Index: 3, ID: 507, Count: 5}}}
+
+	if err := s.handleItemDeleted(itemDeletedPacket(99, 1, packets.ItemDeletedNormal)); err != nil {
+		t.Fatalf("handling the deletion: %v", err)
+	}
+
+	if len(s.inventory) != 1 || s.inventory[0].Count != 5 {
+		t.Errorf("the bag came out as %+v", s.inventory)
+	}
+}
+
+// itemDeletedPacket builds a ZC_DELETE_ITEM_FROM_BODY the way the server does.
+func itemDeletedPacket(index, count int, reason uint16) []byte {
+	pkt := make([]byte, 8)
+	binary.LittleEndian.PutUint16(pkt, packets.ZC_DELETE_ITEM_FROM_BODY)
+	binary.LittleEndian.PutUint16(pkt[2:], reason)
+	binary.LittleEndian.PutUint16(pkt[4:], uint16(index))
+	binary.LittleEndian.PutUint16(pkt[6:], uint16(count))
+
+	return pkt
 }

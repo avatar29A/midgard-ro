@@ -38,7 +38,35 @@ var effectScales = map[string][2]float32{
 	// flames still short. Wide enough that the cells run together, tall
 	// enough to stand over a character.
 	"firewall": {3.1, 4.0},
+
+	// The ghost over a corpse. Twice, because that is what this scale is out
+	// by against the one a character is drawn at: measured against the mage
+	// it hangs over, an effect pixel comes out half the size of a body pixel
+	// here. Left at one it was a small thing sitting among the character's
+	// own pixels rather than a ghost floating over them.
+	//
+	// Its ACT's offset is scaled with it, which is the point: at the right
+	// size the fifty-five pixels the ACT lifts it by land it just clear of
+	// the head, where the original hangs it.
+	deadGhost: {2.0, 2.0},
 }
+
+// effectPlain are the effects drawn the ordinary way rather than added to
+// what is behind them.
+//
+// Adding is right for fire and light: a flame over grass is the flame plus
+// the grass, and that is what nearly every effect in RO is. It is wrong for
+// something meant to be a thing rather than a light. Added, the ghost's white
+// body blew out over pale stone and its eyes, which are the darkest part of
+// it, disappeared altogether.
+//
+// Drawn solid, at that. The ACT asks for an alpha of 150 out of 255 and it is
+// not honored: passed through as a tint alpha, the quad comes out neither
+// the art's colors nor a blend of them — the eyes go to black and the pink
+// tail to cyan, which is no blend of anything. Something below this handles a
+// part-transparent image quad wrongly, and until that is found a solid ghost
+// is much nearer the original than a miscoloured one.
+var effectPlain = map[string]bool{deadGhost: true}
 
 // effectScaleOf is that, or its own size for an effect with nothing said
 // about it.
@@ -213,6 +241,22 @@ func (s *InGameState) hideSkillUnit(unit uint32) {
 	s.spriteEffects = kept
 }
 
+// stopSpriteEffect takes away every effect of one kind.
+//
+// For the ones that run until something says otherwise rather than for a
+// length of time: the ghost hangs over a corpse until the character is on
+// their feet again, and what puts it away is that, not a clock.
+func (s *InGameState) stopSpriteEffect(name string) {
+	kept := s.spriteEffects[:0]
+	for _, effect := range s.spriteEffects {
+		if effect.name != name {
+			kept = append(kept, effect)
+		}
+	}
+
+	s.spriteEffects = kept
+}
+
 // advanceSpriteEffects ages them and drops what has finished or lost what it
 // was following.
 func (s *InGameState) advanceSpriteEffects(deltaMs float32) {
@@ -309,7 +353,7 @@ func (s *InGameState) spriteEffectQuads(viewportW, viewportH float32) []EffectQu
 			},
 			UV:       [4][2]float32{{0, 0}, {1, 0}, {1, 1}, {0, 1}},
 			Color:    [4]float32{1, 1, 1, 1},
-			Additive: true,
+			Additive: !effectPlain[effect.name],
 		})
 	}
 

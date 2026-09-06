@@ -119,6 +119,12 @@ func (s *InGameState) UseSkill(skillID uint16, level int) error {
 		return nil
 	}
 
+	// Nor does a corpse cast. The server refuses it, and asking anyway put a
+	// cast bar over a character who was going to do nothing when it filled.
+	if s.playerDead {
+		return nil
+	}
+
 	skill, known := s.findSkill(skillID)
 	if !known {
 		return nil

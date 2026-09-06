@@ -659,6 +659,43 @@ func boltImpactMs(i int) float32 {
 	return burstFrames(boltSpawnFrames + boltPeriodFrames*float32(i) + boltTravelFrames())
 }
 
+// soulImpactMs is when the nth orb of a strike lands, the same moment its
+// flash is born at.
+func soulImpactMs(i int) float32 {
+	return burstFrames(float32(i*soulSpawnFrames) + soulFlightFrames)
+}
+
+// blowTimes is when an effect's blows land, counted from the moment it starts.
+//
+// Empty for the effects that land one blow, which is nearly all of them: what
+// is here are the volleys, the ones whose picture already draws a shot for
+// every blow the skill did. A sound belongs to a blow rather than to a cast,
+// so this is what says when to make it.
+func blowTimes(effect string, hits int) []float32 {
+	var (
+		count int
+		at    func(int) float32
+	)
+
+	switch effect {
+	case "EF_ICEARROW", "EF_FIREARROW":
+		count, at = min(max(hits, 1), boltMax), boltImpactMs
+
+	case "EF_SOULSTRIKE":
+		count, at = min(max(hits, 1), soulBoltsMax), soulImpactMs
+
+	default:
+		return nil
+	}
+
+	times := make([]float32, 0, count)
+	for i := 0; i < count; i++ {
+		times = append(times, at(i))
+	}
+
+	return times
+}
+
 // boltParts is a volley of them.
 func boltParts(hits int, style boltStyle) burstSpec {
 	shots := min(max(hits, 1), boltMax)

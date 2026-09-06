@@ -2,6 +2,8 @@ package scene
 
 import (
 	"fmt"
+	"image"
+	"image/draw"
 	gomath "math"
 	"unsafe"
 
@@ -9,6 +11,7 @@ import (
 
 	"github.com/Faultbox/midgard-ro/internal/engine/scene/shaders"
 	"github.com/Faultbox/midgard-ro/internal/engine/shader"
+	"github.com/Faultbox/midgard-ro/pkg/formats"
 	"github.com/Faultbox/midgard-ro/pkg/math"
 )
 
@@ -46,6 +49,51 @@ const (
 	portalTexSize = 256
 )
 
+// The flared funnel the original stands over a warp: PP_3DCASTING_4, in the
+// client's own names.
+//
+// A flat pad is what the effect is nine tenths of, and it is what this drew:
+// rings of light on the floor. The tenth is what makes it a way through rather
+// than a mark on the ground — bands that rise out of the pad at an angle and
+// drift inward, tilting from flat toward upright as they close on the middle,
+// so the whole reads as a funnel turning rather than a picture lying there.
+//
+// Every figure here is the original's, in its own units against a pad of
+// fifteen: the bands start at four radii, doubled into pairs a fifth of a unit
+// apart, so eight bands read as four rings. Each creeps inward by a twentieth
+// of a unit a frame and starts again from the outside when it reaches the
+// middle.
+const (
+	funnelSides = 20
+
+	funnelDistMax        = float32(10)
+	funnelShrinkPerFrame = float32(0.05)
+
+	// funnelMaxAlpha is the alpha the original ramps a band to, and
+	// funnelFadeInFrames how long that takes at its own rate of one a frame.
+	funnelMaxAlpha     = float32(70) / 255
+	funnelFadeInFrames = float32(70)
+
+	// funnelUnitPad is the pad these figures were measured against. Ours is
+	// PortalRadius, and the bands are scaled to it so the two agree whatever
+	// the pad is set to.
+	funnelUnitPad = float32(15)
+
+	// portalFPS is the rate the original counts its effect frames at.
+	portalFPS = float32(60)
+
+	// ringTexturePath is the archive's own art for the bands: pale blue rays
+	// hanging down a white field, which wrapped round a cone is the swirl.
+	ringTexturePath = `data\texture\effect\ring_blue.tga`
+)
+
+// funnelBands are where each band starts and the quarter turn its texture is
+// laid on at, transcribed from the original's two launches.
+var funnelBands = [8][2]float32{
+	{2.5, 270}, {5.0, 0}, {7.5, 90}, {10.0, 180},
+	{2.7, 271}, {5.2, 1}, {7.7, 91}, {10.2, 181},
+}
+
 // portalTint scales the generated colors. The texture already carries the
 // blue, so this only holds the whole effect short of full strength.
 var portalTint = [4]float32{1, 1, 1, 0.9}
@@ -66,6 +114,13 @@ type PortalRenderer struct {
 
 	discVAO, discVBO uint32
 	discVerts        int32
+
+	// The funnel's wall, and the archive's rays to paper it with. Without the
+	// texture the funnel is left off and the pad drawn on its own, which is
+	// what this was before there was one.
+	tubeVAO, tubeVBO uint32
+	tubeVerts        int32
+	ringTex          uint32
 
 	discTex uint32
 }
@@ -91,6 +146,8 @@ func NewPortalRenderer() (*PortalRenderer, error) {
 
 	pr.discVAO, pr.discVBO, pr.discVerts = uploadMesh5(discVertices())
 	pr.discTex = uploadRGBA(portalPixels(portalTexSize), portalTexSize, portalTexSize, gl.CLAMP_TO_EDGE)
+
+	pr.tubeVAO, pr.tubeVBO, pr.tubeVerts = uploadMesh5(tubeVertices(funnelSides))
 
 	return pr, nil
 }
@@ -319,9 +376,102 @@ func (pr *PortalRenderer) Render(viewProj math.Mat4, x, y, z, timeMs, alpha floa
 	gl.BindVertexArray(pr.discVAO)
 	gl.DrawArrays(gl.TRIANGLES, 0, pr.discVerts)
 
+	pr.renderFunnel(x, y, z, timeMs, alpha)
+
 	gl.BindVertexArray(0)
 	gl.BlendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 	gl.DepthMask(true)
+}
+
+// renderFunnel draws the bands that stand out of the pad.
+//
+// Worked out from the age rather than kept as state, the way the original
+// does: every band's radius, tilt and strength follow from how many frames
+// have passed, so a portal that has been standing for an hour costs the same
+// as one that has just been walked up to.
+func (pr *PortalRenderer) renderFunnel(x, y, z, timeMs, alpha float32) {
+	if pr.ringTex == 0 {
+		return
+	}
+
+	frame := timeMs / 1000 * portalFPS
+
+	// The whole set fades in over one band's worth of frames, so a portal
+	// coming into view does not arrive at full strength.
+	startup := min(frame/funnelFadeInFrames, 1)
+
+	scale := PortalRadius / funnelUnitPad
+
+	// Added to what is behind rather than covering it: these are rays.
+	gl.BlendFuncSeparate(gl.SRC_ALPHA, gl.ONE, gl.ZERO, gl.ONE)
+	gl.BindTexture(gl.TEXTURE_2D, pr.ringTex)
+	gl.BindVertexArray(pr.tubeVAO)
+
+	for _, band := range funnelBands {
+		start, turn := band[0], band[1]
+
+		// Inward, wrapping back to the outside when it reaches the middle.
+		d := float32(gomath.Mod(float64(start-funnelShrinkPerFrame*frame), float64(funnelDistMax)))
+		if d <= 0 {
+			d += funnelDistMax
+		}
+
+		// A band comes up from nothing over the frames since it last started
+		// again, which is what its distance says.
+		since := (funnelDistMax - d) / funnelShrinkPerFrame
+
+		bandAlpha := funnelMaxAlpha * min(since/funnelFadeInFrames, 1) * startup * alpha
+		if bandAlpha <= 0 {
+			continue
+		}
+
+		// Flat where it starts and upright by the time it closes: the tilt is
+		// the whole of what makes this read as a way through.
+		rise := float64(min(max(90-d*9, 0), 90)) * gomath.Pi / 180
+
+		gl.Uniform4f(pr.locTint,
+			portalTint[0], portalTint[1], portalTint[2], bandAlpha)
+		gl.Uniform3f(pr.locPosition, x, y+portalLift, z)
+		gl.Uniform1f(pr.locBottomSize, d*scale)
+		gl.Uniform1f(pr.locTopSize, (d+float32(gomath.Cos(rise))*d)*scale)
+		gl.Uniform1f(pr.locHeight, float32(gomath.Sin(rise))*d*scale)
+		gl.Uniform1f(pr.locSpin, turn*gomath.Pi/180)
+
+		gl.DrawArrays(gl.TRIANGLES, 0, pr.tubeVerts)
+	}
+}
+
+// LoadRingTexture reads the archive's rays for the funnel's bands.
+//
+// Separate from building the renderer, as the click marker's is: the shader
+// and the meshes need nothing from the archive, and a portal without the rays
+// is still a portal — the pad on the floor is most of it.
+func (pr *PortalRenderer) LoadRingTexture(load func(string) ([]byte, error)) error {
+	if pr == nil {
+		return nil
+	}
+
+	data, err := load(ringTexturePath)
+	if err != nil {
+		return fmt.Errorf("portal ring texture %q: %w", ringTexturePath, err)
+	}
+
+	img, err := formats.DecodeImage(data)
+	if err != nil {
+		return fmt.Errorf("decode %q: %w", ringTexturePath, err)
+	}
+
+	bounds := img.Bounds()
+
+	rgba, ok := img.(*image.RGBA)
+	if !ok {
+		rgba = image.NewRGBA(bounds)
+		draw.Draw(rgba, bounds, img, bounds.Min, draw.Src)
+	}
+
+	pr.ringTex = uploadRGBA(rgba.Pix, bounds.Dx(), bounds.Dy(), gl.REPEAT)
+
+	return nil
 }
 
 // Destroy releases the GPU resources.

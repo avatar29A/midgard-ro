@@ -118,6 +118,10 @@ type InGameState struct {
 	// lands a while after the volley starts.
 	delayedEffects []delayedEffect
 
+	// delayedSounds are the ones waiting for the blow they belong to, which
+	// is how a volley is heard as the several blows it is rather than as one.
+	delayedSounds []delayedSound
+
 	// skillUnits are the ground skills standing on the map, by the id their
 	// blows arrive from. What is kept is the packet: who placed it, for the
 	// battle log, and where and what it is, for drawing it.
@@ -144,6 +148,11 @@ type InGameState struct {
 
 	// sightMs is how far round the Sight aura has turned.
 	sightMs float32
+
+	// shop is the counter that is open, if any, and talkingTo whoever opened
+	// it — a shop that does not ask which way round carries no id of its own.
+	shop      Shop
+	talkingTo uint32
 
 	// playerDead is the character lying down, which is what the window
 	// offering a way back is shown on.
@@ -403,9 +412,9 @@ func (s *InGameState) loadPlayerSprites() {
 		zap.Int("walkFrames", s.playerRender.FrameCount(entity.ActionWalk, entity.DirS)))
 }
 
-// loadPortalRenderer builds the warp portal effect. It needs nothing from
-// the archive — the effect is generated — so the only way it fails is the
-// shader, and then the warps are still there to walk into.
+// loadPortalRenderer builds the warp portal effect. The pad on the floor is
+// generated and needs nothing from the archive, so the only way it fails is
+// the shader, and then the warps are still there to walk into.
 func (s *InGameState) loadPortalRenderer() {
 	pr, err := scene.NewPortalRenderer()
 	if err != nil {
@@ -413,6 +422,13 @@ func (s *InGameState) loadPortalRenderer() {
 		return
 	}
 	s.portals = pr
+
+	// The rays the funnel is papered with are the archive's. Warned and no
+	// more if they are missing: the pad is drawn without them, which is what
+	// a portal was here before the funnel stood over it.
+	if err := s.portals.LoadRingTexture(s.manager.TexLoader); err != nil {
+		logger.Warn("no rays for the warp portal", zap.Error(err))
+	}
 
 	m, err := scene.NewGroundMarker()
 	if err != nil {
@@ -839,6 +855,7 @@ func (s *InGameState) Update(dt float64) error {
 		s.advancePendingSkill(deltaMs)
 		s.advanceBursts(deltaMs)
 		s.advanceDelayedEffects(deltaMs)
+		s.advanceDelayedSounds(deltaMs)
 		s.advanceUnitSounds()
 		s.advanceAmbientSounds(deltaMs)
 		s.advanceSpriteEffects(deltaMs)
@@ -1341,6 +1358,49 @@ func (s *InGameState) handleUseItemAck(data []byte) error {
 	return nil
 }
 
+// takeFromBag subtracts from a slot, and takes the line out altogether when
+// nothing is left in it.
+//
+// The count is how many left the bag rather than how many remain, which is how
+// both the drop acknowledgement and the deletion packet report it.
+func (s *InGameState) takeFromBag(index, count int) {
+	for i := range s.inventory {
+		if s.inventory[i].Index != index {
+			continue
+		}
+
+		s.inventory[i].Count -= count
+		if s.inventory[i].Count <= 0 {
+			s.inventory = append(s.inventory[:i], s.inventory[i+1:]...)
+		}
+
+		return
+	}
+}
+
+// handleItemDeleted takes out what the server says has left the bag.
+//
+// Everything that removes an item without dropping it arrives here: sold at a
+// counter, put in storage or a cart, spent on a skill, burnt by a refine that
+// failed. Without it the bag goes on showing what the character no longer
+// has, until something else makes the server send the whole list again.
+func (s *InGameState) handleItemDeleted(data []byte) error {
+	gone, ok := packets.DecodeItemDeleted(data)
+	if !ok {
+		logger.Warn("short item deletion", zap.Int("len", len(data)))
+
+		return nil
+	}
+
+	s.takeFromBag(gone.Index, gone.Count)
+
+	trace.Emit(trace.HUD, "item-deleted",
+		zap.Int("index", gone.Index), zap.Int("count", gone.Count),
+		zap.Uint16("reason", gone.Reason))
+
+	return nil
+}
+
 // handleInventoryEquip takes the worn half.
 func (s *InGameState) handleInventoryEquip(data []byte) error {
 	return s.takeInventory(data, packets.EquipItemLen, "equip", packets.DecodeInventoryEquip)
@@ -1424,6 +1484,13 @@ func (s *InGameState) takeInventory(
 // new count, and acting before it does would show a potion drunk that the
 // server refused.
 func (s *InGameState) UseItem(index int) error {
+	// Nothing in the bag helps a corpse. The server refuses it, and a potion
+	// that appears to be drunk and does nothing is worse than a hotkey that
+	// does nothing.
+	if s.playerDead {
+		return nil
+	}
+
 	trace.Emit(trace.HUD, "use-item", zap.Int("index", index))
 
 	return s.client.Send(packets.EncodeUseItem(index))
@@ -1598,6 +1665,12 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_INVENTORY_ITEMLIST_EQUIP, s.handleInventoryEquip)
 	s.client.RegisterHandler(packets.ZC_USE_ITEM_ACK, s.handleUseItemAck)
 	s.client.RegisterHandler(packets.ZC_AUTORUN_SKILL, s.handleAutorunSkill)
+	s.client.RegisterHandler(packets.SC_NOTIFY_BAN, s.handleKicked)
+	s.client.RegisterHandler(packets.ZC_SELECT_DEALTYPE, s.handleDealType)
+	s.client.RegisterHandler(packets.ZC_PC_PURCHASE_ITEMLIST, s.handleShopItems)
+	s.client.RegisterHandler(packets.ZC_PC_SELL_ITEMLIST, s.handleSellItems)
+	s.client.RegisterHandler(packets.ZC_PC_PURCHASE_RESULT, s.handleBuyResult)
+	s.client.RegisterHandler(packets.ZC_PC_SELL_RESULT, s.handleSellResult)
 	s.client.RegisterHandler(packets.ZC_REQ_WEAR_EQUIP_ACK, s.handleEquipAck)
 	s.client.RegisterHandler(packets.ZC_REQ_TAKEOFF_EQUIP_ACK, s.handleUnequipAck)
 	s.client.RegisterHandler(packets.ZC_CONFIG_NOTIFY, s.handleConfigNotify)
@@ -1607,6 +1680,7 @@ func (s *InGameState) registerPacketHandlers() {
 	s.client.RegisterHandler(packets.ZC_ITEM_DISAPPEAR, s.handleGroundItemGone)
 	s.client.RegisterHandler(packets.ZC_ITEM_PICKUP_ACK, s.handlePickupAck)
 	s.client.RegisterHandler(packets.ZC_ITEM_THROW_ACK, s.handleDropAck)
+	s.client.RegisterHandler(packets.ZC_DELETE_ITEM_FROM_BODY, s.handleItemDeleted)
 	s.client.RegisterHandler(packets.ZC_NOTIFY_ACT, s.handleDamage)
 	s.client.RegisterHandler(packets.ZC_MONSTER_HP_INFO, s.handleMonsterHP)
 	s.client.RegisterHandler(packets.ZC_ATTACK_RANGE, s.handleAttackRange)
@@ -1812,8 +1886,11 @@ func (s *InGameState) handleEntityVanish(data []byte) error {
 				s.player.Die()
 			}
 
+			s.playDeadGhost()
+
 			s.forgetAttack()
 			s.forgetPendingPickup()
+			s.forgetPendingSkill()
 			s.forgetPendingBlows()
 		}
 
@@ -2270,11 +2347,7 @@ func (s *InGameState) handleMapChange(data []byte) error {
 	// how a respawn at the save point ends: the server does not resurrect
 	// anybody, it moves them, and the window has to go with the corpse.
 	if !same || s.MapLoaded {
-		s.playerDead = false
-
-		if s.player != nil {
-			s.player.Revive()
-		}
+		s.standUp()
 	}
 
 	return nil
@@ -2475,6 +2548,28 @@ func (s *InGameState) ClickWorld(mouseX, mouseY, viewportW, viewportH float32) {
 		return
 	}
 
+	// A shop holds the world still. The counter is a conversation with
+	// somebody standing in front of you, and walking off mid-purchase leaves
+	// the window open over a character halfway across the map — and the
+	// server refuses the order for being too far away, which reads as the
+	// shop being broken rather than as having walked away from it.
+	if s.shop.Open() {
+		return
+	}
+
+	// A corpse does not take orders. Everything a click can mean here — walk,
+	// attack, pick that up, talk to them — is refused by the server for a
+	// character who is dead, but the walk is not refused visibly: the client
+	// starts it on its own and the body slid across the map in its death
+	// pose, past the window offering to put it back at the save point.
+	//
+	// The original does nothing at all with a click while you are dead, and
+	// that is the whole of it: the three buttons are the only thing left to
+	// press.
+	if s.playerDead {
+		return
+	}
+
 	// A skill waiting for a cell takes the click before anything else can:
 	// while one is held, clicking means "here" and not "walk there" or
 	// "attack that".
@@ -2580,6 +2675,16 @@ func (s *InGameState) RequestMove(tileX, tileY int) error {
 	if s.Casting() {
 		s.faceCell(tileX, tileY)
 
+		return nil
+	}
+
+	// Nor a corpse, and it does not turn to look either: unit_can_move is
+	// false while dead, so the server refuses the walk, and a body that
+	// swivels to face the pointer is not what the original leaves lying on
+	// the ground. This is the last gate rather than the only one — the click
+	// is already dropped in ClickWorld — so that nothing else reaching here
+	// can walk a dead character.
+	if s.playerDead {
 		return nil
 	}
 

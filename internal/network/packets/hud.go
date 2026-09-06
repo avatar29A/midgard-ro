@@ -264,6 +264,17 @@ const (
 
 	ZC_INVENTORY_ITEMLIST_NORMAL uint16 = 0x0B09
 
+	// ZC_DELETE_ITEM_FROM_BODY says something has left the bag and why:
+	// `<reason>.W <index>.W <count>.W`, eight bytes.
+	//
+	// Not the same packet as a drop, though it does the same thing to the
+	// bag. rAthena sends the drop's own acknowledgement only below packet
+	// version 20091117; at ours everything else that takes an item out —
+	// sold, put in storage, spent on a skill, burnt by a failed refine —
+	// comes through here, and a client that only listens for the drop keeps
+	// showing what it no longer has.
+	ZC_DELETE_ITEM_FROM_BODY uint16 = 0x07FA
+
 	// ZC_INVENTORY_ITEMLIST_EQUIP is the equipment. 68-byte entries.
 	ZC_INVENTORY_ITEMLIST_EQUIP uint16 = 0x0B39
 
@@ -535,6 +546,42 @@ type UseItemAck struct {
 	// OK is false when the server refused — too heavy, cannot be used here,
 	// or a slot that no longer holds what we thought.
 	OK bool
+}
+
+// ItemDeleted is something the server has taken out of the bag.
+type ItemDeleted struct {
+	// Index is the slot, and Count how many left it rather than how many
+	// remain.
+	Index int
+	Count int
+
+	// Reason is why, which the original uses to pick a message. Nought is a
+	// plain removal; six is a sale.
+	Reason uint16
+}
+
+// Why an item left the bag, as rAthena numbers them.
+const (
+	ItemDeletedNormal  uint16 = 0
+	ItemDeletedSkill   uint16 = 1
+	ItemDeletedRefine  uint16 = 2
+	ItemDeletedChanged uint16 = 3
+	ItemDeletedStorage uint16 = 4
+	ItemDeletedCart    uint16 = 5
+	ItemDeletedSold    uint16 = 6
+)
+
+// DecodeItemDeleted reads ZC_DELETE_ITEM_FROM_BODY.
+func DecodeItemDeleted(data []byte) (ItemDeleted, bool) {
+	if len(data) < 8 {
+		return ItemDeleted{}, false
+	}
+
+	return ItemDeleted{
+		Reason: binary.LittleEndian.Uint16(data[2:]),
+		Index:  int(binary.LittleEndian.Uint16(data[4:])),
+		Count:  int(binary.LittleEndian.Uint16(data[6:])),
+	}, true
 }
 
 // DecodeUseItemAck reads ZC_USE_ITEM_ACK, reporting false if it is short.

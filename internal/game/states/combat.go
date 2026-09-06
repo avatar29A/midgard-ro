@@ -42,6 +42,12 @@ func (s *InGameState) AttackTarget(e *entity.Entity) {
 		return
 	}
 
+	// A corpse does not fight. Kept here as well as at the click because the
+	// hotkey that attacks the nearest thing comes straight in.
+	if s.playerDead {
+		return
+	}
+
 	trace.Emit(trace.HUD, "attack-target",
 		zap.Uint32("id", e.ID), zap.String("name", e.Name))
 

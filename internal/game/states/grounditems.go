@@ -2,6 +2,7 @@ package states
 
 import (
 	"fmt"
+	"strings"
 
 	"go.uber.org/zap"
 
@@ -391,18 +392,7 @@ func (s *InGameState) handleDropAck(data []byte) error {
 		return nil
 	}
 
-	for i := range s.inventory {
-		if s.inventory[i].Index != ack.Index {
-			continue
-		}
-
-		s.inventory[i].Count -= ack.Count
-		if s.inventory[i].Count <= 0 {
-			s.inventory = append(s.inventory[:i], s.inventory[i+1:]...)
-		}
-
-		break
-	}
+	s.takeFromBag(ack.Index, ack.Count)
 
 	trace.Emit(trace.HUD, "drop-ack",
 		zap.Int("index", ack.Index), zap.Int("count", ack.Count))
@@ -415,6 +405,40 @@ func (s *InGameState) handleDropAck(data []byte) error {
 type HoverLabel struct {
 	Text             string
 	ScreenX, ScreenY float32
+}
+
+// labeled reports whether a unit gets a name under the pointer.
+//
+// Items, monsters and the people you can talk to. Not a warp: its name is the
+// line of script that placed it — prt04, prt16-1 — and the original shows
+// nothing for one either. Not the player, who is never under their own
+// pointer.
+func labeled(e *entity.Entity) bool {
+	if e == nil {
+		return false
+	}
+
+	switch e.Type {
+	case entity.TypeItem, entity.TypeMonster, entity.TypeNPC:
+		return true
+	default:
+		return false
+	}
+}
+
+// displayName is a unit's name with the part nobody is meant to read taken
+// off.
+//
+// A script names two NPCs apart by hanging a tag off the end — "Tool
+// Dealer#prt1", "Illusion Merchant#0829" — and it is the tag that makes the
+// name unique on the map rather than anything the player is supposed to see.
+// rAthena strips it from most of what it sends, and not from all of it.
+func displayName(name string) string {
+	if at := strings.IndexByte(name, '#'); at >= 0 {
+		return name[:at]
+	}
+
+	return name
 }
 
 // SetHoverEntity records what the pointer is over this frame, or nil.
@@ -456,17 +480,22 @@ func (s *InGameState) WorldLabels(viewportW, viewportH float32) []HoverLabel {
 
 // labelFor is the name to show for one unit.
 //
-// Items and monsters get one: an item is unlabelled until you point at it, and
-// a monster's name appears with the pointer on it, both the way the original
-// does. NPCs are left out because theirs sit above their heads permanently,
-// which is a different thing drawn from a different place — and not yet drawn
-// at all.
+// Items, monsters and the people you can talk to. An item is unlabeled until
+// you point at it and a monster's name appears with the pointer on it, both
+// the way the original does; an NPC's sits above their head there whether you
+// point at it or not, which is a different thing drawn from a different place
+// and still not drawn here. Pointing at one is meanwhile the only way to find
+// out who they are, and a town full of unnamed people is a town you have to
+// click your way around.
+//
+// Not a warp. Its name is the line of script that placed it — prt04, prt16-1
+// — and the original shows nothing for one either.
 func (s *InGameState) labelFor(e *entity.Entity, viewportW, viewportH float32) (HoverLabel, bool) {
 	if e == nil || e.Body == nil || e.Name == "" {
 		return HoverLabel{}, false
 	}
 
-	if e.Type != entity.TypeItem && e.Type != entity.TypeMonster {
+	if !labeled(e) {
 		return HoverLabel{}, false
 	}
 
@@ -476,9 +505,9 @@ func (s *InGameState) labelFor(e *entity.Entity, viewportW, viewportH float32) (
 		return HoverLabel{}, false
 	}
 
-	text := e.Name
+	text := displayName(e.Name)
 	if e.Type == entity.TypeItem && e.Amount > 1 {
-		text = fmt.Sprintf("%s %d ea.", e.Name, e.Amount)
+		text = fmt.Sprintf("%s %d ea.", text, e.Amount)
 	}
 
 	return HoverLabel{Text: text, ScreenX: x, ScreenY: y}, true

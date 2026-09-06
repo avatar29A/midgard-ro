@@ -57,18 +57,13 @@ func (b *UI2DBackend) ShowCardView(id uint32) {
 	}
 
 	b.cardViewID = id
-
-	// Clearing the closed flag its own X set, or it opens once and never
-	// again. The nil check is for a backend built without a context, which
-	// this file's own tests do.
-	if b.ctx != nil {
-		b.ctx.OpenWindow(cardViewWindowID)
-	}
 }
 
 // drawCardView draws it, if a card is being looked at.
 func (b *UI2DBackend) drawCardView(screenW, screenH float32) {
 	if b.cardViewID == 0 {
+		b.cardViewWin.hide()
+
 		return
 	}
 
@@ -99,21 +94,19 @@ func (b *UI2DBackend) drawCardView(screenW, screenH float32) {
 		}
 	}
 
-	if !b.ctx.BeginWindowEx(cardViewWindowID, openX, openY, cardViewW, cardViewH,
-		itemDisplayName(b.cardViewID), ui2d.WindowOptions{Closable: true}) {
-		// Minimized is not closed: the title bar is still drawn and the
-		// window is still open, so only a real close puts it away.
-		if b.ctx.WindowClosed(cardViewWindowID) {
-			b.cardViewID = 0
-		}
+	draw, closed := b.cardViewWin.begin(b.ctx, true,
+		openX, openY, cardViewW, cardViewH,
+		itemDisplayName(b.cardViewID), ui2d.WindowOptions{Closable: true})
 
+	if closed {
+		b.cardViewID = 0
+	}
+
+	if !draw {
 		return
 	}
 
-	x, y := openX, openY
-	if rect, ok := b.ctx.WindowRect(cardViewWindowID); ok {
-		x, y = rect.X, rect.Y
-	}
+	x, y := b.cardViewWin.rect(b.ctx, openX, openY)
 
 	r := b.ctx.Renderer()
 
