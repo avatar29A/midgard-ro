@@ -953,3 +953,36 @@ func TestStrikesKeepTheVolleyCadence(t *testing.T) {
 		t.Errorf("a strike waits %v between blows, a shot %v", first, gap)
 	}
 }
+
+// TestTheBlowWaitsForTheBoltToCrack is the fault this was written for: the
+// figure and the flinch went up on the caster's own motion, and lightning.str
+// draws nothing for most of a second, so the damage happened before the spell
+// did.
+func TestTheBlowWaitsForTheBoltToCrack(t *testing.T) {
+	lead := strikeLeadMs([]string{"EF_LIGHTBOLT", "EF_WINDHIT"})
+
+	if want := burstFrames(53); lead != want {
+		t.Errorf("the blow waits %v, want the %v the bolt takes to crack", lead, want)
+	}
+
+	// Long enough to matter: a swing's own hit frame is a fraction of this.
+	if lead < 500 {
+		t.Errorf("the lead is %v, which would not have been the fault", lead)
+	}
+}
+
+// TestAnEffectThatStartsWithItsBlowMakesNobodyWait: nearly all of them are the
+// flash of the hit itself, and delaying those would put every blow in the game
+// behind its own picture.
+func TestAnEffectThatStartsWithItsBlowMakesNobodyWait(t *testing.T) {
+	for _, effects := range [][]string{
+		{"EF_FIREARROW", "EF_FIREHIT"},
+		{"EF_ICEARROW", "EF_COLDHIT"},
+		{"EF_SOULSTRIKE"},
+		nil,
+	} {
+		if lead := strikeLeadMs(effects); lead != 0 {
+			t.Errorf("%v makes its blow wait %v", effects, lead)
+		}
+	}
+}
