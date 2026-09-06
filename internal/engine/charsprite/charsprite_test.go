@@ -749,3 +749,38 @@ func TestHairPalettePathOnlyForPlayers(t *testing.T) {
 		}
 	}
 }
+
+// TestSheetFrameCountTakesALogicalAction: the sheet is keyed by the ACT sets
+// an appearance actually uses, and a logical action is not one of those.
+//
+// A player's death is logical action 5 and ACT set 7, and the two numbers
+// both being valid keys is what made this quiet: asked how long the death
+// animation was, it answered with the length of the swing.
+func TestSheetFrameCountTakesALogicalAction(t *testing.T) {
+	sheet := &Sheet{
+		Actions: DefaultActionMap(KindPlayer),
+		Frames: map[int][]Frame{
+			ActionIdle * Directions: make([]Frame, 1),
+			5 * Directions:          make([]Frame, 5), // the unarmed swing
+			7 * Directions:          make([]Frame, 1), // lying down
+		},
+	}
+
+	if got := sheet.FrameCount(ActionDie, 0); got != 1 {
+		t.Errorf("the death runs %d frames, want the one in set 7", got)
+	}
+	if got := sheet.FrameCount(ActionAttack, 0); got != 5 {
+		t.Errorf("the swing runs %d frames, want 5", got)
+	}
+	if got := sheet.FrameCount(ActionIdle, 0); got != 1 {
+		t.Errorf("standing runs %d frames, want 1", got)
+	}
+
+	// An action this family has nothing for, and one that is not an action.
+	if got := (&Sheet{Actions: DefaultActionMap(KindNPC)}).FrameCount(ActionDie, 0); got != 0 {
+		t.Errorf("an NPC's death runs %d frames, want none", got)
+	}
+	if got := sheet.FrameCount(LogicalActions, 0); got != 0 {
+		t.Errorf("a number that is not an action gave %d", got)
+	}
+}

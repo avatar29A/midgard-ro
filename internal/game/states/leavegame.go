@@ -73,11 +73,7 @@ func (s *InGameState) handleResurrection(data []byte) error {
 
 	trace.Emit(trace.HUD, "resurrected", zap.Uint32("aid", aid))
 
-	s.playerDead = false
-
-	if s.player != nil {
-		s.player.Revive()
-	}
+	s.standUp()
 
 	return nil
 }
@@ -87,6 +83,37 @@ func (s *InGameState) RequestQuit() error {
 	trace.Emit(trace.HUD, "leave-request", zap.String("to", "quit"))
 
 	return s.client.Send(packets.EncodeDisconnect())
+}
+
+// handleKicked is the server throwing us off.
+//
+// It sends this and then closes the socket. Nothing else says so, and a client
+// that does not read it goes on drawing a world it is no longer connected to:
+// every click after that goes nowhere, which reads as the game having quietly
+// stopped working. It is said out loud instead, in the one place the player is
+// already reading.
+func (s *InGameState) handleKicked(data []byte) error {
+	reason, ok := packets.DecodeKicked(data)
+	if !ok {
+		logger.Warn("short disconnect packet", zap.Int("len", len(data)))
+
+		return nil
+	}
+
+	words := packets.KickedReason(reason)
+
+	logger.Warn("thrown off the server",
+		zap.Uint8("reason", reason), zap.String("why", words))
+	trace.Emit(trace.HUD, "kicked", zap.Uint8("reason", reason))
+
+	s.chat.AddLocal(ChatError, words)
+	s.chat.AddLocal(ChatError, "Not connected any more — log in again.")
+
+	// Whatever was open belongs to a conversation that no longer exists.
+	s.CloseShop()
+	s.dropDialog()
+
+	return nil
 }
 
 // handleRestartAck acts on the server granting a return to character select.

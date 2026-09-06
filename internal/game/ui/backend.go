@@ -45,6 +45,9 @@ type UIBackend interface {
 	// TakeDeadAction returns the button pressed on the death window.
 	TakeDeadAction() DeadAction
 
+	// TakeShopAction returns what the counter was asked for.
+	TakeShopAction() (ShopAction, bool)
+
 	// OpenWindow opens one of the HUD windows.
 	OpenWindow(window HUDWindow)
 
@@ -331,6 +334,9 @@ type InGameUIState struct {
 	// Inventory what it is carrying.
 	Skills    []packets.Skill
 	Inventory []packets.InventoryItem
+
+	// Shop is the counter that is open, if any.
+	Shop states.Shop
 
 	// Equipment is what is worn, keyed by the place on the body it is worn
 	// in, which is the question the equipment window's ten slots ask.

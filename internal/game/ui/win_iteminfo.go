@@ -96,18 +96,13 @@ func (b *UI2DBackend) showItemInfo(id uint32, cards [4]uint32, special bool) {
 	b.itemInfoID = id
 	b.itemInfoCards = cards
 	b.itemInfoSpecial = special
-
-	// Clearing the closed flag its own X set, or it opens once and never
-	// again. The nil check is for a backend built without a context, which
-	// the window's own tests do.
-	if b.ctx != nil {
-		b.ctx.OpenWindow(itemInfoWindowID)
-	}
 }
 
 // drawItemInfo draws the window, if anything is being looked at.
 func (b *UI2DBackend) drawItemInfo(screenW, screenH float32) {
 	if b.itemInfoID == 0 {
+		b.itemInfoWin.hide()
+
 		return
 	}
 
@@ -117,23 +112,18 @@ func (b *UI2DBackend) drawItemInfo(screenW, screenH float32) {
 	// Closable but not minimizable: a window this size is either wanted or it
 	// is not, and a title bar left floating with nothing under it is clutter
 	// rather than a convenience.
-	if !b.ctx.BeginWindowEx(itemInfoWindowID, openX, openY, itemInfoW, itemInfoH,
-		"Item Info", ui2d.WindowOptions{Closable: true}) {
-		// Minimized is not closed: the title bar is still drawn and the
-		// window is still open, so only a real close puts it away.
-		if b.ctx.WindowClosed(itemInfoWindowID) {
-			b.itemInfoID = 0
-		}
+	draw, closed := b.itemInfoWin.begin(b.ctx, true,
+		openX, openY, itemInfoW, itemInfoH, "Item Info", ui2d.WindowOptions{Closable: true})
 
+	if closed {
+		b.itemInfoID = 0
+	}
+
+	if !draw {
 		return
 	}
 
-	// Read back after BeginWindow: before, the position is last frame's, and
-	// the contents trail the frame while it is dragged.
-	x, y := openX, openY
-	if rect, ok := b.ctx.WindowRect(itemInfoWindowID); ok {
-		x, y = rect.X, rect.Y
-	}
+	x, y := b.itemInfoWin.rect(b.ctx, openX, openY)
 
 	b.drawItemInfoBody(b.itemInfoID, x, y+ui2d.FrameTitleH)
 

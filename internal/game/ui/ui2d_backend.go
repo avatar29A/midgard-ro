@@ -157,7 +157,35 @@ type UI2DBackend struct {
 	// cardViewID is the card whose drawing is being looked at, nought when
 	// that window is shut.
 	cardViewID uint32
-	itemTab    int
+
+	// shopOrder is what is in the basket, by item id when buying and by
+	// inventory slot when selling, and shopScroll how far down the shelf is.
+	shopOrder  map[int]int
+	shopScroll int
+
+	// shopAction is what the counter was asked for, waiting to be sent.
+	shopAction shopActionState
+
+	// shopSellable is what the counter will take out of the bag, by slot,
+	// noted while the list is drawn: the drag that carries something there is
+	// resolved elsewhere and has nothing to ask.
+	shopSellable map[int]int
+
+	// shopBagOpened marks that the bag has been put up beside a selling list,
+	// so it is opened on the way in and not again — a window reopened every
+	// frame is one whose close button does nothing.
+	shopBagOpened bool
+
+	// The two panels of a counter, whose remembered flags a shopkeeper has to
+	// clear on the way in: nobody presses a button to open a shop.
+	shopStockWindow hostedWindow
+	shopCartWindow  hostedWindow
+	shopAskWindow   hostedWindow
+
+	// The item's own two, opened by asking about one rather than by a button.
+	itemInfoWin hostedWindow
+	cardViewWin hostedWindow
+	itemTab     int
 
 	// mapWorldView switches the Map window between this map and the world.
 	mapWorldView bool
@@ -227,6 +255,12 @@ func NewUI2DBackend(width, height int) (*UI2DBackend, error) {
 		ctx:           ctx,
 		charSelectIdx: -1,
 		skillLevels:   map[uint16]int{},
+
+		shopStockWindow: newHostedWindow(shopStockWindowID),
+		shopCartWindow:  newHostedWindow(shopCartWindowID),
+		shopAskWindow:   newHostedWindow(shopAskWindowID),
+		itemInfoWin:     newHostedWindow(itemInfoWindowID),
+		cardViewWin:     newHostedWindow(cardViewWindowID),
 	}, nil
 }
 
@@ -1076,6 +1110,10 @@ func (b *UI2DBackend) RenderInGameUI(state InGameUIState, dt float64, width, hei
 
 	// After the windows, because it is opened from one of them: drawn
 	// before, the inventory it was asked from paints straight over it.
+	// Before the item windows, so the information window opened from a shop
+	// row lies over the shop rather than under it.
+	b.drawShop(state, width, height)
+
 	b.drawItemInfo(width, height)
 	b.drawCardView(width, height)
 

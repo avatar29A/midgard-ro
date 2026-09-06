@@ -175,7 +175,22 @@ func (s *InGameState) applySkillUse(use packets.SkillUse) {
 		}
 
 		swing := blow.SwingDurationMs()
-		if delay := s.hitDelayMs(use.SourceID, swing); delay > 0 {
+
+		delay := s.hitDelayMs(use.SourceID, swing)
+
+		// A blow waits for whichever comes later: the caster reaching the
+		// point of their own motion, or the spell reaching the point of its
+		// picture. Lightning Bolt is the second — its art is most of a second
+		// of gathering before the bolt cracks — and answering the motion
+		// alone put the figure and the flinch on screen while the sky was
+		// still empty.
+		if effects, known := skills.EffectsOf(use.SkillID); known {
+			if lead := strikeLeadMs(effects.OnTarget); lead > delay {
+				delay = lead
+			}
+		}
+
+		if delay > 0 {
 			s.pendingBlows = append(s.pendingBlows,
 				pendingBlow{blow: blow, remainingMs: delay})
 		} else {
@@ -505,6 +520,12 @@ func (s *InGameState) SkillLabels(viewportW, viewportH float32) []HoverLabel {
 // misplaced.
 func (s *InGameState) UseSkillAt(skillID uint16, level, cellX, cellY int) error {
 	if s.client == nil {
+		return nil
+	}
+
+	// A corpse casts nothing. The skill it was holding is dropped on dying,
+	// so this is only reached by whatever was already in the air.
+	if s.playerDead {
 		return nil
 	}
 
@@ -1179,11 +1200,27 @@ func effectSoundFor(effect string) string {
 	return effectSoundDir + strings.ToLower(effect) + ".wav"
 }
 
+// effectFiles are the effects the archive files under a name that is not
+// their own.
+//
+// Nearly all of them match — EF_FIREHIT is firehit.str — and the few that do
+// not are named for what they draw rather than for the effect that draws it.
+// EF_LIGHTBOLT is the one that matters here: there is no lightbolt.str in the
+// archive at all, so Lightning Bolt drew nothing whatever, and what it should
+// have been drawing is filed under the strike itself.
+var effectFiles = map[string]string{
+	"EF_LIGHTBOLT": "lightning.str",
+}
+
 // effectFileFor is the STR the archive files an effect under, from the name
 // the table uses: EF_FIREHIT is firehit.str.
 func effectFileFor(effect string) string {
 	if len(effect) <= 3 || effect[:3] != "EF_" {
 		return ""
+	}
+
+	if file, aliased := effectFiles[effect]; aliased {
+		return file
 	}
 
 	return strings.ToLower(effect[3:]) + ".str"
@@ -1250,7 +1287,99 @@ type delayedEffect struct {
 	// caster is who threw it, for the effects drawn from them to the target.
 	caster uint32
 
+	// at is where the blow was aimed, kept for when the target is no longer
+	// there to ask.
+	at [3]float32
+
 	delayMs float32
+}
+
+// delayedSound is a sound waiting for the blow it belongs to.
+//
+// Its own list rather than a field on delayedEffect: a volley's shots are
+// drawn by one burst that already knows how to lay them out over time, so
+// there is nothing to draw at each blow — only something to hear.
+type delayedSound struct {
+	path    string
+	delayMs float32
+}
+
+// playSoundIn asks for a sound a while from now.
+func (s *InGameState) playSoundIn(path string, delayMs float32) {
+	if path == "" {
+		return
+	}
+
+	if delayMs <= 0 {
+		s.playSound(path)
+
+		return
+	}
+
+	s.delayedSounds = append(s.delayedSounds, delayedSound{path: path, delayMs: delayMs})
+}
+
+// advanceDelayedSounds plays the ones whose moment has come.
+func (s *InGameState) advanceDelayedSounds(deltaMs float32) {
+	if len(s.delayedSounds) == 0 {
+		return
+	}
+
+	kept := s.delayedSounds[:0]
+	for _, waiting := range s.delayedSounds {
+		waiting.delayMs -= deltaMs
+		if waiting.delayMs > 0 {
+			kept = append(kept, waiting)
+
+			continue
+		}
+
+		s.playSound(waiting.path)
+	}
+
+	s.delayedSounds = kept
+}
+
+// playImpactSounds makes a list of effects heard.
+//
+// A skill that lands ten blows made one sound: the whole list was played the
+// moment the packet arrived, before the first shot of the volley had left the
+// caster. What the archive keeps says otherwise — ef_firearrow, ef_icearrow
+// and ef_lightbolt each ship with three numbered variants beside them, which
+// is a sound meant to be heard over and over rather than once.
+//
+// So an effect that lands its blows one after another is heard once for each
+// of them, at the moment that one lands. Everything else is heard once, as
+// before.
+func (s *InGameState) playImpactSounds(effects []string, hits int) {
+	for _, effect := range effects {
+		sound := effectSoundFor(effect)
+		if sound == "" {
+			continue
+		}
+
+		times := blowTimes(effect, hits)
+		if len(times) == 0 {
+			s.playSound(sound)
+
+			continue
+		}
+
+		for _, at := range times {
+			s.playSoundIn(sound, at)
+		}
+	}
+}
+
+// aimPoint is where a blow is aimed, for the volleys that go on landing after
+// what they were aimed at has fallen over.
+func (s *InGameState) aimPoint(target uint32) [3]float32 {
+	x, y, z, ok := s.effectHeight(target)
+	if !ok {
+		return [3]float32{}
+	}
+
+	return [3]float32{x, y, z}
 }
 
 // advanceDelayedEffects plays the ones whose moment has come.
@@ -1268,16 +1397,33 @@ func (s *InGameState) advanceDelayedEffects(deltaMs float32) {
 			continue
 		}
 
-		// Gone with whoever it was aimed at. A flash where a monster used to
-		// stand is worse than no flash.
-		x, y, z, ok := s.effectHeight(waiting.target)
-		if !ok {
+		// Where the target is now, or where it was when the blow was aimed.
+		//
+		// The second half is a volley's doing. A blow that has left is going
+		// to land whether or not what it was aimed at is still standing —
+		// the shots of a bolt volley are drawn by one burst and fall however
+		// the fight goes — and dropping only the flashes left ten shots
+		// coming down on nothing at all. The original's monsters die under a
+		// volley that finishes over them.
+		x, y, z := waiting.at[0], waiting.at[1], waiting.at[2]
+		if live, liveY, liveZ, ok := s.effectHeight(waiting.target); ok {
+			x, y, z = live, liveY, liveZ
+		} else if x == 0 && y == 0 && z == 0 {
 			continue
 		}
 
 		one := []string{waiting.effect}
 		s.playSkillEffects(one, x, y, z)
 		s.playSkillBursts(one, 1, s.casterAt(waiting.caster), [3]float32{x, y, z})
+
+		// And what it sounds like, here rather than when the skill arrived:
+		// this is a blow landing, and the sound of a blow belongs to it.
+		//
+		// Waiting as long as the picture does where the picture takes its
+		// time. A thunderclap is the bolt, not the cloud gathering before it.
+		for _, effect := range one {
+			s.playSoundIn(effectSoundFor(effect), strikeLeadMs(one))
+		}
 	}
 
 	s.delayedEffects = kept
@@ -1288,6 +1434,71 @@ func (s *InGameState) advanceDelayedEffects(deltaMs float32) {
 var boltEffects = map[string]bool{
 	"EF_ICEARROW":  true,
 	"EF_FIREARROW": true,
+}
+
+// volleyEffects are drawn once for every blow rather than once for the cast,
+// and have no burst of their own to lay the blows out with.
+//
+// Lightning Bolt is the one. Its blows do not fly anywhere: each is a strike
+// on the target out of lightning.str, and a level ten cast is ten of them one
+// after another. Fire and Cold are not here — their shots are drawn by a
+// single burst that lays out the whole volley itself.
+var volleyEffects = map[string]bool{
+	"EF_LIGHTBOLT": true,
+}
+
+// volleyed reports whether a list of effects belongs to a skill that strikes
+// once per blow.
+//
+// The whole list goes with it when it does: the strike and the spark it makes
+// are two halves of one blow, and drawing the spark once for ten strikes is
+// the fault this is here to fix, in miniature.
+func volleyed(effects []string) bool {
+	for _, effect := range effects {
+		if volleyEffects[effect] {
+			return true
+		}
+	}
+
+	return false
+}
+
+// strikeLandsAt is how far into an effect's own art the blow it depicts
+// actually lands, in frames of the sixty a second the files are counted in.
+//
+// Most of what this client draws for a blow begins with the blow: a firehit
+// is the flash of the hit itself and starts at its first frame. A few take
+// their time first, and until the picture catches up the figure and the
+// flinch are the only thing on screen — which reads as the damage happening
+// before the spell does.
+//
+// Measured off the files. lightning.str gathers its rings from frame 35 and
+// cracks its bolt at 53; nothing at all is drawn before that.
+var strikeLandsAt = map[string]float32{
+	"EF_LIGHTBOLT": 53,
+}
+
+// strikeLeadMs is the longest any of these effects makes the blow wait.
+func strikeLeadMs(effects []string) float32 {
+	lead := float32(0)
+	for _, effect := range effects {
+		if at, slow := strikeLandsAt[effect]; slow {
+			if ms := burstFrames(at); ms > lead {
+				lead = ms
+			}
+		}
+	}
+
+	return lead
+}
+
+// strikeMs is when the nth blow of such a volley lands.
+//
+// The same cadence the shots of a bolt volley keep, because it is the same
+// skill at the same level doing it — only without the flight, since a strike
+// arrives where it is aimed.
+func strikeMs(i int) float32 {
+	return burstFrames(boltPeriodFrames * float32(i))
 }
 
 // splitBolts separates a skill's shots from what they hit with.
@@ -1384,20 +1595,40 @@ func (s *InGameState) playSkillUseEffects(use packets.SkillUse) {
 				s.playSkillBursts(bolts, hits, from, [3]float32{x, y, z})
 			}
 
+			aim := s.aimPoint(use.TargetID)
+
 			for i := 0; i < min(hits, boltMax); i++ {
 				for _, effect := range onImpact {
 					s.delayedEffects = append(s.delayedEffects, delayedEffect{
 						effect: effect, target: use.TargetID, caster: use.SourceID,
-						delayMs: boltImpactMs(i),
+						at: aim, delayMs: boltImpactMs(i),
+					})
+				}
+			}
+			// The volley's own sound, once for every shot in it. What the
+			// shots hit with is heard as each one lands, from the delayed
+			// effects queued above.
+			s.playImpactSounds(bolts, hits)
+		} else if volleyed(effects.OnTarget) {
+			// Struck once for every blow, picture and sound together: each
+			// goes out as a delayed effect, which draws it and makes its
+			// noise at the moment it lands.
+			aim := s.aimPoint(use.TargetID)
+
+			for i := 0; i < min(max(hits, 1), boltMax); i++ {
+				for _, effect := range effects.OnTarget {
+					s.delayedEffects = append(s.delayedEffects, delayedEffect{
+						effect: effect, target: use.TargetID, caster: use.SourceID,
+						at: aim, delayMs: strikeMs(i),
 					})
 				}
 			}
 		} else if x, y, z, ok := s.effectHeight(use.TargetID); ok {
 			s.playSkillEffects(effects.OnTarget, x, y, z)
 			s.playSkillBursts(effects.OnTarget, hits, from, [3]float32{x, y, z})
-		}
 
-		s.playSkillSounds(effects.OnTarget)
+			s.playImpactSounds(effects.OnTarget, hits)
+		}
 	}
 
 	if use.Ground {

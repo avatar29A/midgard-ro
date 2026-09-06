@@ -84,6 +84,18 @@ func main() {
 	if ids := config.UseItems(); len(ids) > 0 {
 		g.SetUseItems(ids)
 	}
+	if names := config.TalkTo(); len(names) > 0 {
+		g.SetTalkTo(names)
+	}
+	if config.ShopClose() {
+		g.SetShopClose(true)
+	}
+	if deal := config.ShopDeal(); deal != "" {
+		g.SetShopDeal(deal)
+	}
+	if ids := config.ShopBuys(); len(ids) > 0 {
+		g.SetShopBuys(ids)
+	}
 	if cast := config.CastSkills(); len(cast) > 0 {
 		g.SetCastSkills(cast)
 	}

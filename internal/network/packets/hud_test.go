@@ -342,3 +342,41 @@ func TestCardsAreFourBytesEach(t *testing.T) {
 		t.Errorf("the card after it read back as %d", equip[0].Cards[1])
 	}
 }
+
+// TestDecodeItemDeleted reads the packet the server sends whenever something
+// leaves the bag without being dropped.
+//
+// The field order is the trap: the reason comes before the slot, unlike every
+// other inventory packet, so a decoder that reads them the other way round
+// takes an item out of slot six every time something is sold.
+func TestDecodeItemDeleted(t *testing.T) {
+	pkt := []byte{
+		0xFA, 0x07,
+		0x06, 0x00, // sold
+		0x03, 0x00, // slot 3
+		0x02, 0x00, // two of them
+	}
+
+	gone, ok := DecodeItemDeleted(pkt)
+	if !ok {
+		t.Fatal("a whole packet was read as short")
+	}
+
+	if gone.Reason != ItemDeletedSold {
+		t.Errorf("Reason = %d, want the sale", gone.Reason)
+	}
+	if gone.Index != 3 {
+		t.Errorf("Index = %d, want 3", gone.Index)
+	}
+	if gone.Count != 2 {
+		t.Errorf("Count = %d, want 2", gone.Count)
+	}
+}
+
+// TestDecodeItemDeletedShort: a packet cut off mid-field is refused rather
+// than read past the end of the buffer.
+func TestDecodeItemDeletedShort(t *testing.T) {
+	if _, ok := DecodeItemDeleted([]byte{0xFA, 0x07, 0x06, 0x00, 0x03}); ok {
+		t.Error("a short packet was read as whole")
+	}
+}
