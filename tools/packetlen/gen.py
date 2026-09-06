@@ -239,8 +239,38 @@ def collect_all(src: str, env: dict):
     return structs, ids, consts
 
 
-def sizes_by_id(structs: dict, ids: dict, consts: dict) -> dict:
+# A struct filled in and sent under an id that is declared as an enumerator,
+# not under its own name. clif_skill_scale() builds a PACKET_ZC_SKILL_SCALE and
+# writes `p.PacketType = skillscale;` — the struct is in packets_struct.hpp, the
+# id is `skillscale = 0xA41` in the same file's enum, and nothing ties the two
+# together but that assignment. Neither packet_db nor DEFINE_PACKET_HEADER
+# knows the packet, so 0x0A41 was missing from the table; every cast anyone
+# made nearby then desynchronised the stream and ate the packet behind it.
+SENT_AS_RE = re.compile(
+    r"(PACKET_\w+)\s+p\s*(?:=\s*\{\s*\})?\s*;[^;]*?\bp\.PacketType\s*=\s*([a-zA-Z_]\w*)\s*;",
+    re.S,
+)
+
+
+def sent_as(src: str) -> dict:
+    """Enumerator name -> struct name, from `p.PacketType = name` in clif.cpp.
+
+    Only pairs whose id and struct both survive the version guards are used
+    (the caller checks both), so a dead branch in clif.cpp cannot add an entry.
+    """
+    with open(f"{src}/src/map/clif.cpp", encoding="utf-8", errors="replace") as handle:
+        text = handle.read()
+    pairs = {}
+    for match in SENT_AS_RE.finditer(text):
+        pairs.setdefault(match.group(2), match.group(1))
+    return pairs
+
+
+def sizes_by_id(structs: dict, ids: dict, consts: dict, aliases=None) -> dict:
     """Packet id -> wire length, for every id whose struct resolves.
+
+    aliases maps an enumerator name to the struct sent under it (see sent_as),
+    for the ids that carry no struct of their own name.
 
     A struct that will not resolve — an unknown field type, an array bound we
     cannot find — is reported rather than quietly skipped. Skipping is how
@@ -254,6 +284,19 @@ def sizes_by_id(structs: dict, ids: dict, consts: dict) -> dict:
         if name not in structs:
             continue
         size = struct_size(structs[name], structs, consts)
+        if size is None:
+            skipped.append((pid, name))
+            continue
+        lengths[pid] = size
+
+    # The enumerator ids live with the constants (that is how packet(useItemAckType,
+    # ...) resolves), so an id sent as `p.PacketType = skillscale` is looked up
+    # there, under the struct clif.cpp fills in for it.
+    for name, struct_name in (aliases or {}).items():
+        pid = ids.get(name, consts.get(name))
+        if pid is None or pid in lengths or struct_name not in structs:
+            continue
+        size = struct_size(structs[struct_name], structs, consts)
         if size is None:
             skipped.append((pid, name))
             continue
@@ -583,7 +626,7 @@ def main() -> int:
     lengths = parse(f"{src}/src/map/clif_packetdb.hpp", env, ids, structs, consts)
     db_count = len(lengths)
 
-    from_structs = sizes_by_id(structs, ids, consts)
+    from_structs = sizes_by_id(structs, ids, consts, sent_as(src))
 
     conflicts = 0
     added = 0

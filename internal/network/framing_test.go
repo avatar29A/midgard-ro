@@ -19,6 +19,24 @@ func TestPacketLengthFixed(t *testing.T) {
 	}
 }
 
+// TestPacketLengthSkillScale guards the one packet rAthena sends under an
+// enumerator rather than a name of its own: clif_skill_scale() fills a
+// PACKET_ZC_SKILL_SCALE and writes `p.PacketType = skillscale` (0x0A41). The
+// generator did not see that pairing, the table had no length, and every cast
+// anyone made nearby resynchronised the stream and ate the packet behind it.
+func TestPacketLengthSkillScale(t *testing.T) {
+	c := &Client{}
+
+	got, known := c.packetLength(0x0A41, []byte{0x41, 0x0A})
+	if !known {
+		t.Fatal("ZC_SKILL_SCALE (0x0A41) should be known")
+	}
+	if got != 18 {
+		t.Errorf("length = %d, want 18 (int16 id, uint32 AID, int16 skill_id, "+
+			"int16 skill_lv, int16 x, int16 y, uint32 casttime)", got)
+	}
+}
+
 func TestPacketLengthVariable(t *testing.T) {
 	c := &Client{}
 
