@@ -412,9 +412,9 @@ func (s *InGameState) loadPlayerSprites() {
 		zap.Int("walkFrames", s.playerRender.FrameCount(entity.ActionWalk, entity.DirS)))
 }
 
-// loadPortalRenderer builds the warp portal effect. It needs nothing from
-// the archive — the effect is generated — so the only way it fails is the
-// shader, and then the warps are still there to walk into.
+// loadPortalRenderer builds the warp portal effect. The pad on the floor is
+// generated and needs nothing from the archive, so the only way it fails is
+// the shader, and then the warps are still there to walk into.
 func (s *InGameState) loadPortalRenderer() {
 	pr, err := scene.NewPortalRenderer()
 	if err != nil {
@@ -422,6 +422,13 @@ func (s *InGameState) loadPortalRenderer() {
 		return
 	}
 	s.portals = pr
+
+	// The rays the funnel is papered with are the archive's. Warned and no
+	// more if they are missing: the pad is drawn without them, which is what
+	// a portal was here before the funnel stood over it.
+	if err := s.portals.LoadRingTexture(s.manager.TexLoader); err != nil {
+		logger.Warn("no rays for the warp portal", zap.Error(err))
+	}
 
 	m, err := scene.NewGroundMarker()
 	if err != nil {
