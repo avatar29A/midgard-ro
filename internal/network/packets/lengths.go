@@ -862,6 +862,7 @@ var mapPacketLengths = map[uint16]int{
 	0x0A39: 36,
 	0x0A3B: -1,
 	0x0A3F: 11,
+	0x0A41: 18,
 	0x0A44: -1,
 	0x0A46: 14,
 	0x0A47: 3,
