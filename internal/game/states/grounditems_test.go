@@ -153,3 +153,42 @@ func TestForgetPendingPickup(t *testing.T) {
 		t.Error("the idle clock carried over into the next errand")
 	}
 }
+
+// TestPointingAtSomebodyNamesThem: a town full of unnamed people is a town you
+// have to click your way around, which is what it was.
+func TestPointingAtSomebodyNamesThem(t *testing.T) {
+	if !labeled(&entity.Entity{Type: entity.TypeNPC, Name: "Tool Dealer"}) {
+		t.Error("an NPC under the pointer has no name to show")
+	}
+
+	for _, kind := range []entity.Type{entity.TypeItem, entity.TypeMonster} {
+		if !labeled(&entity.Entity{Type: kind}) {
+			t.Errorf("type %d lost its name", kind)
+		}
+	}
+
+	// A warp's name is the line of script that placed it, and the original
+	// shows nothing for one.
+	if labeled(&entity.Entity{Type: entity.TypeWarp, Name: "prt04"}) {
+		t.Error("a warp was labeled with its script name")
+	}
+
+	if labeled(nil) {
+		t.Error("nothing under the pointer was labeled")
+	}
+}
+
+// TestTheTagOnAnNpcNameIsNotShown: a script tells two of them apart by hanging
+// a tag off the end, and it is not for reading.
+func TestTheTagOnAnNpcNameIsNotShown(t *testing.T) {
+	for _, tc := range []struct{ name, want string }{
+		{"Tool Dealer#prt1", "Tool Dealer"},
+		{"Illusion Merchant#0829", "Illusion Merchant"},
+		{"Kafra Employee", "Kafra Employee"},
+		{"#hidden", ""},
+	} {
+		if got := displayName(tc.name); got != tc.want {
+			t.Errorf("displayName(%q) = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
