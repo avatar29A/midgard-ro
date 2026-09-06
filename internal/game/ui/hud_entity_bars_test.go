@@ -89,3 +89,28 @@ func TestBarHeightGrowsWithSP(t *testing.T) {
 			entityBarHSP-entityBarH)
 	}
 }
+
+// TestAMonstersBarSitsOverItsHead is the fault this was written for: under the
+// feet, a monster's bar landed on our own when we stood next to it swinging,
+// and a magenta bar draining where ours is read as us taking the blows.
+func TestAMonstersBarSitsOverItsHead(t *testing.T) {
+	const (
+		screenY = float32(300)
+		height  = entityBarH
+	)
+
+	own := entityBarTop(screenY, height, false)
+	if own <= screenY {
+		t.Errorf("our own bar is at %v, want it below the feet at %v", own, screenY)
+	}
+
+	mob := entityBarTop(screenY, height, true)
+	if mob >= screenY {
+		t.Errorf("a monster's bar is at %v, want it above the head at %v", mob, screenY)
+	}
+
+	// The whole bar clears the anchor: its bottom edge is still above it.
+	if mob+height > screenY {
+		t.Errorf("the monster's bar runs down to %v, past the head at %v", mob+height, screenY)
+	}
+}
