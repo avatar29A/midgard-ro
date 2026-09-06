@@ -2014,8 +2014,10 @@ func (g *Game) updateCursor(state *states.InGameState, io *imgui.IO, mouseX, mou
 		want = hudCursor
 		state.SetHoverEntity(nil)
 
-	// Otherwise the pointer belongs to whatever is under it in the world.
-	case !io.WantCaptureMouse() && !g.uiBackend.MouseCaptured():
+	// Otherwise the pointer belongs to whatever is under it in the world —
+	// unless the world is refusing clicks, at a counter or over a corpse:
+	// promising talk or a doorway then is promising what no click will do.
+	case !io.WantCaptureMouse() && !g.uiBackend.MouseCaptured() && !state.WorldHeld():
 		viewportW, viewportH := g.uiBackend.GetScreenSize()
 		hovered := state.HoverEntity(mouseX, mouseY, viewportW, viewportH)
 		state.SetHoverEntity(hovered)
