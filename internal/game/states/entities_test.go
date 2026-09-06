@@ -567,3 +567,56 @@ func TestWarpsAreTheirOwnType(t *testing.T) {
 		t.Fatal("a portal is drawn — as the effect")
 	}
 }
+
+// TestACorpseLiesThereForItsOwnAnimation is the fault this was written for:
+// a killed unit began fading on the packet that reported the death, and the
+// fade is a fifth of a second — so every monster in the game blinked out two
+// frames into falling over.
+func TestACorpseLiesThereForItsOwnAnimation(t *testing.T) {
+	m := entity.NewManager()
+
+	mob := entity.NewEntity(7, entity.TypeMonster)
+	mob.Body = entity.NewCharacter(0, 0, 0)
+	m.Add(mob)
+
+	mob.IsDead = true
+	mob.Body.Die()
+
+	// Eight frames held a tenth of a second each: most of a second of dying.
+	anim := func(_ *entity.Entity, action, _ int) (int, float32) {
+		if action == entity.ActionDie {
+			return 8, 100
+		}
+
+		return 1, 100
+	}
+
+	// Most of the way through the animation, and nothing has faded.
+	updateUnits(m, 700, anim)
+
+	if mob.Leaving {
+		t.Error("the body began fading before it had finished falling over")
+	}
+
+	// Past the animation and the moment it lies there afterwards.
+	updateUnits(m, 500, anim)
+
+	if !mob.Leaving {
+		t.Errorf("the body is still lying there after %v", mob.DeadMs)
+	}
+}
+
+// TestALivingUnitDoesNotFade: the count is on being dead, not on being drawn.
+func TestALivingUnitDoesNotFade(t *testing.T) {
+	m := entity.NewManager()
+
+	mob := entity.NewEntity(7, entity.TypeMonster)
+	mob.Body = entity.NewCharacter(0, 0, 0)
+	m.Add(mob)
+
+	updateUnits(m, 5000, func(*entity.Entity, int, int) (int, float32) { return 1, 100 })
+
+	if mob.Leaving {
+		t.Error("a living unit started to fade")
+	}
+}
