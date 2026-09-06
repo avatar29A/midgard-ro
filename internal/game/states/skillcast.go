@@ -1185,11 +1185,27 @@ func effectSoundFor(effect string) string {
 	return effectSoundDir + strings.ToLower(effect) + ".wav"
 }
 
+// effectFiles are the effects the archive files under a name that is not
+// their own.
+//
+// Nearly all of them match — EF_FIREHIT is firehit.str — and the few that do
+// not are named for what they draw rather than for the effect that draws it.
+// EF_LIGHTBOLT is the one that matters here: there is no lightbolt.str in the
+// archive at all, so Lightning Bolt drew nothing whatever, and what it should
+// have been drawing is filed under the strike itself.
+var effectFiles = map[string]string{
+	"EF_LIGHTBOLT": "lightning.str",
+}
+
 // effectFileFor is the STR the archive files an effect under, from the name
 // the table uses: EF_FIREHIT is firehit.str.
 func effectFileFor(effect string) string {
 	if len(effect) <= 3 || effect[:3] != "EF_" {
 		return ""
+	}
+
+	if file, aliased := effectFiles[effect]; aliased {
+		return file
 	}
 
 	return strings.ToLower(effect[3:]) + ".str"
@@ -1255,6 +1271,10 @@ type delayedEffect struct {
 
 	// caster is who threw it, for the effects drawn from them to the target.
 	caster uint32
+
+	// at is where the blow was aimed, kept for when the target is no longer
+	// there to ask.
+	at [3]float32
 
 	delayMs float32
 }
@@ -1336,6 +1356,17 @@ func (s *InGameState) playImpactSounds(effects []string, hits int) {
 	}
 }
 
+// aimPoint is where a blow is aimed, for the volleys that go on landing after
+// what they were aimed at has fallen over.
+func (s *InGameState) aimPoint(target uint32) [3]float32 {
+	x, y, z, ok := s.effectHeight(target)
+	if !ok {
+		return [3]float32{}
+	}
+
+	return [3]float32{x, y, z}
+}
+
 // advanceDelayedEffects plays the ones whose moment has come.
 func (s *InGameState) advanceDelayedEffects(deltaMs float32) {
 	if len(s.delayedEffects) == 0 {
@@ -1351,10 +1382,18 @@ func (s *InGameState) advanceDelayedEffects(deltaMs float32) {
 			continue
 		}
 
-		// Gone with whoever it was aimed at. A flash where a monster used to
-		// stand is worse than no flash.
-		x, y, z, ok := s.effectHeight(waiting.target)
-		if !ok {
+		// Where the target is now, or where it was when the blow was aimed.
+		//
+		// The second half is a volley's doing. A blow that has left is going
+		// to land whether or not what it was aimed at is still standing —
+		// the shots of a bolt volley are drawn by one burst and fall however
+		// the fight goes — and dropping only the flashes left ten shots
+		// coming down on nothing at all. The original's monsters die under a
+		// volley that finishes over them.
+		x, y, z := waiting.at[0], waiting.at[1], waiting.at[2]
+		if live, liveY, liveZ, ok := s.effectHeight(waiting.target); ok {
+			x, y, z = live, liveY, liveZ
+		} else if x == 0 && y == 0 && z == 0 {
 			continue
 		}
 
@@ -1375,6 +1414,42 @@ func (s *InGameState) advanceDelayedEffects(deltaMs float32) {
 var boltEffects = map[string]bool{
 	"EF_ICEARROW":  true,
 	"EF_FIREARROW": true,
+}
+
+// volleyEffects are drawn once for every blow rather than once for the cast,
+// and have no burst of their own to lay the blows out with.
+//
+// Lightning Bolt is the one. Its blows do not fly anywhere: each is a strike
+// on the target out of lightning.str, and a level ten cast is ten of them one
+// after another. Fire and Cold are not here — their shots are drawn by a
+// single burst that lays out the whole volley itself.
+var volleyEffects = map[string]bool{
+	"EF_LIGHTBOLT": true,
+}
+
+// volleyed reports whether a list of effects belongs to a skill that strikes
+// once per blow.
+//
+// The whole list goes with it when it does: the strike and the spark it makes
+// are two halves of one blow, and drawing the spark once for ten strikes is
+// the fault this is here to fix, in miniature.
+func volleyed(effects []string) bool {
+	for _, effect := range effects {
+		if volleyEffects[effect] {
+			return true
+		}
+	}
+
+	return false
+}
+
+// strikeMs is when the nth blow of such a volley lands.
+//
+// The same cadence the shots of a bolt volley keep, because it is the same
+// skill at the same level doing it — only without the flight, since a strike
+// arrives where it is aimed.
+func strikeMs(i int) float32 {
+	return burstFrames(boltPeriodFrames * float32(i))
 }
 
 // splitBolts separates a skill's shots from what they hit with.
@@ -1471,11 +1546,13 @@ func (s *InGameState) playSkillUseEffects(use packets.SkillUse) {
 				s.playSkillBursts(bolts, hits, from, [3]float32{x, y, z})
 			}
 
+			aim := s.aimPoint(use.TargetID)
+
 			for i := 0; i < min(hits, boltMax); i++ {
 				for _, effect := range onImpact {
 					s.delayedEffects = append(s.delayedEffects, delayedEffect{
 						effect: effect, target: use.TargetID, caster: use.SourceID,
-						delayMs: boltImpactMs(i),
+						at: aim, delayMs: boltImpactMs(i),
 					})
 				}
 			}
@@ -1483,6 +1560,20 @@ func (s *InGameState) playSkillUseEffects(use packets.SkillUse) {
 			// shots hit with is heard as each one lands, from the delayed
 			// effects queued above.
 			s.playImpactSounds(bolts, hits)
+		} else if volleyed(effects.OnTarget) {
+			// Struck once for every blow, picture and sound together: each
+			// goes out as a delayed effect, which draws it and makes its
+			// noise at the moment it lands.
+			aim := s.aimPoint(use.TargetID)
+
+			for i := 0; i < min(max(hits, 1), boltMax); i++ {
+				for _, effect := range effects.OnTarget {
+					s.delayedEffects = append(s.delayedEffects, delayedEffect{
+						effect: effect, target: use.TargetID, caster: use.SourceID,
+						at: aim, delayMs: strikeMs(i),
+					})
+				}
+			}
 		} else if x, y, z, ok := s.effectHeight(use.TargetID); ok {
 			s.playSkillEffects(effects.OnTarget, x, y, z)
 			s.playSkillBursts(effects.OnTarget, hits, from, [3]float32{x, y, z})
