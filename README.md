@@ -36,8 +36,8 @@ recreation of it.
 | **Character creation** — Human or Doram, hair style and color, the name checked by the server | **Prontera** — the central square, its NPCs and the other players |
 | ![Frost Diver](docs/screenshots/05-prontera-field-frost-diver.jpg) | ![Geffen](docs/screenshots/06-geffen.jpg) |
 | **prt_fild08** — Frost Diver on a Poring | **Geffen** |
-| ![Payon](docs/screenshots/07-payon.jpg) | |
-| **Payon** | |
+| ![Payon](docs/screenshots/07-payon.jpg) | ![Skill Tree](docs/screenshots/08-skill-tree.jpg) |
+| **Payon** | **Skill Tree** — the window from the client's own tables, and the quick panel with skills in it |
 
 ## What works today
 
