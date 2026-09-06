@@ -9,9 +9,14 @@ OpenGL 4.1 · SDL2 · the real RO protocol (packet version 20211103) against a s
 > decisions and session logs are all in [`docs/`](docs/).
 
 <p align="center">
+  <a href="https://www.youtube.com/watch?v=wlumrzGEoms"><img src="https://img.youtube.com/vi/wlumrzGEoms/maxresdefault.jpg" width="800" alt="Gameplay recording of the Midgard RO client on YouTube"></a>
+</p>
+<p align="center"><sub>▶ <a href="https://www.youtube.com/watch?v=wlumrzGEoms">Gameplay recording, 6 September 2026</a> — the latest session, on YouTube at 1.5× speed</sub></p>
+
+<p align="center">
   <img src="docs/screenshots/gameplay.gif" width="800" alt="A walk through Prontera, then a Mage casting Frost Diver and Thunderstorm on Porings south of the city">
 </p>
-<p align="center"><sub>A walk through Prontera, then Frost Diver and Thunderstorm on Porings in prt_fild08 — <a href="docs/screenshots/gameplay.mp4">the same clip as mp4</a></sub></p>
+<p align="center"><sub>A short clip: a walk through Prontera, then Frost Diver and Thunderstorm on Porings in prt_fild08 — <a href="docs/screenshots/gameplay.mp4">the same clip as mp4</a></sub></p>
 
 ## What it does
 
