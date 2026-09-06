@@ -813,3 +813,67 @@ func TestAGroundSkillWithNowhereToGo(t *testing.T) {
 		t.Error("a placement off the map was accepted")
 	}
 }
+
+// TestAVolleyIsHeardOncePerShot is the fault this was written for: a level
+// ten bolt made one sound, played the moment the packet arrived — before the
+// first shot had left the caster.
+func TestAVolleyIsHeardOncePerShot(t *testing.T) {
+	s := &InGameState{}
+
+	s.playImpactSounds([]string{"EF_FIREARROW"}, 4)
+
+	if len(s.sounds) != 0 {
+		t.Errorf("something was heard before the first shot landed: %+v", s.sounds)
+	}
+	if len(s.delayedSounds) != 4 {
+		t.Fatalf("%d sounds are waiting, want one per shot", len(s.delayedSounds))
+	}
+
+	// Each at its own shot's moment, and each the volley's own sound.
+	for i, waiting := range s.delayedSounds {
+		if waiting.delayMs != boltImpactMs(i) {
+			t.Errorf("shot %d is heard at %v, want %v", i, waiting.delayMs, boltImpactMs(i))
+		}
+		if waiting.path != effectSoundFor("EF_FIREARROW") {
+			t.Errorf("shot %d sounds like %q", i, waiting.path)
+		}
+	}
+}
+
+// TestASingleBlowIsStillHeardAtOnce: nothing waits for a skill that lands one.
+func TestASingleBlowIsStillHeardAtOnce(t *testing.T) {
+	s := &InGameState{}
+
+	s.playImpactSounds([]string{"EF_HEAL"}, 1)
+
+	if len(s.delayedSounds) != 0 {
+		t.Errorf("a single blow was made to wait: %+v", s.delayedSounds)
+	}
+	if len(s.sounds) != 1 {
+		t.Fatalf("%d sounds played, want one", len(s.sounds))
+	}
+	if s.sounds[0].Path != effectSoundFor("EF_HEAL") {
+		t.Errorf("it sounded like %q", s.sounds[0].Path)
+	}
+}
+
+// TestAWaitingSoundIsHeardWhenItsMomentComes, once, and is then gone.
+func TestAWaitingSoundIsHeardWhenItsMomentComes(t *testing.T) {
+	s := &InGameState{}
+	s.playSoundIn("a.wav", 100)
+
+	s.advanceDelayedSounds(40)
+
+	if len(s.sounds) != 0 {
+		t.Errorf("heard early: %+v", s.sounds)
+	}
+
+	s.advanceDelayedSounds(80)
+
+	if len(s.sounds) != 1 || s.sounds[0].Path != "a.wav" {
+		t.Errorf("the sounds are %+v, want the one", s.sounds)
+	}
+	if len(s.delayedSounds) != 0 {
+		t.Errorf("it is still waiting: %+v", s.delayedSounds)
+	}
+}

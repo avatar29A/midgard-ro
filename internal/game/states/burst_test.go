@@ -890,3 +890,61 @@ func TestSoulStrikeBoltsFollowOneAnother(t *testing.T) {
 		}
 	}
 }
+
+// TestABoltVolleyLandsItsBlowsInOrder: the times are what a sound is hung on,
+// so they have to be one per shot, in the order they arrive, and bounded by
+// the most a volley draws.
+func TestABoltVolleyLandsItsBlowsInOrder(t *testing.T) {
+	times := blowTimes("EF_FIREARROW", 5)
+
+	if len(times) != 5 {
+		t.Fatalf("got %d blows for five, want five: %v", len(times), times)
+	}
+
+	for i := 1; i < len(times); i++ {
+		if times[i] <= times[i-1] {
+			t.Errorf("blow %d lands at %v, not after %v", i, times[i], times[i-1])
+		}
+	}
+
+	if times[0] <= 0 {
+		t.Errorf("the first blow lands at %v, want it after the shot has flown", times[0])
+	}
+
+	// However many the server says, only what the volley draws is heard.
+	if n := len(blowTimes("EF_ICEARROW", 99)); n != boltMax {
+		t.Errorf("ninety-nine blows gave %d times, want the %d drawn", n, boltMax)
+	}
+
+	// And a skill that lands none still lands one.
+	if n := len(blowTimes("EF_ICEARROW", 0)); n != 1 {
+		t.Errorf("no blows gave %d times, want one", n)
+	}
+}
+
+// TestSoulStrikeIsHeardOncePerOrb, and its orbs are bounded by the five a
+// level ten strike throws rather than by the ten a bolt does.
+func TestSoulStrikeIsHeardOncePerOrb(t *testing.T) {
+	if n := len(blowTimes("EF_SOULSTRIKE", 5)); n != 5 {
+		t.Errorf("got %d orbs for five, want five", n)
+	}
+
+	if n := len(blowTimes("EF_SOULSTRIKE", 99)); n != soulBoltsMax {
+		t.Errorf("got %d orbs for ninety-nine, want the %d thrown", n, soulBoltsMax)
+	}
+
+	// The orb lands where its flash is born, or the sound comes at nothing.
+	if got, want := blowTimes("EF_SOULSTRIKE", 1)[0], soulImpactMs(0); got != want {
+		t.Errorf("the first orb lands at %v, want the flash's %v", got, want)
+	}
+}
+
+// TestAnEffectThatLandsOneBlowHasNoTimes: everything that is not a volley
+// sounds once, and says so by having nothing to schedule.
+func TestAnEffectThatLandsOneBlowHasNoTimes(t *testing.T) {
+	for _, effect := range []string{"EF_FIREHIT", "EF_COLDHIT", "EF_HEAL", "EF_BEGINSPELL", ""} {
+		if times := blowTimes(effect, 10); len(times) != 0 {
+			t.Errorf("%q gave %d times, want none", effect, len(times))
+		}
+	}
+}
