@@ -11,8 +11,16 @@ import (
 // direction would be a cycle. The UI layer gets finished positions and needs
 // nothing from the scene, the same arrangement ChatLine has.
 type EntityBar struct {
-	// ScreenX, ScreenY is where the unit's feet are, in viewport pixels.
+	// ScreenX, ScreenY is where the bar hangs, in viewport pixels: the unit's
+	// feet for our own character, whose bar sits under them, and the top of
+	// the unit's head for everything else, whose bar sits over it.
 	ScreenX, ScreenY float32
+
+	// Overhead puts the bar above ScreenY rather than below it. A monster's
+	// health belongs over its head — under its feet it lands on our own bar
+	// when we are stood next to it swinging, and a magenta bar draining where
+	// ours is reads as us taking the blows rather than dealing them.
+	Overhead bool
 
 	Type entity.Type
 

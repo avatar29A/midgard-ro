@@ -3007,7 +3007,13 @@ func (s *InGameState) EntityBars(viewportW, viewportH float32) []EntityBar {
 			continue
 		}
 
-		x, y := s.projectToScreen(e.Body.RenderX, e.Body.RenderY, e.Body.RenderZ,
+		// Over the head rather than at the feet, so it does not land on our
+		// own bar when we are stood next to the unit fighting it. The top of
+		// the box it is drawn in, so the bar clears a poring and something
+		// tall alike.
+		box := s.unitBox(e)
+
+		x, y := s.projectToScreen(e.Body.RenderX, box.Max[1], e.Body.RenderZ,
 			viewportW, viewportH)
 		if x < 0 {
 			continue
@@ -3015,9 +3021,10 @@ func (s *InGameState) EntityBars(viewportW, viewportH float32) []EntityBar {
 
 		bars = append(bars, EntityBar{
 			ScreenX: x, ScreenY: y,
-			Type:  e.Type,
-			HP:    e.HP,
-			MaxHP: e.MaxHP,
+			Overhead: true,
+			Type:     e.Type,
+			HP:       e.HP,
+			MaxHP:    e.MaxHP,
 			// The server never tells us another unit's SP, so they get one bar.
 			HasSP: false,
 			Alpha: e.Alpha(),

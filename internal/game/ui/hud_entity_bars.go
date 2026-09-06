@@ -28,8 +28,10 @@ const (
 	// entityBarLowHP is the fraction below which the HP bar turns to warn.
 	entityBarLowHP = float32(0.25)
 
-	// entityBarDrop is how far below the unit's feet the bars sit.
+	// entityBarDrop is how far below the unit's feet our own bar sits, and
+	// entityBarRise how far above the head a unit's own bar hangs.
 	entityBarDrop = float32(4)
+	entityBarRise = float32(6)
 )
 
 // Bar colors, from the original by way of roBrowser. The HP color says what
@@ -81,7 +83,23 @@ func hpColor(t entity.Type, fraction float32) ui2d.Color {
 	return entityBarPlayer
 }
 
-// drawEntityBars puts one unit's bars under its feet.
+// entityBarTop is where a bar's top edge sits.
+//
+// Below the feet for our own bar, above the head for everything else — a
+// monster's health under its feet lands on ours when we are stood next to it
+// swinging, and a magenta bar draining where ours is reads as us taking the
+// blows. The gap over the head is a touch larger than the drop under the feet,
+// so a bar does not sit on the sprite's hair.
+func entityBarTop(screenY, height float32, overhead bool) float32 {
+	if overhead {
+		return screenY - height - entityBarRise
+	}
+
+	return screenY + entityBarDrop
+}
+
+// drawEntityBars puts one unit's bars under its feet, or a monster's over its
+// head.
 func (b *UI2DBackend) drawEntityBars(bar states.EntityBar) {
 	if bar.Alpha <= 0 || bar.MaxHP <= 0 {
 		return
@@ -93,7 +111,7 @@ func (b *UI2DBackend) drawEntityBars(bar states.EntityBar) {
 	}
 
 	x := bar.ScreenX - entityBarW/2
-	y := bar.ScreenY + entityBarDrop
+	y := entityBarTop(bar.ScreenY, height, bar.Overhead)
 
 	r := b.ctx.Renderer()
 

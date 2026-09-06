@@ -3,6 +3,7 @@ package game
 
 import (
 	"fmt"
+	gomath "math"
 	"os"
 	"runtime"
 	"sync"
@@ -1373,6 +1374,13 @@ func (g *Game) renderUI() {
 		}
 		playerTileX, playerTileY = state.GetPlayerTilePosition()
 
+		// The minimap arrow points where the camera looks rather than where the
+		// character faces. The map is north-up and the camera turns freely, so
+		// a facing arrow disagreed with the screen — you saw yourself walk
+		// toward the top of the view while the arrow pointed off to the side.
+		// The camera-forward bearing on a north-up map is just the yaw.
+		minimapArrowDir := minimapDirFromYaw(state.GetCamera().Yaw)
+
 		stats := state.Stats()
 		dialog := state.Dialog()
 
@@ -1413,6 +1421,7 @@ func (g *Game) renderUI() {
 			PlayerTileX:     playerTileX,
 			PlayerTileY:     playerTileY,
 			PlayerDirection: playerDirection,
+			MinimapArrowDir: minimapArrowDir,
 			SceneReady:      state.IsSceneReady(),
 			SceneTexture:    state.GetSceneTexture(),
 			StatusMessage:   state.GetStatusMessage(),
@@ -2014,8 +2023,10 @@ func (g *Game) updateCursor(state *states.InGameState, io *imgui.IO, mouseX, mou
 		want = hudCursor
 		state.SetHoverEntity(nil)
 
-	// Otherwise the pointer belongs to whatever is under it in the world.
-	case !io.WantCaptureMouse() && !g.uiBackend.MouseCaptured():
+	// Otherwise the pointer belongs to whatever is under it in the world —
+	// unless the world is refusing clicks, at a counter or over a corpse:
+	// promising talk or a doorway then is promising what no click will do.
+	case !io.WantCaptureMouse() && !g.uiBackend.MouseCaptured() && !state.WorldHeld():
 		viewportW, viewportH := g.uiBackend.GetScreenSize()
 		hovered := state.HoverEntity(mouseX, mouseY, viewportW, viewportH)
 		state.SetHoverEntity(hovered)
@@ -2153,6 +2164,28 @@ func (g *Game) applySoundSettings() {
 
 // cursorFor is the cursor the original shows over a unit of each kind, or
 // the default over nothing.
+// minimapDirFromYaw turns the camera yaw into one of the eight facings the
+// minimap arrow is baked in, so the arrow snaps between them as the camera
+// turns rather than needing a rotation of its own each frame.
+//
+// The arrow index d draws at compass bearing (d+4)*45°, and the camera's
+// forward bearing on a north-up map is the yaw, so the index that points where
+// the camera looks is round(yaw / 45°) - 4, wrapped to eight.
+func minimapDirFromYaw(yaw float32) uint8 {
+	const twoPi = 2 * gomath.Pi
+
+	for yaw < 0 {
+		yaw += twoPi
+	}
+	for yaw >= twoPi {
+		yaw -= twoPi
+	}
+
+	sector := int(gomath.Round(float64(yaw)/(gomath.Pi/4))) - 4
+
+	return uint8(((sector % 8) + 8) % 8)
+}
+
 func cursorFor(e *entity.Entity) cursor.State {
 	if e == nil {
 		return cursor.StateDefault
