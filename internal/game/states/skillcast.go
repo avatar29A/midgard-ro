@@ -175,7 +175,22 @@ func (s *InGameState) applySkillUse(use packets.SkillUse) {
 		}
 
 		swing := blow.SwingDurationMs()
-		if delay := s.hitDelayMs(use.SourceID, swing); delay > 0 {
+
+		delay := s.hitDelayMs(use.SourceID, swing)
+
+		// A blow waits for whichever comes later: the caster reaching the
+		// point of their own motion, or the spell reaching the point of its
+		// picture. Lightning Bolt is the second — its art is most of a second
+		// of gathering before the bolt cracks — and answering the motion
+		// alone put the figure and the flinch on screen while the sky was
+		// still empty.
+		if effects, known := skills.EffectsOf(use.SkillID); known {
+			if lead := strikeLeadMs(effects.OnTarget); lead > delay {
+				delay = lead
+			}
+		}
+
+		if delay > 0 {
 			s.pendingBlows = append(s.pendingBlows,
 				pendingBlow{blow: blow, remainingMs: delay})
 		} else {
@@ -1403,7 +1418,12 @@ func (s *InGameState) advanceDelayedEffects(deltaMs float32) {
 
 		// And what it sounds like, here rather than when the skill arrived:
 		// this is a blow landing, and the sound of a blow belongs to it.
-		s.playSkillSounds(one)
+		//
+		// Waiting as long as the picture does where the picture takes its
+		// time. A thunderclap is the bolt, not the cloud gathering before it.
+		for _, effect := range one {
+			s.playSoundIn(effectSoundFor(effect), strikeLeadMs(one))
+		}
 	}
 
 	s.delayedEffects = kept
@@ -1441,6 +1461,35 @@ func volleyed(effects []string) bool {
 	}
 
 	return false
+}
+
+// strikeLandsAt is how far into an effect's own art the blow it depicts
+// actually lands, in frames of the sixty a second the files are counted in.
+//
+// Most of what this client draws for a blow begins with the blow: a firehit
+// is the flash of the hit itself and starts at its first frame. A few take
+// their time first, and until the picture catches up the figure and the
+// flinch are the only thing on screen — which reads as the damage happening
+// before the spell does.
+//
+// Measured off the files. lightning.str gathers its rings from frame 35 and
+// cracks its bolt at 53; nothing at all is drawn before that.
+var strikeLandsAt = map[string]float32{
+	"EF_LIGHTBOLT": 53,
+}
+
+// strikeLeadMs is the longest any of these effects makes the blow wait.
+func strikeLeadMs(effects []string) float32 {
+	lead := float32(0)
+	for _, effect := range effects {
+		if at, slow := strikeLandsAt[effect]; slow {
+			if ms := burstFrames(at); ms > lead {
+				lead = ms
+			}
+		}
+	}
+
+	return lead
 }
 
 // strikeMs is when the nth blow of such a volley lands.
