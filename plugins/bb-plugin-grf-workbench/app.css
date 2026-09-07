@@ -299,3 +299,14 @@
 .grf-panning .grf-resize-handle {
   cursor: grabbing !important;
 }
+
+.grf-studio { overflow: auto; min-height: 0; flex: 1; }
+.grf-studio .grf-toolbar { flex-wrap: wrap; }
+.grf-studio label { font-size: 12px; display: flex; align-items: center; gap: 6px; }
+.grf-studio select, .grf-studio input[type=number] { background: var(--background); color: var(--foreground); border: 1px solid var(--border); border-radius: 5px; padding: 4px; font-size: 12px; }
+.grf-studio input[type=number] { width: 58px; }
+.grf-studio input[type=range] { flex: 1; min-width: 100px; }
+.grf-studio-view { background: #171b21; outline-offset: -2px; touch-action: none; user-select: none; }
+.grf-studio-view img { display: block; width: 100%; height: auto; max-height: 65vh; object-fit: contain; pointer-events: none; }
+.grf-studio-placeholder { min-height: 240px; display: grid; place-items: center; color: #aab4c0; }
+.grf-studio-inspector { padding: 12px; font-size: 12px; line-height: 1.7; }

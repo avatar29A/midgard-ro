@@ -1,3 +1,4 @@
+import { studioScene } from "./studio-contract";
 import { randomUUID } from "node:crypto";
 import type { BbPluginApi, PluginAgentToolResult } from "@get-bb/plugin-sdk";
 import { z } from "zod";
@@ -27,6 +28,7 @@ export function describe(bundle: Bundle) {
       title: c.title,
       comment: a.comment,
       ...(c.resource ? { resource: c.resource } : {}),
+      ...(c.skillFrame ? { skillFrame: c.skillFrame } : {}),
       sceneContext: c.sceneContext,
       rect: a.rect,
       coordinates:
@@ -164,6 +166,7 @@ export default function plugin(bb: BbPluginApi) {
       title: string;
       sceneContext: string;
       resource?: Capture["resource"];
+      skillFrame?: Capture["skillFrame"];
     },
     loc: { projectId: string; hostId: string },
     result: { sourcePath: string; image: Capture["image"] },
@@ -178,6 +181,7 @@ export default function plugin(bb: BbPluginApi) {
       sourcePath: result.sourcePath,
       image: result.image,
       ...(p.resource ? { resource: p.resource } : {}),
+      ...(p.skillFrame ? { skillFrame: p.skillFrame } : {}),
       createdAt: new Date().toISOString(),
     };
     db.prepare("INSERT INTO captures VALUES (?, ?, ?, ?, ?)").run(
@@ -269,6 +273,37 @@ export default function plugin(bb: BbPluginApi) {
       .parse(JSON.parse(row.payload));
   }
   bb.rpc.register(rpcContract, {
+    studioRender: async (input) => {
+      const loc = await location(input.threadId);
+      return host.call(
+        "studioRender",
+        { ...input, root: loc.root },
+        { hostId: loc.hostId },
+      );
+    },
+    studioClose: async (input) => {
+      const loc = await location(input.threadId);
+      return host.call("studioClose", input, { hostId: loc.hostId });
+    },
+    studioCapture: async (input) => {
+      const loc = await location(input.threadId);
+      const saved = await host.call("studioCapture", input, {
+        hostId: loc.hostId,
+      });
+      return recordCapture(
+        {
+          threadId: input.threadId,
+          title: `Soul Strike · tick ${saved.context.tick} · ${saved.context.scene.camera.yaw}°`,
+          sceneContext: saved.context.limitations.join("\n"),
+          skillFrame: saved.context,
+        },
+        loc,
+        {
+          image: saved.image,
+          sourcePath: `skillstudio://soul_strike.default/${input.frameId}`,
+        },
+      );
+    },
     grfSearch: (input) => searchAssets(input),
     grfInspect: (input) => inspectAsset(input),
     grfRender: (input) => renderAsset(input),
@@ -550,6 +585,62 @@ export default function plugin(bb: BbPluginApi) {
           { type: "image", ...crop.image },
         ],
       };
+    },
+  });
+  bb.agents.registerTool({
+    name: "grf_studio_render",
+    description:
+      "Render an exact offline Soul Strike volley tick using the current game OpenGL renderer. Returns PNG and reproducible context; saves a review capture. Scene hits=0 uses the generated level table. No server, cast aura, audio or target reaction in stage 1.",
+    parameters: studioScene,
+    execute: async (input, ctx) => {
+      const loc = await location(ctx.threadId),
+        sessionId = randomUUID();
+      const scope = { threadId: ctx.threadId, sessionId };
+      try {
+        const frame = await host.call(
+          "studioRender",
+          { ...scope, root: loc.root, scene: input },
+          { hostId: loc.hostId, signal: ctx.signal },
+        );
+        const saved = await host.call(
+          "studioCapture",
+          { ...scope, frameId: frame.frameId },
+          { hostId: loc.hostId, signal: ctx.signal },
+        );
+        const capture = recordCapture(
+          {
+            threadId: ctx.threadId,
+            title: `Soul Strike · tick ${frame.context.tick}`,
+            sceneContext: frame.context.limitations.join("\n"),
+            skillFrame: frame.context,
+          },
+          loc,
+          {
+            image: saved.image,
+            sourcePath: `skillstudio://soul_strike.default/${frame.frameId}`,
+          },
+        );
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({
+                captureId: capture.id,
+                context: frame.context,
+              }),
+            },
+            {
+              type: "image" as const,
+              mimeType: "image/png" as const,
+              data: frame.png,
+            },
+          ],
+        };
+      } finally {
+        await host
+          .call("studioClose", scope, { hostId: loc.hostId })
+          .catch(() => {});
+      }
     },
   });
   bb.agents.registerTool({

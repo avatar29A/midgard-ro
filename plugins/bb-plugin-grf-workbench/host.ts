@@ -1,3 +1,5 @@
+import { StudioBridge } from "./studio-bridge";
+const studio = new StudioBridge();
 import { experimental_defineHostEntry } from "@get-bb/plugin-sdk/host";
 import { grfRequest } from "./grf-bridge";
 import { grfSearchSchema, grfInfoSchema, grfPreviewSchema } from "./contract";
@@ -6,7 +8,12 @@ import { ImageStore } from "./image-store";
 import { Uploads } from "./uploads";
 export default experimental_defineHostEntry({
   contract: hostContract,
+  dispose: () => studio.dispose(),
   handlers: {
+    studioRender: (input, ctx) => studio.render(input, ctx),
+    studioClose: (input) => studio.close(input),
+    studioCapture: (input, ctx) =>
+      studio.capture(input, ctx.experimental_paths.dataDir),
     grfSearch: async ({ root, ...input }, ctx) =>
       grfSearchSchema.parse(
         await grfRequest(root, ctx.experimental_paths.dataDir, ctx.signal, {

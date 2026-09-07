@@ -167,3 +167,21 @@ func (c *Catalog) read(e Entry) ([]byte, error) { return c.readers[e.Archive].Re
 func (c *Catalog) pair(e Entry, ext string, archive int) (Entry, error) {
 	return c.entry(hash([]byte(strings.TrimSuffix(e.raw, filepath.Ext(e.raw))+ext)), archive)
 }
+
+// ReadPath resolves a game path with the same UTF-8/EUC-KR fallback and archive
+// precedence as assets.Manager, retaining provenance for an exact frame.
+func (c *Catalog) ReadPath(path string) ([]byte, Dependency, error) {
+	for _, candidate := range []string{path, string(encoding.UTF8ToEUCKR(path))} {
+		for i := len(c.readers) - 1; i >= 0; i-- {
+			if _, ok := c.readers[i].Entry(candidate); !ok {
+				continue
+			}
+			data, err := c.readers[i].ReadLimit(candidate, 32<<20)
+			if err != nil {
+				return nil, Dependency{}, err
+			}
+			return data, Dependency{Path: path, Source: c.Archives[i].Path, SHA256: hash(data)}, nil
+		}
+	}
+	return nil, Dependency{}, fmt.Errorf("resource not found: %s", path)
+}

@@ -1,3 +1,9 @@
+import {
+  studioScene,
+  studioScope,
+  studioFrame,
+  studioSnapshot,
+} from "./studio-contract";
 import { defineRpcContract } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 
@@ -144,6 +150,7 @@ export const captureSchema = z
     createdAt: z.string(),
     image: imageSchema,
     resource: grfResourceSchema.optional(),
+    skillFrame: studioSnapshot.optional(),
   })
   .strict();
 export const annotationSchema = z
@@ -192,6 +199,18 @@ const uploadComplete = uploadScope.extend({
   checksum: digest,
 });
 export const hostContract = defineRpcContract({
+  studioRender: {
+    input: studioScope.extend({ root: z.string(), scene: studioScene }),
+    output: studioFrame,
+  },
+  studioClose: {
+    input: studioScope,
+    output: z.object({ closed: z.boolean() }).strict(),
+  },
+  studioCapture: {
+    input: studioScope.extend({ frameId: id }),
+    output: z.object({ image: imageSchema, context: studioSnapshot }).strict(),
+  },
   grfSearch: {
     input: grfSearchInput.extend({ root: z.string() }),
     output: grfSearchSchema,
@@ -254,6 +273,18 @@ export const hostContract = defineRpcContract({
   },
 });
 export const rpcContract = defineRpcContract({
+  studioRender: {
+    input: studioScope.extend({ scene: studioScene }),
+    output: studioFrame,
+  },
+  studioClose: {
+    input: studioScope,
+    output: z.object({ closed: z.boolean() }).strict(),
+  },
+  studioCapture: {
+    input: studioScope.extend({ frameId: id }),
+    output: captureSchema,
+  },
   grfSearch: {
     input: grfSearchInput.extend({ threadId: z.string() }),
     output: grfSearchSchema,

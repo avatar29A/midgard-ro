@@ -11,7 +11,6 @@ import (
 	"github.com/Faultbox/midgard-ro/internal/logger"
 	"github.com/Faultbox/midgard-ro/internal/network/packets"
 	"github.com/Faultbox/midgard-ro/internal/trace"
-	"github.com/Faultbox/midgard-ro/pkg/math"
 )
 
 // fallbackUnitHalfWidth and fallbackUnitHeight size a hit box for a unit whose
@@ -111,13 +110,7 @@ func (s *InGameState) pickEntity(screenX, screenY, viewportW, viewportH float32,
 // A point behind the camera comes back as (-1, -1) rather than as the mirrored
 // nonsense the divide would otherwise give.
 func (s *InGameState) projectToScreen(x, y, z, viewportW, viewportH float32) (float32, float32) {
-	clip := s.scene.LastViewProj().MulVec4(math.Vec4{x, y, z, 1})
-	if clip[3] <= 0 {
-		return -1, -1
-	}
-
-	return (clip[0]/clip[3]*0.5 + 0.5) * viewportW,
-		(0.5 - clip[1]/clip[3]*0.5) * viewportH
+	return scene.ProjectToScreen(s.scene.LastViewProj(), x, y, z, viewportW, viewportH)
 }
 
 // isClickable reports whether a unit answers to the pointer: an NPC, which

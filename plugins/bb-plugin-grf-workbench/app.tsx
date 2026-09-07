@@ -1,3 +1,5 @@
+import { SkillStudio } from "./skill-studio";
+import type { StudioScene } from "./studio-contract";
 import {
   useCallback,
   useEffect,
@@ -58,11 +60,13 @@ function Review({
   captureId,
   annotationId,
   onThread,
+  onStudio,
 }: {
   threadId: string | null;
   captureId?: string;
   annotationId?: string;
   onThread?: (threadId: string) => void;
+  onStudio?: (scene: StudioScene) => void;
 }) {
   const rpc = useRpc<typeof rpcContract>(),
     composer = useComposer(),
@@ -1166,6 +1170,28 @@ function Review({
             </div>
             <aside className="grf-inspector border-l border-border">
               <p className="font-medium text-sm">{capture.title}</p>
+              {capture.skillFrame && onStudio && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => onStudio(capture.skillFrame!.scene)}
+                >
+                  Вернуться к живой сцене
+                </Button>
+              )}
+              {capture.skillFrame && (
+                <p className="text-xs text-muted-foreground">
+                  Области относятся к этому снимку. В живой сцене откроются его
+                  время и ракурс.
+                </p>
+              )}
+              {capture.skillFrame && (
+                <p className="text-xs">
+                  Soul Strike · tick {capture.skillFrame.tick} ·{" "}
+                  {capture.skillFrame.scene.camera.yaw}° · код{" "}
+                  {capture.skillFrame.rendererVersion.slice(0, 12)}
+                </p>
+              )}
               {capture.sceneContext && (
                 <p className="text-xs text-muted-foreground whitespace-pre-wrap">
                   {capture.sceneContext}
@@ -1377,8 +1403,13 @@ function Workbench({
   assetId?: string;
 }) {
   const [tab, setTab] = useState(
-    section === "review" || captureId || annotationId ? "review" : "assets",
+    section === "review" || captureId || annotationId
+      ? "review"
+      : section === "studio"
+        ? "studio"
+        : "assets",
   );
+  const [studioScene, setStudioScene] = useState<StudioScene>();
   const [reviewCapture, setReviewCapture] = useState(captureId);
   const [reviewAnnotation, setReviewAnnotation] = useState(annotationId);
   const [resolvedThread, setResolvedThread] = useState(threadId);
@@ -1389,10 +1420,18 @@ function Workbench({
       setReviewAnnotation(annotationId);
       setTab("review");
     } else if (section === "assets" || assetId) setTab("assets");
+    else if (section === "studio") setTab("studio");
   }, [threadId, captureId, annotationId, section, assetId]);
   return (
     <div className="grf-workbench bg-background text-foreground">
       <div className="grf-toolbar border-b border-border">
+        <Button
+          size="sm"
+          variant={tab === "studio" ? "secondary" : "ghost"}
+          onClick={() => setTab("studio")}
+        >
+          Skill Studio
+        </Button>
         <Button
           size="sm"
           variant={tab === "assets" ? "secondary" : "ghost"}
@@ -1408,7 +1447,18 @@ function Workbench({
           Снимки и замечания
         </Button>
       </div>
-      {tab === "assets" ? (
+      {tab === "studio" ? (
+        <SkillStudio
+          threadId={resolvedThread}
+          initialScene={studioScene}
+          onReview={(c) => {
+            setStudioScene(c.skillFrame?.scene);
+            setReviewCapture(c.id);
+            setReviewAnnotation(undefined);
+            setTab("review");
+          }}
+        />
+      ) : tab === "assets" ? (
         <AssetBrowser
           threadId={resolvedThread}
           initialId={assetId}
@@ -1424,6 +1474,10 @@ function Workbench({
           captureId={reviewCapture}
           annotationId={reviewAnnotation}
           onThread={setResolvedThread}
+          onStudio={(scene) => {
+            setStudioScene(scene);
+            setTab("studio");
+          }}
         />
       )}
     </div>
@@ -1495,6 +1549,8 @@ export default definePluginApp((app) => {
     icon: "Scan",
     component: ({ subPath }) => {
       const parts = subPath.split("/");
+      if (parts[0] === "studio")
+        return <Workbench threadId={parts[1] || null} section="studio" />;
       if (parts[0] === "assets")
         return (
           <Workbench
