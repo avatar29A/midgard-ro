@@ -67,6 +67,10 @@ func TestConcurrentReadAndLimits(t *testing.T) {
 	wg.Wait()
 	entry, _ := a.Entry("data/test.txt")
 	entry.Flags = 4
+	stored, _ := a.Entry("data/test.txt")
+	if stored.Flags == entry.Flags {
+		t.Fatal("Entry exposed mutable metadata")
+	}
 	if _, err := a.Read("data/test.txt"); err != nil {
 		t.Fatal("Entry exposed mutable metadata", err)
 	}

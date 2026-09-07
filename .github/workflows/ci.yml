@@ -148,6 +148,7 @@ jobs:
         run: bb plugin build
 
       - name: Verify clean production-only package build
+        working-directory: .
         run: |
           grf_package_dir="$RUNNER_TEMP/grf-workbench-production"
           mkdir -p "$grf_package_dir"

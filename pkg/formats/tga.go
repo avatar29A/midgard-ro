@@ -6,12 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	// DecodeImage owns its decoder registry; standalone tools must not depend
-	// on unrelated game packages registering these formats as a side effect.
-	_ "image/jpeg"
-	_ "image/png"
-
-	_ "golang.org/x/image/bmp"
 )
 
 // Targa images.
