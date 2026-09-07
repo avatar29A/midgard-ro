@@ -18,6 +18,7 @@ type Archive struct {
 	file     *os.File
 	header   Header
 	fileList map[string]*Entry
+	size     int64
 }
 
 // Header contains GRF file header information.
@@ -47,7 +48,13 @@ func Open(path string) (*Archive, error) {
 		return nil, fmt.Errorf("opening file: %w", err)
 	}
 
+	stat, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, err
+	}
 	archive := &Archive{
+		size:     stat.Size(),
 		file:     file,
 		fileList: make(map[string]*Entry),
 	}
@@ -95,38 +102,55 @@ func (a *Archive) readHeader() error {
 
 func (a *Archive) readFileTable() error {
 	tableOffset := int64(a.header.TableOffset) + 46
-	if _, err := a.file.Seek(tableOffset, io.SeekStart); err != nil {
+	if tableOffset < 46 || tableOffset+8 > a.size {
+		return fmt.Errorf("invalid GRF table offset")
+	}
+	var sizes [8]byte
+	if _, err := a.file.ReadAt(sizes[:], tableOffset); err != nil {
 		return err
 	}
-
-	var compressedSize, uncompressedSize uint32
-	binary.Read(a.file, binary.LittleEndian, &compressedSize)
-	binary.Read(a.file, binary.LittleEndian, &uncompressedSize)
-
-	compressedData := make([]byte, compressedSize)
-	io.ReadFull(a.file, compressedData)
-
-	reader, _ := zlib.NewReader(bytes.NewReader(compressedData))
+	compressedSize := binary.LittleEndian.Uint32(sizes[:4])
+	uncompressedSize := binary.LittleEndian.Uint32(sizes[4:])
+	if compressedSize > 64<<20 || uncompressedSize > 256<<20 || int64(compressedSize) > a.size-tableOffset-8 {
+		return fmt.Errorf("invalid or oversized GRF table")
+	}
+	compressedData := make([]byte, int(compressedSize))
+	if _, err := a.file.ReadAt(compressedData, tableOffset+8); err != nil {
+		return err
+	}
+	reader, err := zlib.NewReader(bytes.NewReader(compressedData))
+	if err != nil {
+		return fmt.Errorf("table zlib: %w", err)
+	}
 	defer reader.Close()
-
-	tableData := make([]byte, uncompressedSize)
-	io.ReadFull(reader, tableData)
-
+	tableData, err := io.ReadAll(io.LimitReader(reader, int64(uncompressedSize)+1))
+	if err != nil {
+		return err
+	}
+	if len(tableData) != int(uncompressedSize) {
+		return fmt.Errorf("GRF table size mismatch")
+	}
+	if uint64(a.header.FileCount) < uint64(a.header.Seed)+7 {
+		return fmt.Errorf("invalid GRF file count")
+	}
 	fileCount := a.header.FileCount - a.header.Seed - 7
+	if uint64(fileCount)*18 > uint64(len(tableData)) {
+		return fmt.Errorf("truncated GRF table")
+	}
 	offset := 0
-
 	for i := uint32(0); i < fileCount; i++ {
+		if offset >= len(tableData) {
+			return fmt.Errorf("truncated GRF entry")
+		}
 		nameEnd := bytes.IndexByte(tableData[offset:], 0)
 		if nameEnd < 0 {
-			break
+			return fmt.Errorf("unterminated GRF entry name")
 		}
 		name := string(tableData[offset : offset+nameEnd])
 		offset += nameEnd + 1
-
 		if offset+17 > len(tableData) {
-			break
+			return fmt.Errorf("truncated GRF entry metadata")
 		}
-
 		entry := &Entry{
 			Name:             normalizePath(name),
 			CompressedSize:   binary.LittleEndian.Uint32(tableData[offset:]),
@@ -136,13 +160,20 @@ func (a *Archive) readFileTable() error {
 			Offset:           binary.LittleEndian.Uint32(tableData[offset+13:]),
 		}
 		offset += 17
-
-		if entry.Flags&0x01 != 0 {
+		if entry.Flags&1 != 0 {
 			a.fileList[entry.Name] = entry
 		}
 	}
-
 	return nil
+}
+
+// Entry returns a copy of the metadata, without exposing mutable index state.
+func (a *Archive) Entry(path string) (Entry, bool) {
+	e, ok := a.fileList[normalizePath(path)]
+	if !ok {
+		return Entry{}, false
+	}
+	return *e, true
 }
 
 // List returns all file paths in the archive.
@@ -162,33 +193,45 @@ func (a *Archive) Contains(path string) bool {
 
 // Read reads a file from the archive.
 func (a *Archive) Read(path string) ([]byte, error) {
+	return a.ReadLimit(path, 512<<20)
+}
+
+// ReadLimit bounds decompression for previews. ReadAt keeps concurrent reads
+// independent; callers must still keep the archive open until reads finish.
+func (a *Archive) ReadLimit(path string, maxBytes int64) ([]byte, error) {
 	entry, ok := a.fileList[normalizePath(path)]
 	if !ok {
 		return nil, fmt.Errorf("file not found: %s", path)
 	}
-
-	dataOffset := int64(entry.Offset) + 46
-	a.file.Seek(dataOffset, io.SeekStart)
-
-	compressedData := make([]byte, entry.AlignedSize)
-	io.ReadFull(a.file, compressedData)
-
-	if entry.Flags&0x02 != 0 {
+	if entry.Flags&0x06 != 0 {
 		return nil, fmt.Errorf("encrypted files not yet supported")
 	}
-
-	if entry.CompressedSize == entry.UncompressedSize {
-		return compressedData[:entry.UncompressedSize], nil
+	if maxBytes < 0 || int64(entry.UncompressedSize) > maxBytes || int64(entry.CompressedSize) > maxBytes {
+		return nil, fmt.Errorf("GRF entry exceeds read limit")
 	}
-
-	reader, err := zlib.NewReader(bytes.NewReader(compressedData[:entry.CompressedSize]))
+	offset := int64(entry.Offset) + 46
+	if entry.CompressedSize > entry.AlignedSize || offset > a.size || int64(entry.AlignedSize) > a.size-offset {
+		return nil, fmt.Errorf("invalid GRF entry bounds")
+	}
+	data := make([]byte, int(entry.CompressedSize))
+	if _, err := a.file.ReadAt(data, offset); err != nil {
+		return nil, err
+	}
+	if entry.CompressedSize == entry.UncompressedSize {
+		return data, nil
+	}
+	reader, err := zlib.NewReader(bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}
 	defer reader.Close()
-
-	result := make([]byte, entry.UncompressedSize)
-	io.ReadFull(reader, result)
+	result, err := io.ReadAll(io.LimitReader(reader, int64(entry.UncompressedSize)+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(result) != int(entry.UncompressedSize) {
+		return nil, fmt.Errorf("GRF entry size mismatch")
+	}
 	return result, nil
 }
 

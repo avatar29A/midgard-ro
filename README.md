@@ -67,6 +67,7 @@ recreation of it.
 **Around it**
 - Dockerized rAthena at a pinned commit, seeded test accounts, `make play`
 - `grftool` (CLI) and `grfbrowser` (GUI with sprite, model and map viewers)
+- [GRF Workbench for bb](plugins/bb-plugin-grf-workbench/README.md): browse GRF resources, play SPR/ACT previews with the client's code, and annotate exact frames or screenshots for agents
 - Tables generated from the rAthena source and the client's own Lua: packet lengths, skill names, skill tree, skill effects, item and sprite names
 - Flags that drive the client with nobody at the keyboard — `--autologin`, `--screenshot-after`, `--say`, `--walk-to`, `--cast`, and more — plus an F3 overlay and trace channels
 - About 780 tests, table-driven where it matters: packet layouts, file formats, layout math
@@ -111,6 +112,22 @@ You need a legitimate copy of `data.grf` and `rdata.grf` from a Ragnarok
 Online installation. The seeded test accounts are in
 [docs/TEST_ACCOUNTS.md](docs/TEST_ACCOUNTS.md). Run `make help` for all targets.
 
+## GRF Workbench for bb
+
+The plugin ships in this repository together with its Go resource engine.
+Use a checkout containing both, with Go from `go.mod`, Node.js 22.19+ (22 LTS), and bb
+0.41+ (the build is tested against bb 0.41.0 / SDK 0.4.34):
+
+```sh
+npm ci --prefix plugins/bb-plugin-grf-workbench --include=dev
+bb plugin install path:. --plugin grf-workbench
+```
+
+Open **GRF Workbench** from a bb thread in this checkout. It reads the
+archives listed in `config.yaml`; you supply the GRF files locally.
+The plugin also supports screenshot review with region comments, resizing
+and positioning. [Installation, controls, updates and releases](plugins/bb-plugin-grf-workbench/README.md).
+
 ## Project structure
 
 ```
@@ -118,7 +135,8 @@ midgard-ro/
 ├── cmd/
 │   ├── client/           # The game client
 │   ├── grftool/          # CLI: list, search and extract GRF archives
-│   └── grfbrowser/       # GUI: browse archives, view sprites, models and maps
+│   ├── grfbrowser/       # GUI: browse archives, view sprites, models and maps
+│   └── grfworkbench/     # JSON interface to the client's resource readers/rendering
 ├── internal/
 │   ├── engine/           # Rendering, terrain, models, water, sprites, effects,
 │   │                     # camera, picking, audio, cursor, the ui2d UI system
@@ -131,6 +149,8 @@ midgard-ro/
 │   ├── formats/          # SPR, ACT, PAL, GAT, GND, RSW, RSM, STR parsers
 │   ├── encoding/         # EUC-KR
 │   └── math/             # Vectors, matrices, quaternions
+├── plugins/bb-plugin-grf-workbench/ # BB panels, agent tools and image review
+├── .bb/plugins.json      # Installable project plugin collection
 ├── tools/                # Generators: packet lengths, skill and item tables, sprite names
 ├── docker/rathena/       # The server stack and its seed accounts
 ├── qa/                   # QA use cases

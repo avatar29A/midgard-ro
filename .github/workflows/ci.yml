@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ['grf-workbench/v*']
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -91,10 +92,74 @@ jobs:
           version: v2.0.2
           args: --timeout=5m
 
+  grf-workbench:
+    name: GRF Workbench (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    defaults:
+      run:
+        working-directory: plugins/bb-plugin-grf-workbench
+    env:
+      BB_TELEMETRY: 'false'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: plugins/bb-plugin-grf-workbench/package-lock.json
+
+      - name: Install pinned BB build CLI
+        run: npm install --global bb-app@0.41.0
+
+      - name: Install development dependencies
+        run: npm ci --include=dev
+
+      - name: Check release tag and SDK compatibility
+        run: |
+          node -e 'const p = require("./package.json"); if (process.env.GITHUB_REF_TYPE === "tag" && process.env.GITHUB_REF_NAME !== "grf-workbench/v" + p.version) throw new Error("Release tag must match the plugin package version");'
+          bb plugin types --check
+
+      - name: Typecheck and test plugin
+        run: |
+          npm run typecheck
+          npm test
+
+      - name: Test and build shared Go engine without game assets
+        working-directory: .
+        run: |
+          go test ./pkg/grf ./pkg/formats ./internal/assetworkbench ./internal/engine/sprite ./internal/engine/charsprite
+          go test -race ./pkg/grf
+          go build -trimpath -buildvcs=false -o "$RUNNER_TEMP/grfworkbench" ./cmd/grfworkbench
+
+      - name: Build plugin
+        run: bb plugin build
+
+      - name: Verify clean production-only package build
+        working-directory: .
+        run: |
+          grf_package_dir="$RUNNER_TEMP/grf-workbench-production"
+          mkdir -p "$grf_package_dir"
+          git archive HEAD:plugins/bb-plugin-grf-workbench | tar -x -C "$grf_package_dir"
+          npm ci --prefix "$grf_package_dir" --omit=dev --omit=optional
+          bb plugin build "$grf_package_dir"
+
   # Summary job that depends on all others
   ci-success:
     name: CI Success
-    needs: [build, test, lint]
+    needs: [build, test, lint, grf-workbench]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -102,7 +167,8 @@ jobs:
         run: |
           if [[ "${{ needs.build.result }}" != "success" ]] || \
              [[ "${{ needs.test.result }}" != "success" ]] || \
-             [[ "${{ needs.lint.result }}" != "success" ]]; then
+             [[ "${{ needs.lint.result }}" != "success" ]] || \
+             [[ "${{ needs.grf-workbench.result }}" != "success" ]]; then
             echo "One or more jobs failed"
             exit 1
           fi

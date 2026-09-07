@@ -1,0 +1,301 @@
+.grf-workbench {
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  font-size: 14px;
+}
+.grf-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  flex-shrink: 0;
+}
+.grf-select {
+  border-radius: 6px;
+  padding: 5px 8px;
+  min-width: 0;
+  max-width: 100%;
+  flex: 1;
+  font: inherit;
+  height: 32px;
+}
+.grf-zoom {
+  flex: 0 0 auto;
+}
+.grf-import {
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+  flex-shrink: 0;
+}
+.grf-label {
+  display: grid;
+  gap: 5px;
+  font-size: 12px;
+}
+.grf-textarea {
+  border-radius: 6px;
+  padding: 8px;
+  min-height: 80px;
+  width: 100%;
+  resize: vertical;
+  font-size: 14px;
+}
+.grf-notice {
+  padding: 8px 12px;
+  font-size: 12px;
+}
+.grf-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 290px;
+  flex: 1;
+  min-height: 250px;
+  overflow: hidden;
+}
+.grf-viewport {
+  overflow: auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 16px;
+  overscroll-behavior: contain;
+  overflow-anchor: none;
+  touch-action: none;
+}
+.grf-image-wrap {
+  position: relative;
+  flex-shrink: 0;
+  cursor: crosshair;
+  overflow: hidden;
+  isolation: isolate;
+  touch-action: none;
+  user-select: none;
+}
+.grf-pan-ready,
+.grf-pan-ready .grf-image-wrap {
+  cursor: grab;
+}
+.grf-panning,
+.grf-panning .grf-image-wrap {
+  cursor: grabbing;
+}
+.grf-gesture-hint {
+  padding: 6px 12px;
+}
+.grf-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  image-rendering: pixelated;
+  pointer-events: none;
+}
+.grf-region {
+  position: absolute;
+  border-width: 2px;
+  border-style: solid;
+  pointer-events: none;
+  box-sizing: border-box;
+  padding: 0;
+  background: transparent;
+  text-align: left;
+}
+.grf-region > span {
+  position: absolute;
+  top: 0;
+  left: 0;
+  white-space: nowrap;
+  font-size: 10px;
+  line-height: 16px;
+  padding: 0 3px;
+}
+.grf-inspector {
+  overflow: auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.grf-comment {
+  display: grid;
+  gap: 8px;
+}
+.grf-annotation {
+  padding: 8px;
+}
+.grf-annotation-select {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+.grf-annotation-actions {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.grf-crop {
+  overflow: auto;
+  max-height: 250px;
+}
+.grf-crop img {
+  image-rendering: pixelated;
+  max-width: none;
+  margin-top: 8px;
+}
+@container (max-width: 750px) {
+  .grf-body {
+    display: flex;
+    flex-direction: column;
+    overflow: visible;
+  }
+  .grf-viewport {
+    height: 48vh;
+    min-height: 250px;
+    flex: 0 0 auto;
+  }
+  .grf-inspector {
+    border-left: 0;
+    border-top: 1px solid;
+    border-top-color: inherit;
+    overflow: visible;
+  }
+}
+.grf-assets {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.grf-assets-body {
+  display: grid;
+  grid-template-columns: minmax(210px, 32%) minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+}
+.grf-resource-list {
+  overflow: auto;
+  padding: 8px;
+}
+.grf-resource-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 8px;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.grf-resource-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  overflow: auto;
+  min-width: 0;
+}
+.grf-resource-view {
+  overflow: auto;
+  touch-action: none;
+  user-select: none;
+  overscroll-behavior: contain;
+  min-height: 220px;
+  max-height: 55vh;
+  padding: 24px;
+  border-radius: 8px;
+}
+.grf-resource-pixels {
+  image-rendering: pixelated;
+  flex-shrink: 0;
+  background-repeat: no-repeat;
+}
+.grf-frame-number {
+  width: 65px;
+  padding: 4px;
+  border-radius: 4px;
+}
+@container (max-width: 650px) {
+  .grf-assets-body {
+    display: flex;
+    flex-direction: column;
+  }
+  .grf-resource-list {
+    max-height: 220px;
+    flex-shrink: 0;
+    border-right: 0;
+  }
+  .grf-resource-detail {
+    overflow: visible;
+  }
+}
+
+.grf-region-hit {
+  pointer-events: auto;
+  cursor: pointer;
+}
+.grf-region-active {
+  border-width: 4px;
+  z-index: 2;
+  box-shadow: 0 0 0 9999px rgb(0 0 0 / 40%);
+}
+.grf-region-active > span {
+  font-size: 13px;
+  line-height: 21px;
+  min-width: 22px;
+  text-align: center;
+  padding: 0 4px;
+}
+.grf-annotation-active {
+  border-width: 2px;
+}
+.grf-edit-comment {
+  margin-top: 8px;
+}
+.grf-pan-ready .grf-region-hit {
+  cursor: grab;
+}
+.grf-panning .grf-region-hit {
+  cursor: grabbing;
+}
+.grf-resize-handle {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  padding: 0;
+  transform: translate(-50%, -50%);
+  z-index: 4;
+  touch-action: none;
+}
+.grf-mode-resize .grf-region-hit {
+  cursor: crosshair;
+}
+.grf-mode-move .grf-region-hit {
+  cursor: move;
+}
+.grf-pan-ready .grf-region-hit {
+  cursor: grab;
+}
+.grf-panning .grf-region-hit {
+  cursor: grabbing;
+}
+
+.grf-transform-drag,
+.grf-transform-drag * {
+  cursor: var(--grf-transform-cursor) !important;
+}
+.grf-pan-ready .grf-resize-handle {
+  cursor: grab !important;
+}
+.grf-panning .grf-resize-handle {
+  cursor: grabbing !important;
+}

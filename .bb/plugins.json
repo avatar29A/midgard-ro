@@ -1,0 +1,11 @@
+{
+  "$schema": "https://getbb.app/schemas/plugins.schema.json",
+  "schemaVersion": 1,
+  "name": "midgard-ro-tools",
+  "plugins": [
+    {
+      "name": "grf-workbench",
+      "source": "./plugins/bb-plugin-grf-workbench"
+    }
+  ]
+}
