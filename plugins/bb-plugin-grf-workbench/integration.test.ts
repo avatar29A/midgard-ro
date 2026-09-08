@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   mkdtemp,
   mkdir,
@@ -580,4 +580,119 @@ it("updates region geometry and crop together, preserving the comment and invali
     rect,
   })) as Annotation;
   expect(unchanged.revision).toBe(2);
+});
+
+it("deletes a capture with all annotations while preserving another capture of the same image", async () => {
+  const f = await fixture();
+  const input = {
+    threadId: "thread-1",
+    path: "scene.png",
+    title: "Disposable review",
+    sceneContext: "",
+  };
+  const capture = (await f.harness.behavior.callRpc(
+    "importImage",
+    input,
+  )) as Capture;
+  const other = (await f.harness.behavior.callRpc("importImage", {
+    ...input,
+    title: "Keep this review",
+  })) as Capture;
+  const a = (await f.harness.behavior.callRpc("annotate", {
+    captureId: capture.id,
+    imageDigest: capture.image.digest,
+    rect: { x: 0, y: 0, width: 5, height: 5 },
+    comment: "Remove with capture",
+  })) as Annotation;
+  await f.harness.behavior.callRpc("deleteAnnotation", {
+    annotationId: a.id,
+    revision: a.revision,
+  });
+  await expect(
+    f.harness.behavior.callRpc("deleteCapture", {
+      captureId: capture.id,
+      imageDigest: "0".repeat(64),
+    }),
+  ).rejects.toThrow("Версия снимка");
+  const result = await f.harness.behavior.callRpc("deleteCapture", {
+    captureId: capture.id,
+    imageDigest: capture.image.digest,
+  });
+  expect(result).toMatchObject({
+    captureId: capture.id,
+    deletedAnnotations: 1,
+  });
+  expect(
+    await f.harness.behavior.callRpc("list", { threadId: "thread-1" }),
+  ).toEqual([other]);
+  await expect(
+    f.harness.behavior.callRpc("get", { captureId: capture.id }),
+  ).rejects.toThrow("Снимок не найден");
+  await expect(
+    f.harness.behavior.callRpc("restoreAnnotation", {
+      annotationId: a.id,
+      revision: 1,
+    }),
+  ).rejects.toThrow("Замечание не найдено");
+  const image = (await f.harness.behavior.callRpc("image", {
+    captureId: other.id,
+    offset: 0,
+  })) as { data: string };
+  expect(image.data.length).toBeGreaterThan(0);
+  const reload = await f.harness.lifecycle.reload(plugin);
+  f.harness = reload.harness;
+  cleanups.push(() => reload.harness.lifecycle.dispose());
+  await expect(
+    f.harness.behavior.callRpc("get", { captureId: capture.id }),
+  ).rejects.toThrow("Снимок не найден");
+});
+
+it("does not create an orphan annotation when capture deletion races with a host crop", async () => {
+  const f = await fixture();
+  const capture = (await f.harness.behavior.callRpc("importImage", {
+    threadId: "thread-1",
+    path: "scene.png",
+    title: "Race test",
+    sceneContext: "",
+  })) as Capture;
+  let release!: () => void, entered!: () => void;
+  const gate = new Promise<void>((r) => {
+      release = r;
+    }),
+    ready = new Promise<void>((r) => {
+      entered = r;
+    });
+  const original = ImageStore.prototype.cropImage;
+  const spy = vi
+    .spyOn(ImageStore.prototype, "cropImage")
+    .mockImplementation(async function (
+      this: ImageStore,
+      ...args: Parameters<ImageStore["cropImage"]>
+    ) {
+      entered();
+      await gate;
+      return original.apply(this, args);
+    });
+  try {
+    const saving = f.harness.behavior.callRpc("annotate", {
+      captureId: capture.id,
+      imageDigest: capture.image.digest,
+      rect: { x: 0, y: 0, width: 5, height: 5 },
+      comment: "Pending crop",
+    });
+    const rejected = expect(saving).rejects.toThrow("Снимок не найден");
+    await ready;
+    await f.harness.behavior.callRpc("deleteCapture", {
+      captureId: capture.id,
+      imageDigest: capture.image.digest,
+    });
+    release();
+    await rejected;
+    expect(
+      await f.harness.behavior.callRpc("list", { threadId: "thread-1" }),
+    ).toEqual([]);
+  } finally {
+    release();
+    spy.mockRestore();
+  }
 });

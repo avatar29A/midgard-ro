@@ -766,3 +766,70 @@ it("resizes then moves a region as one draft, applies exact source pixels and su
     vi.unstubAllGlobals();
   }
 });
+
+it("confirms capture deletion, keeps Cancel safe and removes the selected snapshot from review", async () => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  const app = await loadPluginApp(() => import("./app"));
+  let present = true;
+  const remove = vi.fn(() => {
+    present = false;
+    return {
+      captureId: capture.id,
+      threadId: capture.threadId,
+      deletedAnnotations: 0,
+    };
+  });
+  const slot = renderSlot(
+    app.threadPanelActions[0]!,
+    { threadId: capture.threadId, params: { captureId: capture.id } },
+    {
+      context: { threadId: capture.threadId, projectId: capture.projectId },
+      rpc: {
+        list: () => (present ? [capture] : []),
+        get: () => {
+          if (!present) throw new Error("Снимок не найден.");
+          return { capture, annotations: [] };
+        },
+        image: () => ({
+          mimeType: "image/png",
+          data: "aGVsbG8=",
+          nextOffset: 0,
+          done: true,
+        }),
+        deleteCapture: remove,
+      },
+    },
+  );
+  try {
+    await slot.findByAltText(capture.title);
+    fireEvent.click(slot.getByRole("button", { name: "Удалить снимок" }));
+    await slot.findByRole("alertdialog");
+    expect(remove).not.toHaveBeenCalled();
+    fireEvent.click(slot.getByRole("button", { name: "Отмена" }));
+    await waitFor(() => expect(slot.queryByRole("alertdialog")).toBeNull());
+    expect(remove).not.toHaveBeenCalled();
+    fireEvent.click(slot.getByRole("button", { name: "Удалить снимок" }));
+    await slot.findByRole("alertdialog");
+    fireEvent.click(
+      slot.getByRole("button", { name: "Удалить снимок и замечания" }),
+    );
+    await waitFor(() => expect(remove).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(slot.queryByAltText(capture.title)).toBeNull());
+    expect(
+      slot.inspection.rpcCalls.find((c) => c.method === "deleteCapture")?.input,
+    ).toEqual({ captureId: capture.id, imageDigest: capture.image.digest });
+    fireEvent.click(slot.getByText("Ресурсы GRF"));
+    fireEvent.click(slot.getByText("Снимки и замечания"));
+    await waitFor(() => expect(slot.queryByAltText(capture.title)).toBeNull());
+  } finally {
+    slot.lifecycle.unmount();
+    vi.unstubAllGlobals();
+  }
+});

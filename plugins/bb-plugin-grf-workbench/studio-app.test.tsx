@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { catalogFixture } from "./test-support/catalog";
 import { expect, it, vi } from "vitest";
 import { fireEvent, waitFor } from "@testing-library/react";
 import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
@@ -46,6 +47,7 @@ it("rotates a paused native scene, captures its displayed token and closes the w
     {
       context: { threadId: "thread-1", projectId: "p1" },
       rpc: {
+        skillCatalog: () => catalogFixture,
         studioRender: (i) => render(i as { scene: StudioScene }),
         studioClose: close,
         studioCapture: captureCall,
@@ -93,6 +95,7 @@ it("keeps showing completed frames during continuous camera input and coalesces 
     {
       context: { threadId: "thread-1", projectId: "p1" },
       rpc: {
+        skillCatalog: () => catalogFixture,
         studioRender: (input) =>
           new Promise((resolve) => {
             active++;
@@ -171,6 +174,7 @@ it("starts playback at the paused tick without counting time spent idle", async 
     {
       context: { threadId: "thread-1", projectId: "p1" },
       rpc: {
+        skillCatalog: () => catalogFixture,
         studioRender: (input) => render(input as { scene: StudioScene }),
         studioClose: () => ({ closed: true }),
       },
@@ -186,5 +190,65 @@ it("starts playback at the paused tick without counting time spent idle", async 
   } finally {
     slot.lifecycle.unmount();
     clock.mockRestore();
+  }
+});
+
+it("sends cast fixtures and seeks directly to a timeline event", async () => {
+  HTMLImageElement.prototype.decode = async () => {};
+  const f = frameFixture();
+  f.context.timeline = {
+    castMs: 500,
+    releaseTick: 30,
+    endTick: 127,
+    durationTicks: 157,
+    reactionTicks: [46],
+    impactTicks: [56],
+    cancelTick: null,
+    events: [
+      { id: "release", kind: "cast.released", tick: 30, owner: "caster" },
+      { id: "hit", kind: "visual.impact", tick: 56, owner: "target" },
+    ],
+  };
+  const render = vi.fn(async (input: { scene: StudioScene }) => ({
+    ...f,
+    context: { ...f.context, scene: input.scene, tick: input.scene.tick },
+  }));
+  const app = await loadPluginApp(() => import("./app"));
+  const slot = renderSlot(
+    app.threadPanelActions[0]!,
+    { threadId: "thread-1", params: { section: "studio" } },
+    {
+      context: { threadId: "thread-1", projectId: "p1" },
+      rpc: {
+        skillCatalog: () => catalogFixture,
+        studioRender: (i) => render(i as { scene: StudioScene }),
+        studioClose: () => ({ closed: true }),
+      },
+    },
+  );
+  try {
+    await slot.findByAltText("Soul Strike · tick 0 · 0°");
+    fireEvent.click(slot.getByText("Попадание · 56"));
+    await slot.findByAltText("Soul Strike · tick 56 · 0°");
+    fireEvent.change(slot.getByLabelText("Длительность каста"), {
+      target: { value: "1000" },
+    });
+    await waitFor(() =>
+      expect(render.mock.calls.at(-1)?.[0].scene.sequence?.castMs).toBe(1000),
+    );
+    fireEvent.change(slot.getByLabelText("Исход каста"), {
+      target: { value: "cancel" },
+    });
+    await waitFor(() =>
+      expect(render.mock.calls.at(-1)?.[0].scene.sequence?.cancelTick).toBe(30),
+    );
+    fireEvent.change(slot.getByLabelText("Последовательность навыка"), {
+      target: { value: "volley" },
+    });
+    await waitFor(() =>
+      expect(render.mock.calls.at(-1)?.[0].scene.sequence).toBeUndefined(),
+    );
+  } finally {
+    slot.lifecycle.unmount();
   }
 });

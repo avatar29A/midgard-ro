@@ -1,6 +1,7 @@
 package states
 
 import (
+	"math"
 	"testing"
 
 	"github.com/Faultbox/midgard-ro/pkg/formats"
@@ -155,5 +156,30 @@ func TestAUnitEffectLoopsUntilItsUnitGoes(t *testing.T) {
 
 	if len(s.effects) != 1 || s.effects[0].unit != 21 {
 		t.Fatalf("hiding unit 20 left %d effects, want only the other wall", len(s.effects))
+	}
+}
+
+func TestFireWallFlameBaseStaysOnGroundAcrossFramesAndZoom(t *testing.T) {
+	for frame := 0; frame < 8; frame++ {
+		for _, per := range []float32{0.5, 2, 5} {
+			q := spriteEffectQuad("firewall", spriteEffectFrame{frame: frame}, [2]float32{64, 64}, 200, 350, per)
+			h := q.Corners[2][1] - q.Corners[0][1]
+			// The authored flame base, at source row 54, must project to the ground.
+			base := q.Corners[0][1] + h*54/64
+			if math.Abs(float64(base-350)) > 0.001 {
+				t.Fatal(frame, per, "floating base", base)
+			}
+			// Bright art covers about 40 source pixels: fixed ~30 world units,
+			// not scaled from any actor's dimensions.
+			visibleWorld := h * 40 / 64 / per
+			if math.Abs(float64(visibleWorld-30)) > 0.001 {
+				t.Fatal("incorrect fixed flame height", visibleWorld)
+			}
+		}
+	}
+	// A floating ghost still uses its ACT offset and existing bottom anchor.
+	q := spriteEffectQuad(deadGhost, spriteEffectFrame{offY: -55}, [2]float32{64, 64}, 200, 350, 3)
+	if q.Corners[2][1] != 295 {
+		t.Fatal("changed unrelated ghost anchor", q.Corners)
 	}
 }

@@ -1,5 +1,7 @@
 package skills
 
+import "sort"
+
 // Reading the generated tables.
 //
 // What the server sends about a skill is what the character has of it: the id,
@@ -50,4 +52,42 @@ func EffectsOf(skill uint16) (SkillEffects, bool) {
 	effects, ok := skillEffects[skill]
 
 	return effects, ok
+}
+
+// JobIDs returns the actual pages in the generated client tree.
+func JobIDs() []int {
+	ids := make([]int, 0, len(tree))
+	for id := range tree {
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+	return ids
+}
+
+// IDs is the union of known names, metadata, trees and effect mappings.
+func IDs() []uint16 {
+	all := map[uint16]bool{}
+	for id := range names {
+		all[id] = true
+	}
+	for id := range info {
+		all[id] = true
+	}
+	for id := range skillEffects {
+		all[id] = true
+	}
+	for id := range effects {
+		all[id] = true
+	}
+	for _, slots := range tree {
+		for _, slot := range slots {
+			all[slot.Skill] = true
+		}
+	}
+	ids := make([]uint16, 0, len(all))
+	for id := range all {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
 }

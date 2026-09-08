@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strconv"
 
 	"github.com/go-gl/gl/v4.1-core/gl"
 	"github.com/veandco/go-sdl2/sdl"
@@ -24,6 +25,21 @@ func main() {
 	}
 }
 func run() error {
+	if len(os.Args) >= 2 && os.Args[1] == "--audio" {
+		id := uint64(13)
+		if len(os.Args) > 2 {
+			parsed, err := strconv.ParseUint(os.Args[2], 10, 16)
+			if err != nil {
+				return err
+			}
+			id = parsed
+		}
+		sounds, err := skillstudio.AudioClips(".", uint16(id))
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(sounds)
+	}
 	if err := sdl.Init(sdl.INIT_VIDEO | sdl.INIT_EVENTS); err != nil {
 		return err
 	}

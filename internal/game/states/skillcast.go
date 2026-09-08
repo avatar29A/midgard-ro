@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/Faultbox/midgard-ro/internal/engine/picking"
+	"github.com/Faultbox/midgard-ro/internal/engine/skillvisual"
 	"github.com/Faultbox/midgard-ro/internal/game/entity"
 	"github.com/Faultbox/midgard-ro/internal/game/skills"
 
@@ -1151,22 +1152,10 @@ func (s *InGameState) drawCastAuras(viewProj math.Mat4) {
 			continue
 		}
 
-		done := 1 - aura.leftMs/aura.totalMs
-
-		alpha := float32(1)
-		if done > 1-castAuraFade {
-			alpha = (1 - done) / castAuraFade
-		}
-
-		// It rises over the cast and opens outward as it goes, which is the
-		// four leaning emitters the original builds it from, drawn as one
-		// wall.
-		height := castAuraHeightMax * done
-		top := castAuraRadius + (castAuraFlare-1)*castAuraRadius*done
-
+		shape := CastAuraAt(aura.totalMs-aura.leftMs, aura.totalMs)
 		s.castAura.RenderTube(viewProj,
 			body.RenderX, s.terrainHeight(body.RenderX, body.RenderZ), body.RenderZ,
-			castAuraRadius, top, height, alpha)
+			shape.Bottom, shape.Top, shape.Height, shape.Alpha)
 	}
 }
 
@@ -1200,31 +1189,7 @@ func effectSoundFor(effect string) string {
 	return effectSoundDir + strings.ToLower(effect) + ".wav"
 }
 
-// effectFiles are the effects the archive files under a name that is not
-// their own.
-//
-// Nearly all of them match — EF_FIREHIT is firehit.str — and the few that do
-// not are named for what they draw rather than for the effect that draws it.
-// EF_LIGHTBOLT is the one that matters here: there is no lightbolt.str in the
-// archive at all, so Lightning Bolt drew nothing whatever, and what it should
-// have been drawing is filed under the strike itself.
-var effectFiles = map[string]string{
-	"EF_LIGHTBOLT": "lightning.str",
-}
-
-// effectFileFor is the STR the archive files an effect under, from the name
-// the table uses: EF_FIREHIT is firehit.str.
-func effectFileFor(effect string) string {
-	if len(effect) <= 3 || effect[:3] != "EF_" {
-		return ""
-	}
-
-	if file, aliased := effectFiles[effect]; aliased {
-		return file
-	}
-
-	return strings.ToLower(effect[3:]) + ".str"
-}
+func effectFileFor(name string) string { return skillvisual.EffectFileFor(name) }
 
 // playSkillEffects puts a list of them over a world position.
 func (s *InGameState) playSkillEffects(effects []string, x, y, z float32) {
@@ -1587,47 +1552,24 @@ func (s *InGameState) playSkillUseEffects(use packets.SkillUse) {
 	s.playSkillSounds(effects.OnCaster)
 
 	if use.TargetID != 0 {
-		bolts, onImpact := splitBolts(effects.OnTarget)
-
-		if len(bolts) > 0 {
-			// The volley now, and what its shots hit with as each one lands.
+		aim := s.aimPoint(use.TargetID)
+		for _, call := range targetVisualPlan(effects.OnTarget, hits) {
+			if call.deferred {
+				s.delayedEffects = append(s.delayedEffects, delayedEffect{effect: call.effect, target: use.TargetID, caster: use.SourceID, at: aim, delayMs: call.delayMs})
+				continue
+			}
 			if x, y, z, ok := s.effectHeight(use.TargetID); ok {
-				s.playSkillBursts(bolts, hits, from, [3]float32{x, y, z})
-			}
-
-			aim := s.aimPoint(use.TargetID)
-
-			for i := 0; i < min(hits, boltMax); i++ {
-				for _, effect := range onImpact {
-					s.delayedEffects = append(s.delayedEffects, delayedEffect{
-						effect: effect, target: use.TargetID, caster: use.SourceID,
-						at: aim, delayMs: boltImpactMs(i),
-					})
+				one := []string{call.effect}
+				if !call.burstOnly {
+					s.playSkillEffects(one, x, y, z)
 				}
+				s.playSkillBursts(one, call.hits, from, [3]float32{x, y, z})
+			} else if !call.burstOnly {
+				continue
 			}
-			// The volley's own sound, once for every shot in it. What the
-			// shots hit with is heard as each one lands, from the delayed
-			// effects queued above.
-			s.playImpactSounds(bolts, hits)
-		} else if volleyed(effects.OnTarget) {
-			// Struck once for every blow, picture and sound together: each
-			// goes out as a delayed effect, which draws it and makes its
-			// noise at the moment it lands.
-			aim := s.aimPoint(use.TargetID)
-
-			for i := 0; i < min(max(hits, 1), boltMax); i++ {
-				for _, effect := range effects.OnTarget {
-					s.delayedEffects = append(s.delayedEffects, delayedEffect{
-						effect: effect, target: use.TargetID, caster: use.SourceID,
-						at: aim, delayMs: strikeMs(i),
-					})
-				}
+			for _, at := range call.sounds {
+				s.playSoundIn(effectSoundFor(call.effect), at)
 			}
-		} else if x, y, z, ok := s.effectHeight(use.TargetID); ok {
-			s.playSkillEffects(effects.OnTarget, x, y, z)
-			s.playSkillBursts(effects.OnTarget, hits, from, [3]float32{x, y, z})
-
-			s.playImpactSounds(effects.OnTarget, hits)
 		}
 	}
 

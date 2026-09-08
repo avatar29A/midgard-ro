@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"golang.org/x/image/bmp"
@@ -90,6 +91,16 @@ func TestArchivePriorityAndClientFrameParity(t *testing.T) {
 	}
 	if r := c.Search("몬스터/test", "spr", 0, 0, 50); r.Entries[0].Archive != 0 {
 		t.Fatal("explicit archive ignored")
+	}
+	for _, path := range []string{name + ".spr", strings.ReplaceAll(name, "/", "\\") + ".SPR"} {
+		resolved, err := c.ResolvePath(path)
+		if err != nil || resolved.ID != found.Entries[0].ID || resolved.Archive != 1 {
+			t.Fatal("library identity lost encoding/priority", resolved, err)
+		}
+		data, dep, _, err := c.ReadID(resolved.ID)
+		if err != nil || !bytes.Equal(data, patched) || dep.SHA256 != hash(patched) {
+			t.Fatal("library selected different bytes", dep, err)
+		}
 	}
 	ids := c.Search("test.act", "act", -1, 0, 50)
 	p, err := c.Render(ids.Entries[0].ID, -1, 0, 0, true, true)

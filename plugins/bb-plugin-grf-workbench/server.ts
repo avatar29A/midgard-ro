@@ -1,5 +1,7 @@
+import { libraryQuery } from "./effect-library-contract";
+import { reviewLaunches } from "./review-launches";
 import { studioScene } from "./studio-contract";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import type { BbPluginApi, PluginAgentToolResult } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import {
@@ -55,6 +57,9 @@ export default function plugin(bb: BbPluginApi) {
     "CREATE INDEX captures_thread ON captures(thread_id, created_at)",
     "CREATE INDEX annotations_capture ON annotations(capture_id, created_at)",
     "CREATE TABLE grf_previews (id TEXT PRIMARY KEY, payload TEXT NOT NULL)",
+    "CREATE TABLE review_launches (id TEXT PRIMARY KEY, thread_id TEXT, payload TEXT NOT NULL)",
+    "CREATE INDEX review_launches_thread ON review_launches(thread_id)",
+    "CREATE TABLE skill_research_launches (id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, thread_id TEXT)",
   ]);
   const getCapture = (captureId: string): Capture => {
     id.parse(captureId);
@@ -107,7 +112,7 @@ export default function plugin(bb: BbPluginApi) {
     (
       db
         .prepare(
-          "SELECT payload FROM annotations WHERE capture_id=? AND json_extract(payload, '$.deletedAt') IS NULL ORDER BY created_at, id",
+          "SELECT payload FROM annotations WHERE capture_id=? AND json_extract(payload, '$.deletedAt') IS NULL ORDER BY COALESCE(json_extract(payload, '$.order'), 2147483647), created_at, id",
         )
         .all(captureId) as { payload: string }[]
     ).map((r) => annotationSchema.parse(JSON.parse(r.payload)));
@@ -115,7 +120,7 @@ export default function plugin(bb: BbPluginApi) {
     (
       db
         .prepare(
-          "SELECT payload FROM captures WHERE thread_id=? ORDER BY created_at DESC, id LIMIT 100",
+          "SELECT payload FROM captures WHERE thread_id=? AND json_extract(payload, '$.pendingReview') IS NULL ORDER BY created_at DESC, id LIMIT 100",
         )
         .all(threadId) as { payload: string }[]
     ).map((r) => captureSchema.parse(JSON.parse(r.payload)));
@@ -272,7 +277,105 @@ export default function plugin(bb: BbPluginApi) {
       })
       .parse(JSON.parse(row.payload));
   }
+  const reviews = reviewLaunches(bb, db, getCapture, getAnnotation);
   bb.rpc.register(rpcContract, {
+    researchContext: async ({ threadId }) => {
+      const t = await bb.sdk.threads.get({ threadId });
+      if (!t.environmentId) throw new Error("У исходного треда нет окружения.");
+      return { projectId: t.projectId, environmentId: t.environmentId };
+    },
+    startResearch: async (input) => {
+      const fingerprint = createHash("sha256")
+        .update(JSON.stringify(input))
+        .digest("hex");
+      const existing = db
+        .prepare(
+          "SELECT fingerprint, thread_id FROM skill_research_launches WHERE id=?",
+        )
+        .get(input.operationId) as
+        | { fingerprint: string; thread_id: string | null }
+        | undefined;
+      if (existing) {
+        if (existing.fingerprint !== fingerprint)
+          throw new Error("Запуск уже начат с другими параметрами.");
+        if (existing.thread_id) return { threadId: existing.thread_id };
+        throw new Error(
+          "Создание уже началось, но результат не подтверждён. Проверьте список тредов; повторный тред автоматически не создаётся.",
+        );
+      }
+      await bb.sdk.threads.get({ threadId: input.sourceThreadId });
+      const claimed = db
+        .prepare(
+          "INSERT OR IGNORE INTO skill_research_launches VALUES (?, ?, NULL)",
+        )
+        .run(input.operationId, fingerprint);
+      if (!claimed.changes)
+        throw new Error("Создание этого исследования уже выполняется.");
+      const t = await bb.sdk.threads.spawn({
+        ...input.request,
+        title: `Skill Studio · ${input.skillName}`,
+      });
+      db.prepare(
+        "UPDATE skill_research_launches SET thread_id=? WHERE id=?",
+      ).run(t.id, input.operationId);
+      return { threadId: t.id };
+    },
+
+    effectLibrary: async ({ threadId, ...query }) => {
+      const loc = await location(threadId);
+      return host.call(
+        "effectLibrary",
+        { root: loc.root, ...query },
+        { hostId: loc.hostId },
+      );
+    },
+    skillCatalog: async ({ threadId }) => {
+      const loc = await location(threadId);
+      return host.call(
+        "skillCatalog",
+        { root: loc.root },
+        { hostId: loc.hostId },
+      );
+    },
+    prepareReview: (input) => reviews.prepare(input),
+    reviewDraft: ({ operationId }) => reviews.get(operationId),
+    discardReviewDraft: ({ operationId }) => reviews.discard(operationId),
+    startReview: ({ operationId, request }) =>
+      reviews.start(operationId, request),
+    reviewForThread: ({ threadId }) => reviews.forThread(threadId),
+    deleteCapture: ({ captureId, imageDigest }) => {
+      const result = db.transaction(() => {
+        const c = getCapture(captureId);
+        if (c.image.digest !== imageDigest)
+          throw new Error("Версия снимка изменилась. Откройте его заново.");
+        const removed = db
+          .prepare("DELETE FROM annotations WHERE capture_id=?")
+          .run(captureId);
+        db.prepare("DELETE FROM captures WHERE id=?").run(captureId);
+        return {
+          captureId,
+          threadId: c.threadId,
+          deletedAnnotations: removed.changes,
+        };
+      })();
+      bb.realtime.publish("capture-deleted", {
+        captureId,
+        threadId: result.threadId,
+      });
+      bb.realtime.publish("review-changed", {
+        captureId,
+        threadId: result.threadId,
+      });
+      return result;
+    },
+    studioAudio: async ({ threadId, skillId = 13 }) => {
+      const loc = await location(threadId);
+      return host.call(
+        "studioAudio",
+        { root: loc.root, skillId },
+        { hostId: loc.hostId },
+      );
+    },
     studioRender: async (input) => {
       const loc = await location(input.threadId);
       return host.call(
@@ -293,14 +396,14 @@ export default function plugin(bb: BbPluginApi) {
       return recordCapture(
         {
           threadId: input.threadId,
-          title: `Soul Strike · tick ${saved.context.tick} · ${saved.context.scene.camera.yaw}°`,
+          title: `${saved.context.skillName ?? "Soul Strike"} · tick ${saved.context.tick} · ${saved.context.scene.camera.yaw}°`,
           sceneContext: saved.context.limitations.join("\n"),
           skillFrame: saved.context,
         },
         loc,
         {
           image: saved.image,
-          sourcePath: `skillstudio://soul_strike.default/${input.frameId}`,
+          sourcePath: `skillstudio://${saved.context.effectId}/${input.frameId}`,
         },
       );
     },
@@ -408,6 +511,9 @@ export default function plugin(bb: BbPluginApi) {
         crop,
       };
       db.transaction(() => {
+        // The host crop may have completed after another panel deleted the
+        // capture. Recheck inside the insertion transaction to prevent orphans.
+        getCapture(captureId);
         const count = db
           .prepare(
             "SELECT count(*) AS n FROM annotations WHERE capture_id=? AND json_extract(payload, '$.deletedAt') IS NULL",
@@ -517,7 +623,7 @@ export default function plugin(bb: BbPluginApi) {
       if (!projectId) return [];
       const rows = db
         .prepare(
-          "SELECT a.payload FROM annotations a JOIN captures c ON c.id=a.capture_id WHERE c.project_id=? AND json_extract(a.payload, '$.deletedAt') IS NULL ORDER BY a.created_at DESC LIMIT 200",
+          "SELECT a.payload FROM annotations a JOIN captures c ON c.id=a.capture_id WHERE c.project_id=? AND json_extract(c.payload, '$.pendingReview') IS NULL AND json_extract(a.payload, '$.deletedAt') IS NULL ORDER BY a.created_at DESC LIMIT 200",
         )
         .all(projectId) as { payload: string }[];
       return rows
@@ -588,9 +694,68 @@ export default function plugin(bb: BbPluginApi) {
     },
   });
   bb.agents.registerTool({
+    name: "grf_skill_catalog",
+    description:
+      "Read the current client profession pages, skill metadata and effect bindings. Studio preview support is distinct from EF mappings; no GRF or graphics context required. Results are paginated.",
+    parameters: z
+      .object({
+        job: z.number().int().min(-1).max(65535).default(2),
+        query: z.string().max(200).default(""),
+        offset: z.number().int().nonnegative().default(0),
+        limit: z.number().int().min(1).max(50).default(30),
+      })
+      .strict(),
+    execute: async (input, ctx) => {
+      const loc = await location(ctx.threadId);
+      const c = await host.call(
+        "skillCatalog",
+        { root: loc.root },
+        { hostId: loc.hostId, signal: ctx.signal },
+      );
+      const q = input.query.toLowerCase();
+      const rows = c.skills.filter(
+        (s) =>
+          (input.job === -1 || s.jobs.includes(input.job)) &&
+          `${s.id} ${s.name} ${s.icon} ${s.bindings.flatMap((b) => b.effects).join(" ")}`
+            .toLowerCase()
+            .includes(q),
+      );
+      return JSON.stringify({
+        jobs: c.jobs.map((j) => ({
+          id: j.id,
+          name: j.name,
+          count: j.skills.length,
+        })),
+        source: c.source,
+        sourceVersion: c.sourceVersion,
+        total: rows.length,
+        next:
+          input.offset + input.limit < rows.length
+            ? input.offset + input.limit
+            : null,
+        skills: rows.slice(input.offset, input.offset + input.limit),
+      });
+    },
+  });
+  bb.agents.registerTool({
+    name: "grf_effect_library",
+    description:
+      "Search semantic effects, client EF bindings and unclassified GRF STR/ACT/SPR animations. Russian/English labels and tags are in the project catalog. Returns resource identities, skill usages and preview availability; mappings alone do not prove complete visuals. Modes: curated, bindings, resources, all. Results are paginated, 50 per call.",
+    parameters: libraryQuery,
+    execute: async (input, ctx) => {
+      const loc = await location(ctx.threadId);
+      const result = await host.call(
+        "effectLibrary",
+        { root: loc.root, ...input },
+        { hostId: loc.hostId, signal: ctx.signal },
+      );
+      return JSON.stringify(result);
+    },
+  });
+  bb.agents.registerTool({
     name: "grf_studio_render",
     description:
-      "Render an exact offline Soul Strike volley tick using the current game OpenGL renderer. Returns PNG and reproducible context; saves a review capture. Scene hits=0 uses the generated level table. No server, cast aura, audio or target reaction in stage 1.",
+      "Render an exact offline Mage skill tick (IDs 10–21), or an isolated 2D STR using strResourceId from grf_effect_library (omit sequence for STR) with the game OpenGL renderer and save a review capture. hits=0 uses client level metadata for target attacks. Persistent skills use effectDurationMs; ground placement supports Safety Wall, Fire Wall and Thunderstorm. Frost Diver supports targetStatus=frozen, Stone Curse supports targetStatus=stone with no petrified-body rendering yet; statusDelayMs and effectDurationMs define state timing. Missing STR resources are reported while available components still render. Optional sequence adds cast/cancellation, reaction and sound events; omit it to preview from release. No server required.",
     parameters: studioScene,
     execute: async (input, ctx) => {
       const loc = await location(ctx.threadId),
@@ -610,14 +775,14 @@ export default function plugin(bb: BbPluginApi) {
         const capture = recordCapture(
           {
             threadId: ctx.threadId,
-            title: `Soul Strike · tick ${frame.context.tick}`,
+            title: `${frame.context.skillName ?? "Soul Strike"} · tick ${frame.context.tick}`,
             sceneContext: frame.context.limitations.join("\n"),
             skillFrame: frame.context,
           },
           loc,
           {
             image: saved.image,
-            sourcePath: `skillstudio://soul_strike.default/${frame.frameId}`,
+            sourcePath: `skillstudio://${frame.context.effectId}/${frame.frameId}`,
           },
         );
         return {

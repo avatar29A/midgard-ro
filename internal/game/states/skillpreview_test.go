@@ -36,3 +36,19 @@ func TestSoulDefinitionChangesSharedGeometry(t *testing.T) {
 		t.Fatal("spatial parameters changed timing")
 	}
 }
+
+func TestCastAuraSharesGameShapeAndStopsAtBoundary(t *testing.T) {
+	at := CastAuraAt(250, 500)
+	if at.Bottom != castAuraRadius || at.Height != castAuraHeightMax/2 || at.Alpha != 1 {
+		t.Fatal(at)
+	}
+	if a := CastAuraAt(499, 500); a.Alpha <= 0 || a.Alpha >= 1 {
+		t.Fatal(a)
+	}
+	if a := CastAuraAt(500, 500); a != (CastAuraShape{}) {
+		t.Fatal(a)
+	}
+	if a := CastAuraAt(0, 0); a != (CastAuraShape{}) {
+		t.Fatal(a)
+	}
+}

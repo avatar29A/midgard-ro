@@ -7,6 +7,8 @@ import (
 	"os"
 
 	"github.com/Faultbox/midgard-ro/internal/assetworkbench"
+	"github.com/Faultbox/midgard-ro/internal/effectcatalog"
+	"github.com/Faultbox/midgard-ro/internal/skillcatalog"
 )
 
 func main() {
@@ -22,6 +24,8 @@ func run() (err error) {
 		}
 	}()
 	var req struct {
+		Mode     string `json:"mode"`
+		SkillID  uint16 `json:"skillId"`
 		Op       string `json:"op"`
 		ID       string `json:"id"`
 		Query    string `json:"query"`
@@ -44,6 +48,9 @@ func run() (err error) {
 	if req.Archive < -1 || req.Offset < 0 || req.Limit < 1 || req.Limit > 100 || req.Action < 0 || req.Frame < 0 {
 		return fmt.Errorf("invalid request bounds")
 	}
+	if req.Op == "skills" {
+		return json.NewEncoder(os.Stdout).Encode(skillcatalog.Build())
+	}
 	c, err := assetworkbench.Open(".")
 	if err != nil {
 		return err
@@ -51,6 +58,8 @@ func run() (err error) {
 	defer c.Close()
 	var result any
 	switch req.Op {
+	case "library":
+		result, err = effectcatalog.Load(".", c, req.Query, req.Type, req.Mode, req.SkillID, req.Offset, req.Limit)
 	case "search":
 		result = c.Search(req.Query, req.Type, req.Archive, req.Offset, req.Limit)
 	case "inspect":

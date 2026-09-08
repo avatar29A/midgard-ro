@@ -16,6 +16,7 @@ import {
 import { join } from "node:path";
 import { z } from "zod";
 import {
+  studioAudio,
   studioContext,
   studioFrame,
   type StudioFrame,
@@ -333,4 +334,23 @@ export class StudioBridge {
     );
     this.sessions.clear();
   }
+}
+
+export async function studioAudioRequest(
+  root: string,
+  dataDir: string,
+  signal: AbortSignal,
+  skillId = 13,
+) {
+  const engine = await binary(root, dataDir, signal);
+  const result = await new Promise<string>((resolve, reject) => {
+    execFile(
+      engine.path,
+      ["--audio", String(skillId)],
+      { cwd: root, signal, timeout: 25000, maxBuffer: 5 * 1024 * 1024 },
+      (err, stdout, stderr) =>
+        err ? reject(new Error(stderr.trim() || err.message)) : resolve(stdout),
+    );
+  });
+  return studioAudio.parse(JSON.parse(result));
 }

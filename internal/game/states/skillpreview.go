@@ -26,3 +26,27 @@ func SoulStrikeImpactTicks(hits int) []int {
 	}
 	return out
 }
+
+// CastAuraShape is shared by the live client and the offline timeline.
+type CastAuraShape struct{ Bottom, Top, Height, Alpha float32 }
+
+func CastAuraAt(elapsedMs, totalMs float32) CastAuraShape {
+	if totalMs <= 0 || elapsedMs < 0 || elapsedMs >= totalMs {
+		return CastAuraShape{}
+	}
+	done := elapsedMs / totalMs
+	alpha := float32(1)
+	if done > 1-castAuraFade {
+		alpha = (1 - done) / castAuraFade
+	}
+	return CastAuraShape{castAuraRadius, castAuraRadius + (castAuraFlare-1)*castAuraRadius*done, castAuraHeightMax * done, alpha}
+}
+func AttackHitDelayMS(frame, frames int, durationMs float32) float32 {
+	if frames <= 0 || frame <= 0 || durationMs <= 0 {
+		return 0
+	}
+	return durationMs * float32(frame) / float32(frames)
+}
+func SoulStrikeSoundPaths() (cast, impact string) {
+	return effectSoundFor(castAuraEffect), effectSoundFor("EF_SOULSTRIKE")
+}

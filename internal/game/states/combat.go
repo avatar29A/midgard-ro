@@ -397,7 +397,7 @@ func (s *InGameState) hitDelayMs(attacker uint32, durationMs float32) float32 {
 		return 0
 	}
 
-	return durationMs * float32(frame) / float32(frames)
+	return AttackHitDelayMS(frame, frames, durationMs)
 }
 
 // hitSound is the sound the attacker's swing plays where it lands.

@@ -11,7 +11,7 @@ import { frameFixture } from "./test-support/studio";
 
 it("validates bounded native scene inputs including unknown fields and non-finite camera values", () => {
   for (const scene of [
-    { ...defaultStudioScene, tick: 601 },
+    { ...defaultStudioScene, tick: 3601 },
     { ...defaultStudioScene, hits: -1 },
     {
       ...defaultStudioScene,

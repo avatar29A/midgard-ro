@@ -220,26 +220,7 @@ func (s *InGameState) EffectQuads(viewportW, viewportH float32) []EffectQuad {
 			continue
 		}
 
-		for _, quad := range effect.Frames(e.str, e.ageMs) {
-			placed := EffectQuad{
-				// The whole path. A quad may draw a file out of the effect
-				// texture directory or a frame of a sprite, and the two are
-				// not in the same place.
-				Texture:  effectTexturePath + quad.Texture,
-				UV:       quad.UV,
-				Color:    quad.Color,
-				Additive: quad.Additive,
-			}
-
-			for i := range placed.Corners {
-				placed.Corners[i] = [2]float32{
-					originX + quad.Corners[i][0],
-					originY + quad.Corners[i][1],
-				}
-			}
-
-			out = append(out, placed)
-		}
+		out = append(out, strEffectQuads(e.str, e.ageMs, originX, originY)...)
 	}
 
 	return out
@@ -367,4 +348,30 @@ func (s *InGameState) playSoundGain(path string, gain float32) {
 	}
 
 	s.sounds = append(s.sounds, Sound{Path: path, Gain: gain})
+}
+
+// strEffectQuads preserves the client screen-space STR placement.
+func strEffectQuads(str *formats.STR, ageMs, originX, originY float32) []EffectQuad {
+	var out []EffectQuad
+	for _, quad := range effect.Frames(str, ageMs) {
+		placed := EffectQuad{
+			// The whole path. A quad may draw a file out of the effect
+			// texture directory or a frame of a sprite, and the two are
+			// not in the same place.
+			Texture:  effectTexturePath + quad.Texture,
+			UV:       quad.UV,
+			Color:    quad.Color,
+			Additive: quad.Additive,
+		}
+
+		for i := range placed.Corners {
+			placed.Corners[i] = [2]float32{
+				originX + quad.Corners[i][0],
+				originY + quad.Corners[i][1],
+			}
+		}
+
+		out = append(out, placed)
+	}
+	return out
 }
