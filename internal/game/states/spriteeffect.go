@@ -11,33 +11,20 @@ import (
 
 // Effects the archive draws frame by frame.
 //
-// A third kind, beside the STR animations and the particle bursts. Fire Wall,
-// Safety Wall and Sight are sprites: an SPR of frames and an ACT that says
-// which to show when and where to put it, exactly like a monster. Nothing here
-// could play one, so three of the Mage's skills drew nothing at all.
-//
-// The frames come through the same texture cache the ice does — a frame of a
-// sprite is nameable the way a file is — and come out as the same quads
-// everything else in this file ends as, so no new renderer is involved.
+// Fire Wall and the ghost over a corpse use SPR images with ACT timing.
+// Safety Wall is handled by the STR player in effects.go; Sight is the
+// procedural status aura in sightaura.go. All ultimately use effect quads.
+// Frames pass through the game's texture cache, sharing decoding and blending.
 
-// effectScales is how big an effect is drawn against its own art, where one
-// is the size a character's sheet is drawn at.
-//
-// The frame is the art rather than the size. A Fire Wall's frames are 64
-// pixels square where a Mage's body is 61 by 88, so drawn at the same scale
-// the wall stands three quarters of the caster's height — and a wall a
-// monster steps over is not a wall. In the original it stands about twice a
-// character, and its flames are columns rather than blobs, which is what
-// these are set from.
-//
-// Anything not named here is drawn at its own size.
+// effectScales sets fixed artwork dimensions relative to character sprite
+// pixels. These values do not depend on the target's size.
 var effectScales = map[string][2]float32{
 	// Across and up, and not the same. The art is a square tile and a Fire
 	// Wall is a column of flame: stretched evenly it comes out as a squat
 	// bonfire however big it is made, which is the wall being tall but its
 	// flames still short. Wide enough that the cells run together, tall
 	// enough to stand over a character.
-	"firewall": {3.1, 4.0},
+	"firewall": {3.1, 4.5},
 
 	// The ghost over a corpse. Twice, because that is what this scale is out
 	// by against the one a character is drawn at: measured against the mage
@@ -50,6 +37,13 @@ var effectScales = map[string][2]float32{
 	// the head, where the original hangs it.
 	deadGhost: {2.0, 2.0},
 }
+
+// fireWallGroundV is the flame's ground contact, not the texture's bottom.
+// The 64px artwork has dark padding below its burning base near row 54.
+// Keep one pivot across the ACT cycle so the wall never bobs with frame bounds.
+// With the fixed vertical scale, the visible flame is roughly 30 world units
+// tall (ordinary actor height), independent of the target and camera.
+const fireWallGroundV = float32(54.0 / 64.0)
 
 // effectPlain are the effects drawn the ordinary way rather than added to
 // what is behind them.
@@ -90,7 +84,7 @@ type spriteEffect struct {
 	act  *formats.ACT
 
 	// on is the unit it follows, or zero for one that stands where it was
-	// put. A Sight orbits its caster; a Fire Wall stays on its cell.
+	// put. A ghost follows its owner; a Fire Wall stays on its cell.
 	on uint32
 
 	x, y, z float32
@@ -120,8 +114,8 @@ type spriteEffectFrame struct {
 // frameAt is the frame an effect shows at an age, and whether it is still
 // playing.
 //
-// The ACT's own interval rather than a rate chosen here: a Fire Wall burns at
-// its own pace and a Sight turns at another, and both are written down.
+// The ACT's own interval rather than a rate chosen here: Fire Wall burns at
+// the pace recorded by its animation.
 func (e *spriteEffect) frameAt(ageMs float32) (spriteEffectFrame, bool) {
 	if e.act == nil || len(e.act.Actions) == 0 {
 		return spriteEffectFrame{}, false
@@ -327,34 +321,7 @@ func (s *InGameState) spriteEffectQuads(viewportW, viewportH float32) []EffectQu
 			continue
 		}
 
-		stretch := effectScaleOf(effect.name)
-		scale := playerrender.SpriteScale * perUnit
-
-		w, h := size[0]*stretch[0]*scale, size[1]*stretch[1]*scale
-
-		// Standing on the point rather than centered over it. A Fire Wall
-		// rises out of the ground it was placed on; centered, half of it is
-		// under the grass and what is left reads as a puff of flame floating
-		// at knee height, which is what it looked like.
-		//
-		// The frame's own offset is added on top, for the effects whose ACT
-		// does move them about. These do not: the wall's frames sit at
-		// nought, and the art is drawn where it stands.
-		left := screenX + at.offX*stretch[0]*scale - w/2
-		top := screenY + at.offY*stretch[1]*scale - h
-
-		out = append(out, EffectQuad{
-			Texture: spriteFrameKey(effectSpriteDir+effect.name+".spr", at.frame),
-			Corners: [4][2]float32{
-				{left, top},
-				{left + w, top},
-				{left + w, top + h},
-				{left, top + h},
-			},
-			UV:       [4][2]float32{{0, 0}, {1, 0}, {1, 1}, {0, 1}},
-			Color:    [4]float32{1, 1, 1, 1},
-			Additive: !effectPlain[effect.name],
-		})
+		out = append(out, spriteEffectQuad(effect.name, at, size, screenX, screenY, perUnit))
 	}
 
 	return out
@@ -405,4 +372,35 @@ func (s *InGameState) effectSPR(name string) *formats.SPR {
 	s.effectSPRs[name] = spr
 
 	return spr
+}
+
+// spriteEffectQuad is the client placement policy shared with Studio.
+func spriteEffectQuad(name string, at spriteEffectFrame, size [2]float32, screenX, screenY, perUnit float32) EffectQuad {
+	stretch := effectScaleOf(name)
+	scale := playerrender.SpriteScale * perUnit
+
+	w, h := size[0]*stretch[0]*scale, size[1]*stretch[1]*scale
+
+	// Most effects stand on the texture edge and retain their ACT offsets.
+	// Fire Wall instead stands on its authored flame base; scaling the empty
+	// padding must not lift the visible fire above the ground.
+	baseV := float32(1)
+	if name == "firewall" {
+		baseV = fireWallGroundV
+	}
+	left := screenX + at.offX*stretch[0]*scale - w/2
+	top := screenY + at.offY*stretch[1]*scale - baseV*h
+
+	return EffectQuad{
+		Texture: spriteFrameKey(effectSpriteDir+name+".spr", at.frame),
+		Corners: [4][2]float32{
+			{left, top},
+			{left + w, top},
+			{left + w, top + h},
+			{left, top + h},
+		},
+		UV:       [4][2]float32{{0, 0}, {1, 0}, {1, 1}, {0, 1}},
+		Color:    [4]float32{1, 1, 1, 1},
+		Additive: !effectPlain[name],
+	}
 }

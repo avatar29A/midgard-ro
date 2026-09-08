@@ -14,10 +14,12 @@ import { useImagePan } from "./use-image-pan";
 export function AssetBrowser({
   threadId,
   initialId,
+  compact = false,
   onReview,
 }: {
   threadId: string | null;
   initialId?: string;
+  compact?: boolean;
   onReview: (capture: Capture) => void;
 }) {
   const rpc = useRpc<typeof rpcContract>();
@@ -51,7 +53,7 @@ export function AssetBrowser({
     if (initialId) setSelected(initialId);
   }, [initialId]);
   useEffect(() => {
-    if (!threadId) return;
+    if (!threadId || compact) return;
     let live = true;
     setSearching(true);
     setSearchError("");
@@ -204,120 +206,127 @@ export function AssetBrowser({
         ? info.imageCount
         : 1;
   return (
-    <div className="grf-assets">
-      <div className="grf-toolbar border-b border-border">
-        <Input
-          aria-label="Поиск в GRF"
-          placeholder="Имя или путь: rocker, poring, basic_interface…"
-          value={query}
-          onChange={(e) => {
-            setQuery(e.target.value);
-            setOffset(0);
-          }}
-        />
-        <select
-          aria-label="Тип ресурса"
-          className="grf-select border border-input bg-background"
-          value={type}
-          onChange={(e) => {
-            setType(e.target.value);
-            setOffset(0);
-          }}
-        >
-          <option value="">Все типы</option>
-          <option value="act">Анимации ACT</option>
-          <option value="spr">Спрайты SPR</option>
-          <option value="bmp">BMP</option>
-          <option value="tga">TGA</option>
-          <option value="png">PNG</option>
-          <option value="jpg">JPG</option>
-        </select>
-        <select
-          aria-label="Архив"
-          className="grf-select border border-input bg-background"
-          value={archive}
-          onChange={(e) => {
-            setArchive(Number(e.target.value));
-            setOffset(0);
-          }}
-        >
-          <option value={-1}>Как в клиенте: приоритет архивов</option>
-          {results?.archives.map((a) => (
-            <option value={a.index} key={a.index}>
-              {a.path.split(/[\\/]/).pop()} · {a.files.toLocaleString()} файлов
-            </option>
-          ))}
-        </select>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() => setRefresh((n) => n + 1)}
-        >
-          Обновить
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() =>
-            navigate.toPluginPanel("review", {
-              subPath: `assets/${threadId}/${selected}`,
-            })
-          }
-        >
-          Развернуть
-        </Button>
-      </div>
+    <div className={`grf-assets ${compact ? "grf-assets-embedded" : ""}`}>
+      {!compact && (
+        <div className="grf-toolbar border-b border-border">
+          <Input
+            aria-label="Поиск в GRF"
+            placeholder="Имя или путь: rocker, poring, basic_interface…"
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setOffset(0);
+            }}
+          />
+          <select
+            aria-label="Тип ресурса"
+            className="grf-select border border-input bg-background"
+            value={type}
+            onChange={(e) => {
+              setType(e.target.value);
+              setOffset(0);
+            }}
+          >
+            <option value="">Все типы</option>
+            <option value="act">Анимации ACT</option>
+            <option value="spr">Спрайты SPR</option>
+            <option value="bmp">BMP</option>
+            <option value="tga">TGA</option>
+            <option value="png">PNG</option>
+            <option value="jpg">JPG</option>
+          </select>
+          <select
+            aria-label="Архив"
+            className="grf-select border border-input bg-background"
+            value={archive}
+            onChange={(e) => {
+              setArchive(Number(e.target.value));
+              setOffset(0);
+            }}
+          >
+            <option value={-1}>Как в клиенте: приоритет архивов</option>
+            {results?.archives.map((a) => (
+              <option value={a.index} key={a.index}>
+                {a.path.split(/[\\/]/).pop()} · {a.files.toLocaleString()}{" "}
+                файлов
+              </option>
+            ))}
+          </select>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setRefresh((n) => n + 1)}
+          >
+            Обновить
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() =>
+              navigate.toPluginPanel("review", {
+                subPath: `assets/${threadId}/${selected}`,
+              })
+            }
+          >
+            Развернуть
+          </Button>
+        </div>
+      )}
       {searchError && (
         <p role="alert" className="grf-notice text-destructive">
           {searchError}
         </p>
       )}
       <div className="grf-assets-body">
-        <aside className="grf-resource-list border-r border-border">
-          <p className="text-xs text-muted-foreground">
-            {searching
-              ? "Загружаю архивы…"
-              : results
-                ? `${results.matched.toLocaleString()} совпадений · ${results.total.toLocaleString()} ресурсов`
-                : "Архивы из config.yaml"}
-          </p>
-          {results?.entries.map((e) => (
-            <button
-              type="button"
-              key={e.id}
-              className={`grf-resource-row ${selected === e.id ? "bg-primary/10" : "hover:bg-muted/50"}`}
-              onClick={() => setSelected(e.id)}
-            >
-              <span className="text-sm">{e.path.split("/").pop()}</span>
-              <span className="text-xs text-muted-foreground break-all">
-                {e.path}
-              </span>
-              <span className="text-xs text-muted-foreground">
-                {e.source.split(/[\\/]/).pop()} · {(e.bytes / 1024).toFixed(1)}{" "}
-                KiB
-                {e.variants.length > 1 ? ` · ${e.variants.length} версии` : ""}
-              </span>
-            </button>
-          ))}
-          <div className="grf-toolbar">
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={offset === 0 || searching}
-              onClick={() => setOffset(Math.max(0, offset - 50))}
-            >
-              Назад
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={!results || results.next < 0 || searching}
-              onClick={() => setOffset(results!.next)}
-            >
-              Далее
-            </Button>
-          </div>
-        </aside>
+        {!compact && (
+          <aside className="grf-resource-list border-r border-border">
+            <p className="text-xs text-muted-foreground">
+              {searching
+                ? "Загружаю архивы…"
+                : results
+                  ? `${results.matched.toLocaleString()} совпадений · ${results.total.toLocaleString()} ресурсов`
+                  : "Архивы из config.yaml"}
+            </p>
+            {results?.entries.map((e) => (
+              <button
+                type="button"
+                key={e.id}
+                className={`grf-resource-row ${selected === e.id ? "bg-primary/10" : "hover:bg-muted/50"}`}
+                onClick={() => setSelected(e.id)}
+              >
+                <span className="text-sm">{e.path.split("/").pop()}</span>
+                <span className="text-xs text-muted-foreground break-all">
+                  {e.path}
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  {e.source.split(/[\\/]/).pop()} ·{" "}
+                  {(e.bytes / 1024).toFixed(1)} KiB
+                  {e.variants.length > 1
+                    ? ` · ${e.variants.length} версии`
+                    : ""}
+                </span>
+              </button>
+            ))}
+            <div className="grf-toolbar">
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={offset === 0 || searching}
+                onClick={() => setOffset(Math.max(0, offset - 50))}
+              >
+                Назад
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!results || results.next < 0 || searching}
+                onClick={() => setOffset(results!.next)}
+              >
+                Далее
+              </Button>
+            </div>
+          </aside>
+        )}
         <section className="grf-resource-detail">
           {!selected && (
             <p className="text-sm text-muted-foreground">

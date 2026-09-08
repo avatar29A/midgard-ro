@@ -1,3 +1,7 @@
+import { effectLibrarySchema } from "./effect-library-contract";
+import { skillCatalogSchema } from "./skill-catalog-contract";
+import { StudioBridge, studioAudioRequest } from "./studio-bridge";
+const studio = new StudioBridge();
 import { experimental_defineHostEntry } from "@get-bb/plugin-sdk/host";
 import { grfRequest } from "./grf-bridge";
 import { grfSearchSchema, grfInfoSchema, grfPreviewSchema } from "./contract";
@@ -6,7 +10,34 @@ import { ImageStore } from "./image-store";
 import { Uploads } from "./uploads";
 export default experimental_defineHostEntry({
   contract: hostContract,
+  dispose: () => studio.dispose(),
   handlers: {
+    effectLibrary: async ({ root, kind, ...query }, ctx) =>
+      effectLibrarySchema.parse(
+        await grfRequest(root, ctx.experimental_paths.dataDir, ctx.signal, {
+          ...query,
+          type: kind,
+          op: "library",
+          limit: 50,
+        }),
+      ),
+    skillCatalog: async ({ root }, ctx) =>
+      skillCatalogSchema.parse(
+        await grfRequest(root, ctx.experimental_paths.dataDir, ctx.signal, {
+          op: "skills",
+        }),
+      ),
+    studioAudio: (input, ctx) =>
+      studioAudioRequest(
+        input.root,
+        ctx.experimental_paths.dataDir,
+        ctx.signal,
+        input.skillId,
+      ),
+    studioRender: (input, ctx) => studio.render(input, ctx),
+    studioClose: (input) => studio.close(input),
+    studioCapture: (input, ctx) =>
+      studio.capture(input, ctx.experimental_paths.dataDir),
     grfSearch: async ({ root, ...input }, ctx) =>
       grfSearchSchema.parse(
         await grfRequest(root, ctx.experimental_paths.dataDir, ctx.signal, {

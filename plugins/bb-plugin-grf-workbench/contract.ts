@@ -1,3 +1,14 @@
+import { effectLibrarySchema, libraryQuery } from "./effect-library-contract";
+import { skillCatalogSchema } from "./skill-catalog-contract";
+import { reviewRequestSchema, reviewEnvironmentSchema } from "./review-request";
+import {
+  previewSkillId,
+  studioAudio,
+  studioScene,
+  studioScope,
+  studioFrame,
+  studioSnapshot,
+} from "./studio-contract";
 import { defineRpcContract } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 
@@ -144,6 +155,12 @@ export const captureSchema = z
     createdAt: z.string(),
     image: imageSchema,
     resource: grfResourceSchema.optional(),
+    skillFrame: studioSnapshot.optional(),
+    pendingReview: id.optional(),
+    copiedFrom: z
+      .object({ captureId: id, threadId: z.string(), copiedAt: z.string() })
+      .strict()
+      .optional(),
   })
   .strict();
 export const annotationSchema = z
@@ -156,7 +173,12 @@ export const annotationSchema = z
     createdAt: z.string(),
     resolved: z.boolean(),
     deletedAt: z.string().nullable().optional(),
+    copiedFrom: z
+      .object({ annotationId: id, revision: z.number().int().nonnegative() })
+      .strict()
+      .optional(),
     revision: z.number().int().nonnegative(),
+    order: z.number().int().nonnegative().optional(),
     crop: imageSchema,
   })
   .strict();
@@ -192,6 +214,32 @@ const uploadComplete = uploadScope.extend({
   checksum: digest,
 });
 export const hostContract = defineRpcContract({
+  effectLibrary: {
+    input: libraryQuery.extend({ root: z.string() }),
+    output: effectLibrarySchema,
+  },
+  skillCatalog: {
+    input: z.object({ root: z.string() }).strict(),
+    output: skillCatalogSchema,
+  },
+  studioAudio: {
+    input: z
+      .object({ root: z.string(), skillId: previewSkillId.optional() })
+      .strict(),
+    output: studioAudio,
+  },
+  studioRender: {
+    input: studioScope.extend({ root: z.string(), scene: studioScene }),
+    output: studioFrame,
+  },
+  studioClose: {
+    input: studioScope,
+    output: z.object({ closed: z.boolean() }).strict(),
+  },
+  studioCapture: {
+    input: studioScope.extend({ frameId: id }),
+    output: z.object({ image: imageSchema, context: studioSnapshot }).strict(),
+  },
   grfSearch: {
     input: grfSearchInput.extend({ root: z.string() }),
     output: grfSearchSchema,
@@ -253,7 +301,109 @@ export const hostContract = defineRpcContract({
       .strict(),
   },
 });
+export const reviewDraftSchema = z
+  .object({
+    id,
+    title: z.string(),
+    capture: captureSchema,
+    annotations: z.array(annotationSchema),
+    defaultEnvironment: reviewEnvironmentSchema,
+    status: z.enum(["prepared", "creating", "created", "copied", "done"]),
+    threadId: z.string().nullable(),
+  })
+  .strict();
+export type ReviewDraft = z.infer<typeof reviewDraftSchema>;
 export const rpcContract = defineRpcContract({
+  researchContext: {
+    input: z.object({ threadId: z.string() }).strict(),
+    output: z
+      .object({ projectId: z.string(), environmentId: z.string() })
+      .strict(),
+  },
+  startResearch: {
+    input: z
+      .object({
+        operationId: id,
+        sourceThreadId: z.string(),
+        skillId: z.number().int().min(1).max(65535),
+        skillName: z.string().min(1).max(200),
+        request: reviewRequestSchema,
+      })
+      .strict(),
+    output: z.object({ threadId: z.string() }).strict(),
+  },
+
+  effectLibrary: {
+    input: libraryQuery.extend({ threadId: z.string() }),
+    output: effectLibrarySchema,
+  },
+  skillCatalog: {
+    input: z.object({ threadId: z.string() }).strict(),
+    output: skillCatalogSchema,
+  },
+  prepareReview: {
+    input: z
+      .object({
+        operationId: id,
+        captureId: id,
+        imageDigest: digest,
+        title: z.string().trim().min(1).max(200),
+        annotations: z
+          .array(
+            z.object({ id, revision: z.number().int().nonnegative() }).strict(),
+          )
+          .max(200),
+      })
+      .strict(),
+    output: reviewDraftSchema,
+  },
+  discardReviewDraft: {
+    input: z.object({ operationId: id }).strict(),
+    output: z.object({ discarded: z.boolean() }).strict(),
+  },
+  reviewDraft: {
+    input: z.object({ operationId: id }).strict(),
+    output: reviewDraftSchema,
+  },
+  startReview: {
+    input: z
+      .object({ operationId: id, request: reviewRequestSchema.optional() })
+      .strict(),
+    output: z.object({ threadId: z.string(), captureId: id }).strict(),
+  },
+  reviewForThread: {
+    input: z.object({ threadId: z.string() }).strict(),
+    output: z.object({ captureId: id, title: z.string() }).strict().nullable(),
+  },
+
+  deleteCapture: {
+    input: z.object({ captureId: id, imageDigest: digest }).strict(),
+    output: z
+      .object({
+        captureId: id,
+        threadId: z.string(),
+        deletedAnnotations: z.number().int().nonnegative(),
+      })
+      .strict(),
+  },
+  studioAudio: {
+    input: z
+      .object({ threadId: z.string(), skillId: previewSkillId.optional() })
+      .strict(),
+    output: studioAudio,
+  },
+  studioRender: {
+    input: studioScope.extend({ scene: studioScene }),
+    output: studioFrame,
+  },
+  studioClose: {
+    input: studioScope,
+    output: z.object({ closed: z.boolean() }).strict(),
+  },
+  studioCapture: {
+    input: studioScope.extend({ frameId: id }),
+    output: captureSchema,
+  },
   grfSearch: {
     input: grfSearchInput.extend({ threadId: z.string() }),
     output: grfSearchSchema,

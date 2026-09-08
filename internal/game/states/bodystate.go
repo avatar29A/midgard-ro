@@ -121,13 +121,7 @@ func (s *InGameState) IceQuads(viewportW, viewportH float32) []EffectQuad {
 		// ground with the unit inside it. One quad rather than a ring of
 		// spikes: the sprite already is the shape, which is the whole reason
 		// to use it.
-		height := max(s.unitHeight(id)*frozenBlockOver, frozenBlockLeast)
-
-		block := frozenPart(frozenBlock, height)
-		block.y = height / 2
-		block.lifeMs = 1
-
-		held := &activeBurst{parts: []burstParticle{block}, x: x, y: y, z: z}
+		held := frozenPreviewBurst([3]float32{x, y, z}, s.unitHeight(id))
 
 		out = append(out, s.burstQuadsOf(held, viewportW, viewportH)...)
 	}

@@ -1,3 +1,5 @@
+import { effectLibrarySchema } from "./effect-library-contract";
+import { skillCatalogSchema } from "./skill-catalog-contract";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { access, mkdir, readFile, readdir, realpath } from "node:fs/promises";
@@ -44,24 +46,37 @@ function run(
 }
 async function binary(root: string, dataDir: string, signal: AbortSignal) {
   root = await realpath(root);
-  const inputs = ["go.mod", "go.sum"];
+  const inputs = [
+    "go.mod",
+    "go.sum",
+    "tools/skill-studio/catalog/effects.json",
+  ];
   async function walk(dir: string) {
     for (const e of (
       await readdir(join(root, dir), { withFileTypes: true })
     ).sort((a, b) => a.name.localeCompare(b.name))) {
       const p = `${dir}/${e.name}`;
       if (e.isDirectory() && e.name !== "testdata") await walk(p);
-      else if (e.isFile() && p.endsWith(".go") && !p.endsWith("_test.go"))
+      else if (
+        e.isFile() &&
+        (p.endsWith(".go") || p.endsWith(".yaml")) &&
+        !p.endsWith("_test.go")
+      )
         inputs.push(p);
     }
   }
   for (const p of [
     "cmd/grfworkbench",
     "internal/assetworkbench",
+    "internal/skillcatalog",
+    "internal/effectcatalog",
+    "internal/game/jobs",
+    "internal/game/skills",
     "pkg/grf",
     "pkg/formats",
     "pkg/encoding",
     "internal/engine/charsprite",
+    "internal/engine/skillvisual",
     "internal/engine/sprite",
     "internal/engine/texture",
   ])
@@ -115,6 +130,13 @@ export async function grfRequest(
   const data = JSON.parse(
     await run(engine.path, [], root, signal, JSON.stringify(request)),
   );
+  if (request.op === "library")
+    return effectLibrarySchema.parse({
+      ...data,
+      sourceVersion: engine.version,
+    });
+  if (request.op === "skills")
+    return skillCatalogSchema.parse({ ...data, sourceVersion: engine.version });
   if (request.op === "search") return grfSearchSchema.parse(data);
   if (request.op === "inspect") return grfInfoSchema.parse(data);
   const parsed = grfPreviewBase

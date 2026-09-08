@@ -167,3 +167,49 @@ func (c *Catalog) read(e Entry) ([]byte, error) { return c.readers[e.Archive].Re
 func (c *Catalog) pair(e Entry, ext string, archive int) (Entry, error) {
 	return c.entry(hash([]byte(strings.TrimSuffix(e.raw, filepath.Ext(e.raw))+ext)), archive)
 }
+
+// ReadPath resolves a game path with the same UTF-8/EUC-KR fallback and archive
+// precedence as assets.Manager, retaining provenance for an exact frame.
+func (c *Catalog) ReadPath(path string) ([]byte, Dependency, error) {
+	for _, candidate := range []string{path, string(encoding.UTF8ToEUCKR(path))} {
+		for i := len(c.readers) - 1; i >= 0; i-- {
+			if _, ok := c.readers[i].Entry(candidate); !ok {
+				continue
+			}
+			data, err := c.readers[i].ReadLimit(candidate, 32<<20)
+			if err != nil {
+				return nil, Dependency{}, err
+			}
+			return data, Dependency{Path: path, Source: c.Archives[i].Path, SHA256: hash(data)}, nil
+		}
+	}
+	return nil, Dependency{}, fmt.Errorf("resource not found: %s", path)
+}
+
+// ResolvePath returns the exact browser identity using the client's encoding fallback.
+func (c *Catalog) ResolvePath(path string) (Entry, error) {
+	for _, candidate := range []string{path, string(encoding.UTF8ToEUCKR(path))} {
+		if e, err := c.entry(hash([]byte(normalizedIdentity(candidate))), -1); err == nil {
+			return e, nil
+		}
+	}
+	return Entry{}, fmt.Errorf("resource not found: %s", path)
+}
+func (c *Catalog) ReadID(id string) ([]byte, Dependency, Entry, error) {
+	e, err := c.entry(id, -1)
+	if err != nil {
+		return nil, Dependency{}, e, err
+	}
+	data, err := c.read(e)
+	return data, Dependency{e.Path, e.Source, hash(data)}, e, err
+}
+
+func normalizedIdentity(path string) string {
+	b := []byte(strings.ReplaceAll(path, "\\", "/"))
+	for i, c := range b {
+		if c >= 'A' && c <= 'Z' {
+			b[i] = c + ('a' - 'A')
+		}
+	}
+	return string(b)
+}

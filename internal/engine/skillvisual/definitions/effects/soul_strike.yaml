@@ -1,0 +1,9 @@
+schema_version: 1
+id: soul_strike.default
+kind: procedural
+generator: procedural.soul_strike
+contract_version: 1
+# World units. Timing and hit policy still belong to the existing Go adapter.
+half_size: 18
+rise: 16
+spread: 20

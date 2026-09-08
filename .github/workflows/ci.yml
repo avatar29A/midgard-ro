@@ -40,6 +40,7 @@ jobs:
         run: |
           go build -v ./cmd/grftool
           go build -v ./cmd/grfbrowser
+          go build -v -o "$RUNNER_TEMP/skillstudio" ./cmd/skillstudio
 
   test:
     name: Test

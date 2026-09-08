@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-grf-workbench",
-  "version": "0.2.3",
+  "version": "0.9.1",
   "type": "module",
   "engines": {
     "bb": ">=0.41",
@@ -8,7 +8,7 @@
   },
   "bb": {
     "name": "GRF Workbench",
-    "description": "Browse Ragnarok GRF resources, preview SPR/ACT animations with game-client code, and annotate exact frames.",
+    "description": "Browse Ragnarok GRFs, preview Mage skills with the game renderer in Skill Studio, and annotate exact frames.",
     "branding": {
       "icon": "Scan"
     },

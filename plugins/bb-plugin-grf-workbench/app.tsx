@@ -1,3 +1,8 @@
+import { EffectLibrary } from "./effect-library";
+import { NewReview, ReviewThreadHeader } from "./new-review";
+import * as AlertDialog from "@radix-ui/react-alert-dialog";
+import { SkillCatalog } from "./skill-catalog";
+import type { StudioScene } from "./studio-contract";
 import {
   useCallback,
   useEffect,
@@ -58,16 +63,21 @@ function Review({
   captureId,
   annotationId,
   onThread,
+  onStudio,
+  onCaptureDeleted,
 }: {
   threadId: string | null;
   captureId?: string;
   annotationId?: string;
   onThread?: (threadId: string) => void;
+  onStudio?: (scene: StudioScene) => void;
+  onCaptureDeleted?: (captureId: string) => void;
 }) {
   const rpc = useRpc<typeof rpcContract>(),
     composer = useComposer(),
     navigate = useBbNavigate();
   const [captures, setCaptures] = useState<Capture[]>([]);
+  const [deletingCapture, setDeletingCapture] = useState<Capture | null>(null);
   const [selected, setSelected] = useState(captureId ?? "");
   const [capture, setCapture] = useState<Capture | null>(null);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
@@ -139,6 +149,42 @@ function Review({
   const [generation, setGeneration] = useState(0);
   const refresh = useCallback(() => setGeneration((n) => n + 1), []);
   useRealtime("review-changed", refresh);
+  const forgetCapture = useCallback(
+    (removedId: string) => {
+      setCaptures((old) => old.filter((c) => c.id !== removedId));
+      setSelected((current) => (current === removedId ? "" : current));
+      setCapture((current) => (current?.id === removedId ? null : current));
+      setDeletingCapture((current) =>
+        current?.id === removedId ? null : current,
+      );
+      setDeletedAnnotation((current) =>
+        current?.captureId === removedId ? null : current,
+      );
+      if (selected === removedId) {
+        setAnnotations([]);
+        setActiveAnnotation("");
+        setSelection(null);
+        setTransform(null);
+        setComment("");
+        setCropURL("");
+        setImageURL("");
+        setError("");
+        onCaptureDeleted?.(removedId);
+      }
+    },
+    [onCaptureDeleted, selected],
+  );
+  useRealtime("capture-deleted", (payload) => {
+    if (
+      payload &&
+      typeof payload === "object" &&
+      "captureId" in payload &&
+      typeof payload.captureId === "string"
+    ) {
+      forgetCapture(payload.captureId);
+      refresh();
+    }
+  });
   const connection = useRealtimeConnectionState();
   useEffect(() => {
     if (connection === "connected") refresh();
@@ -762,6 +808,7 @@ function Review({
     <div
       className="grf-workbench bg-background text-foreground"
       onKeyDown={(e) => {
+        if (deletingCapture) return;
         if (e.repeat || e.metaKey || e.ctrlKey || e.altKey || pending) return;
         if (
           e.target instanceof Element &&
@@ -887,7 +934,93 @@ function Review({
             Развернуть
           </Button>
         )}
+        {capture && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="text-destructive hover:text-destructive"
+            aria-label="Удалить снимок"
+            disabled={pending}
+            onClick={() => {
+              setError("");
+              setDeletingCapture(capture);
+            }}
+          >
+            {trashIcon}
+          </Button>
+        )}
+        {capture && (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={pending}
+            onClick={() =>
+              navigate.toPluginPanel("review", { subPath: `new/${capture.id}` })
+            }
+          >
+            Новый разбор
+          </Button>
+        )}
       </div>
+      <AlertDialog.Root
+        open={Boolean(deletingCapture)}
+        onOpenChange={(open) => {
+          if (!open && !pending) setDeletingCapture(null);
+        }}
+      >
+        <AlertDialog.Portal>
+          <AlertDialog.Overlay className="grf-delete-overlay" />
+          <AlertDialog.Content
+            className="grf-delete-dialog bg-background text-foreground border border-border"
+            onEscapeKeyDown={(e) => {
+              if (pending) e.preventDefault();
+            }}
+          >
+            <AlertDialog.Title className="font-medium">
+              Удалить снимок и все замечания?
+            </AlertDialog.Title>
+            <AlertDialog.Description className="text-sm text-muted-foreground">
+              {deletingCapture?.title}. Все области и комментарии этого снимка
+              будут удалены. Это действие нельзя отменить.
+            </AlertDialog.Description>
+            {error && (
+              <p role="alert" className="text-sm text-destructive">
+                {error}
+              </p>
+            )}
+            <div className="grf-toolbar">
+              <AlertDialog.Cancel asChild>
+                <Button size="sm" variant="outline" disabled={pending}>
+                  Отмена
+                </Button>
+              </AlertDialog.Cancel>
+              <AlertDialog.Action asChild>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  disabled={pending}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    const target = deletingCapture;
+                    if (!target) return;
+                    void run(async () => {
+                      await rpc.call("deleteCapture", {
+                        captureId: target.id,
+                        imageDigest: target.image.digest,
+                      });
+                      forgetCapture(target.id);
+                      setNotice("Снимок и все замечания удалены.");
+                      refresh();
+                    });
+                  }}
+                >
+                  {pending ? "Удаляю…" : "Удалить снимок и замечания"}
+                </Button>
+              </AlertDialog.Action>
+            </div>
+          </AlertDialog.Content>
+        </AlertDialog.Portal>
+      </AlertDialog.Root>
       {(importOpen || (!capture && !selected)) && (
         <form
           className="grf-import border-b border-border"
@@ -1166,6 +1299,42 @@ function Review({
             </div>
             <aside className="grf-inspector border-l border-border">
               <p className="font-medium text-sm">{capture.title}</p>
+              {capture.copiedFrom && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() =>
+                    navigate.toPluginPanel("review", {
+                      subPath: capture.copiedFrom!.captureId,
+                    })
+                  }
+                >
+                  Исходный снимок
+                </Button>
+              )}
+              {capture.skillFrame && onStudio && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => onStudio(capture.skillFrame!.scene)}
+                >
+                  Вернуться к живой сцене
+                </Button>
+              )}
+              {capture.skillFrame && (
+                <p className="text-xs text-muted-foreground">
+                  Области относятся к этому снимку. В живой сцене откроются его
+                  время и ракурс.
+                </p>
+              )}
+              {capture.skillFrame && (
+                <p className="text-xs">
+                  {capture.skillFrame.skillName ?? "Soul Strike"} · tick{" "}
+                  {capture.skillFrame.tick} ·{" "}
+                  {capture.skillFrame.scene.camera.yaw}° · код{" "}
+                  {capture.skillFrame.rendererVersion.slice(0, 12)}
+                </p>
+              )}
               {capture.sceneContext && (
                 <p className="text-xs text-muted-foreground whitespace-pre-wrap">
                   {capture.sceneContext}
@@ -1377,8 +1546,15 @@ function Workbench({
   assetId?: string;
 }) {
   const [tab, setTab] = useState(
-    section === "review" || captureId || annotationId ? "review" : "assets",
+    section === "review" || captureId || annotationId
+      ? "review"
+      : section === "studio"
+        ? "studio"
+        : "assets",
   );
+  const [studioScene, setStudioScene] = useState<StudioScene>();
+  const [librarySkill, setLibrarySkill] = useState(0);
+  const [selectedSkill, setSelectedSkill] = useState<number>();
   const [reviewCapture, setReviewCapture] = useState(captureId);
   const [reviewAnnotation, setReviewAnnotation] = useState(annotationId);
   const [resolvedThread, setResolvedThread] = useState(threadId);
@@ -1389,10 +1565,28 @@ function Workbench({
       setReviewAnnotation(annotationId);
       setTab("review");
     } else if (section === "assets" || assetId) setTab("assets");
+    else if (section === "studio") setTab("studio");
   }, [threadId, captureId, annotationId, section, assetId]);
   return (
     <div className="grf-workbench bg-background text-foreground">
       <div className="grf-toolbar border-b border-border">
+        <Button
+          size="sm"
+          variant={tab === "studio" ? "secondary" : "ghost"}
+          onClick={() => setTab("studio")}
+        >
+          Skill Studio
+        </Button>
+        <Button
+          size="sm"
+          variant={tab === "library" ? "secondary" : "ghost"}
+          onClick={() => {
+            setLibrarySkill(0);
+            setTab("library");
+          }}
+        >
+          Эффекты и анимации
+        </Button>
         <Button
           size="sm"
           variant={tab === "assets" ? "secondary" : "ghost"}
@@ -1408,7 +1602,45 @@ function Workbench({
           Снимки и замечания
         </Button>
       </div>
-      {tab === "assets" ? (
+      {tab === "studio" ? (
+        <SkillCatalog
+          key={selectedSkill}
+          initialSkillId={selectedSkill}
+          onLibrary={(id) => {
+            setLibrarySkill(id);
+            setTab("library");
+          }}
+          threadId={resolvedThread}
+          initialScene={studioScene}
+          onReview={(c) => {
+            setStudioScene(c.skillFrame?.scene);
+            setReviewCapture(c.id);
+            setReviewAnnotation(undefined);
+            setTab("review");
+          }}
+        />
+      ) : tab === "library" ? (
+        <EffectLibrary
+          threadId={resolvedThread}
+          initialSkill={librarySkill}
+          initialScene={
+            studioScene?.libraryEntryId || studioScene?.strResourceId
+              ? studioScene
+              : undefined
+          }
+          onSkill={(id) => {
+            setSelectedSkill(id);
+            setStudioScene(undefined);
+            setTab("studio");
+          }}
+          onReview={(c) => {
+            setStudioScene(c.skillFrame?.scene);
+            setReviewCapture(c.id);
+            setReviewAnnotation(undefined);
+            setTab("review");
+          }}
+        />
+      ) : tab === "assets" ? (
         <AssetBrowser
           threadId={resolvedThread}
           initialId={assetId}
@@ -1424,6 +1656,19 @@ function Workbench({
           captureId={reviewCapture}
           annotationId={reviewAnnotation}
           onThread={setResolvedThread}
+          onCaptureDeleted={() => {
+            setReviewCapture(undefined);
+            setReviewAnnotation(undefined);
+          }}
+          onStudio={(scene) => {
+            setStudioScene(scene);
+            setSelectedSkill(undefined);
+            setTab(
+              scene.libraryEntryId || scene.strResourceId
+                ? "library"
+                : "studio",
+            );
+          }}
         />
       )}
     </div>
@@ -1463,6 +1708,11 @@ function ReviewCard({
   );
 }
 export default definePluginApp((app) => {
+  app.slots.experimental_threadHeaderAction({
+    id: "review-copy",
+    title: "Разбор снимка",
+    component: ReviewThreadHeader,
+  });
   app.slots.threadPanelAction({
     id: "review",
     title: "GRF Workbench",
@@ -1495,6 +1745,12 @@ export default definePluginApp((app) => {
     icon: "Scan",
     component: ({ subPath }) => {
       const parts = subPath.split("/");
+      if (parts[0] === "new" && uuid(parts[1]))
+        return <NewReview key={parts[1]} captureId={parts[1]} />;
+      if (parts[0] === "draft" && uuid(parts[1]))
+        return <NewReview key={parts[1]} operationId={parts[1]} />;
+      if (parts[0] === "studio")
+        return <Workbench threadId={parts[1] || null} section="studio" />;
       if (parts[0] === "assets")
         return (
           <Workbench

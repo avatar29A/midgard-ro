@@ -5,6 +5,8 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/Faultbox/midgard-ro/internal/engine/skillvisual"
+	"github.com/Faultbox/midgard-ro/internal/logger"
 	"github.com/Faultbox/midgard-ro/internal/trace"
 )
 
@@ -916,9 +918,7 @@ const (
 	// draws a speck with a halo round it — and one big enough for the core to
 	// read is a quad whose halo swallows the rest of the tail. This is the
 	// size where the beads are still beads.
-	soulHalf   = 18.0
-	soulRise   = 16.0
-	soulSpread = 20.0
+	// The three spatial values now live in skillvisual/definitions/effects/soul_strike.yaml.
 
 	// soulFlashHalf is how wide the orb bursts when it lands, and
 	// soulFlashFrames how long that lasts.
@@ -959,6 +959,15 @@ func soulRollDegrees(bolts, i int) float32 {
 
 // soulStrikeParts is the volley.
 func soulStrikeParts(hits int) burstSpec {
+	d, _, _, err := skillvisual.LoadSoulDefinition(".")
+	if err != nil {
+		logger.Warn("invalid Soul Strike definition; using embedded values", zap.Error(err))
+		d = skillvisual.BuiltInSoulDefinition()
+	}
+	return soulStrikePartsWithDefinition(hits, d)
+}
+
+func soulStrikePartsWithDefinition(hits int, d skillvisual.SoulDefinition) burstSpec {
 	bolts := min(max(hits, 1), soulBoltsMax)
 
 	// A segment lives exactly as long as the flight, so every one of them
@@ -974,8 +983,8 @@ func soulStrikeParts(hits int) burstSpec {
 		// perpendicular to a line along the ground are up and sideways. No
 		// roll is straight up and over, which is what a single bolt does; a
 		// quarter turn is all the way out to one side.
-		across := soulSpread * float32(math.Sin(roll))
-		rise := soulRise + soulSpread*float32(math.Cos(roll))
+		across := d.Spread * float32(math.Sin(roll))
+		rise := d.Rise + d.Spread*float32(math.Cos(roll))
 
 		// Up and back down over the flight, so the bolt arrives at the height
 		// it was aimed at rather than above it.
@@ -989,8 +998,8 @@ func soulStrikeParts(hits int) burstSpec {
 
 			parts = append(parts, burstParticle{
 				vy: vy, ay: ay,
-				halfW: soulHalf * (1 - 0.6*back),
-				halfH: soulHalf * (1 - 0.6*back),
+				halfW: d.HalfSize * (1 - 0.6*back),
+				halfH: d.HalfSize * (1 - 0.6*back),
 
 				birthMs: burstFrames(float32(bolt*soulSpawnFrames + seg*soulTrailFrames)),
 				lifeMs:  life,
