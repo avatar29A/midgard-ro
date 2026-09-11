@@ -1,8 +1,6 @@
 module github.com/Faultbox/midgard-ro
 
-go 1.24.0
-
-toolchain go1.24.11
+go 1.25.0
 
 require (
 	github.com/AllenDang/cimgui-go v1.4.0
@@ -13,7 +11,7 @@ require (
 	github.com/veandco/go-sdl2 v0.4.40
 	go.uber.org/zap v1.27.1
 	golang.org/x/image v0.34.0
-	golang.org/x/text v0.33.0
+	golang.org/x/text v0.41.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -22,7 +20,6 @@ require (
 	github.com/TheTitanrain/w32 v0.0.0-20180517000239-4f5cfb03fabf // indirect
 	github.com/ebitengine/oto/v3 v3.3.2 // indirect
 	github.com/ebitengine/purego v0.8.0 // indirect
-	github.com/hajimehoshi/go-mp3 v0.3.4 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
 	golang.org/x/sys v0.25.0 // indirect
