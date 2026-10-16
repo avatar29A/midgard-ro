@@ -9,7 +9,7 @@ require (
 	github.com/go-gl/gl v0.0.0-20231021071112-07e5d0ea2e71
 	github.com/gopxl/beep/v2 v2.1.1
 	github.com/sqweek/dialog v0.0.0-20240226140203-065105509627
-	github.com/tosone/minimp3 v1.0.2
+	github.com/tosone/minimp3 v1.1.0
 	github.com/veandco/go-sdl2 v0.4.40
 	go.uber.org/zap v1.27.1
 	golang.org/x/image v0.34.0
@@ -22,7 +22,6 @@ require (
 	github.com/TheTitanrain/w32 v0.0.0-20180517000239-4f5cfb03fabf // indirect
 	github.com/ebitengine/oto/v3 v3.3.2 // indirect
 	github.com/ebitengine/purego v0.8.0 // indirect
-	github.com/hajimehoshi/go-mp3 v0.3.4 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
 	golang.org/x/sys v0.25.0 // indirect
